@@ -220,7 +220,121 @@ fn test_definition_07_nested_deep_only() {
 fn test_definition_90_document_simple() {
     let doc = Lexplore::definition(90).parse().unwrap();
 
-    assert!(!doc.root.children.is_empty(), "definition-90 should parse");
+    // Ensemble document: title paragraph, description paragraph, definition, 3 sessions,
+    // trailing paragraph, trailing definition, final paragraph
+    assert_ast(&doc)
+        .title("Ensemble Test with Definitions {{paragraph}}")
+        .item(0, |item| {
+            item.assert_paragraph()
+                .text_contains("tests all core elements");
+        })
+        .item(1, |item| {
+            item.assert_definition()
+                .subject("Introduction")
+                .child_count(2)
+                .child(0, |child| {
+                    child
+                        .assert_paragraph()
+                        .text_contains("demonstrates how definitions integrate");
+                })
+                .child(1, |child| {
+                    child
+                        .assert_list()
+                        .item_count(4)
+                        .item(0, |li| {
+                            li.text_contains("Paragraphs provide narrative content");
+                        })
+                        .item(3, |li| {
+                            li.text_contains("Definitions explain terms");
+                        });
+                });
+        })
+        .item(2, |item| {
+            // "1. Simple Elements Section"
+            item.assert_session()
+                .label("1. Simple Elements Section {{session}}")
+                .child(0, |child| {
+                    child
+                        .assert_paragraph()
+                        .text_contains("each element in isolation");
+                })
+                .child(1, |child| {
+                    child
+                        .assert_definition()
+                        .subject("API Endpoint")
+                        .child(0, |def_para| {
+                            def_para
+                                .assert_paragraph()
+                                .text_contains("URL that provides access");
+                        });
+                })
+                .child(2, |child| {
+                    child
+                        .assert_definition()
+                        .subject("Database Types")
+                        .child(0, |def_list| {
+                            def_list.assert_list().item_count(3).item(0, |li| {
+                                li.text_contains("Relational databases");
+                            });
+                        });
+                })
+                .child(3, |child| {
+                    child
+                        .assert_paragraph()
+                        .text_contains("simple list at the session level");
+                })
+                .child(4, |child| {
+                    child.assert_list().item_count(3).item(0, |li| {
+                        li.text_contains("First item");
+                    });
+                });
+        })
+        .item(3, |item| {
+            // "2. Nested Elements Section"
+            item.assert_session()
+                .label("2. Nested Elements Section {{session}}")
+                .child(0, |child| {
+                    child
+                        .assert_paragraph()
+                        .text_contains("more complex nesting patterns");
+                })
+                .child(1, |child| {
+                    // "2.1. Subsection with Definitions"
+                    child
+                        .assert_session()
+                        .label("2.1. Subsection with Definitions {{session}}")
+                        .child(0, |sc| {
+                            sc.assert_definition()
+                                .subject("Microservice")
+                                .child(0, |p| {
+                                    p.assert_paragraph().text_contains("architectural style");
+                                });
+                        });
+                });
+        })
+        .item(4, |item| {
+            // "3. Deep Nesting Section"
+            item.assert_session()
+                .label("3. Deep Nesting Section {{session}}")
+                .child(0, |child| {
+                    child
+                        .assert_paragraph()
+                        .text_contains("deeper nesting levels");
+                })
+                .child(1, |child| {
+                    child
+                        .assert_session()
+                        .label("3.1. Level One {{session}}")
+                        .child(1, |grandchild| {
+                            grandchild
+                                .assert_definition()
+                                .subject("Design Pattern")
+                                .child(0, |p| {
+                                    p.assert_paragraph().text_contains("reusable solution");
+                                });
+                        });
+                });
+        });
 }
 
 #[test]
@@ -298,8 +412,24 @@ fn test_definition_100_document_nested_sessions() {
     assert_ast(&doc).item_count(1).item(0, |item| {
         item.assert_session()
             .label("Disambiguation from Sessions")
-            .child_count(3); // Paragraph, Definition, Definition (BlankLineGroups not counted)
-                             // Just verify the key point: "API Endpoint:" inside "Session (has blank line):"
-                             // is correctly parsed as a Paragraph (not a Session)
+            .child_count(3) // Paragraph, Definition, Definition
+            .child(0, |child| {
+                child
+                    .assert_paragraph()
+                    .text_contains("Definitions vs Sessions")
+                    .text_contains("blank line rule");
+            })
+            .child(1, |child| {
+                // "Definition (no blank line):" — is a definition
+                child
+                    .assert_definition()
+                    .subject("Definition (no blank line)");
+            })
+            .child(2, |child| {
+                // "Session (has blank line):" — also a definition at this level
+                child
+                    .assert_definition()
+                    .subject("Session (has blank line)");
+            });
     });
 }

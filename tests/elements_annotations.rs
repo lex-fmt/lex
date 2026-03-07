@@ -308,43 +308,6 @@ fn test_annotation_requires_label() {
 }
 
 #[test]
-fn test_annotations_overview_document_debug() {
-    // Debug test to understand parsing
-    let doc = Lexplore::from_path(workspace_path("specs/v1/elements/annotation.lex"))
-        .parse()
-        .unwrap();
-
-    eprintln!("Document title: '{}'", doc.root.title.as_string());
-    eprintln!("Number of children: {}", doc.root.children.len());
-
-    for (i, child) in doc.root.children.iter().enumerate().take(5) {
-        let type_name = match child {
-            ContentItem::Paragraph(_) => "Paragraph",
-            ContentItem::Session(_) => "Session",
-            ContentItem::List(_) => "List",
-            ContentItem::Definition(_) => "Definition",
-            ContentItem::Annotation(_) => "Annotation",
-            ContentItem::VerbatimBlock(_) => "VerbatimBlock",
-            ContentItem::BlankLineGroup(_) => "BlankLineGroup",
-            _ => "Other",
-        };
-
-        let text_preview = match child {
-            ContentItem::Paragraph(p) => p.text().chars().take(50).collect::<String>(),
-            ContentItem::Session(s) => {
-                format!(
-                    "title: {}",
-                    s.title.as_string().chars().take(50).collect::<String>()
-                )
-            }
-            _ => String::new(),
-        };
-
-        eprintln!("  [{i}] {type_name}: {text_preview}");
-    }
-}
-
-#[test]
 fn test_annotations_overview_document() {
     // annotation.lex: Specification overview document for annotations
     let doc = Lexplore::from_path(workspace_path("specs/v1/elements/annotation.lex"))
