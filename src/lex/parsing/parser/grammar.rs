@@ -93,7 +93,7 @@ pub(super) const GRAMMAR_PATTERNS: &[(&str, &str)] = &[
     // Title accepts same line types as session: paragraph, subject, list, or subject-or-list-item
     (
         "document_title",
-        r"^<document-start-line>(?P<title><paragraph-line>|<subject-line>|<list-line>|<subject-or-list-item-line>)(?P<blank><blank-line>+)(?!<container>)",
+        r"^<document-start-line>(?P<title><paragraph-line>|<subject-line>|<list-line>|<subject-or-list-item-line>)(?P<blank>(<blank-line>)+)(?!<container>)",
     ),
     // Document start marker: synthetic boundary between metadata and content
     // Only matched when there's no document title (fallback)
@@ -118,17 +118,17 @@ pub(super) const GRAMMAR_PATTERNS: &[(&str, &str)] = &[
     // List with preceding blank line (for lists at root level)
     (
         "list",
-        r"^(?P<blank><blank-line>+)(?P<items>((<list-line>|<subject-or-list-item-line>)(<container>)?){2,})(?P<trailing_blank><blank-line>)?",
+        r"^(?P<blank>(<blank-line>)+)(?P<items>((<list-line>|<subject-or-list-item-line>)(<container>)?){2,})(?P<trailing_blank><blank-line>)?",
     ),
-    // Definition: <subject-line>|<subject-or-list-item-line>|<paragraph-line><container>
+    // Definition: subject (must end with colon) + immediate indented content
     (
         "definition",
-        r"^(?P<subject><subject-line>|<subject-or-list-item-line>|<paragraph-line>)(?P<content><container>)",
+        r"^(?P<subject><subject-line>|<subject-or-list-item-line>)(?P<content><container>)",
     ),
     // Session (requires subject + blank + indented content, allowed at start or after separator)
     (
         "session",
-        r"^(?P<subject><paragraph-line>|<subject-line>|<list-line>|<subject-or-list-item-line>)(?P<blank><blank-line>+)(?P<content><container>)",
+        r"^(?P<subject><paragraph-line>|<subject-line>|<list-line>|<subject-or-list-item-line>)(?P<blank>(<blank-line>)+)(?P<content><container>)",
     ),
     // Paragraph: <content-line>+
     (

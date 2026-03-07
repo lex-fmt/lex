@@ -6,6 +6,6 @@ Fullwidth Table at Root:
  ---+-----------+--------
  01 | Alice     | Active
  02 | Bob       | Pending
-:: data
+:: data ::
 
 This paragraph comes after the fullwidth block.

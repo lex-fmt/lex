@@ -1,5 +1,5 @@
 ---
-source: lex-parser/tests/detokenizer/main.rs
+source: tests/detokenizer/main.rs
 expression: detokenized
 ---
 Code Example:
@@ -8,4 +8,4 @@ Code Example:
         return "world";
     }
 
-:: javascript
+:: javascript ::

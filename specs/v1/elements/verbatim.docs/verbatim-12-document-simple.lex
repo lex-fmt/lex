@@ -18,7 +18,7 @@ This document tests the combination of all three core elements (sessions, paragr
 		$ cd <path to go>
     Feeling lost, let's get back home:
 		$ cd ~
-    :: shell
+    :: shell ::
 
 2. Session with List Content {{session-title}}
 
@@ -42,7 +42,7 @@ A paragraph at the root level. {{paragraph}}
 - With multiple items {{list-item}}
 
 This is an Image Verbatim Representation:
-:: image src="image.jpg"
+:: image src="image.jpg" ::
 
 4. Another Session {{session-title}}
 
@@ -58,4 +58,4 @@ Final root level paragraph. {{paragraph}}
 
 Say goodbye mom:
 	alert("Goodbye mom!")
-:: javascript
+:: javascript ::

@@ -14,8 +14,9 @@
 //!     matching order.
 //!
 //!     The end marker identification has to be very easy. That's the reason why it ends in a
-//!     data node, which is the only form that is not common on regular text. The closing data
-//!     node must be at the same indentation level as the subject line.
+//!     closing annotation (:: label ::), which is the only form that is not common on regular
+//!     text and can be detected in a pre-pass without full parsing. The closing annotation
+//!     must be at the same indentation level as the subject line.
 //!
 //!     This builder extracts the subject line, collects all content lines (which may be in a
 //!     container for in-flow mode, or flat lines for full-width mode), and the closing data
@@ -47,11 +48,8 @@ pub(in crate::lex::parsing::parser::builder) fn build_verbatim_block(
     }
 
     let closing_token = extract_line_token(&tokens[closing_idx])?;
-    if !matches!(
-        closing_token.line_type,
-        LineType::DataLine | LineType::AnnotationStartLine
-    ) {
-        return Err("Verbatim blocks must end with a data line (:: label params)".to_string());
+    if !matches!(closing_token.line_type, LineType::AnnotationStartLine) {
+        return Err("Verbatim blocks must end with a closing annotation (:: label ::)".to_string());
     }
     let header_tokens = extract_annotation_header_tokens(closing_token)?;
 

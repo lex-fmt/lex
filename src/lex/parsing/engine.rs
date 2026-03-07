@@ -180,6 +180,119 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_session_with_multiple_blank_lines() {
+        // Sessions should work with 2+ blank lines between title and content
+        let source = "Title Two\n\n\n    Content with two blank lines.\n";
+        let tokens = lex_helper(source).expect("Failed to tokenize");
+
+        let result = parse_from_flat_tokens(tokens, source);
+        assert!(result.is_ok(), "Parser should succeed");
+
+        let root = result.unwrap();
+        let has_session = root
+            .children
+            .iter()
+            .any(|item| matches!(item, ContentItem::Session(_)));
+        assert!(
+            has_session,
+            "Should parse as Session even with 2+ blank lines. Got: {:?}",
+            root.children
+                .iter()
+                .map(|c| match c {
+                    ContentItem::Paragraph(_) => "Paragraph",
+                    ContentItem::Session(_) => "Session",
+                    ContentItem::BlankLineGroup(_) => "BlankLineGroup",
+                    _ => "Other",
+                })
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_parse_session_with_three_blank_lines() {
+        let source = "Title Three\n\n\n\n    Content with three blank lines.\n";
+        let tokens = lex_helper(source).expect("Failed to tokenize");
+
+        let result = parse_from_flat_tokens(tokens, source);
+        assert!(result.is_ok(), "Parser should succeed");
+
+        let root = result.unwrap();
+        let has_session = root
+            .children
+            .iter()
+            .any(|item| matches!(item, ContentItem::Session(_)));
+        assert!(has_session, "Should parse as Session with 3 blank lines");
+    }
+
+    #[test]
+    fn test_verbatim_with_double_closing_marker() {
+        let source =
+            "Code Example:\n\n    function hello() {\n        return \"world\";\n    }\n\n:: javascript ::\n";
+        let tokens = lex_helper(source).expect("Failed to tokenize");
+
+        let root = parse_from_flat_tokens(tokens, source).expect("Parser failed");
+
+        let has_verbatim = root
+            .children
+            .iter()
+            .any(|item| matches!(item, ContentItem::VerbatimBlock(_)));
+        assert!(
+            has_verbatim,
+            "Should contain a Verbatim block. Got: {:?}",
+            root.children
+                .iter()
+                .map(|c| match c {
+                    ContentItem::Paragraph(_) => "Paragraph",
+                    ContentItem::Session(_) => "Session",
+                    ContentItem::VerbatimBlock(_) => "Verbatim",
+                    ContentItem::BlankLineGroup(_) => "BlankLineGroup",
+                    ContentItem::Annotation(_) => "Annotation",
+                    _ => "Other",
+                })
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_annotations_inside_session() {
+        let source = "1. Session\n\n    Some content.\n\n    :: note-editor :: Maybe this could be better rephrased?\n    :: note.author :: Done keeping it simple\n\n    More content.\n";
+        let tokens = lex_helper(source).expect("Failed to tokenize");
+
+        let root = parse_from_flat_tokens(tokens, source).expect("Parser failed");
+
+        // Should have a session
+        let session = root
+            .children
+            .iter()
+            .find(|item| matches!(item, ContentItem::Session(_)));
+        assert!(session.is_some(), "Should contain a Session");
+
+        if let Some(ContentItem::Session(s)) = session {
+            // Session should contain annotations
+            let annotation_count = s
+                .children
+                .iter()
+                .filter(|item| matches!(item, ContentItem::Annotation(_)))
+                .count();
+            assert!(
+                annotation_count >= 2,
+                "Session should contain at least 2 annotations, got {}. Children: {:?}",
+                annotation_count,
+                s.children
+                    .iter()
+                    .map(|c| match c {
+                        ContentItem::Paragraph(_) => "Paragraph",
+                        ContentItem::Annotation(_) => "Annotation",
+                        ContentItem::BlankLineGroup(_) => "BlankLineGroup",
+                        ContentItem::Session(_) => "Session",
+                        _ => "Other",
+                    })
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
     fn test_parse_annotation() {
         // Use tokens from the lexer pipeline
         let source = ":: note ::\n";

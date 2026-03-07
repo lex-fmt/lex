@@ -7,7 +7,7 @@ From there the interactive help is available:
 And the built-in viewer can be used to quickly view the parsing:
 
     $ lexv <path>
-:: shell
+:: shell ::
 
 This should not stop the content below, correct, from parsing however.
 
@@ -17,9 +17,9 @@ This is block 1:
 Which is a shell block:
 
     $ pwd
-:: shell
+:: shell ::
 
 And this is a block 2:
 
       input("Favorite fruit:")
-:: javascript
+:: javascript ::

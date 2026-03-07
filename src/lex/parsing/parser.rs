@@ -255,8 +255,7 @@ impl GrammarMatcher {
         start_idx: usize,
     ) -> Option<(PatternMatch, Range<usize>)> {
         use LineType::{
-            AnnotationStartLine, BlankLine, DataLine, DocumentStart, SubjectLine,
-            SubjectOrListItemLine,
+            AnnotationStartLine, BlankLine, DocumentStart, SubjectLine, SubjectOrListItemLine,
         };
 
         let len = tokens.len();
@@ -337,8 +336,8 @@ impl GrammarMatcher {
 
                     match &tokens[cursor] {
                         LineContainer::Token(line) => {
-                            if matches!(line.line_type, DataLine | AnnotationStartLine) {
-                                // Container followed by annotation - this IS verbatim!
+                            if matches!(line.line_type, AnnotationStartLine) {
+                                // Container followed by closing annotation (:: label ::) - this IS verbatim!
                                 // Continue loop to match it
                                 continue;
                             }
@@ -357,8 +356,8 @@ impl GrammarMatcher {
                     }
                 }
                 LineContainer::Token(line) => {
-                    if matches!(line.line_type, DataLine | AnnotationStartLine) {
-                        // Found closing annotation - success!
+                    if matches!(line.line_type, AnnotationStartLine) {
+                        // Found closing annotation (:: label ::) - success!
                         // But only if we haven't mixed containers with flat content in a problematic way
                         return Some((
                             PatternMatch::VerbatimBlock {
@@ -475,6 +474,22 @@ fn parse_with_declarative_grammar_internal(
             items.extend(pending_nodes);
             idx = range.end;
         } else {
+            // When no pattern matches, check if this is a Container (orphaned indented content).
+            // Rather than silently dropping it, parse its children and promote them to this level.
+            if let LineContainer::Container {
+                children: inner, ..
+            } = &tokens[idx]
+            {
+                if !inner.is_empty() {
+                    let orphaned = parse_with_declarative_grammar_internal(
+                        inner.clone(),
+                        source,
+                        allow_sessions,
+                        false,
+                    )?;
+                    items.extend(orphaned);
+                }
+            }
             idx += 1;
         }
     }

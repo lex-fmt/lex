@@ -6,11 +6,11 @@ Code examples:
         def hello():
             return "world"
 
-    :: python
+    :: python ::
 
 - JavaScript example
     Another function:
 
         const greet = () => "hello";
 
-    :: javascript
+    :: javascript ::

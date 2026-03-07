@@ -269,7 +269,7 @@ mod tests {
     #[test]
     fn test_verbatim_src_parameter() {
         let source =
-            "Sunset Photo:\n    As the sun sets over the ocean.\n:: image src=./diagram.png\n\n";
+            "Sunset Photo:\n    As the sun sets over the ocean.\n:: image src=./diagram.png ::\n\n";
         let doc = parse_document(source).unwrap();
 
         let links = doc.find_all_links();

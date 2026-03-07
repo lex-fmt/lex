@@ -10,7 +10,7 @@ And let's go places:
 
 Feeling lost, let's get back home: 
 	$ cd ~
-:: shell
+:: shell ::
 
 
 Note that verbatim blocks conetents can have any number of blank lines, including None.

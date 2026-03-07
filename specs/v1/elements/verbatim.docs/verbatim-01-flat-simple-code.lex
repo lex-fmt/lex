@@ -4,4 +4,4 @@ Code Example:
         return "world";
     }
 
-:: javascript
+:: javascript ::

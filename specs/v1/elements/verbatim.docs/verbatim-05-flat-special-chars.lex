@@ -5,4 +5,4 @@ Special Characters:
         return "::";
     }
 
-:: javascript
+:: javascript ::

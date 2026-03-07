@@ -47,7 +47,7 @@ This is a marker annotation at the root level, attached to the definition above.
         function example() {
             return "lex";
         }
-    :: javascript
+    :: javascript ::
 
 2. Second Root Session {{session}}
 
@@ -63,6 +63,6 @@ This is a marker annotation at the root level, attached to the definition above.
     ::
 
     Image Reference (Marker Verbatim Block):
-    :: image src="logo.png" alt="Lex Logo"
+    :: image src="logo.png" alt="Lex Logo" ::
 
 Final paragraph at the end of the document. {{paragraph}}

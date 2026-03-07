@@ -1,2 +1,2 @@
 Code Example:
-:: javascript
+:: javascript ::

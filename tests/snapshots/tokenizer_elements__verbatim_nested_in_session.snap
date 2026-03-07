@@ -1,5 +1,5 @@
 ---
-source: lex-parser/tests/tokenizer_elements.rs
+source: tests/tokenizer_elements.rs
 expression: tokens
 ---
 [
@@ -189,11 +189,21 @@ expression: tokens
         70..73,
     ),
     (
+        Whitespace(
+            1,
+        ),
+        73..74,
+    ),
+    (
+        LexMarker,
+        74..76,
+    ),
+    (
         BlankLine(
             Some(
                 "\n",
             ),
         ),
-        73..74,
+        76..77,
     ),
 ]

@@ -4,4 +4,4 @@ Configuration:
         listen 80;
     }
 
-:: nginx format=pretty
+:: nginx format=pretty ::
