@@ -14,7 +14,7 @@
 //!
 //!     - subject: The lead item identifying what the verbatim block contains
 //!     - children: VerbatimLine nodes containing the actual content (can be empty)
-//!     - closing_data: The closing marker (format: `:: label params?`)
+//!     - closing_data: The closing marker (format: `:: label params? ::`)
 //!
 //!     The subject introduces what the content is, and the closing data terminates the block.
 //!     The data node carries the label/parameters describing the payload. As a convention
@@ -81,7 +81,7 @@
 //!             I'm the first content line
 //!             But content can be indented however I please
 //!     error ->| as long as it's past the wall
-//!             :: text
+//!             :: text ::
 //!
 //! Full-Width Mode
 //!
@@ -97,7 +97,7 @@
 //!   Here is the content.
 //!   |<- this is the wall
 //!
-//!             :: lex
+//!             :: lex ::
 //!
 //!     The block's mode is determined by the position of the first non-whitespace character
 //!     of the first content line. If it's at user-facing column 2, it's a full-width mode
