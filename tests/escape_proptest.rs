@@ -1,6 +1,6 @@
-//! Property-based tests for inline escape/unescape logic
+//! Property-based tests for escape/unescape logic
 
-use lex_core::lex::escape::{escape_inline, unescape_inline};
+use lex_core::lex::escape::{escape_inline, escape_quoted, unescape_inline, unescape_quoted};
 use proptest::prelude::*;
 
 /// Arbitrary string that may contain inline special characters and backslashes.
@@ -136,4 +136,59 @@ fn realistic_mixed_content() {
     // User wants to display: The formula *x* uses [brackets]
     let escaped = "The formula \\*x\\* uses \\[brackets\\]";
     assert_eq!(unescape_inline(escaped), "The formula *x* uses [brackets]");
+}
+
+// --- Quoted parameter value prop tests ---
+
+/// Content that may contain quotes and backslashes
+fn quoted_content_strategy() -> impl Strategy<Value = String> {
+    prop_oneof![
+        "[a-zA-Z0-9 ,.!?;:'-]{0,30}",
+        "[a-zA-Z0-9 \"\\\\]{0,20}",
+        "[ -~]{0,40}",
+    ]
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(500))]
+
+    #[test]
+    fn roundtrip_quoted_escape_unescape(text in quoted_content_strategy()) {
+        let escaped = escape_quoted(&text);
+        let wrapped = format!("\"{escaped}\"");
+        let back = unescape_quoted(&wrapped);
+        prop_assert_eq!(&back, &text,
+            "quoted roundtrip failed: {:?} -> {:?} -> {:?}", text, wrapped, back);
+    }
+
+    #[test]
+    fn unescape_quoted_never_panics(text in "[ -~]{0,50}") {
+        let _ = unescape_quoted(&text);
+    }
+
+    #[test]
+    fn escape_quoted_never_panics(text in "[ -~]{0,50}") {
+        let _ = escape_quoted(&text);
+    }
+
+    #[test]
+    fn escape_quoted_no_bare_quotes(text in quoted_content_strategy()) {
+        let escaped = escape_quoted(&text);
+        // Every quote in the output must be preceded by a backslash
+        let chars: Vec<char> = escaped.chars().collect();
+        for (i, &ch) in chars.iter().enumerate() {
+            if ch == '"' {
+                prop_assert!(
+                    i > 0 && chars[i - 1] == '\\',
+                    "bare quote at position {} in {:?}", i, escaped
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn escape_quoted_length_at_least_original(text in quoted_content_strategy()) {
+        let escaped = escape_quoted(&text);
+        prop_assert!(escaped.len() >= text.len());
+    }
 }

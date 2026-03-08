@@ -1,13 +1,17 @@
-//! Centralized escape/unescape logic for Lex inline content
+//! Centralized escape/unescape logic for Lex content
 //!
-//! Rules:
+//! Inline Escaping Rules:
 //!   - Backslash before non-alphanumeric: escapes the character (backslash removed)
 //!   - Backslash before alphanumeric: backslash preserved (for paths like C:\Users)
 //!   - Double backslash (\\): produces a single backslash
 //!   - Trailing backslash at end of input: preserved
 //!
-//! These rules apply to inline text content only. Verbatim blocks and labels
-//! have no character-level escaping.
+//! Quoted Parameter Value Escaping Rules:
+//!   - `\"` inside a quoted value: literal quote (backslash removed)
+//!   - `\\` inside a quoted value: literal backslash
+//!   - Only `"` and `\` can be escaped; other backslashes are literal
+//!
+//! Verbatim blocks and labels have no character-level escaping.
 
 /// Result of processing a backslash at position `i` in a character stream.
 pub enum EscapeAction {
@@ -88,6 +92,71 @@ pub fn escape_inline(text: &str) -> String {
 /// Characters that have special meaning in inline parsing and need escaping.
 fn is_inline_special(ch: char) -> bool {
     matches!(ch, '\\' | '*' | '_' | '`' | '#' | '[' | ']')
+}
+
+// --- Quoted parameter value escaping ---
+
+/// Check whether a quote at `pos` in `source` is escaped by a preceding backslash.
+///
+/// Correctly handles chains of backslashes: `\\"` is NOT escaped (even backslashes),
+/// `\\\"` IS escaped (odd backslashes before the quote).
+pub fn is_quote_escaped(source: &[u8], pos: usize) -> bool {
+    let mut backslash_count = 0;
+    let mut check = pos;
+    while check > 0 && source[check - 1] == b'\\' {
+        backslash_count += 1;
+        check -= 1;
+    }
+    backslash_count % 2 == 1
+}
+
+/// Unescape a quoted parameter value.
+///
+/// Input should be the raw stored value including outer quotes (e.g., `"Hello World"`).
+/// Returns the semantic content with escapes resolved and outer quotes stripped.
+///
+/// Escapes: `\"` → `"`, `\\` → `\`. Other backslashes are literal.
+pub fn unescape_quoted(raw: &str) -> String {
+    // Strip outer quotes if present
+    let inner = if raw.starts_with('"') && raw.ends_with('"') && raw.len() >= 2 {
+        &raw[1..raw.len() - 1]
+    } else {
+        raw
+    };
+
+    let mut result = String::with_capacity(inner.len());
+    let chars: Vec<char> = inner.chars().collect();
+    let mut i = 0;
+
+    while i < chars.len() {
+        if chars[i] == '\\' {
+            if let Some(&next) = chars.get(i + 1) {
+                if next == '"' || next == '\\' {
+                    result.push(next);
+                    i += 2;
+                    continue;
+                }
+            }
+        }
+        result.push(chars[i]);
+        i += 1;
+    }
+
+    result
+}
+
+/// Escape a string for use as a quoted parameter value.
+///
+/// Escapes `\` → `\\` and `"` → `\"`. Does NOT add outer quotes.
+pub fn escape_quoted(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    for ch in text.chars() {
+        if ch == '\\' || ch == '"' {
+            result.push('\\');
+        }
+        result.push(ch);
+    }
+    result
 }
 
 #[cfg(test)]
@@ -242,5 +311,124 @@ mod tests {
     fn roundtrip_mixed() {
         let original = "path\\file *bold* and \\more";
         assert_eq!(unescape_inline(&escape_inline(original)), original);
+    }
+
+    // --- unescape_quoted ---
+
+    #[test]
+    fn unescape_quoted_simple() {
+        assert_eq!(unescape_quoted("\"Hello World\""), "Hello World");
+    }
+
+    #[test]
+    fn unescape_quoted_with_escaped_quote() {
+        assert_eq!(unescape_quoted("\"say \\\"hello\\\"\""), "say \"hello\"");
+    }
+
+    #[test]
+    fn unescape_quoted_with_escaped_backslash() {
+        assert_eq!(unescape_quoted("\"path\\\\to\""), "path\\to");
+    }
+
+    #[test]
+    fn unescape_quoted_escaped_backslash_before_quote() {
+        // \\\\" = escaped backslash then real closing quote
+        assert_eq!(unescape_quoted("\"end\\\\\""), "end\\");
+    }
+
+    #[test]
+    fn unescape_quoted_other_backslash_literal() {
+        // \n is not a recognized escape, backslash preserved
+        assert_eq!(unescape_quoted("\"hello\\nworld\""), "hello\\nworld");
+    }
+
+    #[test]
+    fn unescape_quoted_empty() {
+        assert_eq!(unescape_quoted("\"\""), "");
+    }
+
+    #[test]
+    fn unescape_quoted_no_quotes() {
+        // Unquoted values pass through (backslash handling still applies)
+        assert_eq!(unescape_quoted("simple"), "simple");
+    }
+
+    // --- escape_quoted ---
+
+    #[test]
+    fn escape_quoted_simple() {
+        assert_eq!(escape_quoted("Hello World"), "Hello World");
+    }
+
+    #[test]
+    fn escape_quoted_with_quote() {
+        assert_eq!(escape_quoted("say \"hello\""), "say \\\"hello\\\"");
+    }
+
+    #[test]
+    fn escape_quoted_with_backslash() {
+        assert_eq!(escape_quoted("path\\to"), "path\\\\to");
+    }
+
+    #[test]
+    fn escape_quoted_empty() {
+        assert_eq!(escape_quoted(""), "");
+    }
+
+    // --- quoted roundtrip ---
+
+    #[test]
+    fn roundtrip_quoted_simple() {
+        let original = "Hello World";
+        let escaped = format!("\"{}\"", escape_quoted(original));
+        assert_eq!(unescape_quoted(&escaped), original);
+    }
+
+    #[test]
+    fn roundtrip_quoted_with_quotes() {
+        let original = "say \"hello\" and \"bye\"";
+        let escaped = format!("\"{}\"", escape_quoted(original));
+        assert_eq!(unescape_quoted(&escaped), original);
+    }
+
+    #[test]
+    fn roundtrip_quoted_with_backslashes() {
+        let original = "C:\\Users\\name";
+        let escaped = format!("\"{}\"", escape_quoted(original));
+        assert_eq!(unescape_quoted(&escaped), original);
+    }
+
+    #[test]
+    fn roundtrip_quoted_with_both() {
+        let original = "path\\to \"file\"";
+        let escaped = format!("\"{}\"", escape_quoted(original));
+        assert_eq!(unescape_quoted(&escaped), original);
+    }
+
+    // --- is_quote_escaped ---
+
+    #[test]
+    fn is_quote_escaped_no_backslash() {
+        assert!(!is_quote_escaped(b"hello\"", 5));
+    }
+
+    #[test]
+    fn is_quote_escaped_single_backslash() {
+        assert!(is_quote_escaped(b"hello\\\"", 6));
+    }
+
+    #[test]
+    fn is_quote_escaped_double_backslash() {
+        assert!(!is_quote_escaped(b"hello\\\\\"", 7));
+    }
+
+    #[test]
+    fn is_quote_escaped_triple_backslash() {
+        assert!(is_quote_escaped(b"hello\\\\\\\"", 8));
+    }
+
+    #[test]
+    fn is_quote_escaped_at_start() {
+        assert!(!is_quote_escaped(b"\"", 0));
     }
 }

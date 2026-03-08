@@ -25,6 +25,7 @@
 //!         - Parameters spec: specs/v1/elements/parameter.lex
 
 use super::super::range::{Position, Range};
+use crate::lex::escape::unescape_quoted;
 use std::fmt;
 
 /// A parameter represents a key-value pair
@@ -52,6 +53,15 @@ impl Parameter {
     pub fn at(mut self, location: Range) -> Self {
         self.location = location;
         self
+    }
+
+    /// Returns the semantic value with outer quotes stripped and escapes resolved.
+    ///
+    /// For quoted values like `"Hello World"`, returns `Hello World`.
+    /// For values with escapes like `"say \"hello\""`, returns `say "hello"`.
+    /// For unquoted values like `simple`, returns `simple` unchanged.
+    pub fn unquoted_value(&self) -> String {
+        unescape_quoted(&self.value)
     }
 }
 

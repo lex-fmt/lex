@@ -3,6 +3,7 @@
 //! Extracts primitive data (text, byte ranges) for annotation parameters.
 //! Handles key=value parsing with support for quoted and unquoted values.
 
+use crate::lex::escape::is_quote_escaped;
 use crate::lex::token::normalization::utilities::{compute_bounding_box, extract_text};
 use crate::lex::token::Token;
 use std::ops::Range as ByteRange;
@@ -84,7 +85,17 @@ pub(super) fn parse_parameter(
             is_quoted = true;
             val_tokens.push(tokens[i].clone()); // Include opening quote
             i += 1;
-            while i < tokens.len() && !matches!(tokens[i].0, Token::Quote) {
+            while i < tokens.len() {
+                if matches!(tokens[i].0, Token::Quote) {
+                    // Check if this quote is escaped by a preceding backslash
+                    if is_quote_escaped(source.as_bytes(), tokens[i].1.start) {
+                        // Escaped quote — include as content, not a delimiter
+                        val_tokens.push(tokens[i].clone());
+                        i += 1;
+                        continue;
+                    }
+                    break; // Unescaped quote = closing delimiter
+                }
                 val_tokens.push(tokens[i].clone());
                 i += 1;
             }

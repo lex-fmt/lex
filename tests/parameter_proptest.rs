@@ -7,6 +7,7 @@
 //! - Whitespace around parameters is ignored
 
 use lex_core::lex::assembling::AttachRoot;
+use lex_core::lex::escape::escape_quoted;
 use lex_core::lex::parsing::engine::parse_from_flat_tokens;
 use lex_core::lex::parsing::{parse_document, ContentItem, Document};
 use lex_core::lex::testing::assert_ast;
@@ -62,6 +63,21 @@ fn quoted_value_strategy() -> impl Strategy<Value = String> {
         "[a-zA-Z0-9][a-zA-Z0-9 .-]{0,19}",
         // Simple alphanumeric text
         "[a-zA-Z0-9]{1,10}",
+    ]
+}
+
+/// Generate semantic content that may contain quotes and backslashes.
+/// The returned string is the plain text content (before escaping for embedding in source).
+fn escaped_quoted_content_strategy() -> impl Strategy<Value = String> {
+    prop_oneof![
+        // Content with embedded quotes
+        "[a-zA-Z]{1,5} \"[a-zA-Z]{1,5}\"",
+        // Content with backslashes
+        "[a-zA-Z]{1,5}\\\\[a-zA-Z]{1,5}",
+        // Content with both
+        "[a-zA-Z]{1,3}\\\\[a-zA-Z]{1,3} \"[a-zA-Z]{1,3}\"",
+        // Simple content (no escapes needed)
+        "[a-zA-Z0-9 ]{1,15}",
     ]
 }
 
@@ -179,6 +195,34 @@ mod proptest_tests {
                     .collect();
 
                 prop_assert_eq!(actual_keys, expected_keys);
+            }
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(50))]
+
+        #[test]
+        fn test_escaped_quoted_value_roundtrip(
+            key in parameter_key_strategy(),
+            content in escaped_quoted_content_strategy()
+        ) {
+            // Escape content for embedding in source (\" and \\)
+            let escaped_content = escape_quoted(&content);
+            let source = format!(":: note {key}=\"{escaped_content}\" ::\n\nText. {{{{paragraph}}}}\n");
+            let result = parse_annotation_without_attachment(&source);
+
+            prop_assert!(result.is_ok(), "Failed to parse: {}", source);
+
+            if let Ok(doc) = result {
+                let annotation = doc.root.children[0].as_annotation().unwrap();
+                prop_assert_eq!(annotation.data.parameters.len(), 1);
+                prop_assert_eq!(&annotation.data.parameters[0].key, &key);
+                // Verify unquoted_value recovers the original content
+                let recovered = annotation.data.parameters[0].unquoted_value();
+                prop_assert_eq!(&recovered, &content,
+                    "roundtrip failed: content={:?}, escaped={:?}, stored={:?}",
+                    content, escaped_content, annotation.data.parameters[0].value);
             }
         }
     }
@@ -309,5 +353,74 @@ mod specific_tests {
                 .parameter(0, "ref-id", "123")
                 .parameter(1, "api_version", "2");
         });
+    }
+
+    #[test]
+    fn test_escaped_quote_in_quoted_value() {
+        let source = ":: note message=\"say \\\"hello\\\"\" ::\n\nText. {{paragraph}}\n";
+        let doc = parse_annotation_without_attachment(source).unwrap();
+        assert_ast(&doc).item(0, |item| {
+            item.assert_annotation()
+                .label("note")
+                .parameter_count(1)
+                .has_parameter_with_value("message", "\"say \\\"hello\\\"\"");
+        });
+        // Verify unquoted_value resolves escapes
+        let annotation = doc.root.children[0].as_annotation().unwrap();
+        assert_eq!(
+            annotation.data.parameters[0].unquoted_value(),
+            "say \"hello\""
+        );
+    }
+
+    #[test]
+    fn test_escaped_backslash_in_quoted_value() {
+        let source = ":: note path=\"C:\\\\Users\\\\name\" ::\n\nText. {{paragraph}}\n";
+        let doc = parse_annotation_without_attachment(source).unwrap();
+        assert_ast(&doc).item(0, |item| {
+            item.assert_annotation()
+                .label("note")
+                .parameter_count(1)
+                .has_parameter_with_value("path", "\"C:\\\\Users\\\\name\"");
+        });
+        let annotation = doc.root.children[0].as_annotation().unwrap();
+        assert_eq!(
+            annotation.data.parameters[0].unquoted_value(),
+            "C:\\Users\\name"
+        );
+    }
+
+    #[test]
+    fn test_escaped_backslash_before_closing_quote() {
+        // \\" = escaped backslash then real closing quote
+        let source = ":: note trail=\"end\\\\\" ::\n\nText. {{paragraph}}\n";
+        let doc = parse_annotation_without_attachment(source).unwrap();
+        assert_ast(&doc).item(0, |item| {
+            item.assert_annotation()
+                .label("note")
+                .parameter_count(1)
+                .has_parameter_with_value("trail", "\"end\\\\\"");
+        });
+        let annotation = doc.root.children[0].as_annotation().unwrap();
+        assert_eq!(annotation.data.parameters[0].unquoted_value(), "end\\");
+    }
+
+    #[test]
+    fn test_unquoted_value_has_no_escaping() {
+        let source = ":: note key=simple ::\n\nText. {{paragraph}}\n";
+        let doc = parse_annotation_without_attachment(source).unwrap();
+        let annotation = doc.root.children[0].as_annotation().unwrap();
+        assert_eq!(annotation.data.parameters[0].unquoted_value(), "simple");
+    }
+
+    #[test]
+    fn test_quoted_value_unquoted_value_strips_quotes() {
+        let source = ":: note message=\"Hello World\" ::\n\nText. {{paragraph}}\n";
+        let doc = parse_annotation_without_attachment(source).unwrap();
+        let annotation = doc.root.children[0].as_annotation().unwrap();
+        assert_eq!(
+            annotation.data.parameters[0].unquoted_value(),
+            "Hello World"
+        );
     }
 }
