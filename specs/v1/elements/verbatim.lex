@@ -49,8 +49,7 @@ The Indentation Wall
 		Subject:
 		    content (indented past wall)
 		        more content (further indented - preserved)
-		:: label
-
+		:: label ::
 	Invalid:
 		Subject:
 		  content (not enough indent - breaks the wall)
@@ -91,8 +90,7 @@ Content Preservation
 		    // spaces    preserved
 		    
 		    function() { return "::"; }  // :: not treated as marker
-		:: javascript
-
+		:: javascript ::
 Closing Data
 
 	The closing data node:
@@ -112,8 +110,7 @@ Examples
 		    function hello() {
 		        return "world";
 		    }
-		:: javascript
-
+		:: javascript ::
 	Marker form for images:
 		Sunset Photo:
 		    As the sun sets over the ocean.

@@ -27,8 +27,7 @@ Grammar for lex
             <paragraph> = <text-line>+
             <list-marker> = <dash> | <number> <period> | <letter> <period>
             <session-title> = (<number> <period>)? <text-span>+ <line-break>
-        :: grammar
-
+        :: grammar ::
     1.2. AST Tree Notation
 
         AST structures are shown using ASCII tree notation:
@@ -41,8 +40,7 @@ Grammar for lex
             │       └── list
             │           ├── list-item
             │           └── list-item
-        :: tree
-
+        :: tree ::
         Conventions:
         - `├──` indicates a child node
         - `│` indicates continuation of parent structure
@@ -66,8 +64,7 @@ Grammar for lex
             SequenceMarker: ^- \s
             AnnotationMarker: :
             VerbatimStart: .+:\s*$
-        :: regex
-
+        :: regex ::
     1.4. Indentation Notation
 
         Indentation levels are shown with explicit markers:
@@ -76,8 +73,7 @@ Grammar for lex
             Base level (column 0)
                 +1 indented (column 4)
                     +2 indented (column 8)
-        :: indentation
-
+        :: indentation ::
         - Each indentation level is exactly 4 spaces
         - `+n` indicates n levels of indentation from base
         - Tabs are converted to 4 spaces during preprocessing

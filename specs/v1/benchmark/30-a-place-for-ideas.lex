@@ -68,8 +68,7 @@ A Place For Ideas
                     blocks = group_blocks(tokens)
                     ast = resolve_types(blocks)
                     return process_inlines(ast)
-            :: python
-
+            :: python ::
             This clear, readable structure makes Lex a superior authoring format for everything from technical specifications to academic papers, as discussed in [#3.1].
 
 A Manifesto for Your Ideas

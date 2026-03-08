@@ -100,8 +100,7 @@ Ideas, Naked
 
                 alert("Look Ma, no Lex");
 
-            :: javascript 
-
+            :: javascript ::
             Many times this is, as above a piece of text that is formatted in a formal language, like a computer programming language, but at its core it signals that Lex won't process that content. Tools can choose to (as in syntax highlighting code or inlining images), as they please.
 
             The Tower of Babel: 
