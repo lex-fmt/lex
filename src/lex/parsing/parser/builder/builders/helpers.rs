@@ -4,6 +4,7 @@
 //! for extracting and processing tokens.
 
 use crate::lex::annotation::analyze_annotation_header_token_pairs;
+use crate::lex::escape::find_structural_lex_marker_pairs;
 use crate::lex::token::{LineContainer, LineToken, Token};
 use std::ops::Range;
 
@@ -35,16 +36,26 @@ pub(super) fn collect_line_tokens(container: &LineContainer, out: &mut Vec<LineT
 }
 
 /// Extract header tokens from an annotation start line.
-/// Header tokens are all tokens between the two :: markers (excluding the markers themselves).
+/// Header tokens are all tokens between the two structural :: markers
+/// (excluding the structural markers, but preserving any :: inside quoted values).
 pub(super) fn extract_annotation_header_tokens(
     start_token: &LineToken,
 ) -> Result<Vec<(Token, std::ops::Range<usize>)>, String> {
-    let header_tokens: Vec<_> = start_token
+    let all_tokens: Vec<_> = start_token
         .source_tokens
         .clone()
         .into_iter()
         .zip(start_token.token_spans.clone())
-        .filter(|(token, _)| !matches!(token, Token::LexMarker))
+        .collect();
+
+    let structural = find_structural_lex_marker_pairs(&all_tokens);
+
+    // Filter out only structural LexMarker positions
+    let header_tokens: Vec<_> = all_tokens
+        .into_iter()
+        .enumerate()
+        .filter(|(i, _)| !structural.contains(i))
+        .map(|(_, pair)| pair)
         .collect();
 
     ensure_header_has_label(start_token, &header_tokens)?;
@@ -60,36 +71,43 @@ pub(super) struct AnnotationHeaderAndContent {
 /// Extract content from an annotation single-line form.
 /// Returns (header_tokens, content_children) where content_children is either empty
 /// or contains a single Paragraph node with the inline content.
+///
+/// Uses quote-aware marker detection so `::` inside quoted parameter values
+/// is preserved as header content, not treated as a structural delimiter.
 pub(super) fn extract_annotation_single_content(
     start_token: &LineToken,
 ) -> Result<AnnotationHeaderAndContent, String> {
     use crate::lex::parsing::ir::{NodeType, ParseNode};
 
-    let all_tokens = start_token
+    let all_tokens: Vec<_> = start_token
         .source_tokens
         .clone()
         .into_iter()
         .zip(start_token.token_spans.clone())
-        .collect::<Vec<_>>();
+        .collect();
 
-    let mut lex_marker_count = 0;
-    let mut content_started = false;
+    let structural = find_structural_lex_marker_pairs(&all_tokens);
+
+    // The second structural marker separates header from content
+    let second_marker_idx = structural.get(1).copied();
+
     let mut header_tokens = Vec::new();
     let mut content_tokens = Vec::new();
 
-    for (token, span) in all_tokens {
-        if token == Token::LexMarker {
-            lex_marker_count += 1;
-            if lex_marker_count == 2 {
-                content_started = true;
-            }
+    for (i, (token, span)) in all_tokens.into_iter().enumerate() {
+        if structural.contains(&i) {
+            // Skip structural markers (opening and closing ::)
             continue;
         }
 
-        if !content_started {
-            header_tokens.push((token, span));
+        if let Some(boundary) = second_marker_idx {
+            if i < boundary {
+                header_tokens.push((token, span));
+            } else {
+                content_tokens.push((token, span));
+            }
         } else {
-            content_tokens.push((token, span));
+            header_tokens.push((token, span));
         }
     }
 

@@ -33,6 +33,7 @@
 
 use crate::lex::annotation::analyze_annotation_header_tokens;
 use crate::lex::ast::elements::sequence_marker::{DecorationStyle, Form, Separator};
+use crate::lex::escape::find_structural_lex_markers;
 use crate::lex::token::{LineType, Token};
 
 /// Parsed details about a list marker at the start of a line.
@@ -144,37 +145,29 @@ fn is_annotation_end_line(tokens: &[Token]) -> bool {
 
 /// Check if line is an annotation start line: follows annotation grammar
 /// Grammar: <lex-marker><space><label>(<space><parameters>)? <lex-marker> <content>?
+///
+/// Uses quote-aware marker detection so that `::` inside quoted parameter
+/// values (e.g., `:: note msg=":: value" ::`) is not misidentified as a
+/// structural delimiter.
 fn is_annotation_start_line(tokens: &[Token]) -> bool {
     if tokens.is_empty() {
         return false;
     }
 
-    // Must contain at least one LexMarker
-    let marker_count = tokens
-        .iter()
-        .filter(|t| matches!(t, Token::LexMarker))
-        .count();
-    if marker_count < 1 {
+    // Find structural markers (outside quoted regions)
+    let structural = find_structural_lex_markers(tokens);
+    if structural.len() < 2 {
         return false;
     }
 
-    // Find first LexMarker position (after optional leading whitespace)
-    let mut first_marker_idx = None;
-    for (i, token) in tokens.iter().enumerate() {
-        match token {
-            Token::Indentation | Token::Whitespace(_) => continue,
-            Token::LexMarker => {
-                first_marker_idx = Some(i);
-                break;
-            }
-            _ => break, // Non-whitespace, non-marker: not an annotation line
+    let first_marker_idx = structural[0];
+
+    // First marker must be at the start (after optional whitespace/indentation)
+    for token in &tokens[..first_marker_idx] {
+        if !matches!(token, Token::Indentation | Token::Whitespace(_)) {
+            return false;
         }
     }
-
-    let first_marker_idx = match first_marker_idx {
-        Some(idx) => idx,
-        None => return false,
-    };
 
     // After first marker, must have whitespace (or be end of line)
     if first_marker_idx + 1 < tokens.len()
@@ -183,18 +176,7 @@ fn is_annotation_start_line(tokens: &[Token]) -> bool {
         return false;
     }
 
-    // Must have a second LexMarker somewhere after the first
-    let mut second_marker_idx = None;
-    for (i, token) in tokens.iter().enumerate().skip(first_marker_idx + 1) {
-        if matches!(token, Token::LexMarker) {
-            second_marker_idx = Some(i);
-            break;
-        }
-    }
-
-    let Some(second_marker_idx) = second_marker_idx else {
-        return false;
-    };
+    let second_marker_idx = structural[1];
 
     // Require a label between the markers
     let header_tokens = &tokens[first_marker_idx + 1..second_marker_idx];
@@ -202,39 +184,37 @@ fn is_annotation_start_line(tokens: &[Token]) -> bool {
 }
 
 /// Check if a line is a data line (:: label params? without closing ::)
+///
+/// Uses quote-aware marker detection so that `::` inside quoted parameter
+/// values does not disqualify a line from being a data line.
 fn is_data_line(tokens: &[Token]) -> bool {
     if tokens.is_empty() {
         return false;
     }
 
-    // Find first LexMarker after optional indentation/whitespace
-    let mut first_marker_idx = None;
-    for (i, token) in tokens.iter().enumerate() {
-        match token {
-            Token::Indentation | Token::Whitespace(_) => continue,
-            Token::LexMarker => {
-                first_marker_idx = Some(i);
-                break;
-            }
-            _ => return false,
-        }
+    // Find structural markers (outside quoted regions)
+    let structural = find_structural_lex_markers(tokens);
+    if structural.is_empty() {
+        return false;
     }
 
-    let Some(first_marker_idx) = first_marker_idx else {
+    // Data lines have exactly one structural marker (no closing ::)
+    if structural.len() >= 2 {
         return false;
-    };
+    }
+
+    let first_marker_idx = structural[0];
+
+    // First marker must be at the start (after optional whitespace/indentation)
+    for token in &tokens[..first_marker_idx] {
+        if !matches!(token, Token::Indentation | Token::Whitespace(_)) {
+            return false;
+        }
+    }
 
     // After first marker we expect whitespace
     if first_marker_idx + 1 >= tokens.len()
         || !matches!(tokens[first_marker_idx + 1], Token::Whitespace(_))
-    {
-        return false;
-    }
-
-    // Data lines must not contain a second LexMarker before newline
-    if tokens[first_marker_idx + 1..]
-        .iter()
-        .any(|t| matches!(t, Token::LexMarker))
     {
         return false;
     }
@@ -596,5 +576,47 @@ mod tests {
         assert_eq!(parsed.body_start, 6);
 
         assert_eq!(classify_line_tokens(&tokens), LineType::ListLine);
+    }
+
+    #[test]
+    fn test_lex_marker_inside_quoted_value_is_annotation_start() {
+        // :: note foo=":: jane" ::
+        let tokens = vec![
+            Token::LexMarker,
+            Token::Whitespace(1),
+            Token::Text("note".to_string()),
+            Token::Whitespace(1),
+            Token::Text("foo".to_string()),
+            Token::Equals,
+            Token::Quote,
+            Token::LexMarker, // :: inside quotes
+            Token::Whitespace(1),
+            Token::Text("jane".to_string()),
+            Token::Quote,
+            Token::Whitespace(1),
+            Token::LexMarker, // closing ::
+            Token::BlankLine(Some("\n".to_string())),
+        ];
+        assert_eq!(classify_line_tokens(&tokens), LineType::AnnotationStartLine);
+    }
+
+    #[test]
+    fn test_lex_marker_inside_quoted_value_data_line() {
+        // :: note foo=":: value"  (no closing ::)
+        let tokens = vec![
+            Token::LexMarker,
+            Token::Whitespace(1),
+            Token::Text("note".to_string()),
+            Token::Whitespace(1),
+            Token::Text("foo".to_string()),
+            Token::Equals,
+            Token::Quote,
+            Token::LexMarker, // :: inside quotes
+            Token::Whitespace(1),
+            Token::Text("value".to_string()),
+            Token::Quote,
+            Token::BlankLine(Some("\n".to_string())),
+        ];
+        assert_eq!(classify_line_tokens(&tokens), LineType::DataLine);
     }
 }

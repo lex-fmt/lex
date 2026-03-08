@@ -423,4 +423,40 @@ mod specific_tests {
             "Hello World"
         );
     }
+
+    #[test]
+    fn test_lex_marker_inside_quoted_value() {
+        let source = ":: note foo=\":: jane\" ::\n\nText. {{paragraph}}\n";
+        let doc = parse_annotation_without_attachment(source).unwrap();
+        assert_ast(&doc).item(0, |item| {
+            item.assert_annotation()
+                .label("note")
+                .parameter_count(1)
+                .has_parameter_with_value("foo", "\":: jane\"");
+        });
+    }
+
+    #[test]
+    fn test_multiple_lex_markers_inside_quoted_value() {
+        let source = ":: note msg=\"a :: b :: c\" ::\n\nText. {{paragraph}}\n";
+        let doc = parse_annotation_without_attachment(source).unwrap();
+        assert_ast(&doc).item(0, |item| {
+            item.assert_annotation()
+                .label("note")
+                .parameter_count(1)
+                .has_parameter_with_value("msg", "\"a :: b :: c\"");
+        });
+    }
+
+    #[test]
+    fn test_single_colon_inside_quoted_value() {
+        let source = ":: note title=\"Chapter: Introduction\" ::\n\nText. {{paragraph}}\n";
+        let doc = parse_annotation_without_attachment(source).unwrap();
+        assert_ast(&doc).item(0, |item| {
+            item.assert_annotation()
+                .label("note")
+                .parameter_count(1)
+                .has_parameter_with_value("title", "\"Chapter: Introduction\"");
+        });
+    }
 }

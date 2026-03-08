@@ -94,6 +94,45 @@ fn is_inline_special(ch: char) -> bool {
     matches!(ch, '\\' | '*' | '_' | '`' | '#' | '[' | ']')
 }
 
+// --- Structural marker detection ---
+
+/// Find positions of `LexMarker` tokens that are NOT inside a quoted context.
+///
+/// Tracks quote state by toggling on each `Quote` token. LexMarkers inside
+/// quoted regions are treated as content, not structural delimiters.
+///
+/// Works with bare `Token` slices (no byte ranges needed).
+pub fn find_structural_lex_markers(tokens: &[crate::lex::token::Token]) -> Vec<usize> {
+    use crate::lex::token::Token;
+    let mut markers = Vec::new();
+    let mut in_quotes = false;
+    for (i, token) in tokens.iter().enumerate() {
+        match token {
+            Token::Quote => in_quotes = !in_quotes,
+            Token::LexMarker if !in_quotes => markers.push(i),
+            _ => {}
+        }
+    }
+    markers
+}
+
+/// Find positions of structural `LexMarker` tokens in a paired token/span slice.
+///
+/// Same logic as `find_structural_lex_markers` but for `(Token, Range)` pairs.
+pub fn find_structural_lex_marker_pairs<R>(tokens: &[(crate::lex::token::Token, R)]) -> Vec<usize> {
+    use crate::lex::token::Token;
+    let mut markers = Vec::new();
+    let mut in_quotes = false;
+    for (i, (token, _)) in tokens.iter().enumerate() {
+        match token {
+            Token::Quote => in_quotes = !in_quotes,
+            Token::LexMarker if !in_quotes => markers.push(i),
+            _ => {}
+        }
+    }
+    markers
+}
+
 // --- Quoted parameter value escaping ---
 
 /// Check whether a quote at `pos` in `source` is escaped by a preceding backslash.
@@ -430,5 +469,60 @@ mod tests {
     #[test]
     fn is_quote_escaped_at_start() {
         assert!(!is_quote_escaped(b"\"", 0));
+    }
+
+    // --- find_structural_lex_markers ---
+
+    #[test]
+    fn structural_markers_no_quotes() {
+        use crate::lex::token::Token;
+        let tokens = vec![
+            Token::LexMarker,
+            Token::Whitespace(1),
+            Token::Text("note".into()),
+            Token::Whitespace(1),
+            Token::LexMarker,
+        ];
+        assert_eq!(find_structural_lex_markers(&tokens), vec![0, 4]);
+    }
+
+    #[test]
+    fn structural_markers_with_quoted_marker() {
+        use crate::lex::token::Token;
+        // :: note foo=":: value" ::
+        let tokens = vec![
+            Token::LexMarker, // 0: structural
+            Token::Whitespace(1),
+            Token::Text("note".into()),
+            Token::Whitespace(1),
+            Token::Text("foo".into()),
+            Token::Equals,
+            Token::Quote,     // 6: opens quote
+            Token::LexMarker, // 7: inside quotes — NOT structural
+            Token::Whitespace(1),
+            Token::Text("value".into()),
+            Token::Quote, // 10: closes quote
+            Token::Whitespace(1),
+            Token::LexMarker, // 12: structural
+        ];
+        assert_eq!(find_structural_lex_markers(&tokens), vec![0, 12]);
+    }
+
+    #[test]
+    fn structural_markers_data_line_with_quoted_marker() {
+        use crate::lex::token::Token;
+        // :: note foo=":: value"  (no closing ::)
+        let tokens = vec![
+            Token::LexMarker, // 0: structural
+            Token::Whitespace(1),
+            Token::Text("note".into()),
+            Token::Equals,
+            Token::Quote,
+            Token::LexMarker, // inside quotes
+            Token::Text("value".into()),
+            Token::Quote,
+        ];
+        // Only one structural marker (opening)
+        assert_eq!(find_structural_lex_markers(&tokens), vec![0]);
     }
 }
