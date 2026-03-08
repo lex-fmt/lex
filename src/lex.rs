@@ -69,6 +69,7 @@ pub mod annotation;
 pub mod assembling;
 pub mod ast;
 pub mod building;
+pub mod escape;
 pub mod formats;
 pub mod inlines;
 pub mod lexing;

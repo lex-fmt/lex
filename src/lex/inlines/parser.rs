@@ -63,6 +63,7 @@
 
 use super::references::classify_reference_node;
 use crate::lex::ast::elements::inlines::{InlineContent, InlineNode, ReferenceInline};
+use crate::lex::escape::unescape_inline_char;
 use crate::lex::token::InlineKind;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
@@ -218,21 +219,20 @@ fn parse_with(parser: &InlineParser, text: &str) -> InlineContent {
         };
 
         if ch == '\\' {
-            if let Some(next_char) = next {
-                if !next_char.is_alphanumeric() {
-                    // Escape non-alphanumeric characters
-                    stack.last_mut().unwrap().push_char(next_char);
+            match unescape_inline_char(next) {
+                crate::lex::escape::EscapeAction::Escape(escaped) => {
+                    stack.last_mut().unwrap().push_char(escaped);
                     i += 2;
                     continue;
-                } else {
-                    // Preserve backslash before alphanumeric
+                }
+                crate::lex::escape::EscapeAction::Literal => {
                     stack.last_mut().unwrap().push_char('\\');
+                    if next.is_none() {
+                        break;
+                    }
                     i += 1;
                     continue;
                 }
-            } else {
-                stack.last_mut().unwrap().push_char('\\');
-                break;
             }
         }
 
