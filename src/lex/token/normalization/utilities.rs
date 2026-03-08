@@ -75,10 +75,7 @@ pub fn flatten_token_vecs(
 /// Compute the bounding box (minimum start, maximum end) from a list of tokens.
 ///
 /// Returns the smallest `Range<usize>` that encompasses all token ranges.
-///
-/// # Panics
-///
-/// Panics if the token list is empty. Callers should ensure tokens are non-empty.
+/// Returns `0..0` if the token list is empty.
 ///
 /// # Example
 ///
@@ -92,10 +89,9 @@ pub fn flatten_token_vecs(
 /// assert_eq!(bbox, 0..11);
 /// ```
 pub fn compute_bounding_box(tokens: &[(Token, ByteRange<usize>)]) -> ByteRange<usize> {
-    assert!(
-        !tokens.is_empty(),
-        "Cannot compute bounding box from empty token list"
-    );
+    if tokens.is_empty() {
+        return 0..0;
+    }
 
     let min_start = tokens
         .iter()
@@ -225,10 +221,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Cannot compute bounding box from empty token list")]
-    fn test_compute_bounding_box_empty_panics() {
+    fn test_compute_bounding_box_empty_returns_zero_range() {
         let tokens: Vec<(Token, ByteRange<usize>)> = vec![];
-        compute_bounding_box(&tokens);
+        assert_eq!(compute_bounding_box(&tokens), 0..0);
     }
 
     #[test]

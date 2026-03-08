@@ -18,7 +18,7 @@ Introduction
 Syntax Forms:
 
 	Data node (reusable header):
-		:: label
+		:: label ::
 		:: label params
 		(The closing :: belongs to the embedding element.)
 
@@ -33,11 +33,7 @@ Syntax Forms:
 	Block form (indented content - note TWO closing :: markers):
 		:: label ::
 		    indented paragraph or list
-		::
-
-
-Content
-
+		:: Content ::
 	Can be empty (marker form - the label itself carries meaning)
 	Forms:
 	- Inline text (single-line form)

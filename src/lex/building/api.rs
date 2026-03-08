@@ -342,9 +342,14 @@ pub fn session_from_tokens(
     source: &str,
     source_location: &SourceLocation,
 ) -> ContentItem {
+    let filtered_tokens: Vec<_> = title_tokens
+        .into_iter()
+        .filter(|(token, _)| !matches!(token, Token::BlankLine(_)))
+        .collect();
+
     // Skip normalization, tokens already normalized
     // 1. Extract
-    let data = extraction::extract_session_data(title_tokens, source);
+    let data = extraction::extract_session_data(filtered_tokens, source);
 
     // 2. Create
     ast_nodes::session_node(data, content, source_location)
@@ -367,9 +372,14 @@ pub fn definition_from_tokens(
     source: &str,
     source_location: &SourceLocation,
 ) -> ContentItem {
+    let filtered_tokens: Vec<_> = subject_tokens
+        .into_iter()
+        .filter(|(token, _)| !matches!(token, Token::BlankLine(_)))
+        .collect();
+
     // Skip normalization, tokens already normalized
     // 1. Extract
-    let data = extraction::extract_definition_data(subject_tokens, source);
+    let data = extraction::extract_definition_data(filtered_tokens, source);
 
     // 2. Create
     ast_nodes::definition_node(data, content, source_location)

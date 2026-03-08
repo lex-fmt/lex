@@ -32,14 +32,12 @@ Disambiguation from Sessions
 	Definition syntax (no blank line):
 		API Endpoint:
 		    A URL that provides access...
-	:: code
-
+	:: code ::
 	Session syntax (has blank line):
 		API Endpoint:
 
 		    A URL that provides access...
-	:: code
-
+	:: code ::
 Content Structure
 
 	Can contain:
