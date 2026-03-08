@@ -310,7 +310,7 @@ fn test_annotation_requires_label() {
 #[test]
 fn test_annotations_overview_document() {
     // annotation.lex: Specification overview document for annotations
-    let doc = Lexplore::from_path(workspace_path("specs/v1/elements/annotation.lex"))
+    let doc = Lexplore::from_path(workspace_path("comms/specs/elements/annotation.lex"))
         .parse()
         .unwrap();
 

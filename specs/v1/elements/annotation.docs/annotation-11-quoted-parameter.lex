@@ -1,1 +1,0 @@
-:: note author="Jane Doe" ::

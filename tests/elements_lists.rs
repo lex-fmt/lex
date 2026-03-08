@@ -419,7 +419,7 @@ fn test_list_13_single_item_is_paragraph() {
 
 #[test]
 fn test_lists_overview_document() {
-    let doc = Lexplore::from_path(workspace_path("specs/v1/elements/list.lex"))
+    let doc = Lexplore::from_path(workspace_path("comms/specs/elements/list.lex"))
         .parse()
         .unwrap();
 

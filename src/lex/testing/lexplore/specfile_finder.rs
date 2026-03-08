@@ -5,7 +5,7 @@
 //!
 //! ## How Does it Work?
 //!
-//! There is a spec file root, which is $PROJECT_ROOT/specs/<version>/ (currently v1)
+//! There is a spec file root, which is $PROJECT_ROOT/comms/specs/ (via git submodule)
 //!
 //! From there one finds several categories of files: benchmarks, trifectas, elements, etc.
 //! Some of these categories have further subcategories. Elements use per-element directories
@@ -30,8 +30,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
-const SPEC_VERSION: &str = "v1";
-const SPECS_ROOT: &str = "specs";
+const SPECS_ROOT: &str = "comms/specs";
 
 /// Element types that can be loaded from the per-element library
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,8 +106,8 @@ impl From<std::io::Error> for SpecFileError {
 ///
 /// # Examples
 /// ```ignore
-/// get_doc_root("elements", Some("paragraph")) -> "specs/v1/elements/paragraph.docs"
-/// get_doc_root("benchmark", None) -> "specs/v1/benchmark"
+/// get_doc_root("elements", Some("paragraph")) -> "comms/specs/elements/paragraph.docs"
+/// get_doc_root("benchmark", None) -> "comms/specs/benchmark"
 /// ```
 pub fn get_doc_root(category: &str, subcategory: Option<&str>) -> PathBuf {
     // CARGO_MANIFEST_DIR points to the crate root where specs/ lives
@@ -116,7 +115,6 @@ pub fn get_doc_root(category: &str, subcategory: Option<&str>) -> PathBuf {
     let crate_root = std::path::Path::new(manifest_dir);
 
     let mut path = crate_root.join(SPECS_ROOT);
-    path.push(SPEC_VERSION);
     path.push(category);
     if let Some(subcat) = subcategory {
         if category == "elements" {

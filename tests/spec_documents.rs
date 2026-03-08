@@ -6,7 +6,7 @@ use lex_core::lex::testing::workspace_path;
 
 #[test]
 fn test_labels_spec_document() {
-    let doc = Lexplore::from_path(workspace_path("specs/v1/elements/label.lex"))
+    let doc = Lexplore::from_path(workspace_path("comms/specs/elements/label.lex"))
         .parse()
         .unwrap();
 
@@ -23,7 +23,7 @@ fn test_labels_spec_document() {
 
 #[test]
 fn test_parameters_spec_document() {
-    let doc = Lexplore::from_path(workspace_path("specs/v1/elements/parameter.lex"))
+    let doc = Lexplore::from_path(workspace_path("comms/specs/elements/parameter.lex"))
         .parse()
         .unwrap();
 
@@ -34,7 +34,7 @@ fn test_parameters_spec_document() {
 
 #[test]
 fn test_verbatim_spec_document() {
-    let doc = Lexplore::from_path(workspace_path("specs/v1/elements/verbatim.lex"))
+    let doc = Lexplore::from_path(workspace_path("comms/specs/elements/verbatim.lex"))
         .parse()
         .unwrap();
 
@@ -49,9 +49,11 @@ fn test_verbatim_spec_document() {
 
 #[test]
 fn test_template_document_simple() {
-    let doc = Lexplore::from_path(workspace_path("specs/v1/elements/XXX-document-simple.lex"))
-        .parse()
-        .unwrap();
+    let doc = Lexplore::from_path(workspace_path(
+        "comms/specs/elements/XXX-document-simple.lex",
+    ))
+    .parse()
+    .unwrap();
 
     assert_ast(&doc).item(1, |item| {
         item.assert_session()
@@ -64,9 +66,11 @@ fn test_template_document_simple() {
 
 #[test]
 fn test_template_document_tricky() {
-    let doc = Lexplore::from_path(workspace_path("specs/v1/elements/XXX-document-tricky.lex"))
-        .parse()
-        .unwrap();
+    let doc = Lexplore::from_path(workspace_path(
+        "comms/specs/elements/XXX-document-tricky.lex",
+    ))
+    .parse()
+    .unwrap();
 
     assert_ast(&doc).item(1, |item| {
         item.assert_session()
