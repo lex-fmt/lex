@@ -66,3 +66,67 @@ proptest! {
         let _ = parse_document(&input);
     }
 }
+
+fn verbatim_block_strategy() -> impl Strategy<Value = String> {
+    prop::collection::vec(
+        prop_oneof![
+            "[a-zA-Z0-9]+",
+            "    [a-zA-Z0-9]+", // indented content inside verbatim
+            "",
+        ],
+        1..5,
+    )
+    .prop_map(|lines| {
+        let content = lines.join("\n");
+        format!("```\n{content}\n```")
+    })
+}
+
+fn annotation_strategy() -> impl Strategy<Value = String> {
+    prop::collection::vec(
+        prop_oneof![
+            "[a-zA-Z0-9]+",
+            "[a-zA-Z0-9]+: [a-zA-Z0-9]+", // parameter-like content
+        ],
+        1..3,
+    )
+    .prop_map(|lines| {
+        let content = lines.join("\n");
+        format!("+[[Annotation]]+\n{content}\n+[[Annotation]]+")
+    })
+}
+
+fn inline_text_strategy() -> impl Strategy<Value = String> {
+    prop_oneof![
+        "This is \\*bold\\* text.",
+        "This is _italic_ text.",
+        "This is `code` text.",
+        "This has a \\[link\\]\\(https://example.com\\).",
+        "This has a \\^\\[footnote\\].",
+        "Mixed \\*bold\\* and _italic_ and `code`.",
+    ]
+}
+
+fn expanded_lex_document_strategy() -> impl Strategy<Value = String> {
+    prop::collection::vec(
+        prop_oneof![
+            lex_text_strategy(),
+            list_item_strategy(),
+            session_title_strategy(),
+            verbatim_block_strategy(),
+            annotation_strategy(),
+            inline_text_strategy(),
+        ],
+        1..30,
+    )
+    .prop_map(|lines| lines.join("\n\n")) // Join with double newlines to ensure separation
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(250))]
+
+    #[test]
+    fn test_parse_document_never_panics_on_expanded_lex(input in expanded_lex_document_strategy()) {
+        let _ = parse_document(&input);
+    }
+}
