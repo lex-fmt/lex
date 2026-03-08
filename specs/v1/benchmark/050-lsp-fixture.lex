@@ -19,7 +19,7 @@
     CLI Example:
         lex build
         lex serve
-    :: shell language=bash
+    :: shell language=bash ::
 
 Notes
     
