@@ -617,7 +617,60 @@ proptest! {
 }
 
 // =============================================================================
-// 8. Session with Mixed Content Types
+// 8. Mixed Marker Types Across Siblings
+// =============================================================================
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(50))]
+
+    #[test]
+    fn session_with_dash_and_numbered_lists(
+        title in subject_strategy(),
+        d1 in list_text(),
+        d2 in list_text(),
+        n1 in list_text(),
+        n2 in list_text(),
+    ) {
+        // Session containing both a dash list and a numbered list
+        let source = format!(
+            "{title}:\n\n\
+             {0}Intro.\n\
+             \n\
+             {0}- {d1}\n\
+             {0}- {d2}\n\
+             \n\
+             {0}Middle.\n\
+             \n\
+             {0}1. {n1}\n\
+             {0}2. {n2}\n",
+            "    "
+        );
+        let doc = parse_document(&source)
+            .unwrap_or_else(|e| panic!("Failed to parse: {e}\nSource:\n{source}"));
+
+        let session = doc.root.children.iter()
+            .find_map(|i| i.as_session())
+            .expect("Expected session");
+
+        let lists: Vec<_> = session.children.iter()
+            .filter(|c| matches!(c, ContentItem::List(_)))
+            .collect();
+        assert_eq!(lists.len(), 2, "Expected 2 lists in session\nSource:\n{source}");
+
+        // First list: dash (Plain style)
+        let list1 = lists[0].as_list().unwrap();
+        let m1 = list1.marker.as_ref().expect("first list needs marker");
+        assert_eq!(m1.style, DecorationStyle::Plain);
+
+        // Second list: numbered
+        let list2 = lists[1].as_list().unwrap();
+        let m2 = list2.marker.as_ref().expect("second list needs marker");
+        assert_eq!(m2.style, DecorationStyle::Numerical);
+    }
+}
+
+// =============================================================================
+// 9. Session with Mixed Content Types
 // =============================================================================
 
 proptest! {
