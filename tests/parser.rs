@@ -533,14 +533,13 @@ fn test_trifecta_050_paragraph_lists() {
     let source = Lexplore::trifecta(50).source();
     let doc = parse_document(&source).unwrap();
 
-    // Based on treeviz output, should have 15 items
-    assert_ast(&doc).item_count(15);
+    // 17 non-blank items after fixture fix (added blank lines before two list sections)
+    assert_ast(&doc).item_count(17);
 
     // Item 0: Description
     assert_ast(&doc).item(0, |item| {
         item.assert_paragraph()
             .text_contains("disambiguation between paragraphs and lists")
-            .text_contains("{{paragraph}}")
             .line_count(1);
     });
 
@@ -560,88 +559,93 @@ fn test_trifecta_050_paragraph_lists() {
             .line_count(2);
     });
 
-    // Item 3: Multi-line paragraph with two list items (becomes a paragraph because no blank line before)
+    // Item 3: Header paragraph (now separate because blank line follows)
     assert_ast(&doc).item(3, |item| {
         item.assert_paragraph()
             .text_contains("Lists require at least two items")
-            .text_contains("- First item")
-            .text_contains("- Second item")
-            .line_count(3);
+            .line_count(1);
     });
 
-    // Item 4: Header paragraph
+    // Item 4: Actual list (now has blank line before it)
     assert_ast(&doc).item(4, |item| {
+        item.assert_list().item_count(2);
+    });
+
+    // Item 5: Header paragraph
+    assert_ast(&doc).item(5, |item| {
         item.assert_paragraph()
             .text_contains("Paragraph followed by list WITH blank line")
             .line_count(1);
     });
 
-    // Item 5: Actual list (has blank line before it)
-    assert_ast(&doc).item(5, |item| {
+    // Item 6: Actual list (has blank line before it)
+    assert_ast(&doc).item(6, |item| {
         item.assert_list().item_count(2);
     });
 
-    // Item 6: Header paragraph
-    assert_ast(&doc).item(6, |item| {
+    // Item 7: Header paragraph
+    assert_ast(&doc).item(7, |item| {
         item.assert_paragraph()
             .text_contains("List followed by paragraph without blank line")
             .line_count(1);
     });
 
-    // Item 7: List
-    assert_ast(&doc).item(7, |item| {
+    // Item 8: List
+    assert_ast(&doc).item(8, |item| {
         item.assert_list().item_count(2);
     });
 
-    // Item 8: Paragraph after list
-    assert_ast(&doc).item(8, |item| {
+    // Item 9: Paragraph after list
+    assert_ast(&doc).item(9, |item| {
         item.assert_paragraph()
             .text_contains("This paragraph follows after blank line")
             .line_count(1);
     });
 
-    // Item 9: Multi-line paragraph with dash item
-    assert_ast(&doc).item(9, |item| {
+    // Item 10: Multi-line paragraph with dash item (illegal — blank line between items)
+    assert_ast(&doc).item(10, |item| {
         item.assert_paragraph()
             .text_contains("Blank lines between list items")
             .text_contains("- This is not")
             .line_count(2);
     });
 
-    // Item 10: Single line paragraph with dash
-    assert_ast(&doc).item(10, |item| {
+    // Item 11: Single line paragraph with dash
+    assert_ast(&doc).item(11, |item| {
         item.assert_paragraph()
             .text("- A list {{paragraph}}")
             .line_count(1);
     });
 
-    // Item 11: Header paragraph
-    assert_ast(&doc).item(11, |item| {
+    // Item 12: Header paragraph
+    assert_ast(&doc).item(12, |item| {
         item.assert_paragraph()
             .text_contains("Proper list with blank lines around it")
             .line_count(1);
     });
 
-    // Item 12: Proper list
-    assert_ast(&doc).item(12, |item| {
+    // Item 13: Proper list
+    assert_ast(&doc).item(13, |item| {
         item.assert_list().item_count(2);
     });
 
-    // Item 13: Paragraph after list
-    assert_ast(&doc).item(13, |item| {
+    // Item 14: Paragraph after list
+    assert_ast(&doc).item(14, |item| {
         item.assert_paragraph()
             .text("Paragraph after proper list. {{paragraph}}")
             .line_count(1);
     });
 
-    // Item 14: Multi-line paragraph containing what looks like list items
-    assert_ast(&doc).item(14, |item| {
+    // Item 15: Header paragraph (now separate because blank line follows)
+    assert_ast(&doc).item(15, |item| {
         item.assert_paragraph()
             .text_contains("Valid mixed decoration list")
-            .text_contains("- First item")
-            .text_contains("1. Second item")
-            .text_contains("a. Third item")
-            .line_count(4);
+            .line_count(1);
+    });
+
+    // Item 16: Mixed decoration list (now has blank line before it)
+    assert_ast(&doc).item(16, |item| {
+        item.assert_list().item_count(3);
     });
 }
 
