@@ -67,43 +67,45 @@ proptest! {
     }
 }
 
+/// Generate valid Lex verbatim blocks: Subject:\n    content\n:: label ::
 fn verbatim_block_strategy() -> impl Strategy<Value = String> {
-    prop::collection::vec(
-        prop_oneof![
-            "[a-zA-Z0-9]+",
-            "    [a-zA-Z0-9]+", // indented content inside verbatim
-            "",
-        ],
-        1..5,
+    (
+        "[A-Z][a-zA-Z0-9 ]{1,15}",
+        prop::collection::vec("[a-zA-Z0-9 ]+", 1..5),
+        "[a-z][a-z0-9_-]{0,8}",
     )
-    .prop_map(|lines| {
-        let content = lines.join("\n");
-        format!("```\n{content}\n```")
-    })
+        .prop_map(|(subject, lines, label)| {
+            let subject = subject.trim_end().to_string();
+            let content = lines
+                .iter()
+                .map(|l| format!("    {l}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            format!("{subject}:\n{content}\n:: {label} ::")
+        })
 }
 
+/// Generate valid Lex annotations: :: label :: or :: label key=value ::
 fn annotation_strategy() -> impl Strategy<Value = String> {
-    prop::collection::vec(
-        prop_oneof![
-            "[a-zA-Z0-9]+",
-            "[a-zA-Z0-9]+: [a-zA-Z0-9]+", // parameter-like content
-        ],
-        1..3,
-    )
-    .prop_map(|lines| {
-        let content = lines.join("\n");
-        format!("+[[Annotation]]+\n{content}\n+[[Annotation]]+")
-    })
+    prop_oneof![
+        // Marker annotation
+        "[a-z][a-z0-9_-]{0,8}".prop_map(|label| format!(":: {label} ::")),
+        // Annotation with parameter
+        ("[a-z][a-z0-9_-]{0,8}", "[a-z][a-z0-9_]{0,6}", "[a-z0-9]+",)
+            .prop_map(|(label, key, value)| format!(":: {label} {key}={value} ::")),
+    ]
 }
 
+/// Generate valid Lex inline text (using actual Lex inline syntax)
 fn inline_text_strategy() -> impl Strategy<Value = String> {
     prop_oneof![
-        "This is \\*bold\\* text.",
-        "This is _italic_ text.",
-        "This is `code` text.",
-        "This has a \\[link\\]\\(https://example.com\\).",
-        "This has a \\^\\[footnote\\].",
-        "Mixed \\*bold\\* and _italic_ and `code`.",
+        "This is *[a-z]+* text.",
+        "This is _[a-z]+_ text.",
+        "This is `[a-z]+` text.",
+        "This has #[a-z]+# math.",
+        "See \\[@[a-z]+\\] here.",
+        "Mixed *[a-z]+* and _[a-z]+_ text.",
+        "Reference \\[\\^[a-z]+\\] note.",
     ]
 }
 
