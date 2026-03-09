@@ -4,6 +4,7 @@
 //! deeply nested structures, adjacent definitions, and mixed marker types.
 
 use lex_core::lex::ast::elements::sequence_marker::{DecorationStyle, Form, Separator};
+use lex_core::lex::ast::elements::verbatim::VerbatimBlockMode;
 use lex_core::lex::ast::ContentItem;
 use lex_core::lex::parsing::parse_document;
 use lex_core::lex::testing::assert_ast;
@@ -560,7 +561,63 @@ proptest! {
 }
 
 // =============================================================================
-// 7. Session with Mixed Content Types
+// 7. Fullwidth Verbatim Mode
+// =============================================================================
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(50))]
+
+    #[test]
+    fn fullwidth_verbatim_at_root(
+        subject in subject_strategy(),
+        label in label_strategy(),
+    ) {
+        // Fullwidth verbatim: content at column 2 (1 space indent = column index 1)
+        let source = format!("{subject}:\n Header | Value\n Row1   | Data1\n:: {label} ::\n");
+        let doc = parse_document(&source)
+            .unwrap_or_else(|e| panic!("Failed to parse: {e}\nSource:\n{source}"));
+
+        assert_ast(&doc)
+            .item(0, |item| {
+                item.assert_verbatim_block()
+                    .subject(&subject)
+                    .closing_label(&label)
+                    .mode(VerbatimBlockMode::Fullwidth);
+            });
+    }
+
+    #[test]
+    fn inflow_verbatim_vs_fullwidth(
+        subject in subject_strategy(),
+        label in label_strategy(),
+        code in "[a-zA-Z0-9]+",
+    ) {
+        // Inflow: content at standard indent (4 spaces beyond subject)
+        let inflow_source = format!("{subject}:\n    {code}\n:: {label} ::\n");
+        let inflow_doc = parse_document(&inflow_source)
+            .unwrap_or_else(|e| panic!("Failed to parse inflow: {e}\nSource:\n{inflow_source}"));
+
+        assert_ast(&inflow_doc)
+            .item(0, |item| {
+                item.assert_verbatim_block()
+                    .mode(VerbatimBlockMode::Inflow);
+            });
+
+        // Fullwidth: content at column 2 (single space)
+        let fullwidth_source = format!("{subject}:\n {code}\n:: {label} ::\n");
+        let fullwidth_doc = parse_document(&fullwidth_source)
+            .unwrap_or_else(|e| panic!("Failed to parse fullwidth: {e}\nSource:\n{fullwidth_source}"));
+
+        assert_ast(&fullwidth_doc)
+            .item(0, |item| {
+                item.assert_verbatim_block()
+                    .mode(VerbatimBlockMode::Fullwidth);
+            });
+    }
+}
+
+// =============================================================================
+// 8. Session with Mixed Content Types
 // =============================================================================
 
 proptest! {
