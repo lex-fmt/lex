@@ -226,13 +226,21 @@ fn extract_content_line(
     if bounds.is_none() {
         return (String::new(), 0..0);
     }
-    let (line_start, line_end) = bounds.unwrap();
-    let trimmed_end = trim_trailing_newline(source, line_start, line_end);
-    if trimmed_end <= line_start {
-        return (String::new(), line_start..line_start);
+    let (first_token_start, line_end) = bounds.unwrap();
+    let trimmed_end = trim_trailing_newline(source, first_token_start, line_end);
+    if trimmed_end <= first_token_start {
+        return (String::new(), first_token_start..first_token_start);
     }
 
-    let start_offset = advance_to_wall(source, line_start, trimmed_end, wall_column);
+    // The token spans don't include leading indentation whitespace (consumed by the
+    // tree builder as Indent markers). Find the actual line start in the source by
+    // scanning backwards to the preceding newline.
+    let actual_line_start = source[..first_token_start]
+        .rfind('\n')
+        .map(|idx| idx + 1)
+        .unwrap_or(0);
+
+    let start_offset = advance_to_wall(source, actual_line_start, trimmed_end, wall_column);
     if start_offset >= trimmed_end {
         return (String::new(), trimmed_end..trimmed_end);
     }
