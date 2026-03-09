@@ -1,6 +1,8 @@
 //! Property-based tests for escape/unescape logic
 
+use lex_core::lex::ast::elements::inlines::InlineNode;
 use lex_core::lex::escape::{escape_inline, escape_quoted, unescape_inline, unescape_quoted};
+use lex_core::lex::inlines::parse_inlines;
 use proptest::prelude::*;
 
 /// Arbitrary string that may contain inline special characters and backslashes.
@@ -136,6 +138,62 @@ fn realistic_mixed_content() {
     // User wants to display: The formula *x* uses [brackets]
     let escaped = "The formula \\*x\\* uses \\[brackets\\]";
     assert_eq!(unescape_inline(escaped), "The formula *x* uses [brackets]");
+}
+
+// --- End-to-end inline parser escape prop tests ---
+
+/// Content for inside code/math spans: printable ASCII without the delimiter.
+/// Must not start with whitespace (start validation requires non-whitespace after marker).
+fn literal_content_strategy(exclude: char) -> impl Strategy<Value = String> {
+    "[!-~]{1,30}".prop_filter("must not contain delimiter", move |s| !s.contains(exclude))
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(300))]
+
+    #[test]
+    fn code_span_preserves_backslashes(content in literal_content_strategy('`')) {
+        let input = format!("`{content}`");
+        let nodes = parse_inlines(&input);
+        prop_assert_eq!(
+            nodes,
+            vec![InlineNode::code(content.clone())],
+            "code span should preserve content verbatim: input={:?}", input
+        );
+    }
+
+    #[test]
+    fn math_span_preserves_backslashes(content in literal_content_strategy('#')) {
+        let input = format!("#{content}#");
+        let nodes = parse_inlines(&input);
+        prop_assert_eq!(
+            nodes,
+            vec![InlineNode::math(content.clone())],
+            "math span should preserve content verbatim: input={:?}", input
+        );
+    }
+
+    #[test]
+    fn escaped_inline_markers_become_plain_text(text in plain_content_strategy()) {
+        // Escaping all special chars and parsing should yield plain text with the original content
+        let escaped = escape_inline(&text);
+        let nodes = parse_inlines(&escaped);
+        // All nodes should be plain text (no Strong, Emphasis, Code, Math, or Reference)
+        for node in &nodes {
+            prop_assert!(
+                matches!(node, InlineNode::Plain { .. }),
+                "expected plain text after escaping, got {:?} from input {:?} -> {:?}",
+                node, text, escaped
+            );
+        }
+        // The combined plain text should equal the original
+        let combined: String = nodes.iter().map(|n| match n {
+            InlineNode::Plain { text, .. } => text.as_str(),
+            _ => "",
+        }).collect();
+        prop_assert_eq!(&combined, &text,
+            "escaped content should roundtrip to original through parser");
+    }
 }
 
 // --- Quoted parameter value prop tests ---
