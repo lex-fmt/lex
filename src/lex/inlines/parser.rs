@@ -218,7 +218,9 @@ fn parse_with(parser: &InlineParser, text: &str) -> InlineContent {
             None
         };
 
-        if ch == '\\' {
+        // Escape processing only applies outside literal contexts (code/math).
+        // Inside literal elements, backslash is just a regular character.
+        if ch == '\\' && !stack.last().unwrap().is_literal(parser) {
             match unescape_inline_char(next) {
                 crate::lex::escape::EscapeAction::Escape(escaped) => {
                     stack.last_mut().unwrap().push_char(escaped);
@@ -449,9 +451,12 @@ impl BlockedClosings {
 }
 
 fn is_valid_start(prev: Option<char>, next: Option<char>, spec: &InlineSpec) -> bool {
-    if spec.kind == InlineKind::Reference {
-        !is_word(prev) && next.is_some()
+    if spec.literal {
+        // Literal elements (code, math, reference) accept any non-whitespace content.
+        // This allows code/math to start with \, {, (, *, etc.
+        !is_word(prev) && next.is_some_and(|c| !c.is_whitespace())
     } else {
+        // Non-literal elements (strong, emphasis) require word char after marker.
         !is_word(prev) && is_word(next)
     }
 }
@@ -556,6 +561,20 @@ mod tests {
     fn math_is_literal() {
         let nodes = parse_inlines("#x + y#");
         assert_eq!(nodes, vec![InlineNode::math("x + y".into())]);
+    }
+
+    #[test]
+    fn code_preserves_backslashes() {
+        // Backslashes inside literal contexts (code) are preserved verbatim
+        let nodes = parse_inlines("`\\*text\\*`");
+        assert_eq!(nodes, vec![InlineNode::code("\\*text\\*".into())]);
+    }
+
+    #[test]
+    fn math_preserves_backslashes() {
+        // Backslashes inside literal contexts (math) are preserved verbatim
+        let nodes = parse_inlines("#\\alpha#");
+        assert_eq!(nodes, vec![InlineNode::math("\\alpha".into())]);
     }
 
     #[test]
