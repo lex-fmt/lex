@@ -401,7 +401,76 @@ proptest! {
 }
 
 // =============================================================================
-// 6. Extended Markers (1.2.3) and Roman Numerals
+// 6. Extended Form Markers (1.2.3, I.a.2, etc.)
+// =============================================================================
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(50))]
+
+    #[test]
+    fn list_marker_extended_numerical(
+        item1 in list_text(),
+        item2 in list_text(),
+    ) {
+        let source = format!("\n1.2.3. {item1}\n1.2.4. {item2}\n");
+        let doc = parse_document(&source)
+            .unwrap_or_else(|e| panic!("Failed to parse: {e}\nSource:\n{source}"));
+
+        let items: Vec<&ContentItem> = doc.root.children.iter().collect();
+        let list = items
+            .iter()
+            .find_map(|item| if let ContentItem::List(l) = item { Some(l) } else { None })
+            .expect("Expected a List");
+
+        let marker = list.marker.as_ref().expect("List should have a marker");
+        assert_eq!(marker.form, Form::Extended);
+        assert_eq!(marker.separator, Separator::Period);
+    }
+
+    #[test]
+    fn list_marker_extended_mixed(
+        item1 in list_text(),
+        item2 in list_text(),
+    ) {
+        // Mixed extended form: 1.a) and 1.b)
+        let source = format!("\n1.a) {item1}\n1.b) {item2}\n");
+        let doc = parse_document(&source)
+            .unwrap_or_else(|e| panic!("Failed to parse: {e}\nSource:\n{source}"));
+
+        let items: Vec<&ContentItem> = doc.root.children.iter().collect();
+        let list = items
+            .iter()
+            .find_map(|item| if let ContentItem::List(l) = item { Some(l) } else { None })
+            .expect("Expected a List");
+
+        let marker = list.marker.as_ref().expect("List should have a marker");
+        assert_eq!(marker.form, Form::Extended);
+        assert_eq!(marker.separator, Separator::Parenthesis);
+    }
+
+    #[test]
+    fn list_marker_extended_two_level(
+        item1 in list_text(),
+        item2 in list_text(),
+    ) {
+        let source = format!("\n1.1. {item1}\n1.2. {item2}\n");
+        let doc = parse_document(&source)
+            .unwrap_or_else(|e| panic!("Failed to parse: {e}\nSource:\n{source}"));
+
+        let items: Vec<&ContentItem> = doc.root.children.iter().collect();
+        let list = items
+            .iter()
+            .find_map(|item| if let ContentItem::List(l) = item { Some(l) } else { None })
+            .expect("Expected a List");
+
+        let marker = list.marker.as_ref().expect("List should have a marker");
+        assert_eq!(marker.form, Form::Extended);
+        assert_eq!(marker.style, DecorationStyle::Numerical);
+    }
+}
+
+// =============================================================================
+// 7. Roman Numerals and Alphabetical Variants
 // =============================================================================
 
 proptest! {
