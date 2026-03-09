@@ -38,6 +38,24 @@ fn paragraph_line() -> impl Strategy<Value = String> {
     "[A-Z][a-z]+ [a-z]+ [a-z]+[.]"
 }
 
+/// Paragraph text containing colons mid-line (should remain paragraph, not trigger definition)
+fn text_with_mid_colons() -> impl Strategy<Value = String> {
+    prop_oneof![
+        "[A-Z][a-z]+: [a-z]+ [a-z]+[.]",
+        "[A-Z][a-z]+ [a-z]+: [a-z]+ [a-z]+[.]",
+        "[A-Z][a-z]+: [a-z]+: [a-z]+[.]",
+    ]
+}
+
+/// Paragraph text containing dashes (should remain paragraph, not trigger list)
+fn text_with_dashes() -> impl Strategy<Value = String> {
+    prop_oneof![
+        "[A-Z][a-z]+ - [a-z]+ [a-z]+[.]",
+        "[A-Z][a-z]+-[a-z]+ [a-z]+[.]",
+        "[A-Z][a-z]+ [a-z]+ -- [a-z]+[.]",
+    ]
+}
+
 fn subject_strategy() -> impl Strategy<Value = String> {
     "[A-Z][a-zA-Z0-9 ]{1,20}"
         .prop_map(|s| s.trim_end().to_string())
@@ -91,6 +109,67 @@ proptest! {
             assert!(
                 !matches!(item, ContentItem::Definition(_)),
                 "Colon text followed by unindented text should NOT be a Definition\nSource:\n{source}"
+            );
+        }
+    }
+}
+
+// =============================================================================
+// 1b. Colons and dashes mid-text should not trigger false detection
+// =============================================================================
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(100))]
+
+    #[test]
+    fn mid_colon_text_stays_paragraph(text in text_with_mid_colons()) {
+        // Colons in the middle of running text → still paragraph
+        let source = format!("{text}\n");
+        let doc = parse_document(&source)
+            .unwrap_or_else(|e| panic!("Failed to parse: {e}\nSource:\n{source}"));
+
+        // At root level, this might parse as session if colon is at end.
+        // But mid-colon text should never produce a Definition.
+        let items: Vec<&ContentItem> = doc.root.children.iter().collect();
+        for item in &items {
+            assert!(
+                !matches!(item, ContentItem::Definition(_)),
+                "Mid-colon text should NOT be a Definition\nSource:\n{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn dash_mid_text_stays_paragraph(text in text_with_dashes()) {
+        // Dashes in the middle of text → still paragraph, not list
+        let source = format!("{text}\n");
+        let doc = parse_document(&source)
+            .unwrap_or_else(|e| panic!("Failed to parse: {e}\nSource:\n{source}"));
+
+        let items: Vec<&ContentItem> = doc.root.children.iter().collect();
+        for item in &items {
+            assert!(
+                !matches!(item, ContentItem::List(_)),
+                "Dash in middle of text should NOT be a List\nSource:\n{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn double_colon_sequence_mid_text_not_annotation(
+        prefix in "[A-Z][a-z]+",
+        suffix in "[a-z]+ [a-z]+[.]",
+    ) {
+        // :: in the middle of a word or sentence
+        let source = format!("{prefix}::{suffix}\n");
+        let doc = parse_document(&source)
+            .unwrap_or_else(|e| panic!("Failed to parse: {e}\nSource:\n{source}"));
+
+        let items: Vec<&ContentItem> = doc.root.children.iter().collect();
+        for item in &items {
+            assert!(
+                !matches!(item, ContentItem::Annotation(_)),
+                ":: mid-word should NOT be an Annotation\nSource:\n{source}"
             );
         }
     }
