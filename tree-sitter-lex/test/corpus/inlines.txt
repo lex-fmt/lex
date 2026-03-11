@@ -116,3 +116,99 @@ See [Section 1] and [Section 2] for details
         (text_content
           (reference)
           (reference))))))
+
+==================
+Strong (bold)
+==================
+This is *bold* text
+---
+
+(document
+  (paragraph
+    (text_line
+      (line_content
+        (text_content
+          (strong))))))
+
+==================
+Emphasis (italic)
+==================
+This is _italic_ text
+---
+
+(document
+  (paragraph
+    (text_line
+      (line_content
+        (text_content
+          (emphasis))))))
+
+==================
+Strong and emphasis on same line
+==================
+Here is *bold* and _italic_ together
+---
+
+(document
+  (paragraph
+    (text_line
+      (line_content
+        (text_content
+          (strong)
+          (emphasis))))))
+
+==================
+Unmatched asterisk
+==================
+7 * 8 = 56
+---
+
+(document
+  (paragraph
+    (text_line
+      (line_content
+        (text_content)))))
+
+==================
+Strong with multiple words
+==================
+This has *all major features* inside
+---
+
+(document
+  (paragraph
+    (text_line
+      (line_content
+        (text_content
+          (strong))))))
+
+==================
+All inline elements together
+==================
+Text *bold* _italic_ `code` #math# [ref]
+---
+
+(document
+  (paragraph
+    (text_line
+      (line_content
+        (text_content
+          (strong)
+          (emphasis)
+          (code_span)
+          (math_span)
+          (reference))))))
+
+==================
+Escaped asterisk not strong
+==================
+Use \* not bold \* here
+---
+
+(document
+  (paragraph
+    (text_line
+      (line_content
+        (text_content
+          (escape_sequence)
+          (escape_sequence))))))

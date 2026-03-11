@@ -431,6 +431,14 @@
       "members": [
         {
           "type": "SYMBOL",
+          "name": "strong"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "emphasis"
+        },
+        {
+          "type": "SYMBOL",
           "name": "code_span"
         },
         {
@@ -454,6 +462,14 @@
           "name": "_delimiter_char"
         }
       ]
+    },
+    "strong": {
+      "type": "PATTERN",
+      "value": "\\*[^\\n*]+\\*"
+    },
+    "emphasis": {
+      "type": "PATTERN",
+      "value": "_[^\\n_]+_"
     },
     "code_span": {
       "type": "PATTERN",

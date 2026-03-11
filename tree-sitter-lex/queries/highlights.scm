@@ -11,6 +11,8 @@
 (verbatim_block) @markup.raw
 
 ; Inline formatting
+(strong) @markup.bold
+(emphasis) @markup.italic
 (code_span) @markup.raw.inline
 (math_span) @markup.math
 (reference) @markup.link

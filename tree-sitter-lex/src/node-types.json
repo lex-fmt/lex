@@ -71,6 +71,10 @@
           "named": true
         },
         {
+          "type": "emphasis",
+          "named": true
+        },
+        {
           "type": "escape_sequence",
           "named": true
         },
@@ -80,6 +84,10 @@
         },
         {
           "type": "reference",
+          "named": true
+        },
+        {
+          "type": "strong",
           "named": true
         }
       ]
@@ -378,6 +386,10 @@
           "named": true
         },
         {
+          "type": "emphasis",
+          "named": true
+        },
+        {
           "type": "escape_sequence",
           "named": true
         },
@@ -387,6 +399,10 @@
         },
         {
           "type": "reference",
+          "named": true
+        },
+        {
+          "type": "strong",
           "named": true
         }
       ]
@@ -486,6 +502,10 @@
     "named": true
   },
   {
+    "type": "emphasis",
+    "named": true
+  },
+  {
     "type": "escape_sequence",
     "named": true
   },
@@ -499,6 +519,10 @@
   },
   {
     "type": "reference",
+    "named": true
+  },
+  {
+    "type": "strong",
     "named": true
   },
   {

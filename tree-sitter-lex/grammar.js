@@ -155,6 +155,8 @@ module.exports = grammar({
 
     _inline: ($) =>
       choice(
+        $.strong,
+        $.emphasis,
         $.code_span,
         $.math_span,
         $.reference,
@@ -163,9 +165,11 @@ module.exports = grammar({
         $._delimiter_char,
       ),
 
-    // Literal inline spans — matched as single regex tokens.
+    // Inline spans — matched as single regex tokens.
     // Lexer longest-match ensures these win over _delimiter_char for
     // the opening character when a closing delimiter exists on the line.
+    strong: (_$) => /\*[^\n*]+\*/,
+    emphasis: (_$) => /_[^\n_]+_/,
     code_span: (_$) => /`[^`\n]+`/,
     math_span: (_$) => /#[^#\n]+#/,
     reference: (_$) => /\[[^\]\n]+\]/,
