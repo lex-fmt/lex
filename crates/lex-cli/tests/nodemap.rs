@@ -39,7 +39,7 @@ fn test_inspect_nodemap_color() {
     cmd.arg("inspect")
         .arg(file)
         .arg("ast-nodemap")
-        .arg("--extra-color");
+        .arg("--color");
 
     cmd.assert()
         .success()
@@ -58,7 +58,7 @@ fn test_inspect_nodemap_summary() {
     cmd.arg("inspect")
         .arg(file)
         .arg("ast-nodemap")
-        .arg("--extra-nodesummary");
+        .arg("--node-summary");
 
     let assert = cmd.assert().success();
     let output = assert.get_output();

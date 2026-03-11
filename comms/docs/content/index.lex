@@ -45,7 +45,7 @@ Home
 
     CLI Workflow:
         lex generate-lex-css > docs/assets/css/lex-content.css
-        lex docs/_lex_src/pages/index.lex --to html --extras-css-path docs/assets/css/lex-content.css -o index.html
+        lex docs/_lex_src/pages/index.lex --to html --css-path docs/assets/css/lex-content.css -o index.html
     :: shell ::
 4. Key Elements
 
@@ -70,6 +70,6 @@ Home
 
 6. Footnotes & References
 
-    1. The CLI version 0.2.6 introduced `--extras-css-path`, enabling this page to share styles with the rest of the site.
+    1. The CLI version 0.2.6 introduced `--css-path` (originally `--extras-css-path`), enabling this page to share styles with the rest of the site.
     ^durable.  Durable storage matters because lex documents often combine research, notes, and publication drafts across years.
     @specs.   The specification lives at https://lex.ing/specs/.

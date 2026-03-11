@@ -46,7 +46,7 @@ for src in "$SRC_DIR"/*.lex; do
   echo "[lex] $src → $dest"
 
   # Convert lex to full HTML
-  "$LEX_BIN" "$src" --to html --extras-css-path "$CSS_PATH" > "$tmp_html"
+  "$LEX_BIN" "$src" --to html --css-path "$CSS_PATH" > "$tmp_html"
 
   # Extract just the lex-document div (strip HTML wrapper)
   python3 - "$tmp_html" "$dest" <<'PY'

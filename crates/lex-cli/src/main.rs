@@ -15,75 +15,25 @@
 //  lex convert <input> --to <format> [--from <format>] [--output <file>]  - Same as above (explicit)
 //  lex inspect <path> [<transform>]      - Execute a transform (defaults to "ast-treeviz")
 //  lex --list-transforms                 - List available transforms
+//  lex config [list|gen|get|set|unset]   - Manage configuration
 //
-// Extra Parameters:
+// Configuration:
 //
-// Format-specific parameters can be passed using --extra-<parameter-name> <value>.
-// The CLI layer strips the "extra-" prefix and passes the parameters to the format/transform.
-// Example:
-//  lex inspect file.lex --extra-all-nodes true --extra-max-depth 5
+// Settings are loaded from lex.toml files (CWD, project root, platform config dir),
+// environment variables (LEX__*), and CLI flags. Use `lex config` to manage settings.
 
 use lex_cli::transforms;
 
-use clap::{Arg, ArgAction, Command, ValueHint};
+use clap::{Arg, ArgAction, ArgMatches, Command, ValueHint};
+use clapfig::{Boundary, Clapfig, ClapfigBuilder, ConfigCommand, SearchPath};
 use lex_babel::{
     formats::lex::formatting_rules::FormattingRules, transforms::serialize_to_lex_with_rules,
     FormatRegistry, SerializedDocument,
 };
-use lex_config::{LexConfig, Loader, PdfPageSize};
+use lex_config::{LexConfig, PdfPageSize};
 use lex_core::lex::ast::{find_node_path_at_position, Position};
 use std::collections::HashMap;
 use std::fs;
-
-/// Parse extra-* arguments from command line args
-/// Returns (cleaned_args_without_extras, extra_params_map)
-///
-/// Supports both:
-/// - `--extra-<key> <value>` (explicit value)
-/// - `--extra-<key>` (boolean flag, defaults to "true")
-/// - `--extras-<key>` (alias for `--extra-<key>`)
-fn parse_extra_args(args: &[String]) -> (Vec<String>, HashMap<String, String>) {
-    let mut cleaned_args = Vec::new();
-    let mut extra_params = HashMap::new();
-    let mut i = 0;
-
-    while i < args.len() {
-        let arg = &args[i];
-
-        let key_opt = if let Some(key) = arg.strip_prefix("--extra-") {
-            Some(key)
-        } else {
-            arg.strip_prefix("--extras-")
-        };
-
-        if let Some(key) = key_opt {
-            // Found an extra-* argument
-            // Check if the next arg is a value or another flag/end
-            let has_value = if i + 1 < args.len() {
-                let next = &args[i + 1];
-                !next.starts_with('-') && !next.starts_with("--")
-            } else {
-                false
-            };
-
-            if has_value {
-                // Explicit value provided
-                extra_params.insert(key.to_string(), args[i + 1].clone());
-                i += 2; // Skip both the key and value
-            } else {
-                // No value, treat as boolean flag (default to "true")
-                extra_params.insert(key.to_string(), "true".to_string());
-                i += 1;
-            }
-            continue;
-        }
-
-        cleaned_args.push(arg.clone());
-        i += 1;
-    }
-
-    (cleaned_args, extra_params)
-}
 
 fn build_cli() -> Command {
     Command::new("lex")
@@ -93,16 +43,19 @@ fn build_cli() -> Command {
             "lex is a command-line tool for working with lex document files.\n\n\
             Commands:\n  \
             - inspect: View internal representations (tokens, AST, etc.)\n  \
-            - convert: Transform between document formats (lex, markdown, HTML, etc.)\n\n\
-            Extra Parameters:\n  \
-            Use --extra-<name> [value] to pass format-specific options.\n  \
-            Boolean flags can omit the value (defaults to 'true').\n\n\
+            - convert: Transform between document formats (lex, markdown, HTML, etc.)\n  \
+            - config:  Manage configuration (list, get, set, gen)\n\n\
+            Configuration:\n  \
+            Settings are loaded from lex.toml files, LEX__* env vars, and CLI flags.\n  \
+            Use `lex config list` to see resolved settings.\n\n\
             Examples:\n  \
             lex inspect file.lex                    # View AST tree visualization\n  \
             lex inspect file.lex ast-tag            # View AST as XML tags\n  \
-            lex inspect file.lex --extra-ast-full   # Show complete AST (all node properties)\n  \
+            lex inspect file.lex --ast-full         # Show complete AST (all node properties)\n  \
             lex file.lex --to markdown              # Convert to markdown (outputs to stdout)\n  \
-            lex file.lex --to html -o output.html   # Convert to HTML file"
+            lex file.lex --to html -o output.html   # Convert to HTML file\n  \
+            lex config list                         # Show all resolved settings\n  \
+            lex config set convert.html.theme fancy-serif  # Persist a setting"
         )
         .arg_required_else_help(true)
         .subcommand_required(false)
@@ -114,7 +67,7 @@ fn build_cli() -> Command {
                 .global(true),
         )
         .arg(
-            Arg::new("config")
+            Arg::new("config-path")
                 .long("config")
                 .value_name("PATH")
                 .help("Path to a lex.toml configuration file")
@@ -133,15 +86,10 @@ fn build_cli() -> Command {
                     - ast-json:     AST as JSON\n  \
                     - token-*:      Token stream representations\n  \
                     - ir-json:      Intermediate representation\n\n\
-                    Extra Parameters:\n  \
-                    --extra-ast-full      Show complete AST including:\n                          \
-                    * Document-level annotations\n                          \
-                    * All node properties (labels, subjects, parameters)\n                          \
-                    * Session titles, list markers, definition subjects\n\n\
                     Examples:\n  \
                     lex inspect file.lex                     # Tree visualization (default)\n  \
                     lex inspect file.lex ast-tag             # XML-like output\n  \
-                    lex inspect file.lex --extra-ast-full    # Complete AST with all properties\n  \
+                    lex inspect file.lex --ast-full          # Complete AST with all properties\n  \
                     lex inspect file.lex token-core-json     # View token stream"
                 )
                 .arg(
@@ -170,6 +118,36 @@ fn build_cli() -> Command {
                         ))
                         .index(2)
                         .value_hint(ValueHint::Other),
+                )
+                .arg(
+                    Arg::new("ast-full")
+                        .long("ast-full")
+                        .help("Show complete AST including all node properties")
+                        .action(ArgAction::SetTrue),
+                )
+                .arg(
+                    Arg::new("no-linum")
+                        .long("no-linum")
+                        .help("Hide line numbers in AST output")
+                        .action(ArgAction::SetTrue),
+                )
+                .arg(
+                    Arg::new("color")
+                        .long("color")
+                        .help("Use ANSI-colored blocks in nodemap output")
+                        .action(ArgAction::SetTrue),
+                )
+                .arg(
+                    Arg::new("color-char")
+                        .long("color-char")
+                        .help("Color Base2048 glyphs with ANSI codes in nodemap output")
+                        .action(ArgAction::SetTrue),
+                )
+                .arg(
+                    Arg::new("node-summary")
+                        .long("node-summary")
+                        .help("Show summary statistics under nodemap output")
+                        .action(ArgAction::SetTrue),
                 ),
         )
         .subcommand(
@@ -231,6 +209,25 @@ fn build_cli() -> Command {
                             The file extension should match the target format."
                         )
                         .value_hint(ValueHint::FilePath),
+                )
+                .arg(
+                    Arg::new("theme")
+                        .long("theme")
+                        .help("HTML theme (e.g. 'fancy-serif', 'modern')")
+                        .value_hint(ValueHint::Other),
+                )
+                .arg(
+                    Arg::new("css-path")
+                        .long("css-path")
+                        .help("Path to custom CSS file for HTML export")
+                        .value_hint(ValueHint::FilePath),
+                )
+                .arg(
+                    Arg::new("pdf-size")
+                        .long("pdf-size")
+                        .help("PDF page profile ('lexed' or 'mobile')")
+                        .value_parser(["lexed", "mobile"])
+                        .value_hint(ValueHint::Other),
                 ),
         )
         .subcommand(
@@ -290,8 +287,8 @@ fn build_cli() -> Command {
                 .long_about(
                     "Outputs the default baseline CSS used when converting to HTML.\n\n\
                     Use this as a starting point for custom styling. The output can be\n\
-                    saved to a file and customized, then passed via --extra-css to the\n\
-                    convert command to extend the default styles.\n\n\
+                    saved to a file and customized, then referenced via the\n\
+                    convert.html.custom_css config setting.\n\n\
                     Examples:\n  \
                     lex generate-lex-css                    # Print CSS to stdout\n  \
                     lex generate-lex-css > custom.css       # Save to file for editing"
@@ -300,28 +297,32 @@ fn build_cli() -> Command {
 }
 
 fn main() {
-    // Try to parse args. If no subcommand is provided, inject "convert"
+    let config_cmd = ConfigCommand::new();
+    let cli = build_cli().subcommand(config_cmd.as_command("config"));
+
     let args: Vec<String> = std::env::args().collect();
 
-    // Parse extra-* arguments before clap processing
-    let (cleaned_args, mut extra_params) = parse_extra_args(&args);
-
-    // First, try normal parsing with cleaned args
-    let cli = build_cli();
-    let matches = match cli.clone().try_get_matches_from(&cleaned_args) {
+    // First, try normal parsing
+    let matches = match cli.clone().try_get_matches_from(&args) {
         Ok(m) => m,
         Err(e) => {
             // Check if this is a "missing subcommand" error by seeing if the first arg looks like a file
-            if cleaned_args.len() > 1
-                && !cleaned_args[1].starts_with('-')
-                && cleaned_args[1] != "inspect"
-                && cleaned_args[1] != "convert"
-                && cleaned_args[1] != "generate-lex-css"
-                && cleaned_args[1] != "help"
+            if args.len() > 1
+                && !args[1].starts_with('-')
+                && ![
+                    "inspect",
+                    "convert",
+                    "config",
+                    "format",
+                    "element-at",
+                    "generate-lex-css",
+                    "help",
+                ]
+                .contains(&args[1].as_str())
             {
                 // Inject "convert" as the subcommand
-                let mut new_args = vec![cleaned_args[0].clone(), "convert".to_string()];
-                new_args.extend_from_slice(&cleaned_args[1..]);
+                let mut new_args = vec![args[0].clone(), "convert".to_string()];
+                new_args.extend_from_slice(&args[1..]);
 
                 // Try parsing again with "convert" injected
                 match cli.try_get_matches_from(&new_args) {
@@ -340,88 +341,160 @@ fn main() {
         return;
     }
 
-    let mut config = load_cli_config(matches.get_one::<String>("config").map(|s| s.as_str()));
-    apply_config_overrides(&mut config, &mut extra_params);
+    let builder = make_builder(&matches);
 
     match matches.subcommand() {
-        Some(("inspect", sub_matches)) => {
-            let path = sub_matches
-                .get_one::<String>("path")
-                .expect("path is required");
-            let transform = sub_matches
-                .get_one::<String>("transform")
-                .map(|s| s.as_str())
-                .unwrap_or("ast-treeviz");
-            handle_inspect_command(path, transform, &extra_params, &config);
-        }
-        Some(("convert", sub_matches)) => {
-            let input = sub_matches
-                .get_one::<String>("input")
-                .expect("input is required");
-            let from_arg = sub_matches.get_one::<String>("from");
-            let to = sub_matches.get_one::<String>("to").expect("to is required");
-
-            // Auto-detect --from if not provided
-            let from = if let Some(f) = from_arg {
-                f.to_string()
-            } else {
-                let registry = FormatRegistry::default();
-                match registry.detect_format_from_filename(input) {
-                    Some(detected) => detected,
-                    None => {
-                        eprintln!("Error: Could not detect format from filename '{input}'");
-                        eprintln!("Please specify --from explicitly");
-                        std::process::exit(1);
-                    }
-                }
-            };
-
-            let output = sub_matches.get_one::<String>("output").map(|s| s.as_str());
-            handle_convert_command(input, &from, to, output, &extra_params, &config);
-        }
-        Some(("format", sub_matches)) => {
-            let input = sub_matches
-                .get_one::<String>("input")
-                .expect("input is required");
-            // Format command always outputs to stdout (no -o flag)
-            handle_convert_command(input, "lex", "lex", None, &extra_params, &config);
-        }
-        Some(("element-at", sub_matches)) => {
-            let path = sub_matches
-                .get_one::<String>("path")
-                .expect("path is required");
-            let row = *sub_matches
-                .get_one::<usize>("row")
-                .expect("row is required");
-            let col = *sub_matches
-                .get_one::<usize>("col")
-                .expect("col is required");
-            let all = sub_matches.get_flag("all");
-            handle_element_at_command(path, row, col, all);
-        }
-        Some(("generate-lex-css", _)) => {
-            handle_generate_lex_css_command();
+        Some(("config", sub)) => {
+            let action = config_cmd.parse(sub).unwrap_or_else(|e| {
+                eprintln!("Config error: {e}");
+                std::process::exit(1);
+            });
+            builder.handle_and_print(&action).unwrap_or_else(|e| {
+                eprintln!("{e}");
+                std::process::exit(1);
+            });
         }
         _ => {
-            eprintln!("Unknown subcommand. Use --help for usage information.");
-            std::process::exit(1);
+            let config = builder.load().unwrap_or_else(|e| {
+                eprintln!("Failed to load configuration: {e}");
+                std::process::exit(1);
+            });
+
+            match matches.subcommand() {
+                Some(("inspect", sub_matches)) => {
+                    let path = sub_matches
+                        .get_one::<String>("path")
+                        .expect("path is required");
+                    let transform = sub_matches
+                        .get_one::<String>("transform")
+                        .map(|s| s.as_str())
+                        .unwrap_or("ast-treeviz");
+                    handle_inspect_command(path, transform, &config);
+                }
+                Some(("convert", sub_matches)) => {
+                    let input = sub_matches
+                        .get_one::<String>("input")
+                        .expect("input is required");
+                    let from_arg = sub_matches.get_one::<String>("from");
+                    let to = sub_matches.get_one::<String>("to").expect("to is required");
+
+                    // Auto-detect --from if not provided
+                    let from = if let Some(f) = from_arg {
+                        f.to_string()
+                    } else {
+                        let registry = FormatRegistry::default();
+                        match registry.detect_format_from_filename(input) {
+                            Some(detected) => detected,
+                            None => {
+                                eprintln!("Error: Could not detect format from filename '{input}'");
+                                eprintln!("Please specify --from explicitly");
+                                std::process::exit(1);
+                            }
+                        }
+                    };
+
+                    let output = sub_matches.get_one::<String>("output").map(|s| s.as_str());
+                    handle_convert_command(input, &from, to, output, &config);
+                }
+                Some(("format", sub_matches)) => {
+                    let input = sub_matches
+                        .get_one::<String>("input")
+                        .expect("input is required");
+                    // Format command always outputs to stdout (no -o flag)
+                    handle_convert_command(input, "lex", "lex", None, &config);
+                }
+                Some(("element-at", sub_matches)) => {
+                    let path = sub_matches
+                        .get_one::<String>("path")
+                        .expect("path is required");
+                    let row = *sub_matches
+                        .get_one::<usize>("row")
+                        .expect("row is required");
+                    let col = *sub_matches
+                        .get_one::<usize>("col")
+                        .expect("col is required");
+                    let all = sub_matches.get_flag("all");
+                    handle_element_at_command(path, row, col, all);
+                }
+                Some(("generate-lex-css", _)) => {
+                    handle_generate_lex_css_command();
+                }
+                _ => {
+                    eprintln!("Unknown subcommand. Use --help for usage information.");
+                    std::process::exit(1);
+                }
+            }
         }
     }
 }
 
-/// Handle the inspect command (old execute command)
-fn handle_inspect_command(
-    path: &str,
-    transform: &str,
-    extra_params: &HashMap<String, String>,
-    config: &LexConfig,
-) {
+/// Build a clapfig builder with search paths and CLI overrides from parsed args.
+fn make_builder(matches: &ArgMatches) -> ClapfigBuilder<LexConfig> {
+    let mut builder = Clapfig::builder::<LexConfig>()
+        .app_name("lex")
+        .file_name("lex.toml")
+        .search_paths(vec![
+            SearchPath::Platform,
+            SearchPath::Ancestors(Boundary::Marker(".git")),
+            SearchPath::Cwd,
+        ])
+        .persist_scope("local", SearchPath::Cwd)
+        .persist_scope("user", SearchPath::Platform);
+
+    // Explicit config file path
+    if let Some(path) = matches.get_one::<String>("config-path") {
+        let p = std::path::Path::new(path);
+        if !p.exists() {
+            eprintln!("Configuration file not found: {path}");
+            std::process::exit(1);
+        }
+        let dir = if p.is_file() { p.parent().unwrap() } else { p };
+        builder = builder.add_search_path(SearchPath::Path(dir.to_path_buf()));
+    }
+
+    // Apply CLI flag overrides for inspect subcommand
+    if let Some(("inspect", sub)) = matches.subcommand() {
+        if sub.get_flag("ast-full") {
+            builder = builder.cli_override("inspect.ast.include_all_properties", Some(true));
+        }
+        if sub.get_flag("no-linum") {
+            builder = builder.cli_override("inspect.ast.show_line_numbers", Some(false));
+        }
+        if sub.get_flag("color") {
+            builder = builder.cli_override("inspect.nodemap.color_blocks", Some(true));
+        }
+        if sub.get_flag("color-char") {
+            builder = builder.cli_override("inspect.nodemap.color_characters", Some(true));
+        }
+        if sub.get_flag("node-summary") {
+            builder = builder.cli_override("inspect.nodemap.show_summary", Some(true));
+        }
+    }
+
+    // Apply CLI flag overrides for convert subcommand
+    if let Some(("convert", sub)) = matches.subcommand() {
+        if let Some(theme) = sub.get_one::<String>("theme") {
+            builder = builder.cli_override("convert.html.theme", Some(theme.clone()));
+        }
+        if let Some(css) = sub.get_one::<String>("css-path") {
+            builder = builder.cli_override("convert.html.custom_css", Some(css.clone()));
+        }
+        if let Some(size) = sub.get_one::<String>("pdf-size") {
+            builder = builder.cli_override("convert.pdf.size", Some(size.clone()));
+        }
+    }
+
+    builder
+}
+
+/// Handle the inspect command
+fn handle_inspect_command(path: &str, transform: &str, config: &LexConfig) {
     let source = fs::read_to_string(path).unwrap_or_else(|e| {
         eprintln!("Error reading file '{path}': {e}");
         std::process::exit(1);
     });
 
-    let params = build_inspect_params(config, extra_params);
+    let params = build_inspect_params(config);
 
     let output = transforms::execute_transform(&source, transform, &params).unwrap_or_else(|e| {
         eprintln!("Execution error: {e}");
@@ -437,7 +510,6 @@ fn handle_convert_command(
     from: &str,
     to: &str,
     output: Option<&str>,
-    extra_params: &HashMap<String, String>,
     config: &LexConfig,
 ) {
     let registry = FormatRegistry::default();
@@ -466,7 +538,7 @@ fn handle_convert_command(
 
     let mut format_options = HashMap::new();
 
-    // Serialize (format-specific parameters allowed via --extra-*)
+    // Serialize (format-specific parameters from config)
     let result = if to == "lex" {
         let rules = formatting_rules_from_config(config);
         match serialize_to_lex_with_rules(&doc, rules) {
@@ -484,9 +556,6 @@ fn handle_convert_command(
             if let Some(css_path) = &config.convert.html.custom_css {
                 format_options.insert("css-path".to_string(), css_path.clone());
             }
-        }
-        for (key, value) in extra_params {
-            format_options.insert(key.clone(), value.clone());
         }
         registry
             .serialize_with_options(&doc, to, &format_options)
@@ -533,10 +602,6 @@ fn handle_element_at_command(path: &str, row: usize, col: usize, all: bool) {
     let path_nodes = find_node_path_at_position(&doc, pos);
 
     if path_nodes.is_empty() {
-        // If no element found, we might want to print something or just exit
-        // The requirement says "returns the element name..."
-        // If nothing found, maybe print nothing or error?
-        // I'll print a message for now.
         eprintln!("No element found at {row}:{col}");
         return;
     }
@@ -584,20 +649,6 @@ fn handle_list_transforms_command() {
     }
 }
 
-fn load_cli_config(explicit_path: Option<&str>) -> LexConfig {
-    let loader = Loader::new().with_optional_file("lex.toml");
-    let loader = if let Some(path) = explicit_path {
-        loader.with_file(path)
-    } else {
-        loader
-    };
-
-    loader.build().unwrap_or_else(|err| {
-        eprintln!("Failed to load configuration: {err}");
-        std::process::exit(1);
-    })
-}
-
 fn formatting_rules_from_config(config: &LexConfig) -> FormattingRules {
     let cfg = &config.formatting.rules;
     FormattingRules {
@@ -612,57 +663,7 @@ fn formatting_rules_from_config(config: &LexConfig) -> FormattingRules {
     }
 }
 
-fn apply_config_overrides(config: &mut LexConfig, extra_params: &mut HashMap<String, String>) {
-    if let Some(raw) = extra_params.remove("ast-full") {
-        config.inspect.ast.include_all_properties = parse_bool_arg("ast-full", &raw);
-    }
-    if let Some(raw) = extra_params.remove("show-linum") {
-        config.inspect.ast.show_line_numbers = parse_bool_arg("show-linum", &raw);
-    }
-
-    if let Some(raw) = take_override(extra_params, &["color"]) {
-        config.inspect.nodemap.color_blocks = parse_bool_arg("color", &raw);
-    }
-    if let Some(raw) = take_override(extra_params, &["colorchar", "color-char"]) {
-        config.inspect.nodemap.color_characters = parse_bool_arg("color-char", &raw);
-    }
-    if let Some(raw) = take_override(extra_params, &["nodesummary", "node-summary"]) {
-        config.inspect.nodemap.show_summary = parse_bool_arg("nodesummary", &raw);
-    }
-
-    let mut pdf_override = None;
-    if let Some(raw) = extra_params.remove("size-mobile") {
-        if parse_bool_arg("size-mobile", &raw) {
-            pdf_override = Some(PdfPageSize::Mobile);
-        }
-    }
-    if let Some(raw) = extra_params.remove("size-lexed") {
-        if parse_bool_arg("size-lexed", &raw) {
-            if let Some(existing) = pdf_override {
-                eprintln!("Conflicting PDF profile overrides: {existing:?} and lexed");
-                std::process::exit(1);
-            }
-            pdf_override = Some(PdfPageSize::LexEd);
-        }
-    }
-
-    if let Some(size) = pdf_override {
-        config.convert.pdf.size = size;
-    }
-
-    if let Some(raw) = take_override(extra_params, &["theme"]) {
-        config.convert.html.theme = raw;
-    }
-
-    if let Some(path) = take_override(extra_params, &["css", "css-path"]) {
-        config.convert.html.custom_css = Some(path);
-    }
-}
-
-fn build_inspect_params(
-    config: &LexConfig,
-    overrides: &HashMap<String, String>,
-) -> HashMap<String, String> {
+fn build_inspect_params(config: &LexConfig) -> HashMap<String, String> {
     let mut params = HashMap::new();
 
     if config.inspect.ast.include_all_properties {
@@ -671,11 +672,7 @@ fn build_inspect_params(
 
     params.insert(
         "show-linum".to_string(),
-        if config.inspect.ast.show_line_numbers {
-            "true".to_string()
-        } else {
-            "false".to_string()
-        },
+        config.inspect.ast.show_line_numbers.to_string(),
     );
 
     if config.inspect.nodemap.color_blocks {
@@ -686,10 +683,6 @@ fn build_inspect_params(
     }
     if config.inspect.nodemap.show_summary {
         params.insert("nodesummary".to_string(), "true".to_string());
-    }
-
-    for (key, value) in overrides {
-        params.insert(key.clone(), value.clone());
     }
 
     params
@@ -708,268 +701,67 @@ fn pdf_params_from_config(config: &LexConfig) -> HashMap<String, String> {
     params
 }
 
-fn take_override(map: &mut HashMap<String, String>, keys: &[&str]) -> Option<String> {
-    for key in keys {
-        if let Some(value) = map.remove(*key) {
-            return Some(value);
-        }
-    }
-    None
-}
-
-fn parse_bool_arg(flag: &str, raw: &str) -> bool {
-    match raw.to_lowercase().as_str() {
-        "true" | "1" | "yes" | "y" => true,
-        "false" | "0" | "no" | "n" => false,
-        other => {
-            eprintln!("Invalid boolean value '{other}' for --extra-{flag}");
-            std::process::exit(1);
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_parse_extra_args_empty() {
-        let args = vec![
-            "lex".to_string(),
-            "inspect".to_string(),
-            "file.lex".to_string(),
-        ];
-        let (cleaned, extra) = parse_extra_args(&args);
-
-        assert_eq!(cleaned, args);
-        assert!(extra.is_empty());
+    fn test_config() -> LexConfig {
+        Clapfig::builder::<LexConfig>()
+            .app_name("lex")
+            .no_env()
+            .search_paths(vec![])
+            .load()
+            .expect("defaults to load")
     }
 
     #[test]
-    fn test_parse_extra_args_single_param() {
-        let args = vec![
-            "lex".to_string(),
-            "inspect".to_string(),
-            "file.lex".to_string(),
-            "--extra-all-nodes".to_string(),
-            "true".to_string(),
-        ];
-        let (cleaned, extra) = parse_extra_args(&args);
-
-        assert_eq!(
-            cleaned,
-            vec![
-                "lex".to_string(),
-                "inspect".to_string(),
-                "file.lex".to_string()
-            ]
-        );
-        assert_eq!(extra.len(), 1);
-        assert_eq!(extra.get("all-nodes"), Some(&"true".to_string()));
-    }
-
-    #[test]
-    fn test_parse_extra_args_multiple_params() {
-        let args = vec![
-            "lex".to_string(),
-            "inspect".to_string(),
-            "file.lex".to_string(),
-            "--extra-all-nodes".to_string(),
-            "true".to_string(),
-            "ast-treeviz".to_string(),
-            "--extra-max-depth".to_string(),
-            "5".to_string(),
-        ];
-        let (cleaned, extra) = parse_extra_args(&args);
-
-        assert_eq!(
-            cleaned,
-            vec![
-                "lex".to_string(),
-                "inspect".to_string(),
-                "file.lex".to_string(),
-                "ast-treeviz".to_string()
-            ]
-        );
-        assert_eq!(extra.len(), 2);
-        assert_eq!(extra.get("all-nodes"), Some(&"true".to_string()));
-        assert_eq!(extra.get("max-depth"), Some(&"5".to_string()));
-    }
-
-    #[test]
-    fn test_parse_extra_args_mixed_with_regular_args() {
-        let args = vec![
-            "lex".to_string(),
-            "convert".to_string(),
-            "input.lex".to_string(),
-            "--to".to_string(),
-            "html".to_string(),
-            "--extra-theme".to_string(),
-            "dark".to_string(),
-            "--from".to_string(),
-            "lex".to_string(),
-        ];
-        let (cleaned, extra) = parse_extra_args(&args);
-
-        assert_eq!(
-            cleaned,
-            vec![
-                "lex".to_string(),
-                "convert".to_string(),
-                "input.lex".to_string(),
-                "--to".to_string(),
-                "html".to_string(),
-                "--from".to_string(),
-                "lex".to_string()
-            ]
-        );
-        assert_eq!(extra.len(), 1);
-        assert_eq!(extra.get("theme"), Some(&"dark".to_string()));
-    }
-
-    #[test]
-    fn test_parse_extra_args_boolean_flag() {
-        let args = vec![
-            "lex".to_string(),
-            "inspect".to_string(),
-            "file.lex".to_string(),
-            "ast-tag".to_string(),
-            "--extra-ast-full".to_string(),
-        ];
-        let (cleaned, extra) = parse_extra_args(&args);
-
-        assert_eq!(
-            cleaned,
-            vec![
-                "lex".to_string(),
-                "inspect".to_string(),
-                "file.lex".to_string(),
-                "ast-tag".to_string()
-            ]
-        );
-        assert_eq!(extra.len(), 1);
-        assert_eq!(extra.get("ast-full"), Some(&"true".to_string()));
-    }
-
-    #[test]
-    fn test_parse_extra_args_boolean_flag_at_end() {
-        let args = vec![
-            "lex".to_string(),
-            "inspect".to_string(),
-            "file.lex".to_string(),
-            "--extra-verbose".to_string(),
-        ];
-        let (cleaned, extra) = parse_extra_args(&args);
-
-        assert_eq!(
-            cleaned,
-            vec![
-                "lex".to_string(),
-                "inspect".to_string(),
-                "file.lex".to_string()
-            ]
-        );
-        assert_eq!(extra.len(), 1);
-        assert_eq!(extra.get("verbose"), Some(&"true".to_string()));
-    }
-
-    #[test]
-    fn test_parse_extra_args_allows_extras_alias() {
-        let args = vec![
-            "lex".to_string(),
-            "convert".to_string(),
-            "doc.lex".to_string(),
-            "--extras-css-path".to_string(),
-            "styles.css".to_string(),
-        ];
-
-        let (cleaned, extra) = parse_extra_args(&args);
-        assert_eq!(
-            cleaned,
-            vec![
-                "lex".to_string(),
-                "convert".to_string(),
-                "doc.lex".to_string()
-            ]
-        );
-        assert_eq!(extra.get("css-path"), Some(&"styles.css".to_string()));
-    }
-
-    #[test]
-    fn test_parse_extra_args_mixed_boolean_and_value() {
-        let args = vec![
-            "lex".to_string(),
-            "inspect".to_string(),
-            "file.lex".to_string(),
-            "--extra-verbose".to_string(),
-            "--extra-max-depth".to_string(),
-            "5".to_string(),
-            "--extra-compact".to_string(),
-        ];
-        let (cleaned, extra) = parse_extra_args(&args);
-
-        assert_eq!(
-            cleaned,
-            vec![
-                "lex".to_string(),
-                "inspect".to_string(),
-                "file.lex".to_string()
-            ]
-        );
-        assert_eq!(extra.len(), 3);
-        assert_eq!(extra.get("verbose"), Some(&"true".to_string()));
-        assert_eq!(extra.get("max-depth"), Some(&"5".to_string()));
-        assert_eq!(extra.get("compact"), Some(&"true".to_string()));
-    }
-
-    #[test]
-    fn apply_config_overrides_updates_known_flags() {
-        let mut config = load_cli_config(None);
-        let mut extras = HashMap::new();
-        extras.insert("ast-full".to_string(), "true".to_string());
-        extras.insert("color".to_string(), "false".to_string());
-        extras.insert("size-mobile".to_string(), "true".to_string());
-
-        apply_config_overrides(&mut config, &mut extras);
-
-        assert!(config.inspect.ast.include_all_properties);
-        assert!(!config.inspect.nodemap.color_blocks);
-        assert_eq!(config.convert.pdf.size, PdfPageSize::Mobile);
-        assert!(extras.is_empty());
-    }
-
-    #[test]
-    fn apply_config_overrides_handles_css_path_overrides() {
-        let mut config = load_cli_config(None);
-        let mut extras = HashMap::new();
-        extras.insert("css-path".to_string(), "custom.css".to_string());
-
-        apply_config_overrides(&mut config, &mut extras);
-
-        assert_eq!(
-            config.convert.html.custom_css.as_deref(),
-            Some("custom.css")
-        );
-        assert!(extras.is_empty());
+    fn default_config_has_expected_values() {
+        let config = test_config();
+        assert_eq!(config.formatting.rules.session_blank_lines_before, 1);
+        assert!(config.inspect.ast.show_line_numbers);
+        assert!(!config.inspect.ast.include_all_properties);
+        assert_eq!(config.convert.pdf.size, PdfPageSize::LexEd);
+        assert_eq!(config.convert.html.theme, "default");
     }
 
     #[test]
     fn inspect_params_include_configured_defaults() {
-        let config = load_cli_config(None);
-        let mut overrides = HashMap::new();
-        overrides.insert("custom".to_string(), "value".to_string());
-
-        let params = build_inspect_params(&config, &overrides);
+        let config = test_config();
+        let params = build_inspect_params(&config);
         assert_eq!(params.get("show-linum"), Some(&"true".to_string()));
-        assert_eq!(params.get("custom"), Some(&"value".to_string()));
+        assert!(!params.contains_key("ast-full"));
+        assert!(!params.contains_key("color"));
+    }
+
+    #[test]
+    fn inspect_params_with_all_flags() {
+        let mut config = test_config();
+        config.inspect.ast.include_all_properties = true;
+        config.inspect.nodemap.color_blocks = true;
+        config.inspect.nodemap.color_characters = true;
+        config.inspect.nodemap.show_summary = true;
+
+        let params = build_inspect_params(&config);
+        assert_eq!(params.get("ast-full"), Some(&"true".to_string()));
+        assert_eq!(params.get("color"), Some(&"true".to_string()));
+        assert_eq!(params.get("color-char"), Some(&"true".to_string()));
+        assert_eq!(params.get("nodesummary"), Some(&"true".to_string()));
     }
 
     #[test]
     fn pdf_params_follow_configured_profile() {
-        let mut config = load_cli_config(None);
+        let mut config = test_config();
         config.convert.pdf.size = PdfPageSize::Mobile;
         let params = pdf_params_from_config(&config);
         assert_eq!(params.get("size-mobile"), Some(&"true".to_string()));
         assert!(!params.contains_key("size-lexed"));
+    }
+
+    #[test]
+    fn pdf_params_default_lexed() {
+        let config = test_config();
+        let params = pdf_params_from_config(&config);
+        assert_eq!(params.get("size-lexed"), Some(&"true".to_string()));
+        assert!(!params.contains_key("size-mobile"));
     }
 }
