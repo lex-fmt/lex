@@ -1,0 +1,38 @@
+---
+source: lex-babel/tests/html/export.rs
+expression: snapshot_without_styles(&html)
+---
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="generator" content="lex-babel">
+  <title>Kitchensink Test Document {{paragraph}}</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/github.min.css">
+  <style data-lex-snapshot="removed"></style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js"></script>
+  <script>hljs.highlightAll();</script>
+</head>
+<body>
+<div class="lex-document">
+<p class="lex-paragraph">This document includes <strong>all major features</strong> of the lex language to serve as a comprehensive "kitchensink" regression test for the parser, as noted in <a href="#ref-spec2025, pp. 45-46">@spec2025, pp. 45-46</a>. {{paragraph}}</p><p class="lex-paragraph">This is a two-lined paragraph.
+First, a simple <em>definition</em> at the root level. {{paragraph}}</p><dl class="lex-definition"><dt>Root Definition</dt><dd><div class="lex-content"><p class="lex-paragraph">This definition contains a paragraph and a <code>list</code> to test mixed content at the top level. {{definition}}</p><ul class="lex-list"><li class="lex-list-item"><span class="seq_marker">-</span> Item 1 in definition referencing <a href="TK-rootlist">TK-rootlist</a>. {{list-item}}
+</li><li class="lex-list-item"><span class="seq_marker">-</span> Item 2 in definition with note <a href="42">42</a>. {{list-item}}
+</li></ul></div></dd></dl><p class="lex-paragraph">This is a marker annotation at the root level, attached to the definition above.</p><section class="lex-session lex-session-2"><h2><span class="seq_marker">1.</span> Primary Session {{session}}</h2><div class="lex-content"><p class="lex-paragraph">This session acts as the main container for testing nested structures. It starts with a simple paragraph. {{paragraph}}</p><!-- lex:warning severity=high --><div class="lex-content"><p class="lex-paragraph"> This is a single-line annotation inside the session.</p></div><!-- /lex:warning --><ul class="lex-list"><li class="lex-list-item"><span class="seq_marker">-</span> Followed by a simple list. {{list-item}}
+</li><li class="lex-list-item"><span class="seq_marker">-</span> This list has two items. {{list-item}}
+</li></ul><section class="lex-session lex-session-3"><h3><span class="seq_marker">1.1.</span> Nested Session (Level 2) {{session}}</h3><div class="lex-content"><p class="lex-paragraph">This is a second-level session containing a definition and a list with nested content. {{paragraph}}</p><dl class="lex-definition"><dt>Nested Definition</dt><dd><div class="lex-content"><p class="lex-paragraph">This definition is inside a nested session and contains a list. {{definition}}</p><ul class="lex-list"><li class="lex-list-item"><span class="seq_marker">-</span> List inside a nested definition. {{list-item}}
+</li><li class="lex-list-item"><span class="seq_marker">-</span> Second item. {{list-item}}
+</li></ul></div></dd></dl><ul class="lex-list"><li class="lex-list-item"><span class="seq_marker">-</span> A list item at level 2. {{list-item}}
+<div class="lex-content"><p class="lex-paragraph">This list item contains a nested paragraph. {{paragraph}}</p><ul class="lex-list"><li class="lex-list-item"><span class="seq_marker">-</span> And a nested list (Level 3). {{list-item}}
+</li><li class="lex-list-item"><span class="seq_marker">-</span> With its own items. {{list-item}}
+</li></ul></div></li><li class="lex-list-item"><span class="seq_marker">-</span> Another list item at level 2. {{list-item}}
+</li></ul></div></section><p class="lex-paragraph">A paragraph back at the first level of nesting. {{paragraph}}</p><div class="lex-verbatim-subject">Code Example (Verbatim Block)</div><pre class="lex-verbatim" data-language="javascript"><code class="language-javascript">// This is a verbatim block with code.
+function example() {
+    return "lex";
+}</code></pre></div></section><section class="lex-session lex-session-2"><h2><span class="seq_marker">2.</span> Second Root Session {{session}}</h2><div class="lex-content"><p class="lex-paragraph">This session tests annotations with block content and marker-style verbatim blocks. {{paragraph}}</p><!-- lex:todo status="open" assignee="team" --><div class="lex-content"><p class="lex-paragraph">This is a block annotation. {{paragraph}}</p><p class="lex-paragraph">It contains a paragraph and a list. {{paragraph}}</p><ul class="lex-list"><li class="lex-list-item"><span class="seq_marker">-</span> Task 1 to complete. {{list-item}}
+</li><li class="lex-list-item"><span class="seq_marker">-</span> Task 2 to complete. {{list-item}}
+</li></ul></div><!-- /lex:todo --><div class="lex-verbatim-subject">Image Reference (Marker Verbatim Block)</div><pre class="lex-verbatim" data-language="image"><code class="language-image"></code></pre></div></section><p class="lex-paragraph">Final paragraph at the end of the document. {{paragraph}}</p>
+</div>
+</body>
+</html>

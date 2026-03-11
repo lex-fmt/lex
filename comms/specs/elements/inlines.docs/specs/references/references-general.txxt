@@ -1,0 +1,257 @@
+:: title :: References General Specification
+:: author :: Arthur Debert
+:: pub-date :: 2025-01-12
+
+Complete specification for the general reference system - the foundation for linking, cross-referencing, and connecting content within and beyond lex documents.
+
+:: note :: This specification describes the specific characteristics of reference inline elements. For the general inline token pattern, universal grammar, parsing architecture, and AST foundation shared by all inline elements, see [../inlines-general.lex].
+
+1. Purpose
+
+    References provide the mechanism for linking content within documents and connecting to external resources. They enable cross-references to document sections, links to external URLs, file references, and integration with citation systems. The reference system maintains the plain text philosophy while providing powerful connectivity and navigation capabilities.
+
+2. General Reference Form
+
+    2.1. Basic Syntax Pattern
+
+        All references follow the bracket-enclosed pattern:
+            [reference-content]
+        
+        Where:
+        - Square brackets immediately surround the reference
+        - No spaces between brackets and content
+        - Content determines reference type and target
+        - References are resolved based on content pattern
+
+        Examples of the general form:
+            [section title]
+            [http://example.com]
+            [file.txt]
+            [@citation-key]
+            [^footnote-id]
+        :: reference-pattern
+
+    2.2. Content-Based Type Resolution
+
+        Reference type determined by content pattern:
+        - URL patterns → External links
+        - File patterns → File references
+        - Citation patterns (`@key`) → Bibliographic citations
+        - Footnote patterns (`^id`) → Footnote references
+        - Session patterns (`#number`) → Session cross-references
+        - Plain text → General document references
+
+3. Reference Types
+
+    3.1. External Links
+
+        Direct URL references:
+            [https://example.com]
+            [http://lex.org/docs]
+            [mailto:user@domain.com]
+        :: external-links
+
+        Purpose: Links to external web resources, email addresses
+
+    3.2. File References
+
+        Local and relative file links:
+            [../docs/guide.lex]
+            [images/diagram.png]
+            [/absolute/path/file.txt]
+        :: file-references
+
+        Purpose: References to other files in the project or filesystem
+
+    3.3. Document Cross-References
+
+        Internal document navigation:
+            [Introduction]
+            [#1.2]
+            [Methodology section]
+        :: document-references
+
+        Purpose: Navigation within the current document
+
+    3.4. Citation References
+
+        Bibliographic and academic citations:
+            [@smith2023]
+            [@doe2024, p. 45]
+            [@multiple; @citations]
+        :: citation-references
+
+        Purpose: Academic and bibliographic references
+
+    3.5. Footnote References
+
+        Footnote and annotation links support two formats:
+
+        Naked numerical format:
+            [1]
+            [2]
+            [42]
+        :: footnote-naked
+
+        Labeled format with caret prefix:
+            [^note1]
+            [^detailed-explanation]
+            [^methodology-note]
+        :: footnote-labeled
+
+        Purpose: Footnotes and supplementary information
+        
+        The caret (^) prefix distinguishes labeled footnotes from naked numerical footnotes and other reference types.
+
+    3.6. TK (To Come) References
+
+        Placeholder references for future content:
+            [TK]                    # Naked TK reference
+            [TK-identifier]         # TK with identifier
+            [TK-1]                  # Numbered TK
+            [TK-someword]           # Named TK
+        :: tk-references
+
+        Purpose: Content placeholders and development markers
+
+    3.7. Not Sure References
+
+        Unresolved or ambiguous references:
+            [ambiguous-content]     # Cannot determine type
+        :: not-sure-references
+
+        Purpose: Default fallback when reference type cannot be determined
+
+4. Target Resolution
+
+    4.1. Resolution Strategy
+
+        Reference target determination:
+        1. Check for explicit patterns (URL, citation, footnote)
+        2. Search document structure for matching targets
+        3. Check external file references
+        4. Fall back to textual display if no target found
+
+    4.2. Target Types
+
+        Reference resolution targets:
+        - URLs: Direct external links
+        - Files: Filesystem paths (relative/absolute)
+        - Sessions: Document sections by title or number
+        - Definitions: Term definitions within document
+        - Citations: Bibliography entries
+        - Footnotes: Footnote content
+        - Anchors: Named reference points
+        - TK: Content placeholders
+        - Not Sure: Unresolved references
+
+    4.3. Ambiguity Resolution
+
+        Handling multiple potential targets:
+        - Prefer exact matches over partial matches
+        - Prioritize document-internal over external references
+        - Use context to disambiguate similar targets
+        - Provide clear error messages for unresolved references
+
+5. Grammar
+
+    5.1. Reference Structures
+
+        The authoritative grammar for all reference types is defined in the main syntax reference.
+
+        General reference:
+            <reference-content> = (<text-char> - [[\]])+
+            <reference-span> = <left-bracket> <reference-content> <right-bracket>
+
+        Citation reference:
+            <citation-span> = <left-bracket> <at-sign> <citation-keys> <citation-locator>? <right-bracket>
+
+        Page reference:
+            <page-ref> = <left-bracket> <page-locator> <right-bracket>
+
+        Session reference:
+            <session-ref> = <left-bracket> <hash> <session-number> <right-bracket>
+
+        Footnote reference:
+            <footnote-ref> = <footnote-naked> | <footnote-labeled>
+            <footnote-naked> = <left-bracket> <footnote-number> <right-bracket>
+            <footnote-labeled> = <left-bracket> <caret> <footnote-label> <right-bracket>
+        :: grammar
+
+6. AST Structure
+
+    Post-parsing semantic representation:
+
+    Reference AST:
+        ├── Reference
+        │   ├── reference_type: ReferenceType
+        │   ├── content: String
+        │   ├── target: Option<ResolvedTarget>
+        │   ├── display_text: Option<String>
+        │   └── tokens: TokenSequence
+    :: reference-tree
+
+    Reference type variants:
+        ├── ReferenceType
+        │   ├── Url(UrlData)
+        │   ├── File(PathData)
+        │   ├── Session(SessionRef)
+        │   ├── Citation(CitationData)
+        │   ├── FootnoteNaked(u32)
+        │   ├── FootnoteLabeled(String)
+        │   ├── TK(TKData)
+        │   ├── NotSure(String)
+        │   └── General(String)
+
+7. Processing Rules
+
+    7.1. Recognition Phase
+
+        Reference detection and parsing:
+        1. Scan text for bracket patterns `[...]`
+        2. Extract content between brackets
+        3. Validate content is non-empty
+        4. Classify reference type based on content patterns
+
+    7.2. Type Classification
+
+        Reference type determination order:
+        1. TK patterns (`TK` or `TK-identifier`)
+        2. Citation patterns (`@key`)
+        3. Footnote labeled patterns (`^id`)
+        4. Session patterns (`#number`)
+        5. URL patterns (protocol or domain)
+        6. File patterns (starts with `.` or `/`)
+        7. Footnote naked patterns (pure digits)
+        8. Not Sure (default fallback)
+
+    7.3. Validation Rules
+
+        Parser validation requirements:
+        - Must contain at least one alphanumeric character
+        - No validation of actual target existence
+        - No error on unresolved references
+        - Preserve original content for display
+
+8. Implementation Notes
+
+    8.1. Parser Integration
+
+        The parser should make an effort to validate the reference type, but not error or warn. To be a valid reference all that's needed is at least one alphanumeric character. And it should not do further validation such as validate paths or even sessions or footnotes in this same document.
+
+    8.2. TK Reference Details
+
+        TK (To Come) reference specifications:
+        - Naked TK: `[TK]` (case insensitive)
+        - Identified TK: `[TK-identifier]`
+        - Identifier rules: lowercase alphanumeric, can start with numbers
+        - Maximum 20 characters for identifier
+        - Examples: `TK-1`, `TK-343`, `TK-a3`, `TK-someword`
+
+    8.3. Not Sure Fallback
+
+        Default reference type handling:
+        - Used when no other pattern matches
+        - Preserves original content exactly
+        - Allows for future resolution by external tools
+        - No parser errors for unknown reference types 

@@ -25,6 +25,9 @@ Thumbs.db
 local
 
 # Specs test artifacts
-specs/**/*.ast.*
-specs/**/*.treeviz
-specs/**/*.treeviz.*
+comms/specs/**/*.ast.*
+comms/specs/**/*.treeviz
+comms/specs/**/*.treeviz.*
+
+# Proptest regression files
+**/proptest-regressions/

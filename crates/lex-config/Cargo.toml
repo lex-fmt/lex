@@ -1,0 +1,15 @@
+[package]
+name = "lex-config"
+version = "0.4.0"
+edition = "2021"
+license = "MIT"
+authors = ["lex contributors"]
+description = "Shared configuration loading for the lex toolchain"
+repository = "https://github.com/lex-fmt/lex"
+keywords = ["config", "lex"]
+categories = ["config"]
+
+[dependencies]
+config = { workspace = true }
+serde = { workspace = true }
+lex-babel = { workspace = true }

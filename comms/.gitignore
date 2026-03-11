@@ -1,0 +1,57 @@
+# Rust build artifacts
+/target/
+**/*.rs.bk
+*.pdb
+
+# Cargo.lock (only for libraries, keep for binaries)
+# Cargo.lock
+
+# Coverage files
+lcov.info
+coverage/
+*.profraw
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+node_modules/
+editors/vscode/out/
+editors/vscode/dist/
+editors/vscode/.vscode-test/
+editors/vscode/resources/lex-lsp*
+editors/nvim/bin/
+editors/nvim/bin/lex-lsp*
+editors/nvim/dist/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local development
+.envrc
+.direnv/
+reference-no-git
+.padz
+ISSUES
+disposable/ .todos.db
+.todos.db
+local
+
+# Added by cargo
+
+/target
+specs/**/*.ast.*
+specs/**/*.treeviz
+specs/**/*.treeviz.*
+*.dmg
+*.dmg.blockmap
+*.app
+.vite
+test-results
+# docs site
+docs/_includes/_lex/
+docs/_site/
+docs/.jekyll-cache/

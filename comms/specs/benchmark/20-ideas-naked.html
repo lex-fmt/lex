@@ -1,0 +1,978 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="generator" content="lex-babel" />
+    <title>Lex Document</title>
+    <style>
+      /* Lex HTML Export - Baseline Styles
+ * Browser reset and foundational styles for Lex documents
+ * Mobile-first, semantic HTML approach
+ */
+
+      /* === Box Model Reset === */
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+        margin: 0;
+      }
+
+      /* === Document Structure === */
+      html {
+        font-size: 15px;
+        line-height: 1.25;
+        -webkit-text-size-adjust: 100%;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+      }
+
+      body {
+        margin: 0;
+        padding: 0;
+        min-height: 100vh;
+      }
+
+      /* === Lex Document Container === */
+      .lex-document {
+        max-width: 800px;
+        margin: 0 auto;
+        padding: 2rem 1rem;
+      }
+
+      /* Mobile: reduce padding */
+      @media (max-width: 640px) {
+        .lex-document {
+          padding: 1rem 0.75rem;
+        }
+      }
+
+      /* === Sessions (Headings and Sections) === */
+      section.lex-session {
+        margin: 2rem 0;
+      }
+
+      section.lex-session:first-child {
+        margin-top: 0;
+      }
+
+      /* Nested sessions have reduced top margin */
+      section.lex-session section.lex-session {
+        margin-top: 1.5rem;
+      }
+
+      /* === Content Containers (AST container structure) === */
+      .lex-content {
+        /* Themes add padding-left and border for visual indentation */
+      }
+
+      h1,
+      h2,
+      h3,
+      h4,
+      h5,
+      h6 {
+        margin: 1.5rem 0 0.75rem;
+        line-height: 1.3;
+        font-weight: 600;
+      }
+
+      h1:first-child,
+      h2:first-child,
+      h3:first-child,
+      h4:first-child,
+      h5:first-child,
+      h6:first-child {
+        margin-top: 0;
+      }
+
+      /* === Paragraphs === */
+      .lex-paragraph {
+        margin: 1rem 0;
+        line-height: 1.25;
+      }
+
+      .lex-paragraph:first-child {
+        margin-top: 0;
+      }
+
+      /* === Lists === */
+      .lex-list {
+        margin: 1rem 0;
+        padding-left: 2rem;
+      }
+
+      .lex-list:first-child {
+        margin-top: 0;
+      }
+
+      .lex-list-item {
+        margin: 0.5rem 0;
+        line-height: 1.25;
+      }
+
+      /* Nested lists */
+      .lex-list .lex-list {
+        margin: 0.5rem 0;
+      }
+
+      /* === Definition Lists === */
+      .lex-definition {
+        margin: 1rem 0;
+      }
+
+      .lex-definition dt {
+        font-weight: 600;
+        margin-top: 0.75rem;
+      }
+
+      .lex-definition dt:first-child {
+        margin-top: 0;
+      }
+
+      .lex-definition dd {
+        margin-left: 2rem;
+        margin-top: 0.25rem;
+      }
+
+      @media (max-width: 640px) {
+        .lex-definition dd {
+          margin-left: 1rem;
+        }
+      }
+
+      /* === Verbatim (Code Blocks) === */
+      .lex-verbatim {
+        margin: 1.5rem 0;
+        padding: 1rem;
+        overflow-x: auto;
+        border-radius: 4px;
+        background: #f5f5f5;
+      }
+
+      .lex-verbatim code {
+        font-family: 'Courier New', Courier, monospace;
+        font-size: 0.9em;
+        line-height: 1.5;
+        white-space: pre;
+      }
+
+      @media (max-width: 640px) {
+        .lex-verbatim {
+          padding: 0.75rem;
+          margin: 1rem -0.75rem;
+          border-radius: 0;
+        }
+      }
+
+      /* === Inline Elements === */
+      strong {
+        font-weight: 600;
+      }
+
+      em {
+        font-style: italic;
+      }
+
+      code {
+        font-family: 'Courier New', Courier, monospace;
+        font-size: 0.9em;
+        padding: 0.125rem 0.25rem;
+        background: #f0f0f0;
+        border-radius: 3px;
+      }
+
+      /* Code inside pre doesn't need background */
+      pre code {
+        padding: 0;
+        background: none;
+        border-radius: 0;
+      }
+
+      /* === Math === */
+      .lex-math {
+        font-family: 'Times New Roman', Times, serif;
+        font-style: italic;
+      }
+
+      /* === Links (References) === */
+      a {
+        color: inherit;
+        text-decoration: underline;
+        text-decoration-color: rgba(0, 0, 0, 0.3);
+        text-underline-offset: 2px;
+        transition: text-decoration-color 0.2s ease;
+      }
+
+      a:hover {
+        text-decoration-color: rgba(0, 0, 0, 0.7);
+      }
+
+      a:visited {
+        text-decoration-color: rgba(0, 0, 0, 0.2);
+      }
+
+      /* === Responsive Images === */
+      img {
+        max-width: 100%;
+        height: auto;
+        display: block;
+      }
+
+      /* === Print Styles === */
+      @media print {
+        .lex-document {
+          max-width: 100%;
+          padding: 0;
+        }
+
+        a {
+          text-decoration: underline;
+        }
+
+        .lex-verbatim {
+          border: 1px solid #ccc;
+          page-break-inside: avoid;
+        }
+      }
+
+      /* Lex HTML Export - Modern Theme
+ * Monochrome design matching VSCode LexEd theme
+ * Uses typography (bold, italic, underline) and grayscale intensity for visual hierarchy
+ * 
+ * Intensity levels (from theme.ts):
+ *   - normal:   #000000 - Primary content (headings, body text, inline formatting)
+ *   - muted:    #808080 - Structural elements (markers, references)
+ *   - faint:    #b3b3b3 - Meta-information (annotations, verbatim metadata)
+ *   - faintest: #cacaca - Syntax markers
+ */
+
+      @import url('https://fonts.googleapis.com/css2?family=Source+Sans+3:ital,wght@0,400;0,600;0,700;1,400;1,600&family=JetBrains+Mono:wght@400;500&display=swap');
+
+      /* === Color Variables === */
+      :root {
+        /* VSCode Light Theme inspired colors */
+        --lex-normal: #3b3b3b;
+        --lex-muted: #808080;
+        /* Comments/Secondary */
+        --lex-faint: #aaaaaa;
+        /* Meta/Tertiary */
+        --lex-faintest: #cccccc;
+        /* Subtle */
+        --lex-bg: #ffffff;
+        --lex-code-bg: #f3f3f3;
+      }
+
+      .seq_marker {
+        color: var(--lex-faint);
+        font-weight: normal;
+        /* Ensure markers aren't bold even in headings */
+        margin-right: 0.25em;
+      }
+
+      /* === Typography === */
+      body {
+        font-family: 'Helvetica Neue', Helvetica, 'Source Sans 3', Arial,
+          sans-serif;
+        color: var(--lex-normal);
+        background: var(--lex-bg);
+        font-size: 15px;
+        line-height: 1.25;
+      }
+
+      /* === Document Container === */
+      .lex-document {
+        max-width: 800px;
+        margin: 0 auto;
+        padding: 2rem 1.5rem;
+      }
+
+      /* === Sessions (Sections) === */
+      section.lex-session {
+        margin: 1.5rem 0;
+      }
+
+      section.lex-session:first-child {
+        margin-top: 0;
+      }
+
+      .lex-document > section.lex-session {
+        margin: 2rem 0;
+      }
+
+      .lex-document > section.lex-session:first-child {
+        margin-top: 0;
+      }
+
+      /* === Content Containers (AST container visual indentation) === */
+      .lex-content {
+        padding-left: 25px;
+      }
+
+      /* Top-level session content has no indentation */
+      .lex-document > section.lex-session > {
+        padding-left: 0;
+      }
+
+      /* === Headings with Scaled Sizes ===
+ * Level 1: 1.3x regular size
+ * Level 5: 1x regular size
+ * Smooth interpolation between levels (0.075 step)
+ */
+      h1,
+      h2,
+      h3,
+      h4,
+      h5,
+      h6 {
+        font-family: 'Helvetica Neue', Helvetica, 'Source Sans 3', Arial,
+          sans-serif;
+        font-weight: 700;
+        color: var(--lex-normal);
+        line-height: 1.25;
+        margin: 1.25rem 0 0.75rem;
+      }
+
+      /* Title sizing: 1.3x at level 1, decreasing to 1x at level 5 */
+      h1 {
+        font-size: 1.3em;
+        /* 1.3x - Level 1 */
+        margin-top: 0;
+        margin-bottom: 1rem;
+      }
+
+      h2 {
+        font-size: 1.225em;
+        /* 1.225x - Level 2 */
+        margin-top: 1.5rem;
+      }
+
+      h3 {
+        font-size: 1.15em;
+        /* 1.15x - Level 3 */
+        margin-top: 1.25rem;
+      }
+
+      h4 {
+        font-size: 1.075em;
+        /* 1.075x - Level 4 */
+        margin-top: 1rem;
+      }
+
+      h5 {
+        font-size: 1em;
+        /* 1x - Level 5 */
+        margin-top: 1rem;
+      }
+
+      h6 {
+        font-size: 1em;
+        /* 1x - Level 6 (same as 5) */
+        margin-top: 1rem;
+        font-weight: 600;
+      }
+
+      /* First heading in a session has no top margin */
+      section.lex-session > h1:first-child,
+      section.lex-session > h2:first-child,
+      section.lex-session > h3:first-child,
+      section.lex-session > h4:first-child,
+      section.lex-session > h5:first-child,
+      section.lex-session > h6:first-child {
+        margin-top: 0;
+      }
+
+      /* Mobile heading adjustments */
+      @media (max-width: 640px) {
+        body {
+          font-size: 16px;
+        }
+
+        .lex-document {
+          padding: 1rem;
+        }
+
+        section.lex-session {
+          padding-left: 1rem;
+        }
+
+        h1 {
+          font-size: 1.225em;
+        }
+
+        h2 {
+          font-size: 1.15em;
+        }
+
+        h3 {
+          font-size: 1.075em;
+        }
+
+        h4,
+        h5,
+        h6 {
+          font-size: 1em;
+        }
+      }
+
+      /* === Paragraphs === */
+      .lex-paragraph {
+        margin: 1rem 0;
+        line-height: 1.25;
+        color: var(--lex-normal);
+      }
+
+      .lex-paragraph:first-child {
+        margin-top: 0;
+      }
+
+      /* First paragraph after heading */
+      h1 + .lex-paragraph,
+      h2 + .lex-paragraph,
+      h3 + .lex-paragraph,
+      h4 + .lex-paragraph,
+      h5 + .lex-paragraph,
+      h6 + .lex-paragraph {
+        margin-top: 0;
+      }
+
+      /* === Lists === */
+      .lex-list {
+        margin: 1rem 0;
+        padding-left: 2rem;
+        line-height: 1.25;
+      }
+
+      .lex-list:first-child {
+        margin-top: 0;
+      }
+
+      .lex-list-item {
+        margin: 0.5rem 0;
+      }
+
+      /* List markers in muted color */
+      ul.lex-list {
+        list-style-type: none;
+      }
+
+      ol.lex-list {
+        list-style-type: none;
+      }
+
+      .lex-list-item::marker {
+        color: var(--lex-muted);
+      }
+
+      /* Nested lists */
+      .lex-list .lex-list {
+        margin: 0.5rem 0;
+      }
+
+      /* === Definition Lists === */
+      .lex-definition {
+        margin: 1rem 0;
+      }
+
+      .lex-definition dt {
+        font-weight: 600;
+        font-style: italic;
+        color: var(--lex-normal);
+        margin-top: 1rem;
+      }
+
+      .lex-definition dt:first-child {
+        margin-top: 0;
+      }
+
+      .lex-definition dd {
+        margin-left: 1.5rem;
+        margin-top: 0.25rem;
+        margin-bottom: 0.5rem;
+        line-height: 1.25;
+      }
+
+      /* === Code and Verbatim === */
+      code {
+        font-family: 'JetBrains Mono', 'SF Mono', 'Monaco', 'Courier New',
+          monospace;
+        font-size: 0.9em;
+        background: var(--lex-code-bg);
+        color: var(--lex-normal);
+        padding: 0.125rem 0.375rem;
+        border-radius: 3px;
+      }
+
+      .lex-verbatim {
+        background: var(--lex-code-bg);
+        padding: 1rem 1.25rem;
+        margin: 1.25rem 0;
+        border-radius: 4px;
+        overflow-x: auto;
+      }
+
+      .lex-verbatim code {
+        background: none;
+        padding: 0;
+        font-size: 0.9em;
+        line-height: 1.5;
+        color: var(--lex-normal);
+      }
+
+      /* Language indicator in faint color */
+      .lex-verbatim[data-language]::before {
+        content: attr(data-language);
+        display: block;
+        margin-bottom: 0.5rem;
+        font-size: 0.75rem;
+        font-weight: 600;
+        text-transform: lowercase;
+        color: var(--lex-faint);
+        font-family: 'Helvetica Neue', Helvetica, 'Source Sans 3', Arial,
+          sans-serif;
+      }
+
+      /* === Inline Formatting === */
+      strong {
+        font-weight: 700;
+        color: var(--lex-normal);
+      }
+
+      em {
+        font-style: italic;
+        color: var(--lex-normal);
+      }
+
+      /* === Links (References) === */
+      a {
+        color: var(--lex-muted);
+        text-decoration: underline;
+        text-underline-offset: 2px;
+        transition: color 0.2s ease;
+      }
+
+      a:hover {
+        color: var(--lex-normal);
+      }
+
+      a:visited {
+        color: var(--lex-muted);
+      }
+
+      /* === Math === */
+      .lex-math {
+        font-family: 'Times New Roman', Times, serif;
+        font-style: italic;
+        color: var(--lex-normal);
+      }
+
+      /* === Focus styles for accessibility === */
+      a:focus {
+        outline: 2px solid var(--lex-muted);
+        outline-offset: 2px;
+      }
+
+      /* === Selection === */
+      ::selection {
+        background: var(--lex-faintest);
+        color: var(--lex-normal);
+      }
+
+      /* === Print === */
+      @media print {
+        body {
+          font-size: 11pt;
+          color: #000;
+        }
+
+        .lex-document {
+          max-width: 100%;
+          padding: 0;
+        }
+
+        section.lex-session {
+          padding-left: 1rem;
+          border-left-width: 1px;
+        }
+
+        h1 {
+          font-size: 18pt;
+        }
+
+        h2 {
+          font-size: 16pt;
+        }
+
+        h3 {
+          font-size: 14pt;
+        }
+
+        h4 {
+          font-size: 12pt;
+        }
+
+        h5,
+        h6 {
+          font-size: 11pt;
+        }
+
+        a {
+          color: #000;
+          text-decoration: underline;
+        }
+
+        .lex-verbatim {
+          border: 1px solid #ccc;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="lex-document">
+      <!-- lex:frontmatter author= Arthur Debert   publishing-date= 2025/10/12 20:23:23, São Paulo, Brazil --><!-- /lex:frontmatter -->
+      <p class="lex-paragraph">Ideas, Naked</p>
+      <section class="lex-session lex-session-2">
+        <h2><span class="seq_marker">1.</span> Formating Ideas</h2>
+        <div class="lex-content">
+          <p class="lex-paragraph">
+            HTML has proven to be a very rich structure for ideas of all kinds,
+            but it is very tied to browser, presentation and other publishing
+            legacies in one way, and too poor conceptually in others (flat
+            structure, sections are lists). Wikimedia's format is a good
+            candidate, but also too domain and legacy driven.
+          </p>
+          <p class="lex-paragraph">
+            The best candidates we have from this tend to be SGML descendants in
+            a variety of XML formats, normally quite domain specific. While very
+            capable and widely used, these serve as the backend part, while
+            content is authored somewhere else (LaTeX, Doc, HTML), that is they
+            are the final stage of an automated pipeline.
+          </p>
+          <dl class="lex-definition">
+            <dt>GML/SGML</dt>
+            <dd>
+              <div class="lex-content">
+                <p class="lex-paragraph">
+                  IBM's 1960s Generalized Markup Language work by Charles
+                  Goldfarb, Edward Mosher, and Raymond Lorie. GML established
+                  the principle of separating content from presentation—marking
+                  up what something is (a title, equation, citation) rather than
+                  how it should look. Later on SGML, in the 80s standardized and
+                  expanded the idea.
+                </p>
+                <p class="lex-paragraph">
+                  HTML and XML are the children of these, and have proven
+                  incredibly successful as general vessels of human knowledge.
+                  They have, however, from SGML and parts of XML proven to be
+                  too complex and never quite achieved the universal and
+                  unequivocal format they hoped to be.
+                </p>
+              </div>
+            </dd>
+          </dl>
+          <p class="lex-paragraph">
+            There is an underlying assumption here, that any such formats are
+            not good fits for generating / iterating through ideas, but as a
+            final database-like stop. HTML, probably the most successful under
+            this light has proven way too complex for people to hand edit, and
+            in fact, it rarely is, with the work being done either by bespoke
+            GUIs or markdown (which is great at this)
+          </p>
+        </div>
+      </section>
+      <section class="lex-session lex-session-2">
+        <h2>
+          <span class="seq_marker">2.</span> A New Idea for Ideas Old and New
+        </h2>
+        <div class="lex-content">
+          <p class="lex-paragraph">
+            What if we could foster a format for storing ideas that would be
+            great at an idea's very birth: a single line "X sounds interesting,
+            should look into that" or "What if one made X out of Y" but scale
+            too, being able to grow as the idea takes form into a structured,
+            concept rich document.
+          </p>
+          <p class="lex-paragraph">
+            What if this could be done with a minimal learning curve for non
+            technical people, and in fact requiring only literacy and basic
+            computer skills? And what if this could run on any modern computer,
+            in fact by any computer from the past 40 years, being light and
+            simple? And what if this required no specialized software, allowing
+            people to work from a mobile phone, to Word documents, from shell
+            line editors to sophisticated IDEs?
+          </p>
+        </div>
+      </section>
+      <section class="lex-session lex-session-2">
+        <h2><span class="seq_marker">3.</span> Lex: ideas. naked.</h2>
+        <div class="lex-content">
+          <p class="lex-paragraph">
+            Lex is a plain text document format designed for ideas, in general.
+            It can scale down from a single line note to a full engineering
+            spec. It is flexible enough to carry a novel, a love letter, a
+            scientific paper or an internet RFC. It's inclusive, not only by
+            being openly licensed, free, but also by requiring nothing more than
+            processing unicode text files, which any computer from the 1980's
+            onwards can.
+          </p>
+          <section class="lex-session lex-session-3">
+            <h3><span class="seq_marker">3.1.</span> Principles</h3>
+            <div class="lex-content">
+              <p class="lex-paragraph">Lex is designed around being:</p>
+              <ul class="lex-list">
+                <li class="lex-list-item">
+                  <span class="seq_marker">-</span> Accessible: from a technical
+                  point of view, with minimum hardware and software
+                  requirements. If a computer can edit a text file, that's all
+                  it needs to do.
+                </li>
+                <li class="lex-list-item">
+                  <span class="seq_marker">-</span> Expressive: a small, but
+                  powerful set of primitives that can be combined to express
+                  many different types of ideas from unstructured natural text
+                  to highly addressable nested sections (i.e. 1.3.4.b).
+                </li>
+                <li class="lex-list-item">
+                  <span class="seq_marker">-</span> Universal: not designed for
+                  a specific presentation (as HTML or WikiText) or a single
+                  domain, Lex is about ideas, not presentation, and concepts,
+                  not domains.
+                </li>
+                <li class="lex-list-item">
+                  <span class="seq_marker">-</span> Extensible: the combination
+                  of plain text with every element being annotable through
+                  metadata, it opens extension points for tooling and workflows.
+                  The use of label namespaces can foster a level of
+                  specialization and consistency in an automated way.
+                </li>
+                <li class="lex-list-item">
+                  <span class="seq_marker">-</span> Simple: leveraging innate
+                  human skill, such as spatial grouping of similar objects, from
+                  indentation to a rich tradition of well established text
+                  formatting patterns (such as - This is a dialog!), Lex has low
+                  cognitive load for most people requiring no training to read,
+                  and very little training to write.
+                </li>
+                <li class="lex-list-item">
+                  <span class="seq_marker">-</span> Flexible: while it shines in
+                  structured documents, Lex is expressive enough for regular
+                  natural language, and the parser and tooling are designed to
+                  degrade gracefully for unstructured prose when parsing fails,
+                  that is, a regular document is the least you get, no parser
+                  errors, no warnings.
+                </li>
+              </ul>
+            </div>
+          </section>
+          <section class="lex-session lex-session-3">
+            <h3><span class="seq_marker">3.2.</span> The Form in Format</h3>
+            <div class="lex-content">
+              <p class="lex-paragraph">
+                The north star of Lex's syntax is keeping the cognitive load as
+                low as possible when interacting with Lex formatted ideas.
+              </p>
+              <p class="lex-paragraph">
+                This is achieved by what we call "invisible syntax", that is,
+                one structures text, but in a way where the tokens dedicated to
+                document format are kept to a minimal. This is achieved by:
+              </p>
+              <p class="lex-paragraph">
+                - Indentation: leverages human cognition's ability to derive
+                similarity and relationship visually by layout. - The Great
+                Plain Text Tradition: for centuries people have agreed on
+                standard ways to represent text, by using titles, dashes, blank
+                lines and so forth. Lex draws heavily on this tradition. -
+                Minimal syntax: if you consider markdown
+                <strong>bold</strong> and <em>italics</em> part of the current
+                lexicon, Lex only adds the Definition:: and :: label constructs,
+                both using the :: marker.
+              </p>
+              <p class="lex-paragraph">
+                Lex is homomorphic, that is if you copy from a well exported
+                HTML file to a text editor, you get the source form, ready to
+                work (you do loose presentation formating, of course, but not
+                the document's structure).
+              </p>
+            </div>
+          </section>
+          <section class="lex-session lex-session-3">
+            <h3><span class="seq_marker">3.3</span> The Primitives</h3>
+            <div class="lex-content">
+              <section class="lex-session lex-session-4">
+                <h4><span class="seq_marker">3.3.1.</span> Nested structure</h4>
+                <div class="lex-content">
+                  <p class="lex-paragraph">
+                    Lex documents are not flat, as HTML and markdown files are
+                    but instead nested. With sections having formal children,
+                    siblings and parents. In fact this very section, section
+                    3.3.1 has 3.3 The primitives as its parent, itself a child
+                    of section 3. Lex: ideas, naked.
+                  </p>
+                  <p class="lex-paragraph">
+                    Structure is <strong>encoded</strong> through indentations,
+                    where a section's children (its content) is +1 indented off
+                    the section (including its title).
+                  </p>
+                </div>
+              </section>
+              <section class="lex-session lex-session-4">
+                <h4><span class="seq_marker">3.3.3.</span> Theo</h4>
+                <div class="lex-content">
+                  <dl class="lex-definition">
+                    <dt>Hobber Mallow</dt>
+                    <dd>
+                      <div class="lex-content">
+                        <p class="lex-paragraph">
+                          Charatcer that is Chocomallow
+                        </p>
+                      </div>
+                    </dd>
+                  </dl>
+                </div>
+              </section>
+              <section class="lex-session lex-session-4">
+                <h4><span class="seq_marker">3.3.2</span> . Paragraphs</h4>
+                <div class="lex-content">
+                  <p class="lex-paragraph">
+                    The mother of all structures, the most forgiving and
+                    flexible one. A sequence of sentences, separated by blank
+                    spaces. Paragraphs are too good, too perfectly design in
+                    order to need further introduction.
+                  </p>
+                </div>
+              </section>
+              <section class="lex-session lex-session-4">
+                <h4><span class="seq_marker">3.3.3.</span> Lists</h4>
+                <div class="lex-content">
+                  <p class="lex-paragraph">
+                    They are every where, connecting ideas, things, todos and
+                    whatever you ideate.
+                  </p>
+                  <ul class="lex-list">
+                    <li class="lex-list-item">
+                      <span class="seq_marker">-</span> Form: Lists look like
+                      what you though they would.
+                    </li>
+                    <li class="lex-list-item">
+                      <span class="seq_marker">-</span> Function: they can nest
+                      too.
+                      <div class="lex-content">
+                        <p class="lex-paragraph">
+                          1. And have several decoration styles, from plain to
+                          numeral to b. Alphabetical and lest we forget iii.
+                          Roman styling.
+                        </p>
+                        <p class="lex-paragraph">
+                          Lex lists are powerful and can contain any form of
+                          content save for sections.
+                        </p>
+                      </div>
+                    </li>
+                  </ul>
+                </div>
+              </section>
+              <section class="lex-session lex-session-4">
+                <h4><span class="seq_marker">3.3.4.</span> Verbatim Content</h4>
+                <div class="lex-content">
+                  <pre class="lex-verbatim" data-language="javascript"><code>
+alert("Look Ma, no Lex");
+</code></pre>
+                  <p class="lex-paragraph">
+                    Many times this is, as above a piece of text that is
+                    formatted in a formal language, like a computer programming
+                    language, but at its core it signals that Lex won't process
+                    that content. Tools can choose to (as in syntax highlighting
+                    code or inlining images), as they please.
+                  </p>
+                  <pre
+                    class="lex-verbatim"
+                    data-language="image"
+                  ><code>With its epic proportions the tower of Babel is, although a gloomy one, a unequivocal recognition that human communication takes all sorts of forms.</code></pre>
+                </div>
+              </section>
+              <section class="lex-session lex-session-4">
+                <h4><span class="seq_marker">3.3.5.</span> Annotations</h4>
+                <div class="lex-content">
+                  <p class="lex-paragraph">
+                    Annotations represent meta-data, that is, information about
+                    the content, not the content itself. Like the author and pub
+                    date at this document's top level ones.
+                  </p>
+                  <!-- lex:note-editor -->
+                  <div class="lex-content">
+                    <p class="lex-paragraph">
+                      Maybe this could be better rephrased? Not sure how
+                      annotations are linked to the closes element comes in from
+                      this phrase.
+                    </p>
+                  </div>
+                  <!-- /lex:note-editor --><!-- lex:note.author -->
+                  <div class="lex-content">
+                    <p class="lex-paragraph">
+                      Done, I'm still keeping it simple, though. They can be
+                      attached to any content, and are connected through the
+                      annotation position.
+                    </p>
+                  </div>
+                  <!-- /lex:note.author -->
+                  <p class="lex-paragraph">
+                    Annotations are very flexible, and allow tooling, like
+                    review and comments in publishing workflows
+                  </p>
+                </div>
+              </section>
+              <section class="lex-session lex-session-4">
+                <h4><span class="seq_marker">3.3.6.</span> References</h4>
+                <div class="lex-content">
+                  <p class="lex-paragraph">
+                    Ideas, without connections are not ideas. That's why Lex
+                    includes a rich set of reference targets, for urls
+                    <a href="http://example.com">http://example.com</a> to files
+                    <a href="./hi-mom.txt">./hi-mom.txt</a>, sections in the
+                    same document <a href="#3.2">#3.2</a>, placeholders
+                    <a href="TK-betterimage">TK-betterimage</a>, citations
+                    <a href="#ref-john-2023, p.43">@john-2023, p.43</a> and last
+                    but never least footnotes[1]
+                  </p>
+                </div>
+              </section>
+              <section class="lex-session lex-session-4">
+                <h4><span class="seq_marker">3.3.7.</span> Inlines</h4>
+                <div class="lex-content">
+                  <p class="lex-paragraph">
+                    These are rendered instructions such as this should be
+                    <strong>strong</strong> or <em>emphasized</em> and that a
+                    word is a <code>technical term</code> or math #$$E=mc^2$$#.
+                  </p>
+                </div>
+              </section>
+            </div>
+          </section>
+        </div>
+      </section>
+      <section class="lex-session lex-session-2">
+        <h2><span class="seq_marker">4.</span> Parting Notes</h2>
+        <div class="lex-content">
+          <p class="lex-paragraph">
+            This document is Lex-formatted itself. In fact, it showcases all of
+            Lex elements and structures. Hopefully it serves as an example of
+            how simple and unobtrusive the syntax is, where ideas are centered,
+            with minimal distractions, and where most syntax is leveraged by
+            prior knowledge of the rich plain text tradition most people are
+            exposed to.
+          </p>
+        </div>
+      </section>
+      <section class="lex-session lex-session-2">
+        <h2>Notes</h2>
+        <div class="lex-content">
+          <p class="lex-paragraph">
+            1. Citations format hook into established citation management
+            systems as BibTeX and Zotero standards.
+          </p>
+        </div>
+      </section>
+    </div>
+  </body>
+</html>

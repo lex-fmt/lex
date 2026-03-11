@@ -1,0 +1,226 @@
+---
+source: lex-babel/tests/markdown/import.rs
+expression: serialized
+---
+<document>
+  <session>CommonMark
+    <paragraph>1 line(s)
+      <text-line>CommonMark is a rationalized version of Markdown s…</text-line>
+    </paragraph>
+    <paragraph>1 line(s)
+      <text-line>[https://spec.commonmark.org/dingus/]</text-line>
+    </paragraph>
+    <paragraph>1 line(s)
+      <text-line>For more details, see [https://commonmark.org].</text-line>
+    </paragraph>
+    <paragraph>1 line(s)
+      <text-line>This repository contains the spec itself, along wi…</text-line>
+    </paragraph>
+    <paragraph>1 line(s)
+      <text-line>The reference implementations live in separate rep…</text-line>
+    </paragraph>
+    <list>2 items
+      <list-item>
+        <marker>-</marker>
+        <text></text>
+        <paragraph>1 line(s)
+          <text-line>[https://github.com/commonmark/cmark] (C)</text-line>
+        </paragraph>
+      </list-item>
+      <list-item>
+        <marker>-</marker>
+        <text></text>
+        <paragraph>1 line(s)
+          <text-line>[https://github.com/commonmark/commonmark.js] (Jav…</text-line>
+        </paragraph>
+      </list-item>
+    </list>
+    <paragraph>1 line(s)
+      <text-line>There is a list of third-party libraries in a doze…</text-line>
+    </paragraph>
+    <session>Running tests against the spec
+      <paragraph>1 line(s)
+        <text-line>[https://spec.commonmark.org/] contains over 500 e…</text-line>
+      </paragraph>
+      <verbatim-block>
+        <verbatim-group>
+          <verbatim-line>python3 test/spec_tests.py --program $PROG</verbatim-line>
+        </verbatim-group>
+      </verbatim-block>
+      <paragraph>1 line(s)
+        <text-line>If you want to extract the raw test data from the …</text-line>
+      </paragraph>
+      <verbatim-block>
+        <verbatim-group>
+          <verbatim-line>python3 test/spec_tests.py --dump-tests</verbatim-line>
+        </verbatim-group>
+      </verbatim-block>
+      <paragraph>1 line(s)
+        <text-line>and you&apos;ll get all the tests in JSON format.</text-line>
+      </paragraph>
+      <paragraph>1 line(s)
+        <text-line>JavaScript developers may find it more convenient …</text-line>
+      </paragraph>
+      <verbatim-block>
+        <verbatim-group>
+          <verbatim-line>{</verbatim-line>
+          <verbatim-line>  &quot;markdown&quot;: &quot;Foo\nBar\n---\n&quot;,</verbatim-line>
+          <verbatim-line>  &quot;html&quot;: &quot;&lt;h2&gt;Foo\nBar&lt;/h2&gt;\n&quot;,</verbatim-line>
+          <verbatim-line>  &quot;section&quot;: &quot;Setext headings&quot;,</verbatim-line>
+          <verbatim-line>  &quot;number&quot;: 65</verbatim-line>
+          <verbatim-line>}</verbatim-line>
+        </verbatim-group>
+      </verbatim-block>
+    </session>
+    <session>The spec
+      <paragraph>1 line(s)
+        <text-line>The source of [https://spec.commonmark.org/] is `s…</text-line>
+      </paragraph>
+      <verbatim-block>
+        <verbatim-group>
+          <verbatim-line>```````````````````````````````` example</verbatim-line>
+          <verbatim-line>Markdown source</verbatim-line>
+          <verbatim-line>.</verbatim-line>
+          <verbatim-line>expected HTML output</verbatim-line>
+          <verbatim-line>````````````````````````````````</verbatim-line>
+        </verbatim-group>
+      </verbatim-block>
+      <paragraph>1 line(s)
+        <text-line>To build an HTML version of the spec, do `make spe…</text-line>
+      </paragraph>
+      <paragraph>1 line(s)
+        <text-line>The spec is written from the point of view of the …</text-line>
+      </paragraph>
+      <paragraph>1 line(s)
+        <text-line>Because John Gruber&apos;s [https://daringfireball.net/…</text-line>
+      </paragraph>
+      <paragraph>1 line(s)
+        <text-line>For the most part, we have limited ourselves to th…</text-line>
+      </paragraph>
+    </session>
+    <session>Differences from original Markdown
+      <paragraph>1 line(s)
+        <text-line>There are only a few places where this spec says t…</text-line>
+      </paragraph>
+      <list>10 items
+        <list-item>
+          <marker>-</marker>
+          <text></text>
+          <paragraph>1 line(s)
+            <text-line>It allows all punctuation symbols to be backslash-…</text-line>
+          </paragraph>
+        </list-item>
+        <list-item>
+          <marker>-</marker>
+          <text></text>
+          <paragraph>1 line(s)
+            <text-line>It introduces an alternative syntax for hard line …</text-line>
+          </paragraph>
+        </list-item>
+        <list-item>
+          <marker>-</marker>
+          <text></text>
+          <paragraph>1 line(s)
+            <text-line>Link syntax has been made a bit more predictable (…</text-line>
+          </paragraph>
+        </list-item>
+        <list-item>
+          <marker>-</marker>
+          <text></text>
+          <paragraph>1 line(s)
+            <text-line>The rule for HTML blocks differs, though in most r…</text-line>
+          </paragraph>
+        </list-item>
+        <list-item>
+          <marker>-</marker>
+          <text></text>
+          <paragraph>1 line(s)
+            <text-line>It does not collapse adjacent bird-track blocks in…</text-line>
+          </paragraph>
+          <verbatim-block>
+            <verbatim-group>
+              <verbatim-line>&gt; these are two</verbatim-line>
+              <verbatim-line></verbatim-line>
+              <verbatim-line>&gt; blockquotes</verbatim-line>
+              <verbatim-line></verbatim-line>
+              <verbatim-line>&gt; this is a single</verbatim-line>
+              <verbatim-line>&gt;</verbatim-line>
+              <verbatim-line>&gt; blockquote with two paragraphs</verbatim-line>
+            </verbatim-group>
+          </verbatim-block>
+        </list-item>
+        <list-item>
+          <marker>-</marker>
+          <text></text>
+          <paragraph>1 line(s)
+            <text-line>Rules for content in lists differ in a few respect…</text-line>
+          </paragraph>
+        </list-item>
+        <list-item>
+          <marker>-</marker>
+          <text></text>
+          <paragraph>1 line(s)
+            <text-line>Changing bullet characters, or changing from bulle…</text-line>
+          </paragraph>
+        </list-item>
+        <list-item>
+          <marker>-</marker>
+          <text></text>
+          <paragraph>1 line(s)
+            <text-line>The number that begins an ordered list item may be…</text-line>
+          </paragraph>
+        </list-item>
+        <list-item>
+          <marker>-</marker>
+          <text></text>
+          <paragraph>1 line(s)
+            <text-line>The start number of an ordered list is significant…</text-line>
+          </paragraph>
+        </list-item>
+        <list-item>
+          <marker>-</marker>
+          <text></text>
+          <paragraph>1 line(s)
+            <text-line>Fenced code blocks are supported, delimited by eit…</text-line>
+          </paragraph>
+        </list-item>
+      </list>
+    </session>
+    <session>Contributing
+      <paragraph>1 line(s)
+        <text-line>There is a [https://talk.commonmark.org]; you shou…</text-line>
+      </paragraph>
+    </session>
+    <session>Authors
+      <paragraph>1 line(s)
+        <text-line>The spec was written by John MacFarlane, drawing o…</text-line>
+      </paragraph>
+      <list>3 items
+        <list-item>
+          <marker>-</marker>
+          <text></text>
+          <paragraph>1 line(s)
+            <text-line>his experience writing and maintaining Markdown im…</text-line>
+          </paragraph>
+        </list-item>
+        <list-item>
+          <marker>-</marker>
+          <text></text>
+          <paragraph>1 line(s)
+            <text-line>a detailed examination of the differences between …</text-line>
+          </paragraph>
+        </list-item>
+        <list-item>
+          <marker>-</marker>
+          <text></text>
+          <paragraph>1 line(s)
+            <text-line>extensive discussions with David Greenspan, Jeff A…</text-line>
+          </paragraph>
+        </list-item>
+      </list>
+      <paragraph>1 line(s)
+        <text-line>Since the first announcement, many people have con…</text-line>
+      </paragraph>
+    </session>
+  </session>
+</document>

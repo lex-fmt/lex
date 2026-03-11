@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+#
+# build - Convert Lex sources to HTML fragments for Jekyll
+#
+# Usage:
+#   ./build              # Build all content/*.lex files
+#   LEX_BIN=/path/to/lex ./build   # Use custom lex binary
+#
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
+SRC_DIR="content"
+OUT_DIR="_includes/_lex"
+CSS_PATH="css/lex-content.css"
+LEX_BIN="${LEX_BIN:-lex}"
+
+# Verify lex binary exists
+if ! command -v "$LEX_BIN" >/dev/null 2>&1 && [[ ! -x "$LEX_BIN" ]]; then
+  echo "error: lex binary not found: $LEX_BIN" >&2
+  echo "Set LEX_BIN to the path of the lex binary" >&2
+  exit 1
+fi
+
+# Verify source directory exists
+if [[ ! -d "$SRC_DIR" ]]; then
+  echo "error: source directory not found: $SRC_DIR" >&2
+  exit 1
+fi
+
+mkdir -p "$OUT_DIR"
+
+# Temporary file for processing
+tmp_html="$(mktemp)"
+trap 'rm -f "$tmp_html"' EXIT
+
+# Process each .lex file
+count=0
+for src in "$SRC_DIR"/*.lex; do
+  [[ -f "$src" ]] || continue
+
+  name="$(basename "${src%.lex}")"
+  dest="$OUT_DIR/${name}.html"
+
+  echo "[lex] $src → $dest"
+
+  # Convert lex to full HTML
+  "$LEX_BIN" "$src" --to html --extras-css-path "$CSS_PATH" > "$tmp_html"
+
+  # Extract just the lex-document div (strip HTML wrapper)
+  python3 - "$tmp_html" "$dest" <<'PY'
+import sys, pathlib
+html = pathlib.Path(sys.argv[1]).read_text()
+start = html.find('<div class="lex-document">')
+end = html.find('</body>')
+if start == -1 or end == -1:
+    raise SystemExit('error: unexpected lex output format')
+pathlib.Path(sys.argv[2]).write_text(html[start:end].rstrip() + '\n')
+PY
+
+  count=$((count + 1))
+done
+
+echo "Built $count file(s)"
