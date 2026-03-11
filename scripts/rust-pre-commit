@@ -1,0 +1,86 @@
+#!/bin/bash
+#
+# Pre-commit hook for the lex Rust workspace
+# Runs formatting, linting, and testing - matches CI workflow exactly
+#
+# Install: ln -sf ../../scripts/rust-pre-commit .git/hooks/pre-commit
+# Manual:  ./scripts/rust-pre-commit (from repo root)
+
+set -e
+
+# Determine repo name from Cargo.toml
+if [ -f "Cargo.toml" ]; then
+    REPO_NAME=$(grep '^name = ' Cargo.toml | head -1 | sed 's/name = "\(.*\)"/\1/')
+    if [ -z "$REPO_NAME" ]; then
+        REPO_NAME=$(basename "$(pwd)")
+    fi
+else
+    echo "Error: No Cargo.toml found. Run from repo root."
+    exit 1
+fi
+
+# Detect if this is a workspace (has [workspace] in Cargo.toml)
+IS_WORKSPACE=false
+if grep -q '^\[workspace\]' Cargo.toml 2>/dev/null; then
+    IS_WORKSPACE=true
+fi
+
+# Set workspace flags for cargo commands
+if [ "$IS_WORKSPACE" = true ]; then
+    WORKSPACE_FLAG="--workspace"
+else
+    WORKSPACE_FLAG=""
+fi
+
+echo "Running pre-commit checks for $REPO_NAME..."
+
+# 1. Check formatting
+echo ""
+echo "Checking code formatting..."
+if ! cargo fmt -- --check; then
+    echo ""
+    echo "Formatting issues found. Run 'cargo fmt' to fix."
+    exit 1
+fi
+echo "Formatting OK"
+
+# 2. Run Clippy
+echo ""
+echo "Running Clippy..."
+if ! cargo clippy --all-targets --all-features -- -D warnings; then
+    echo ""
+    echo "Clippy found issues!"
+    exit 1
+fi
+echo "Clippy OK"
+
+# 3. Build
+echo ""
+echo "Building..."
+if ! cargo build $WORKSPACE_FLAG; then
+    echo ""
+    echo "Build failed!"
+    exit 1
+fi
+echo "Build OK"
+
+# 4. Run tests (prefer nextest if available)
+echo ""
+echo "Running tests..."
+if command -v cargo-nextest >/dev/null 2>&1; then
+    if ! cargo nextest run $WORKSPACE_FLAG; then
+        echo ""
+        echo "Tests failed!"
+        exit 1
+    fi
+else
+    if ! cargo test $WORKSPACE_FLAG; then
+        echo ""
+        echo "Tests failed!"
+        exit 1
+    fi
+fi
+echo "Tests OK"
+
+echo ""
+echo "All pre-commit checks passed!"
