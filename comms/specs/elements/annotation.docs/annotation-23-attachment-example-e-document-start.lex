@@ -1,0 +1,3 @@
+:: foo ::
+
+Some paragraph here.

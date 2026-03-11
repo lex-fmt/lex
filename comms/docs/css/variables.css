@@ -1,0 +1,49 @@
+/*
+ * variables.css - Shared Design Tokens
+ *
+ * Central configuration for typography, colors, spacing, and layout.
+ * Imported first by all pages. Change fonts/colors here to update
+ * both the site shell and lex content rendering.
+ */
+
+@import url('https://fonts.googleapis.com/css2?family=Geist:wght@400;600;700&family=Source+Sans+3:ital,wght@0,400;0,600;0,700;1,400;1,600&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+  /* === Typography === */
+  --lex-font-headings: 'Geist', Helvetica, 'Source Sans 3', Arial, sans-serif;
+  --lex-font-text: 'Source Sans 3', Helvetica, Arial, sans-serif;
+  --lex-font-verbatim: 'JetBrains Mono', 'SF Mono', 'Monaco', 'Courier New', monospace;
+
+  /* === Colors === */
+  --lex-normal: #000000;
+  --lex-muted: #808080;
+  --lex-faint: #aaaaaa;
+  --lex-faintest: #cccccc;
+  --lex-bg: #ffffff;
+  --lex-code-bg: #f6f8fa;
+  --lex-link: #0366d6;
+  --lex-border: #dddddd;
+
+  /* === Spacing Scale === */
+  --lex-space-025: 0.25rem;
+  --lex-space-050: 0.5rem;
+  --lex-space-075: 0.75rem;
+  --lex-space-100: 1rem;
+  --lex-space-125: 1.25rem;
+  --lex-space-150: 1.5rem;
+  --lex-space-200: 2rem;
+
+  /* === Layout === */
+  --lex-width-site: 900px;
+  --lex-width-document: 50rem;
+  --lex-indent-content: var(--lex-space-100);
+
+  /* === Borders & Radii === */
+  --lex-radius-sm: 0.1875rem;
+  --lex-radius-md: 0.25rem;
+  --lex-outline-width: 0.125rem;
+  --lex-border-thin: 0.0625rem;
+
+  /* === Breakpoints === */
+  --lex-breakpoint-sm: 40rem;
+}

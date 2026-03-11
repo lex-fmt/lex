@@ -1,0 +1,19 @@
+/* Lex HTML Export - Fancy Serif Theme
+ * Only overrides typography to use serif families; layout follows baseline.
+ */
+
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600;700&family=Crimson+Text:ital,wght@0,400;0,600;1,400&display=swap');
+
+body {
+  font-family: 'Crimson Text', 'Georgia', serif;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: 'Cormorant Garamond', 'Georgia', serif;
+  font-weight: 700;
+}

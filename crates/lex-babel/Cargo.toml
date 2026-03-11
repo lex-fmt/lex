@@ -1,0 +1,36 @@
+[package]
+name = "lex-babel"
+version = "0.4.0"
+edition = "2021"
+authors = ["lex contributors"]
+description = "Format conversion library for the lex format"
+license = "MIT"
+repository = "https://github.com/lex-fmt/lex"
+keywords = ["format", "conversion", "lex", "markdown", "html"]
+categories = ["text-processing"]
+
+[lib]
+doctest = false
+
+[features]
+default = ["native-export"]
+native-export = ["tempfile", "which"]
+
+[dependencies]
+lex-core = { workspace = true }
+comrak = "0.29"
+html5ever = "0.35"
+markup5ever_rcdom = "0.35"
+serde = { workspace = true }
+tempfile = { workspace = true, optional = true }
+which = { version = "4", optional = true }
+url = "2.4"
+pathdiff = { workspace = true }
+roxmltree = "0.19"
+
+[dev-dependencies]
+insta = { workspace = true }
+once_cell = { workspace = true }
+regex = { workspace = true }
+tempfile = { workspace = true }
+proptest = { workspace = true }

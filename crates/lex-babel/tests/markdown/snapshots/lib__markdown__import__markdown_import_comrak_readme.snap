@@ -1,0 +1,549 @@
+---
+source: lex-babel/tests/markdown/import.rs
+expression: serialized
+---
+<document>
+  <paragraph>1 line(s)
+    <text-line>Comrak</text-line>
+  </paragraph>
+  <paragraph>1 line(s)
+    <text-line>[https://github.com/kivikakk/comrak/actions/workfl…</text-line>
+  </paragraph>
+  <paragraph>1 line(s)
+    <text-line>Rust port of [https://github.com/github/cmark-gfm]…</text-line>
+  </paragraph>
+  <paragraph>1 line(s)
+    <text-line>Compliant with [https://spec.commonmark.org/0.31.2…</text-line>
+  </paragraph>
+  <session>Installation
+    <paragraph>1 line(s)
+      <text-line>Specify it as a requirement in `Cargo.toml`:</text-line>
+    </paragraph>
+    <verbatim-block>
+      <verbatim-group>
+        <verbatim-line>[dependencies]</verbatim-line>
+        <verbatim-line>comrak = &quot;0.29&quot;</verbatim-line>
+      </verbatim-group>
+    </verbatim-block>
+    <paragraph>1 line(s)
+      <text-line>Comrak&apos;s library supports Rust 1.62.1+.</text-line>
+    </paragraph>
+    <session>CLI
+      <list>2 items
+        <list-item>
+          <marker>-</marker>
+          <text></text>
+          <paragraph>1 line(s)
+            <text-line>Anywhere with a Rust toolchain:</text-line>
+          </paragraph>
+          <list>1 items
+            <list-item>
+              <marker>-</marker>
+              <text></text>
+              <paragraph>1 line(s)
+                <text-line>`cargo install comrak`</text-line>
+              </paragraph>
+            </list-item>
+          </list>
+        </list-item>
+        <list-item>
+          <marker>-</marker>
+          <text></text>
+          <paragraph>1 line(s)
+            <text-line>Many Unix distributions:</text-line>
+          </paragraph>
+          <list>4 items
+            <list-item>
+              <marker>-</marker>
+              <text></text>
+              <paragraph>1 line(s)
+                <text-line>`pacman -S comrak`</text-line>
+              </paragraph>
+            </list-item>
+            <list-item>
+              <marker>-</marker>
+              <text></text>
+              <paragraph>1 line(s)
+                <text-line>`brew install comrak`</text-line>
+              </paragraph>
+            </list-item>
+            <list-item>
+              <marker>-</marker>
+              <text></text>
+              <paragraph>1 line(s)
+                <text-line>`dnf install comrak`</text-line>
+              </paragraph>
+            </list-item>
+            <list-item>
+              <marker>-</marker>
+              <text></text>
+              <paragraph>1 line(s)
+                <text-line>`nix run nixpkgs#comrak`</text-line>
+              </paragraph>
+            </list-item>
+          </list>
+        </list-item>
+      </list>
+      <paragraph>1 line(s)
+        <text-line>You can also find builds I&apos;ve published in [https:…</text-line>
+      </paragraph>
+    </session>
+  </session>
+  <session>Usage
+    <verbatim-block>
+      <verbatim-group>
+        <verbatim-line>$ comrak --help</verbatim-line>
+      </verbatim-group>
+    </verbatim-block>
+    <verbatim-block>
+      <verbatim-group>
+        <verbatim-line>A 100% CommonMark-compatible GitHub Flavored Markd…</verbatim-line>
+        <verbatim-line></verbatim-line>
+        <verbatim-line>Usage: comrak [OPTIONS] [FILE]...</verbatim-line>
+        <verbatim-line></verbatim-line>
+        <verbatim-line>Arguments:</verbatim-line>
+        <verbatim-line>  [FILE]...</verbatim-line>
+        <verbatim-line>          CommonMark file(s) to parse; or standard…</verbatim-line>
+        <verbatim-line></verbatim-line>
+        <verbatim-line>Options:</verbatim-line>
+        <verbatim-line>  -c, --config-file &lt;PATH&gt;</verbatim-line>
+        <verbatim-line>          Path to config file containing command-l…</verbatim-line>
+        <verbatim-line>          </verbatim-line>
+        <verbatim-line>          [default: /home/runner/.config/comrak/co…</verbatim-line>
+        <verbatim-line></verbatim-line>
+        <verbatim-line>  -i, --inplace</verbatim-line>
+        <verbatim-line>          To perform an in-place formatting</verbatim-line>
+        <verbatim-line></verbatim-line>
+        <verbatim-line>      --hardbreaks</verbatim-line>
+        <verbatim-line>          Treat newlines as hard line breaks</verbatim-line>
+        <verbatim-line></verbatim-line>
+        <verbatim-line>      --smart</verbatim-line>
+        <verbatim-line>          Use smart punctuation</verbatim-line>
+        <verbatim-line></verbatim-line>
+        <verbatim-line>      --github-pre-lang</verbatim-line>
+        <verbatim-line>          Use GitHub-style &lt;pre lang&gt; for code blo…</verbatim-line>
+        <verbatim-line></verbatim-line>
+        <verbatim-line>      --full-info-string</verbatim-line>
+        <verbatim-line>          Enable full info strings for code blocks</verbatim-line>
+        <verbatim-line></verbatim-line>
+        <verbatim-line>      --gfm</verbatim-line>
+        <verbatim-line>          Enable GitHub-flavored markdown extensio…</verbatim-line>
+        <verbatim-line>          tasklist. Also enables --github-pre-lang…</verbatim-line>
+        <verbatim-line></verbatim-line>
+        <verbatim-line>      --gfm-quirks</verbatim-line>
+        <verbatim-line>          Enables GFM-style quirks in output HTML,…</verbatim-line>
+        <verbatim-line>          otherwise breaks CommonMark compatibilit…</verbatim-line>
+        <verbatim-line></verbatim-line>
+        <verbatim-line>      --relaxed-tasklist-character</verbatim-line>
+        <verbatim-line>          Enable relaxing which character is allow…</verbatim-line>
+        <verbatim-line></verbatim-line>
+        <verbatim-line>      --relaxed-autolinks</verbatim-line>
+        <verbatim-line>          Enable relaxing of autolink parsing, all…</verbatim-line>
+        <verbatim-line>          allow all url schemes</verbatim-line>
+        <verbatim-line></verbatim-line>
+        <verbatim-line>      --default-info-string &lt;INFO&gt;</verbatim-line>
+        <verbatim-line>          Default value for fenced code block&apos;s in…</verbatim-line>
+        <verbatim-line></verbatim-line>
+        <verbatim-line>      --unsafe</verbatim-line>
+        <verbatim-line>          Allow raw HTML and dangerous URLs</verbatim-line>
+        <verbatim-line></verbatim-line>
+        <verbatim-line>      --gemojis</verbatim-line>
+        <verbatim-line>          Translate gemojis into UTF-8 characters</verbatim-line>
+        <verbatim-line></verbatim-line>
+        <verbatim-line>      --escape</verbatim-line>
+        <verbatim-line>          Escape raw HTML instead of clobbering it</verbatim-line>
+        <verbatim-line></verbatim-line>
+        <verbatim-line>      --escaped-char-spans</verbatim-line>
+        <verbatim-line>          Wrap escaped characters in span tags</verbatim-line>
+        <verbatim-line></verbatim-line>
+        <verbatim-line>  -e, --extension &lt;EXTENSION&gt;</verbatim-line>
+        <verbatim-line>          Specify extension name(s) to use</verbatim-line>
+        <verbatim-line>          </verbatim-line>
+        <verbatim-line>          Multiple extensions can be delimited wit…</verbatim-line>
+        <verbatim-line>          </verbatim-line>
+        <verbatim-line>          [possible values: strikethrough, tagfilt…</verbatim-line>
+        <verbatim-line>          footnotes, description-lists, multiline-…</verbatim-line>
+        <verbatim-line>          wikilinks-title-after-pipe, wikilinks-ti…</verbatim-line>
+        <verbatim-line></verbatim-line>
+        <verbatim-line>  -t, --to &lt;FORMAT&gt;</verbatim-line>
+        <verbatim-line>          Specify output format</verbatim-line>
+        <verbatim-line>          </verbatim-line>
+        <verbatim-line>          [default: html]</verbatim-line>
+        <verbatim-line>          [possible values: html, xml, commonmark]</verbatim-line>
+        <verbatim-line></verbatim-line>
+        <verbatim-line>  -o, --output &lt;FILE&gt;</verbatim-line>
+        <verbatim-line>          Write output to FILE instead of stdout</verbatim-line>
+        <verbatim-line></verbatim-line>
+        <verbatim-line>      --width &lt;WIDTH&gt;</verbatim-line>
+        <verbatim-line>          Specify wrap width (0 = nowrap)</verbatim-line>
+        <verbatim-line>          </verbatim-line>
+        <verbatim-line>          [default: 0]</verbatim-line>
+        <verbatim-line></verbatim-line>
+        <verbatim-line>      --header-ids &lt;PREFIX&gt;</verbatim-line>
+        <verbatim-line>          Use the Comrak header IDs extension, wit…</verbatim-line>
+        <verbatim-line></verbatim-line>
+        <verbatim-line>      --front-matter-delimiter &lt;DELIMITER&gt;</verbatim-line>
+        <verbatim-line>          Ignore front-matter that starts and ends…</verbatim-line>
+        <verbatim-line></verbatim-line>
+        <verbatim-line>      --syntax-highlighting &lt;THEME&gt;</verbatim-line>
+        <verbatim-line>          Syntax highlighting for codefence blocks…</verbatim-line>
+        <verbatim-line>          </verbatim-line>
+        <verbatim-line>          [default: base16-ocean.dark]</verbatim-line>
+        <verbatim-line></verbatim-line>
+        <verbatim-line>      --list-style &lt;LIST_STYLE&gt;</verbatim-line>
+        <verbatim-line>          Specify bullet character for lists (-, +…</verbatim-line>
+        <verbatim-line>          </verbatim-line>
+        <verbatim-line>          [default: dash]</verbatim-line>
+        <verbatim-line>          [possible values: dash, plus, star]</verbatim-line>
+        <verbatim-line></verbatim-line>
+        <verbatim-line>      --sourcepos</verbatim-line>
+        <verbatim-line>          Include source position attribute in HTM…</verbatim-line>
+        <verbatim-line></verbatim-line>
+        <verbatim-line>      --experimental-inline-sourcepos</verbatim-line>
+        <verbatim-line>          Include inline sourcepos in HTML output,…</verbatim-line>
+        <verbatim-line></verbatim-line>
+        <verbatim-line>      --ignore-setext</verbatim-line>
+        <verbatim-line>          Ignore setext headers</verbatim-line>
+        <verbatim-line></verbatim-line>
+        <verbatim-line>      --ignore-empty-links</verbatim-line>
+        <verbatim-line>          Ignore empty links</verbatim-line>
+        <verbatim-line></verbatim-line>
+        <verbatim-line>  -h, --help</verbatim-line>
+        <verbatim-line>          Print help information (use `-h` for a s…</verbatim-line>
+        <verbatim-line></verbatim-line>
+        <verbatim-line>  -V, --version</verbatim-line>
+        <verbatim-line>          Print version information</verbatim-line>
+        <verbatim-line></verbatim-line>
+        <verbatim-line>By default, Comrak will attempt to read command-li…</verbatim-line>
+        <verbatim-line>--config-file. This behaviour can be disabled by p…</verbatim-line>
+        <verbatim-line>the file does not exist.</verbatim-line>
+      </verbatim-group>
+    </verbatim-block>
+    <paragraph>1 line(s)
+      <text-line>And there&apos;s a Rust interface. You can use `comrak:…</text-line>
+    </paragraph>
+    <verbatim-block>
+      <verbatim-group>
+        <verbatim-line>use comrak::{markdown_to_html, Options};</verbatim-line>
+        <verbatim-line>assert_eq!(markdown_to_html(&quot;Hello, **世界**!&quot;, &amp;Opt…</verbatim-line>
+        <verbatim-line>           &quot;&lt;p&gt;Hello, &lt;strong&gt;世界&lt;/strong&gt;!&lt;/p&gt;\n&quot;)…</verbatim-line>
+      </verbatim-group>
+    </verbatim-block>
+    <paragraph>1 line(s)
+      <text-line>Or you can parse the input into an AST yourself, m…</text-line>
+    </paragraph>
+    <verbatim-block>
+      <verbatim-group>
+        <verbatim-line>use comrak::nodes::NodeValue;</verbatim-line>
+        <verbatim-line>use comrak::{format_html, parse_document, Arena, O…</verbatim-line>
+        <verbatim-line></verbatim-line>
+        <verbatim-line>fn replace_text(document: &amp;str, orig_string: &amp;str,…</verbatim-line>
+        <verbatim-line>    // The returned nodes are created in the suppl…</verbatim-line>
+        <verbatim-line>    let arena = Arena::new();</verbatim-line>
+        <verbatim-line></verbatim-line>
+        <verbatim-line>    // Parse the document into a root `AstNode`</verbatim-line>
+        <verbatim-line>    let root = parse_document(&amp;arena, document, &amp;O…</verbatim-line>
+        <verbatim-line></verbatim-line>
+        <verbatim-line>    // Iterate over all the descendants of root.</verbatim-line>
+        <verbatim-line>    for node in root.descendants() {</verbatim-line>
+        <verbatim-line>        if let NodeValue::Text(ref mut text) = nod…</verbatim-line>
+        <verbatim-line>            // If the node is a text node, perform…</verbatim-line>
+        <verbatim-line>            *text = text.replace(orig_string, repl…</verbatim-line>
+        <verbatim-line>        }</verbatim-line>
+        <verbatim-line>    }</verbatim-line>
+        <verbatim-line></verbatim-line>
+        <verbatim-line>    let mut html = vec![];</verbatim-line>
+        <verbatim-line>    format_html(root, &amp;Options::default(), &amp;mut ht…</verbatim-line>
+        <verbatim-line></verbatim-line>
+        <verbatim-line>    String::from_utf8(html).unwrap()</verbatim-line>
+        <verbatim-line>}</verbatim-line>
+        <verbatim-line></verbatim-line>
+        <verbatim-line>fn main() {</verbatim-line>
+        <verbatim-line>    let doc = &quot;This is my input.\n\n1. Also [my](#…</verbatim-line>
+        <verbatim-line>    let orig = &quot;my&quot;;</verbatim-line>
+        <verbatim-line>    let repl = &quot;your&quot;;</verbatim-line>
+        <verbatim-line>    let html = replace_text(&amp;doc, &amp;orig, &amp;repl);</verbatim-line>
+        <verbatim-line></verbatim-line>
+        <verbatim-line>    println!(&quot;{}&quot;, html);</verbatim-line>
+        <verbatim-line>    // Output:</verbatim-line>
+        <verbatim-line>    //</verbatim-line>
+        <verbatim-line>    // &lt;p&gt;This is your input.&lt;/p&gt;</verbatim-line>
+        <verbatim-line>    // &lt;ol&gt;</verbatim-line>
+        <verbatim-line>    // &lt;li&gt;Also &lt;a href=&quot;#&quot;&gt;your&lt;/a&gt; input.&lt;/li&gt;</verbatim-line>
+        <verbatim-line>    // &lt;li&gt;Certainly &lt;em&gt;your&lt;/em&gt; input.&lt;/li&gt;</verbatim-line>
+        <verbatim-line>    // &lt;/ol&gt;</verbatim-line>
+        <verbatim-line>}</verbatim-line>
+      </verbatim-group>
+    </verbatim-block>
+    <paragraph>1 line(s)
+      <text-line>For a slightly more real-world example, see how I …</text-line>
+    </paragraph>
+  </session>
+  <session>Security
+    <paragraph>1 line(s)
+      <text-line>As with [https://github.com/commonmark/cmark] and …</text-line>
+    </paragraph>
+    <paragraph>1 line(s)
+      <text-line>To allow these, use the `unsafe_` option (or `--un…</text-line>
+    </paragraph>
+  </session>
+  <session>Extensions
+    <paragraph>1 line(s)
+      <text-line>Comrak supports the five extensions to CommonMark …</text-line>
+    </paragraph>
+    <list>5 items
+      <list-item>
+        <marker>-</marker>
+        <text></text>
+        <paragraph>1 line(s)
+          <text-line>[https://github.github.com/gfm/#tables-extension-]</text-line>
+        </paragraph>
+      </list-item>
+      <list-item>
+        <marker>-</marker>
+        <text></text>
+        <paragraph>1 line(s)
+          <text-line>[https://github.github.com/gfm/#task-list-items-ex…</text-line>
+        </paragraph>
+      </list-item>
+      <list-item>
+        <marker>-</marker>
+        <text></text>
+        <paragraph>1 line(s)
+          <text-line>[https://github.github.com/gfm/#strikethrough-exte…</text-line>
+        </paragraph>
+      </list-item>
+      <list-item>
+        <marker>-</marker>
+        <text></text>
+        <paragraph>1 line(s)
+          <text-line>[https://github.github.com/gfm/#autolinks-extensio…</text-line>
+        </paragraph>
+      </list-item>
+      <list-item>
+        <marker>-</marker>
+        <text></text>
+        <paragraph>1 line(s)
+          <text-line>[https://github.github.com/gfm/#disallowed-raw-htm…</text-line>
+        </paragraph>
+      </list-item>
+    </list>
+    <paragraph>1 line(s)
+      <text-line>Comrak additionally supports its own extensions, w…</text-line>
+    </paragraph>
+    <list>12 items
+      <list-item>
+        <marker>-</marker>
+        <text></text>
+        <paragraph>1 line(s)
+          <text-line>Superscript</text-line>
+        </paragraph>
+      </list-item>
+      <list-item>
+        <marker>-</marker>
+        <text></text>
+        <paragraph>1 line(s)
+          <text-line>Header IDs</text-line>
+        </paragraph>
+      </list-item>
+      <list-item>
+        <marker>-</marker>
+        <text></text>
+        <paragraph>1 line(s)
+          <text-line>Footnotes</text-line>
+        </paragraph>
+      </list-item>
+      <list-item>
+        <marker>-</marker>
+        <text></text>
+        <paragraph>1 line(s)
+          <text-line>Description lists</text-line>
+        </paragraph>
+      </list-item>
+      <list-item>
+        <marker>-</marker>
+        <text></text>
+        <paragraph>1 line(s)
+          <text-line>Front matter</text-line>
+        </paragraph>
+      </list-item>
+      <list-item>
+        <marker>-</marker>
+        <text></text>
+        <paragraph>1 line(s)
+          <text-line>Multi-line blockquotes</text-line>
+        </paragraph>
+      </list-item>
+      <list-item>
+        <marker>-</marker>
+        <text></text>
+        <paragraph>1 line(s)
+          <text-line>Math</text-line>
+        </paragraph>
+      </list-item>
+      <list-item>
+        <marker>-</marker>
+        <text></text>
+        <paragraph>1 line(s)
+          <text-line>Emoji shortcodes</text-line>
+        </paragraph>
+      </list-item>
+      <list-item>
+        <marker>-</marker>
+        <text></text>
+        <paragraph>1 line(s)
+          <text-line>Wikilinks</text-line>
+        </paragraph>
+      </list-item>
+      <list-item>
+        <marker>-</marker>
+        <text></text>
+        <paragraph>1 line(s)
+          <text-line>Underline</text-line>
+        </paragraph>
+      </list-item>
+      <list-item>
+        <marker>-</marker>
+        <text></text>
+        <paragraph>1 line(s)
+          <text-line>Spoiler text</text-line>
+        </paragraph>
+      </list-item>
+      <list-item>
+        <marker>-</marker>
+        <text></text>
+        <paragraph>1 line(s)
+          <text-line>&quot;Greentext&quot;</text-line>
+        </paragraph>
+      </list-item>
+    </list>
+    <paragraph>1 line(s)
+      <text-line>By default none are enabled; they are individually…</text-line>
+    </paragraph>
+  </session>
+  <session>Plugins
+    <session>Fenced code block syntax highlighting
+      <paragraph>1 line(s)
+        <text-line>You can provide your own syntax highlighting engin…</text-line>
+      </paragraph>
+      <paragraph>1 line(s)
+        <text-line>Create an implementation of the `SyntaxHighlighter…</text-line>
+      </paragraph>
+      <paragraph>1 line(s)
+        <text-line>See the `syntax_highlighter.rs` and `syntect.rs` e…</text-line>
+      </paragraph>
+      <session>Syntect
+        <paragraph>1 line(s)
+          <text-line>[https://github.com/trishume/syntect] is a syntax …</text-line>
+        </paragraph>
+      </session>
+    </session>
+  </session>
+  <session>Related projects
+    <paragraph>1 line(s)
+      <text-line>Comrak&apos;s design goal is to model the upstream [htt…</text-line>
+    </paragraph>
+    <paragraph>1 line(s)
+      <text-line>The downside, of course, is that the code often di…</text-line>
+    </paragraph>
+    <list>3 items
+      <list-item>
+        <marker>-</marker>
+        <text></text>
+        <paragraph>1 line(s)
+          <text-line>[https://github.com/raphlinus]&apos;s [https://github.c…</text-line>
+        </paragraph>
+      </list-item>
+      <list-item>
+        <marker>-</marker>
+        <text></text>
+        <paragraph>1 line(s)
+          <text-line>[https://github.com/wooorm/markdown-rs] (1.x) look…</text-line>
+        </paragraph>
+      </list-item>
+      <list-item>
+        <marker>-</marker>
+        <text></text>
+        <paragraph>1 line(s)
+          <text-line>Know of another library? Please open a PR to add i…</text-line>
+        </paragraph>
+      </list-item>
+    </list>
+    <paragraph>1 line(s)
+      <text-line>As far as I know, Comrak is the only library to im…</text-line>
+    </paragraph>
+  </session>
+  <session>Benchmarking
+    <paragraph>1 line(s)
+      <text-line>You&apos;ll need to [https://github.com/sharkdp/hyperfi…</text-line>
+    </paragraph>
+    <paragraph>1 line(s)
+      <text-line>If you want to just run the benchmark for the `com…</text-line>
+    </paragraph>
+    <verbatim-block>
+      <verbatim-group>
+        <verbatim-line>make bench-comrak</verbatim-line>
+      </verbatim-group>
+    </verbatim-block>
+    <paragraph>1 line(s)
+      <text-line>This will build Comrak in release mode, and run be…</text-line>
+    </paragraph>
+    <paragraph>1 line(s)
+      <text-line>The `Makefile` also provides a way to run benchmar…</text-line>
+    </paragraph>
+    <verbatim-block>
+      <verbatim-group>
+        <verbatim-line>make bench-all</verbatim-line>
+      </verbatim-group>
+    </verbatim-block>
+    <paragraph>1 line(s)
+      <text-line>This will build and run benchmarks across all, and…</text-line>
+    </paragraph>
+  </session>
+  <session>Contributing
+    <paragraph>1 line(s)
+      <text-line>Contributions are *highly encouraged*; if you&apos;d li…</text-line>
+    </paragraph>
+    <paragraph>1 line(s)
+      <text-line>Where possible I practice [http://hintjens.com/blo…</text-line>
+    </paragraph>
+    <paragraph>1 line(s)
+      <text-line>Thank you to Comrak&apos;s many contributors for PRs an…</text-line>
+    </paragraph>
+    <session>Code Contributors
+      <paragraph>1 line(s)
+        <text-line>[https://github.com/kivikakk/comrak/graphs/contrib…</text-line>
+      </paragraph>
+    </session>
+    <session>Financial Contributors
+      <paragraph>1 line(s)
+        <text-line>Become a financial contributor and help sustain Co…</text-line>
+      </paragraph>
+      <list>1 items
+        <list-item>
+          <marker>-</marker>
+          <text></text>
+          <paragraph>1 line(s)
+            <text-line>[https://github.com/sponsors/kivikakk]</text-line>
+          </paragraph>
+        </list-item>
+      </list>
+    </session>
+  </session>
+  <session>Contact
+    <paragraph>1 line(s)
+      <text-line>Asherah Connor &lt;ashe kivikakk ee&gt;</text-line>
+    </paragraph>
+  </session>
+  <session>Legal
+    <paragraph>1 line(s)
+      <text-line>Copyright (c) 2017–2024, Asherah Connor and Comrak…</text-line>
+    </paragraph>
+    <paragraph>1 line(s)
+      <text-line>`cmark` itself is is copyright (c) 2014, John MacF…</text-line>
+    </paragraph>
+    <paragraph>1 line(s)
+      <text-line>See [COPYING] for all the details.</text-line>
+    </paragraph>
+  </session>
+</document>

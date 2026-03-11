@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="generator" content="lex-babel">
+  <title>Kitchensink Test Document {{paragraph}}</title>
+  <style>
+/* Lex HTML Export - Baseline Styles
+ * Browser reset + default modern Lex presentation
+ * Mobile-first, semantic HTML approach
+ */
+
+@import url('https://fonts.googleapis.com/css2?family=Geist:wght@400;600&family=Source+Sans+3:ital,wght@0,200,400;0,600;0,700;1,400,200;1,600&family=JetBrains+Mono:wght@400;500&display=swap');
+
+/* === CSS Variables for Palette + Rhythm === */
+:root {
+  /* VSCode Light Theme inspired colors */
+  --lex-normal: #000000;
+  --lex-muted: #808080;
+  --lex-faint: #aaaaaa;
+  --lex-faintest: #cccccc;
+  --lex-bg: #ffffff;
+  --lex-code-bg: #f3f3f3;
+
+  /* Spacing scale */
+  --lex-space-025: 0.25rem;
+  --lex-space-050: 0.5rem;
+  --lex-space-075: 0.75rem;
+  --lex-space-100: 1rem;
+  --lex-space-125: 1.25rem;
+  --lex-space-150: 1.5rem;
+  --lex-space-200: 2rem;
+
+  /* Layout tokens derived from legacy pixel values */
+  --lex-width-document: 50rem;
+  /* 800px */
+  --lex-indent-content: var(--lex-space-100);
+  --lex-radius-sm: 0.1875rem;
+  /* 3px */
+  --lex-radius-md: 0.25rem;
+  /* 4px */
+  --lex-outline-width: 0.125rem;
+  /* 2px */
+  --lex-border-thin: 0.0625rem;
+  /* 1px */
+  --lex-breakpoint-sm: 40rem;
+  /* 640px */
+}
+
+/* === Box Model Reset === */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+}
+
+/* === Document Structure === */
+html {
+  font-size: 100%;
+  line-height: 1.25;
+  -webkit-text-size-adjust: 100%;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  min-height: 90vh;
+  font-family: 'Geist', Helvetica, 'Source Sans 3', Arial, sans-serif;
+  color: var(--lex-normal);
+  background: var(--lex-bg);
+  font-size: 1rem;
+  line-height: 1.25;
+  font-weight: 400;
+}
+
+/* === Lex Document Container === */
+.lex-document {
+  max-width: var(--lex-width-document);
+  margin: 0 auto;
+  padding: var(--lex-space-200) var(--lex-space-150);
+}
+
+/* === Sessions (Headings and Sections) === */
+section.lex-session {
+  margin: var(--lex-space-150) 0;
+}
+
+section.lex-session:first-child {
+  margin-top: 0;
+}
+
+.lex-document>section.lex-session {
+  margin: var(--lex-space-200) 0;
+}
+
+.lex-document>section.lex-session:first-child {
+  margin-top: 0;
+}
+
+/* === Content Containers (AST container structure) === */
+.lex-content {
+  padding-left: var(--lex-indent-content);
+}
+
+/* Top-level sessions retain standard content padding */
+
+/* === Headings with Scaled Sizes === */
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: 'Geist', Helvetica, 'Source Sans 3', Arial, sans-serif;
+  font-weight: 700;
+  color: var(--lex-normal);
+  line-height: 1.25;
+  margin: var(--lex-space-150) 0 var(--lex-space-150);
+}
+
+h1 {
+  font-size: 1em;
+  margin-top: 0;
+  margin-bottom: var(--lex-space-100);
+}
+
+h2 {
+  font-size: 1em;
+  margin-top: var(--lex-space-150);
+}
+
+h3 {
+  font-size: 1em;
+  margin-top: var(--lex-space-125);
+}
+
+h4 {
+  font-size: 1;
+  margin-top: var(--lex-space-100);
+}
+
+h5 {
+  font-size: 1em;
+  margin-top: var(--lex-space-100);
+}
+
+h6 {
+  font-size: 1em;
+  margin-top: var(--lex-space-100);
+  font-weight: 600;
+}
+
+section.lex-session>h1:first-child,
+section.lex-session>h2:first-child,
+section.lex-session>h3:first-child,
+section.lex-session>h4:first-child,
+section.lex-session>h5:first-child,
+section.lex-session>h6:first-child {
+  margin-top: 0;
+}
+
+/* === Paragraphs === */
+.lex-paragraph {
+  margin: var(--lex-space-100) 0;
+  line-height: 1.25;
+  color: var(--lex-normal);
+}
+
+.lex-paragraph:first-child {
+  margin-top: 0;
+}
+
+h1+.lex-paragraph,
+h2+.lex-paragraph,
+h3+.lex-paragraph,
+h4+.lex-paragraph,
+h5+.lex-paragraph,
+h6+.lex-paragraph {
+  margin-top: 0;
+}
+
+/* === Lists === */
+.lex-list {
+  margin: var(--lex-space-100) 0;
+  padding-left: var(--lex-space-200);
+  list-style: none;
+  line-height: 1.25;
+}
+
+.lex-list:first-child {
+  margin-top: 0;
+}
+
+.lex-list-item {
+  margin: var(--lex-space-050) 0;
+}
+
+.lex-list .lex-list {
+  margin: var(--lex-space-050) 0;
+}
+
+.lex-list-item::marker {
+  color: var(--lex-muted);
+}
+
+/* === Definition Lists === */
+.lex-definition {
+  margin: var(--lex-space-100) 0;
+}
+
+.lex-definition dt {
+  font-weight: 600;
+  font-style: italic;
+  color: var(--lex-normal);
+  margin-top: var(--lex-space-100);
+}
+
+.lex-definition dt:first-child {
+  margin-top: 0;
+}
+
+.lex-definition dd {
+  margin-left: var(--lex-space-150);
+  margin-top: var(--lex-space-025);
+  margin-bottom: var(--lex-space-050);
+  line-height: 1.25;
+}
+
+/* === Verbatim (Code Blocks) === */
+.lex-verbatim {
+  background: var(--lex-code-bg);
+  padding: var(--lex-space-100) var(--lex-space-125);
+  margin: var(--lex-space-125) 0;
+  border-radius: var(--lex-radius-md);
+  overflow-x: auto;
+}
+
+.lex-verbatim code {
+  background: none;
+  padding: 0;
+  font-size: 0.9em;
+  line-height: 1.5;
+  color: var(--lex-normal);
+  font-family: 'JetBrains Mono', 'SF Mono', 'Monaco', 'Courier New', monospace;
+}
+
+.lex-verbatim[data-language]::before {
+  content: attr(data-language);
+  display: block;
+  margin-bottom: var(--lex-space-050);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: lowercase;
+  color: var(--lex-faint);
+  font-family: 'Helvetica Neue', 'Geist', Helvetica, 'Source Sans 3', Arial, sans-serif;
+}
+
+@media (max-width: var(--lex-breakpoint-sm)) {
+  body {
+    font-size: 1.067rem;
+    /* 16px */
+  }
+
+  .lex-document {
+    padding: var(--lex-space-100);
+  }
+
+  section.lex-session {
+    padding-left: var(--lex-space-100);
+  }
+
+  .lex-definition dd {
+    margin-left: var(--lex-space-100);
+  }
+
+  .lex-verbatim {
+    padding: var(--lex-space-075);
+    margin: var(--lex-space-100) calc(-1 * var(--lex-space-075));
+    border-radius: 0;
+  }
+
+  h1 {
+    font-size: 1.25em;
+  }
+
+  h2 {
+    font-size: 1.2em;
+  }
+
+  h3 {
+    font-size: 1.15em;
+  }
+
+  h4,
+  h5,
+  h6 {
+    font-size: 10em;
+  }
+}
+
+/* === Inline Elements === */
+strong {
+  font-weight: 700;
+  color: var(--lex-normal);
+}
+
+em {
+  font-style: italic;
+  color: var(--lex-normal);
+}
+
+code {
+  font-family: 'JetBrains Mono', 'SF Mono', 'Monaco', 'Courier New', monospace;
+  font-size: 0.9em;
+  background: var(--lex-code-bg);
+  color: var(--lex-normal);
+  padding: var(--lex-space-025) var(--lex-space-075);
+  border-radius: var(--lex-radius-sm);
+}
+
+pre code {
+  padding: 0;
+  background: none;
+  border-radius: 0;
+}
+
+/* === Math === */
+.lex-math {
+  font-family: 'Times New Roman', Times, serif;
+  font-style: italic;
+  color: var(--lex-normal);
+}
+
+/* === Sequence Markers === */
+.seq_marker {
+  color: var(--lex-muted);
+  font-weight: 400;
+  margin-right: 0;
+}
+
+/* === Links (References) === */
+a {
+  color: var(--lex-muted);
+  text-decoration: underline;
+  text-underline-offset: var(--lex-outline-width);
+  transition: color 0.2s ease;
+}
+
+a:hover {
+  color: var(--lex-normal);
+}
+
+a:visited {
+  color: var(--lex-muted);
+}
+
+a:focus {
+  outline: var(--lex-outline-width) solid var(--lex-muted);
+  outline-offset: var(--lex-outline-width);
+}
+
+/* === Responsive Images === */
+img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+}
+
+/* === Selection === */
+::selection {
+  background: var(--lex-faintest);
+  color: var(--lex-normal);
+}
+
+/* === Print Styles === */
+@media print {
+  body {
+    font-size: 11pt;
+    color: #000;
+  }
+
+  .lex-document {
+    max-width: 100%;
+    padding: 0;
+  }
+
+  section.lex-session {
+    padding-left: var(--lex-space-100);
+    border-left-width: var(--lex-border-thin);
+  }
+
+  h1 {
+    font-size: 18pt;
+  }
+
+  h2 {
+    font-size: 16pt;
+  }
+
+  h3 {
+    font-size: 14pt;
+  }
+
+  h4 {
+    font-size: 12pt;
+  }
+
+  h5,
+  h6 {
+    font-size: 11pt;
+  }
+
+  a {
+    color: #000;
+    text-decoration: underline;
+  }
+
+  .lex-verbatim {
+    border: var(--lex-border-thin) solid #ccc;
+    page-break-inside: avoid;
+  }
+}
+/* Modern theme merged into baseline. Intentionally left blank so the default
+ * export relies solely on baseline.css.
+ */
+
+  </style>
+</head>
+<body>
+<div class="lex-document">
+<p class="lex-paragraph">This document includes <strong>all major features</strong> of the lex language to serve as a comprehensive "kitchensink" regression test for the parser, as noted in <a href="#ref-spec2025, pp. 45-46">@spec2025, pp. 45-46</a>. {{paragraph}}</p><p class="lex-paragraph">This is a two-lined paragraph.
+First, a simple <em>definition</em> at the root level. {{paragraph}}</p><dl class="lex-definition"><dt>Root Definition</dt><dd><div class="lex-content"><p class="lex-paragraph">This definition contains a paragraph and a <code>list</code> to test mixed content at the top level. {{definition}}</p><ul class="lex-list"><li class="lex-list-item"><span class="seq_marker">-</span> Item 1 in definition referencing <a href="TK-rootlist">TK-rootlist</a>. {{list-item}}
+</li><li class="lex-list-item"><span class="seq_marker">-</span> Item 2 in definition with note <a href="42">42</a>. {{list-item}}
+</li></ul></div></dd></dl><p class="lex-paragraph">This is a marker annotation at the root level, attached to the definition above.</p><section class="lex-session lex-session-2"><h2><span class="seq_marker">1.</span> Primary Session {{session}}</h2><div class="lex-content"><p class="lex-paragraph">This session acts as the main container for testing nested structures. It starts with a simple paragraph. {{paragraph}}</p><!-- lex:warning severity=high --><div class="lex-content"><p class="lex-paragraph"> This is a single-line annotation inside the session.</p></div><!-- /lex:warning --><ul class="lex-list"><li class="lex-list-item"><span class="seq_marker">-</span> Followed by a simple list. {{list-item}}
+</li><li class="lex-list-item"><span class="seq_marker">-</span> This list has two items. {{list-item}}
+</li></ul><section class="lex-session lex-session-3"><h3><span class="seq_marker">1.1.</span> Nested Session (Level 2) {{session}}</h3><div class="lex-content"><p class="lex-paragraph">This is a second-level session containing a definition and a list with nested content. {{paragraph}}</p><dl class="lex-definition"><dt>Nested Definition</dt><dd><div class="lex-content"><p class="lex-paragraph">This definition is inside a nested session and contains a list. {{definition}}</p><ul class="lex-list"><li class="lex-list-item"><span class="seq_marker">-</span> List inside a nested definition. {{list-item}}
+</li><li class="lex-list-item"><span class="seq_marker">-</span> Second item. {{list-item}}
+</li></ul></div></dd></dl><ul class="lex-list"><li class="lex-list-item"><span class="seq_marker">-</span> A list item at level 2. {{list-item}}
+<div class="lex-content"><p class="lex-paragraph">This list item contains a nested paragraph. {{paragraph}}</p><ul class="lex-list"><li class="lex-list-item"><span class="seq_marker">-</span> And a nested list (Level 3). {{list-item}}
+</li><li class="lex-list-item"><span class="seq_marker">-</span> With its own items. {{list-item}}
+</li></ul></div></li><li class="lex-list-item"><span class="seq_marker">-</span> Another list item at level 2. {{list-item}}
+</li></ul></div></section><p class="lex-paragraph">A paragraph back at the first level of nesting. {{paragraph}}</p><pre class="lex-verbatim" data-language="javascript"><code>// This is a verbatim block with code.
+function example() {
+return "lex";
+}</code></pre></div></section><section class="lex-session lex-session-2"><h2><span class="seq_marker">2.</span> Second Root Session {{session}}</h2><div class="lex-content"><p class="lex-paragraph">This session tests annotations with block content and marker-style verbatim blocks. {{paragraph}}</p><!-- lex:todo status="open" assignee="team" --><div class="lex-content"><p class="lex-paragraph">This is a block annotation. {{paragraph}}</p><p class="lex-paragraph">It contains a paragraph and a list. {{paragraph}}</p><ul class="lex-list"><li class="lex-list-item"><span class="seq_marker">-</span> Task 1 to complete. {{list-item}}
+</li><li class="lex-list-item"><span class="seq_marker">-</span> Task 2 to complete. {{list-item}}
+</li></ul></div><!-- /lex:todo --><pre class="lex-verbatim" data-language="image"><code></code></pre></div></section><p class="lex-paragraph">Final paragraph at the end of the document. {{paragraph}}</p>
+</div>
+</body>
+</html>

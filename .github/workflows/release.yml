@@ -1,29 +1,158 @@
+# Unified release workflow
+# Builds lex-cli and lex-lsp binaries for multiple platforms, publishes crates to crates.io
+
 name: Release
+permissions:
+  contents: write
 
 on:
   push:
     tags:
       - 'v*'
 
-env:
-  CARGO_TERM_COLOR: always
-
 jobs:
-  publish:
-    name: Publish to crates.io
-    runs-on: ubuntu-latest
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: true
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
 
-      - name: Publish to crates.io
-        run: cargo publish
+      - name: Install cross-compilation tools (Linux ARM)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Install musl tools
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
+      - name: Build lex-cli
+        run: cargo build --release --target ${{ matrix.target }} -p lex-cli
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+
+      - name: Build lex-lsp
+        run: cargo build --release --target ${{ matrix.target }} -p lex-lsp
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar -czvf ../../../lex-${{ matrix.target }}.tar.gz lex
+          tar -czvf ../../../lex-lsp-${{ matrix.target }}.tar.gz lex-lsp
+          cd ../../..
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          cd target/${{ matrix.target }}/release
+          7z a ../../../lex-${{ matrix.target }}.zip lex.exe
+          7z a ../../../lex-lsp-${{ matrix.target }}.zip lex-lsp.exe
+          cd ../../..
+
+      - name: Upload lex-cli artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lex-${{ matrix.target }}
+          path: lex-${{ matrix.target }}.*
+
+      - name: Upload lex-lsp artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lex-lsp-${{ matrix.target }}
+          path: lex-lsp-${{ matrix.target }}.*
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: artifacts/*
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  publish-crates:
+    name: Publish to crates.io
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Publish lex-core
+        run: cargo publish -p lex-core || echo "lex-core already published"
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Wait for crates.io to index lex-core
+        run: sleep 30
+
+      - name: Publish lex-babel
+        run: cargo publish -p lex-babel || echo "lex-babel already published"
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Wait for crates.io to index lex-babel
+        run: sleep 30
+
+      - name: Publish lex-config
+        run: cargo publish -p lex-config || echo "lex-config already published"
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Publish lex-analysis
+        run: cargo publish -p lex-analysis || echo "lex-analysis already published"
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Wait for crates.io to index lex-analysis
+        run: sleep 30
+
+      - name: Publish lex-lsp
+        run: cargo publish -p lex-lsp || echo "lex-lsp already published"
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

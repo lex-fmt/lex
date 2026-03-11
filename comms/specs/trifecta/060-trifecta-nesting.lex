@@ -1,0 +1,64 @@
+Trifecta Nesting Test {{paragraph}}
+
+This document tests the combination of all three core elements (sessions, paragraphs, lists) with various levels of nesting. {{paragraph}}
+
+1. Root Session {{session-title}}
+
+    This root session contains various nested elements. {{paragraph}}
+
+    1.1. Sub-session with Paragraph {{session-title}}
+
+        This sub-session starts with a paragraph. {{paragraph}}
+
+        - Then has a list {{list-item}}
+        - With multiple items {{list-item}}
+
+    1.2. Sub-session with List {{session-title}}
+
+        - Starts with a list {{list-item}}
+        - Has multiple items {{list-item}}
+
+        Then has a paragraph. {{paragraph}}
+
+        1.2.1. Deeply Nested Session {{session-title}}
+
+            This is a deeply nested session. {{paragraph}}
+
+            - With its own list {{list-item}}
+            - And multiple items {{list-item}}
+
+            - Another list follows {{list-item}}
+            - In the same session {{list-item}}
+
+    Back to the root session level. {{paragraph}}
+
+    - Root session can also have lists {{list-item}}
+    - At its own level {{list-item}}
+
+2. Another Root Session {{session-title}}
+
+    This session demonstrates different nesting patterns. {{paragraph}}
+
+    2.1. Mixed Content Sub-session {{session-title}}
+
+        - Starts with list {{list-item}}
+        - Multiple items {{list-item}}
+
+        Paragraph in the middle. {{paragraph}}
+
+        - Ends with another list {{list-item}}
+        - To complete the pattern {{list-item}}
+
+        2.1.1. Even Deeper Nesting {{session-title}}
+
+            The deepest level contains paragraphs and lists. {{paragraph}}
+
+            - First deep list {{list-item}}
+            - Second deep item {{list-item}}
+
+            Another paragraph at deep level. {{paragraph}}
+
+            - Second deep list {{list-item}}
+            - Completing the deep structure {{list-item}}
+
+Final root level paragraph. {{paragraph}}

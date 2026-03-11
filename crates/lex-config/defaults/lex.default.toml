@@ -1,0 +1,44 @@
+# Default configuration for the Lex toolchain.
+#
+# This file is embedded inside the binaries so code and documentation stay in sync.
+# Users can copy it into lex.toml (or any custom path) and tweak the values below.
+
+[formatting.rules]
+# Number of blank lines inserted before a session title.
+session_blank_lines_before = 1
+# Number of blank lines inserted after a session title.
+session_blank_lines_after = 1
+# Normalize list markers (bullets, numbering) to predictable markers.
+normalize_seq_markers = true
+# Character to use for unordered list items when normalization is enabled.
+unordered_seq_marker = "-"
+# Maximum count of consecutive blank lines kept in the output.
+max_blank_lines = 2
+# Whitespace string used for each indentation level.
+indent_string = "    "
+# Preserve trailing blank lines at the end of a document.
+preserve_trailing_blanks = false
+# Normalize verbatim fences/markers back to the canonical :: form.
+normalize_verbatim_markers = true
+
+[inspect.ast]
+# Include annotations, titles, markers, and other metadata in AST visualizations.
+include_all_properties = false
+# Show line numbers next to AST entries.
+show_line_numbers = true
+
+[inspect.nodemap]
+# Render ANSI-colored blocks instead of Base2048 glyphs.
+color_blocks = false
+# Render Base2048 glyphs but color them with ANSI codes.
+color_characters = false
+# Append high-level summary statistics under the node map output.
+show_summary = false
+
+[convert.pdf]
+# Page profile used when exporting to PDF. Accepted values: "lexed" or "mobile".
+size = "lexed"
+
+[convert.html]
+theme = "default"
+# custom_css = "/path/to/custom.css"  # Optional: appends to the baseline CSS

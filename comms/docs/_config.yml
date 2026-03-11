@@ -1,0 +1,19 @@
+title: lex
+description: A plain text document format designed for the complete lifecycle of an idea
+baseurl: ""
+url: "https://lex.ing"
+
+markdown: kramdown
+theme: minima
+
+# Exclude from processing
+exclude:
+  - Gemfile
+  - Gemfile.lock
+  - node_modules
+  - vendor
+
+# GitHub Pages specific
+plugins:
+  - jekyll-feed
+  - jekyll-seo-tag
