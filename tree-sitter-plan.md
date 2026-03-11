@@ -49,11 +49,14 @@ The grammar itself is **regular at each indent level**. Once indent/dedent bound
 | Indentation tracking | Stack of indent levels; 4 spaces or 1 tab = 1 level |
 | INDENT token | Emitted when indent level increases |
 | DEDENT token(s) | Emitted when indent level decreases (possibly multiple) |
-| NEWLINE token | Emitted at line boundaries (gives grammar line-awareness) |
-| Blank line detection | NEWLINE + only whitespace + NEWLINE |
-| Verbatim mode | Flag + expected closing indent; consume raw content |
-| Verbatim close | Detect `::` at correct indent level, exit verbatim mode |
-| State serialization | Indent stack + verbatim flag serialized for incremental reparsing |
+| NEWLINE token | Emitted at line boundaries and EOF (gives grammar line-awareness) |
+| annotation_marker | `:: ` at line start or mid-line (detects double-colon prefix) |
+| annotation_end_marker | `::` alone on a line (closing marker for annotation blocks) |
+| list_item_line | Full line starting with list marker (-, 1., a), (1), etc.) |
+| subject_content | Full line ending with `:` (for definitions and verbatim blocks) |
+| Emphasis delimiters | `_strong_open`, `_strong_close`, `_emphasis_open`, `_emphasis_close` with flanking validation |
+| Flanking context | `last_char_class` tracks character class for emphasis validation |
+| State serialization | Indent stack + flags + last_char_class serialized for incremental reparsing |
 
 ### grammar.js Node Hierarchy
 
@@ -231,116 +234,60 @@ The diff harness takes a `--level` flag controlling comparison depth.
 
 ## Implementation Phases
 
-### Phase 0: Scaffold
+### Phase 0: Scaffold — COMPLETE
 
-- `tree-sitter init` in a new directory (or subdirectory of this repo)
-- Set up `grammar.js` skeleton, `src/scanner.c` with empty serialize/deserialize
+- `tree-sitter init` in `tree-sitter-lex/` subdirectory
+- `grammar.js` skeleton, `src/scanner.c` with serialize/deserialize
 - CI: `tree-sitter generate && tree-sitter test`
-- Begin expanding `ast-json` in lex-cli (Layer 1 of parity testing)
 
-### Phase 1: Indentation Engine + Paragraphs
+### Phase 1: Indentation Engine + Paragraphs — COMPLETE
 
-**scanner.c:**
-- Indent stack (array of levels, starting with 0)
-- On NEWLINE: count spaces, compare to stack top
-- Emit INDENT / DEDENT tokens accordingly
-- Blank lines: emit NEWLINE without changing indent state
+**scanner.c:** Indent stack (array of levels, starting with 0). On NEWLINE: count leading spaces, compare to stack top. Emit INDENT/DEDENT tokens accordingly. Blank lines: emit NEWLINE without changing indent state. EOF: emit remaining DEDENTs then one synthetic NEWLINE.
 
-**grammar.js:**
-- `document = repeat(_block)`
-- `_block = choice(paragraph, blank_line_group)`
-- `paragraph = repeat1(_text_line)`
-- `_text_line = /[^\n]+/` (anything non-empty)
+**grammar.js:** `document = repeat(_block)`, `paragraph = prec.right(-1, repeat1(text_line))`, `text_line = seq(line_content, _newline)`.
 
-**Validation:** `comms/specs/trifecta/000-paragraphs.lex` parses correctly.
+### Phase 2: Sessions + Definitions — COMPLETE
 
-### Phase 2: Sessions + Definitions
+**grammar.js:** `session = prec.dynamic(1, seq(line_content, _newline, repeat1(blank_line), _indent, repeat1(_block), _dedent))`. `definition = prec.dynamic(2, seq(line_content, _newline, _indent, repeat1(_block), _dedent))`. Session requires blank lines before indent; definition does not.
 
-**grammar.js additions:**
-- `session = seq(_title_line, repeat1(blank_line), $.INDENT, repeat(_block), $.DEDENT)`
-- `definition = seq(subject_line, $.INDENT, repeat(_block), $.DEDENT)`
-- `subject_line = seq(/[^\n]+/, token.immediate(':'))`
-- `_block` choice expanded: `choice(session, definition, paragraph, blank_line_group)`
+**scanner.c:** `subject_content` external token — scanner consumes entire line and verifies trailing `:`. This ensures only colon-terminated lines can start definitions.
 
-**Key:** definition must have higher precedence than session in the choice, and its subject line requires the trailing colon. Session title accepts any line type.
+### Phase 3: Lists — COMPLETE
 
-**Validation:** `comms/specs/trifecta/010` through `060` fixtures. All `comms/specs/elements/session.docs/` and `comms/specs/elements/definition.docs/`.
+**scanner.c:** `list_item_line` external token — scanner matches list markers (dash, numbered, alphabetical, roman, parenthetical, extended `1.2.3` forms) and consumes the entire line. `list = prec.dynamic(3, prec.right(seq(list_item, repeat1(list_item))))` requires 2+ items.
 
-### Phase 3: Lists
+### Phase 4: Annotations — COMPLETE
 
-**grammar.js additions:**
-- `list = seq(list_item, repeat1(list_item), optional(blank_line))`
-- `list_item = seq(list_marker, _text_content, optional(seq($.INDENT, repeat(_block), $.DEDENT)))`
-- `list_marker = choice(plain_marker, ordered_marker)`
-- `plain_marker = '- '`
-- `ordered_marker = seq(choice(/\d+/, /[a-z]/, /[A-Z]+/), choice('.', ')'), ' ')`
-
-**Disambiguation:** `subject_or_list_item` lines (have both marker and trailing colon) — let them match as list items when inside a list context (2+ items), fall through to definition/session otherwise.
-
-**Validation:** All `comms/specs/elements/list.docs/` fixtures. `comms/specs/trifecta/070-trifecta-flat-simple.lex`.
-
-### Phase 4: Annotations
-
-**grammar.js additions:**
-- `annotation_marker = seq('::', label, optional(params), '::')`
-- `annotation_single = seq('::', label, optional(params), '::', _text_content)`
-- `annotation_block = seq('::', label, optional(params), '::', $.INDENT, repeat(_block), $.DEDENT, optional('::'))`
-- `annotation = choice(annotation_block, annotation_single, annotation_marker)`
-- `params = repeat1(param)` where `param = seq(identifier, '=', value)`
-
-**Validation:** All `comms/specs/elements/annotation.docs/` fixtures.
+**scanner.c:** `annotation_marker` (`::`  at line start or mid-line) and `annotation_end_marker` (`::` alone on a line) as external tokens. Grammar has `annotation_block` (with indented body, optional closing `::`) and `annotation_single` (inline only). `annotation_header = /[^\n:]+/`.
 
 ### Phase 5: Verbatim Blocks — COMPLETE
 
-**Actual implementation** (differs from original plan — no scanner verbatim mode needed):
+A verbatim_block is structurally a definition with a closing `:: label params ::` annotation. GLR explores both definition and verbatim paths; the closing annotation disambiguates. `prec.dynamic(4)` ensures verbatim wins when the closing annotation is present. Content inside is parsed as regular Lex blocks (not raw) — acceptable for highlighting. Five GLR conflict declarations for verbatim vs definition/session/text_line.
 
-A verbatim_block is structurally a definition with a closing `:: label params ::` annotation. GLR explores both definition and verbatim paths; the closing annotation disambiguates. Dynamic precedence 4 (higher than definition=2, session=1) ensures verbatim wins when the closing annotation is present.
+**Known limitation — verbatim groups NOT implemented:** Multiple subject/content pairs sharing one closing annotation (e.g., grouped shell transcripts) require scanner-level group detection. Three grammar-only approaches were attempted and failed. Deferred to Phase 7.
 
-**grammar.js:**
-- `verbatim_block = prec.dynamic(4, seq(field("subject", line_content), _newline, repeat(blank_line), optional(seq(_indent, repeat1(_block), _dedent)), annotation_marker, annotation_header, annotation_marker, _newline))`
-- Content inside is parsed as regular Lex blocks (not raw) — acceptable for highlighting
-- Five new GLR conflict declarations for verbatim vs definition/session/text_line
+### Phase 6: Inline Formatting — COMPLETE
 
-**Status:** 27/27 tests pass. `verbatim.lex` fixture parses error-free. 9/14 element fixtures clean.
+Implemented in three sub-phases:
 
-**Known limitation — verbatim groups NOT implemented:**
-Multiple subject/content pairs sharing one closing annotation (e.g., grouped shell transcripts) require scanner-level group detection. Three grammar-only approaches were attempted:
-1. `subject_content` restriction + group repeat → GLR explosion on real files (list.lex: 0→13 errors)
-2. Separate `verbatim_content` rule excluding nested verbatim → tree-sitter can't distinguish inlined hidden rules sharing subrules
-3. `prec.dynamic(5)` per entry → nested interpretation accumulates higher total precedence
+**Phase 6a — Leaf inlines:** `code_span` (`` `...` ``), `math_span` (`#...#`), `reference` (`[...]`), `escape_sequence` (`\x`) as grammar-level regex tokens. `text_content = repeat1(_inline)` replaced the monolithic `/[^\n]+/` text rule. `_word` split into `_word_alnum`, `_word_space`, `_word_other` for character class inference. `_delimiter_char` as fallback for unmatched delimiters.
 
-Groups need a scanner-assisted approach: the scanner would look ahead for the closing `:: label ::` and emit a "group continuation" token, eliminating the grammar-level ambiguity. Deferred to a future phase.
+**Phase 6b — Strong and emphasis (scanner-validated):** Four external tokens: `_strong_open`, `_strong_close`, `_emphasis_open`, `_emphasis_close`. Scanner validates flanking rules (opening: prev not WORD + next is WORD; closing: prev not WHITESPACE + next not WORD). Grammar enforces nesting via `_inline_no_star` (inside strong, excludes strong) and `_inline_no_underscore` (inside emphasis, excludes emphasis). First token after opening must be `_word_alnum` (grammar-level "next is word" check). Scanner tracks `last_char_class` state for "prev" checks.
 
-### Phase 6: Inline Formatting
+**Phase 6c — Word-adjacent delimiter fix:** `_word_alnum` made greedy: `token(seq(/[a-zA-Z0-9]+/, repeat(seq(/[*_]/, /[a-zA-Z0-9]+/))))`. This absorbs word-adjacent `*` and `_` into single tokens (e.g., `word*not` → one token, `snake_case_name` → one token), preventing the scanner from misinterpreting them as emphasis delimiters. Fixes the fundamental tree-sitter limitation where `return false` discards scanner state changes.
 
-**grammar.js additions:**
-- `bold = seq('*', repeat1(_inline_content), '*')`
-- `italic = seq('_', repeat1(_inline_content), '_')`
-- `code = seq('`', /[^`]+/, '`')`
-- `math = seq('#', /[^#]+/, '#')`
-- `reference = seq('[', _reference_content, ']')`
-- `escape_sequence = seq('\\', /[^a-zA-Z0-9]/)`
-- `_inline_content = choice(bold, italic, code, math, reference, escape_sequence, _text)`
+**Status:** 52/52 tree-sitter tests pass. All 95 element fixture files parse error-free (0 ERROR nodes).
 
-**Reference sub-classification** (by content pattern):
-- `footnote_ref = /\d+/`
-- `labeled_footnote_ref = seq('^', identifier)`
-- `citation_ref = seq('@', identifier, optional(locator))`
-- `session_ref = seq('#', /[\d.]+/)`
-- `url_ref = /(https?|mailto):.+/`
-- `file_ref = /[./].+/`
-- `general_ref = /[a-zA-Z].*/`
-
-**Validation:** Inline-specific fixtures + full document fixtures with inline content.
+**Not implemented (deferred):** Reference sub-classification (footnote, citation, URL, etc.) — currently all references are opaque `[...]` tokens. Can be added later as grammar refinement or consumer-side classification.
 
 ### Phase 7: Full Parity + Polish
 
-- Run full parity check against all ~50+ fixtures
+- Build parity testing infrastructure (Layers 1-4 from Parity Testing Strategy)
+- Run full parity check against all ~95+ fixtures
 - Fix edge cases found by diff harness
 - Document title handling
 - Dialog line detection (lines ending with `..`)
-- Extended sequence markers (`1.2.3`)
-- Multiple verbatim groups sharing one closing annotation
+- Verbatim groups (deferred from Phase 5)
 - Highlight queries (`highlights.scm`) for syntax highlighting
 - Injection queries for verbatim blocks (language-specific highlighting)
 

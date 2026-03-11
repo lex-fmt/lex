@@ -5,6 +5,17 @@
  * - Indentation-based structure (INDENT/DEDENT tokens)
  * - NEWLINE emission at line boundaries and EOF
  * - Line-start detection for annotation markers (::) and list items (full line)
+ * - Emphasis delimiter validation (*strong* and _emphasis_) with flanking rules
+ *
+ * Flanking context tracking:
+ *   The scanner tracks `last_char_class` to know what preceded the current
+ *   position. When the scanner returns false (grammar lexer handles the token),
+ *   it infers context from `lexer->lookahead`: the grammar's _word is split into
+ *   _word_alnum (always class WORD), _word_space (always class WHITESPACE), and
+ *   _word_other (always class PUNCTUATION). All other grammar tokens (code_span,
+ *   math_span, reference, escape_sequence, _delimiter_char) end with punctuation.
+ *   So classify_char(lookahead) correctly predicts the class of the LAST character
+ *   of whatever grammar token will be consumed.
  *
  * Lex uses 4-space indentation units (or 1 tab = 1 level).
  *
@@ -15,6 +26,19 @@
  *   3: annotation_marker
  *   4: annotation_end_marker
  *   5: list_item_line
+ *   6: subject_content
+ *   7: _strong_open
+ *   8: _strong_close
+ *   9: _emphasis_open
+ *  10: _emphasis_close
+ *
+ * Flanking validation for emphasis delimiters:
+ *   Opening: prev char must not be alphanumeric (WORD class), next must be WORD.
+ *   Closing: prev must not be whitespace/none, next must not be WORD.
+ *   The "prev" check uses last_char_class, which is only reliably updated when
+ *   scan() returns true. To compensate, _word_alnum in grammar.js is defined as
+ *   a greedy pattern that absorbs word-adjacent * and _ (e.g. word*not, snake_case)
+ *   so the scanner never sees them as separate delimiter tokens.
  */
 
 #include "tree_sitter/parser.h"
@@ -32,15 +56,35 @@ enum TokenType {
     ANNOTATION_END_MARKER,
     LIST_ITEM_LINE,
     SUBJECT_CONTENT,
+    STRONG_OPEN,
+    STRONG_CLOSE,
+    EMPHASIS_OPEN,
+    EMPHASIS_CLOSE,
 };
+
+// Character class for flanking rule context tracking.
+// 0 = start-of-line/none, 1 = whitespace, 2 = punctuation, 3 = word (alnum)
+#define CHAR_CLASS_NONE 0
+#define CHAR_CLASS_WHITESPACE 1
+#define CHAR_CLASS_PUNCTUATION 2
+#define CHAR_CLASS_WORD 3
 
 typedef struct {
     int indent_stack[MAX_INDENT_DEPTH];
     int indent_depth;
     int pending_dedents;
     bool at_line_start;
-    bool emitted_eof_newline; // prevents infinite NEWLINE emission at EOF
+    bool emitted_eof_newline;
+    uint8_t last_char_class;
 } Scanner;
+
+static uint8_t classify_char(int32_t c) {
+    if (c == 0) return CHAR_CLASS_NONE;
+    if (c == ' ' || c == '\t' || c == '\n' || c == '\r') return CHAR_CLASS_WHITESPACE;
+    if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9'))
+        return CHAR_CLASS_WORD;
+    return CHAR_CLASS_PUNCTUATION;
+}
 
 void *tree_sitter_lex_external_scanner_create(void) {
     Scanner *scanner = calloc(1, sizeof(Scanner));
@@ -49,6 +93,7 @@ void *tree_sitter_lex_external_scanner_create(void) {
     scanner->pending_dedents = 0;
     scanner->at_line_start = true;
     scanner->emitted_eof_newline = false;
+    scanner->last_char_class = CHAR_CLASS_NONE;
     return scanner;
 }
 
@@ -65,6 +110,7 @@ unsigned tree_sitter_lex_external_scanner_serialize(void *payload,
     buffer[offset++] = (char)scanner->pending_dedents;
     buffer[offset++] = (char)scanner->at_line_start;
     buffer[offset++] = (char)scanner->emitted_eof_newline;
+    buffer[offset++] = (char)scanner->last_char_class;
 
     for (int i = 0; i <= scanner->indent_depth; i++) {
         int16_t val = (int16_t)scanner->indent_stack[i];
@@ -86,6 +132,7 @@ void tree_sitter_lex_external_scanner_deserialize(void *payload,
         scanner->pending_dedents = 0;
         scanner->at_line_start = true;
         scanner->emitted_eof_newline = false;
+        scanner->last_char_class = CHAR_CLASS_NONE;
         return;
     }
 
@@ -94,6 +141,7 @@ void tree_sitter_lex_external_scanner_deserialize(void *payload,
     scanner->pending_dedents = (int)(unsigned char)buffer[offset++];
     scanner->at_line_start = (bool)buffer[offset++];
     scanner->emitted_eof_newline = (bool)buffer[offset++];
+    scanner->last_char_class = (uint8_t)(unsigned char)buffer[offset++];
 
     for (int i = 0; i <= scanner->indent_depth; i++) {
         int16_t val;
@@ -236,6 +284,7 @@ bool tree_sitter_lex_external_scanner_scan(void *payload, TSLexer *lexer,
                 lexer->advance(lexer, false);
                 lexer->result_symbol = NEWLINE;
                 scanner->at_line_start = true;
+                scanner->last_char_class = CHAR_CLASS_NONE;
                 return true;
             }
             return false;
@@ -268,6 +317,7 @@ bool tree_sitter_lex_external_scanner_scan(void *payload, TSLexer *lexer,
                 scanner->indent_stack[scanner->indent_depth] = indent;
                 lexer->result_symbol = INDENT;
                 scanner->at_line_start = false;
+                scanner->last_char_class = CHAR_CLASS_NONE;
                 return true;
             }
             // If INDENT is not valid, fall through to content detection
@@ -290,9 +340,15 @@ bool tree_sitter_lex_external_scanner_scan(void *payload, TSLexer *lexer,
         }
 
         scanner->at_line_start = false;
+        scanner->last_char_class = CHAR_CLASS_NONE;
 
         // After handling indentation, try to detect line-start tokens.
         lexer->mark_end(lexer);
+
+        // Save the first content char for context tracking. If we return
+        // false later, the grammar will consume from here, and this char's
+        // class tells us what the grammar's token class will be.
+        int32_t line_start_char = lexer->lookahead;
 
         // Try annotation end marker: :: alone on a line (with optional whitespace)
         // Must check before annotation_marker to handle closing :: correctly
@@ -341,6 +397,53 @@ bool tree_sitter_lex_external_scanner_scan(void *payload, TSLexer *lexer,
             return false;
         }
 
+        // When the first char is an emphasis delimiter (* or _), we need to
+        // decide between emphasis and full-line tokens (subject_content).
+        // Strategy: scan the line once to check for trailing :. Use mark_end
+        // to control the emitted token's span — either 1 char (emphasis) or
+        // the whole line (subject_content).
+        if ((lexer->lookahead == '*' || lexer->lookahead == '_') &&
+            (valid_symbols[STRONG_OPEN] || valid_symbols[EMPHASIS_OPEN])) {
+            int32_t delimiter = lexer->lookahead;
+            lexer->advance(lexer, false);        // skip delimiter (now at X+1)
+            int32_t next_char = lexer->lookahead; // char after delimiter
+            lexer->mark_end(lexer);               // mark at X+1 (1-char token)
+
+            // Scan rest of line to check for trailing :
+            int32_t last_char = next_char;
+            while (lexer->lookahead != '\n' && !lexer->eof(lexer)) {
+                last_char = lexer->lookahead;
+                lexer->advance(lexer, false);
+            }
+
+            if (last_char == ':' && valid_symbols[SUBJECT_CONTENT]) {
+                // Subject line — re-mark end at EOL for full line
+                lexer->mark_end(lexer);
+                lexer->result_symbol = SUBJECT_CONTENT;
+                return true;
+            }
+
+            // Not a subject. Try emphasis open — mark_end is at X+1.
+            // Grammar enforces "next must be word" via _word_alnum after open.
+            if (delimiter == '*' && valid_symbols[STRONG_OPEN] &&
+                classify_char(next_char) == CHAR_CLASS_WORD) {
+                scanner->last_char_class = CHAR_CLASS_PUNCTUATION;
+                lexer->result_symbol = STRONG_OPEN;
+                return true;
+            }
+            if (delimiter == '_' && valid_symbols[EMPHASIS_OPEN] &&
+                classify_char(next_char) == CHAR_CLASS_WORD) {
+                scanner->last_char_class = CHAR_CLASS_PUNCTUATION;
+                lexer->result_symbol = EMPHASIS_OPEN;
+                return true;
+            }
+
+            // Neither subject nor valid emphasis. mark_end is at X+1.
+            // Return false — position resets to after the delimiter.
+            scanner->last_char_class = CHAR_CLASS_PUNCTUATION;
+            return false;
+        }
+
         // Try list item line: marker + rest of line (full line token)
         if (valid_symbols[LIST_ITEM_LINE]) {
             if (try_list_marker(lexer)) {
@@ -356,10 +459,6 @@ bool tree_sitter_lex_external_scanner_scan(void *payload, TSLexer *lexer,
         }
 
         // Try subject content: entire line ending with :
-        // The scanner verifies that : is truly the last char on the line,
-        // preventing partial matches on mid-line colons (e.g., URLs).
-        // Position may be past the start if try_list_marker ran and failed;
-        // combined with the while-loop below, the full line is consumed.
         if (valid_symbols[SUBJECT_CONTENT]) {
             int32_t last_char = 0;
             while (lexer->lookahead != '\n' && !lexer->eof(lexer)) {
@@ -371,15 +470,18 @@ bool tree_sitter_lex_external_scanner_scan(void *payload, TSLexer *lexer,
                 lexer->result_symbol = SUBJECT_CONTENT;
                 return true;
             }
-            // Line doesn't end with : — return false, position resets
+            // Line doesn't end with : — return false, position resets to
+            // mark_end (line start). Set last_char_class for the grammar
+            // token that will be consumed at that position.
+            scanner->last_char_class = classify_char(line_start_char);
             return false;
         }
 
+        scanner->last_char_class = classify_char(line_start_char);
         return false;
     }
 
-    // Not at line start — but may be at content start after INDENT.
-    // Check for full-line tokens that the grammar can't detect (externals).
+    // === Not at line start ===
 
     // Try list item line (e.g., first line after INDENT in a definition body)
     if (valid_symbols[LIST_ITEM_LINE]) {
@@ -429,22 +531,93 @@ bool tree_sitter_lex_external_scanner_scan(void *payload, TSLexer *lexer,
         return false;
     }
 
-    // Not at line start — look for NEWLINE or EOF
+    // ===== Emphasis delimiter detection =====
+
+    // Opening * for strong
+    if (valid_symbols[STRONG_OPEN] && lexer->lookahead == '*') {
+        // Flanking: prev must not be word char, next must be word char
+        if (scanner->last_char_class != CHAR_CLASS_WORD) {
+            lexer->mark_end(lexer);
+            lexer->advance(lexer, false);
+            if (classify_char(lexer->lookahead) == CHAR_CLASS_WORD) {
+                lexer->mark_end(lexer);
+                lexer->result_symbol = STRONG_OPEN;
+                scanner->last_char_class = CHAR_CLASS_PUNCTUATION;
+                return true;
+            }
+        }
+    }
+
+    // Closing * for strong
+    if (valid_symbols[STRONG_CLOSE] && lexer->lookahead == '*') {
+        // Flanking: prev must not be whitespace/none, next must not be word char
+        if (scanner->last_char_class != CHAR_CLASS_NONE &&
+            scanner->last_char_class != CHAR_CLASS_WHITESPACE) {
+            lexer->mark_end(lexer);
+            lexer->advance(lexer, false);
+            if (classify_char(lexer->lookahead) != CHAR_CLASS_WORD) {
+                lexer->mark_end(lexer);
+                lexer->result_symbol = STRONG_CLOSE;
+                scanner->last_char_class = CHAR_CLASS_PUNCTUATION;
+                return true;
+            }
+        }
+    }
+
+    // Opening _ for emphasis
+    if (valid_symbols[EMPHASIS_OPEN] && lexer->lookahead == '_') {
+        if (scanner->last_char_class != CHAR_CLASS_WORD) {
+            lexer->mark_end(lexer);
+            lexer->advance(lexer, false);
+            if (classify_char(lexer->lookahead) == CHAR_CLASS_WORD) {
+                lexer->mark_end(lexer);
+                lexer->result_symbol = EMPHASIS_OPEN;
+                scanner->last_char_class = CHAR_CLASS_PUNCTUATION;
+                return true;
+            }
+        }
+    }
+
+    // Closing _ for emphasis
+    if (valid_symbols[EMPHASIS_CLOSE] && lexer->lookahead == '_') {
+        if (scanner->last_char_class != CHAR_CLASS_NONE &&
+            scanner->last_char_class != CHAR_CLASS_WHITESPACE) {
+            lexer->mark_end(lexer);
+            lexer->advance(lexer, false);
+            if (classify_char(lexer->lookahead) != CHAR_CLASS_WORD) {
+                lexer->mark_end(lexer);
+                lexer->result_symbol = EMPHASIS_CLOSE;
+                scanner->last_char_class = CHAR_CLASS_PUNCTUATION;
+                return true;
+            }
+        }
+    }
+
+    // NEWLINE or EOF
     if (valid_symbols[NEWLINE]) {
         if (lexer->lookahead == '\n') {
             lexer->advance(lexer, false);
             lexer->result_symbol = NEWLINE;
             scanner->at_line_start = true;
+            scanner->last_char_class = CHAR_CLASS_NONE;
             return true;
         }
-        // At EOF without trailing newline — emit one synthetic NEWLINE
         if (lexer->eof(lexer) && !scanner->emitted_eof_newline) {
             scanner->emitted_eof_newline = true;
             lexer->result_symbol = NEWLINE;
             scanner->at_line_start = true;
+            scanner->last_char_class = CHAR_CLASS_NONE;
             return true;
         }
     }
+
+    // No external token matched. The grammar lexer will consume the next token.
+    // Infer last_char_class from lookahead — because the grammar's _word is split
+    // into _word_alnum (ends with alnum → WORD), _word_space (ends with space →
+    // WHITESPACE), and _word_other (ends with punct → PUNCTUATION), and all other
+    // grammar inline tokens end with punctuation, classify_char(lookahead) predicts
+    // the last-character class of whatever token the grammar will consume.
+    scanner->last_char_class = classify_char(lexer->lookahead);
 
     return false;
 }

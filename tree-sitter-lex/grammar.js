@@ -11,6 +11,8 @@
  * Token strategy:
  * - Scanner emits full-line tokens: list_item_line (entire line with marker)
  * - Scanner emits annotation_marker (:: prefix) and annotation_end_marker
+ * - Scanner emits emphasis delimiters: _strong_open, _strong_close,
+ *   _emphasis_open, _emphasis_close (with flanking validation)
  * - Grammar lexer emits: subject_content (line ending with :), text_content,
  *   inline tokens (code_span, math_span, reference, escape_sequence)
  * - INDENT/DEDENT/NEWLINE are always from scanner
@@ -26,6 +28,10 @@ module.exports = grammar({
     $.annotation_end_marker, // "::" alone on a line (closing marker)
     $.list_item_line, // entire line starting with list marker (- , 1. , etc.)
     $.subject_content, // entire line ending with : (scanner verifies EOL)
+    $._strong_open, // opening * validated by scanner flanking rules
+    $._strong_close, // closing * validated by scanner flanking rules
+    $._emphasis_open, // opening _ validated by scanner flanking rules
+    $._emphasis_close, // closing _ validated by scanner flanking rules
   ],
 
   extras: (_$) => [],
@@ -145,12 +151,7 @@ module.exports = grammar({
     line_content: ($) =>
       choice($.list_item_line, $.subject_content, $.text_content),
 
-    // subject_content is an external token (scanner detects lines ending with :)
-
     // ===== Inline-Aware Text Content =====
-    // Replaces the old monolithic /[^\n]+/ regex with inline element parsing.
-    // subject_content still wins for colon-ending lines (longer match + prec).
-    // list_item_line still wins for list lines (external scanner priority).
     text_content: ($) => repeat1($._inline),
 
     _inline: ($) =>
@@ -165,22 +166,73 @@ module.exports = grammar({
         $._delimiter_char,
       ),
 
-    // Inline spans — matched as single regex tokens.
-    // Lexer longest-match ensures these win over _delimiter_char for
-    // the opening character when a closing delimiter exists on the line.
-    strong: (_$) => /\*[^\n*]+\*/,
-    emphasis: (_$) => /_[^\n_]+_/,
+    // ===== Strong and Emphasis =====
+    // Scanner-validated delimiters enable proper nesting:
+    //   *bold _italic_ inside* — emphasis nested inside strong
+    //   _italic *bold* inside_ — strong nested inside emphasis
+    // Same-type nesting is blocked by _no_star / _no_underscore variants.
+    // First content token must be _word_alnum — this enforces the Lex rule
+    // that "next char after opening delimiter must be alphanumeric".
+    // The scanner validates the "prev" constraint; the grammar validates "next".
+    strong: ($) =>
+      seq(
+        $._strong_open,
+        $._word_alnum,
+        repeat($._inline_no_star),
+        $._strong_close,
+      ),
+
+    emphasis: ($) =>
+      seq(
+        $._emphasis_open,
+        $._word_alnum,
+        repeat($._inline_no_underscore),
+        $._emphasis_close,
+      ),
+
+    // Inline content inside *strong* — excludes strong to prevent same-type nesting
+    _inline_no_star: ($) =>
+      choice(
+        $.emphasis,
+        $.code_span,
+        $.math_span,
+        $.reference,
+        $.escape_sequence,
+        $._word,
+        $._delimiter_char,
+      ),
+
+    // Inline content inside _emphasis_ — excludes emphasis to prevent same-type nesting
+    _inline_no_underscore: ($) =>
+      choice(
+        $.strong,
+        $.code_span,
+        $.math_span,
+        $.reference,
+        $.escape_sequence,
+        $._word,
+        $._delimiter_char,
+      ),
+
+    // Inline spans — matched as single regex tokens by the grammar lexer.
     code_span: (_$) => /`[^`\n]+`/,
     math_span: (_$) => /#[^#\n]+#/,
     reference: (_$) => /\[[^\]\n]+\]/,
 
     // Backslash before non-alphanumeric = escape (removes backslash).
-    // Backslash before alphanumeric = preserved (falls through to
-    // _delimiter_char for \ + _word for the letter).
     escape_sequence: (_$) => /\\[^a-zA-Z0-9\n]/,
 
-    // Plain text — everything that isn't an inline delimiter or newline
-    _word: (_$) => /[^\n*_`#\[\]\\]+/,
+    // Plain text — everything that isn't an inline delimiter or newline.
+    // Split into three tokens so the scanner can infer the character class
+    // of the last consumed character for emphasis flanking validation:
+    //   _word_alnum always ends with an alphanumeric char (class WORD)
+    //   _word_space always ends with whitespace (class WHITESPACE)
+    //   _word_other always ends with punctuation (class PUNCTUATION)
+    _word: ($) => choice($._word_alnum, $._word_space, $._word_other),
+    _word_alnum: (_$) =>
+      token(seq(/[a-zA-Z0-9]+/, repeat(seq(/[*_]/, /[a-zA-Z0-9]+/)))),
+    _word_space: (_$) => /[ \t]+/,
+    _word_other: (_$) => /[^\na-zA-Z0-9 \t*_`#\[\]\\]+/,
 
     // Fallback for unmatched delimiters (orphan *, _, `, #, [, ], \)
     _delimiter_char: (_$) => /[*_`#\[\]\\]/,

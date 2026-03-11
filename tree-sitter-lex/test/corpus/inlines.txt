@@ -212,3 +212,121 @@ Use \* not bold \* here
         (text_content
           (escape_sequence)
           (escape_sequence))))))
+
+==================
+Emphasis nested inside strong
+==================
+*bold _and italic_ inside*
+---
+
+(document
+  (paragraph
+    (text_line
+      (line_content
+        (text_content
+          (strong
+            (emphasis)))))))
+
+==================
+Strong nested inside emphasis
+==================
+_italic *and bold* inside_
+---
+
+(document
+  (paragraph
+    (text_line
+      (line_content
+        (text_content
+          (emphasis
+            (strong)))))))
+
+==================
+Code span inside strong
+==================
+*bold with `code` inside*
+---
+
+(document
+  (paragraph
+    (text_line
+      (line_content
+        (text_content
+          (strong
+            (code_span)))))))
+
+==================
+Reference inside emphasis
+==================
+_see [Section 1] for details_
+---
+
+(document
+  (paragraph
+    (text_line
+      (line_content
+        (text_content
+          (emphasis
+            (reference)))))))
+
+==================
+Word-adjacent asterisk not strong
+==================
+word*not bold*here
+---
+
+(document
+  (paragraph
+    (text_line
+      (line_content
+        (text_content)))))
+
+==================
+Word-adjacent underscore not emphasis
+==================
+snake_case_name
+---
+
+(document
+  (paragraph
+    (text_line
+      (line_content
+        (text_content)))))
+
+==================
+Strong at line start
+==================
+*bold* at start
+---
+
+(document
+  (paragraph
+    (text_line
+      (line_content
+        (text_content
+          (strong))))))
+
+==================
+Strong at line end
+==================
+text is *bold*
+---
+
+(document
+  (paragraph
+    (text_line
+      (line_content
+        (text_content
+          (strong))))))
+
+==================
+Multiple arithmetic expressions
+==================
+Calculate 7 * 8 + 3 * 4
+---
+
+(document
+  (paragraph
+    (text_line
+      (line_content
+        (text_content)))))

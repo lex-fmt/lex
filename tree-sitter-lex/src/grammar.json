@@ -464,12 +464,118 @@
       ]
     },
     "strong": {
-      "type": "PATTERN",
-      "value": "\\*[^\\n*]+\\*"
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "_strong_open"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "_word_alnum"
+        },
+        {
+          "type": "REPEAT",
+          "content": {
+            "type": "SYMBOL",
+            "name": "_inline_no_star"
+          }
+        },
+        {
+          "type": "SYMBOL",
+          "name": "_strong_close"
+        }
+      ]
     },
     "emphasis": {
-      "type": "PATTERN",
-      "value": "_[^\\n_]+_"
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "_emphasis_open"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "_word_alnum"
+        },
+        {
+          "type": "REPEAT",
+          "content": {
+            "type": "SYMBOL",
+            "name": "_inline_no_underscore"
+          }
+        },
+        {
+          "type": "SYMBOL",
+          "name": "_emphasis_close"
+        }
+      ]
+    },
+    "_inline_no_star": {
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "emphasis"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "code_span"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "math_span"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "reference"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "escape_sequence"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "_word"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "_delimiter_char"
+        }
+      ]
+    },
+    "_inline_no_underscore": {
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "strong"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "code_span"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "math_span"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "reference"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "escape_sequence"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "_word"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "_delimiter_char"
+        }
+      ]
     },
     "code_span": {
       "type": "PATTERN",
@@ -488,8 +594,57 @@
       "value": "\\\\[^a-zA-Z0-9\\n]"
     },
     "_word": {
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "_word_alnum"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "_word_space"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "_word_other"
+        }
+      ]
+    },
+    "_word_alnum": {
+      "type": "TOKEN",
+      "content": {
+        "type": "SEQ",
+        "members": [
+          {
+            "type": "PATTERN",
+            "value": "[a-zA-Z0-9]+"
+          },
+          {
+            "type": "REPEAT",
+            "content": {
+              "type": "SEQ",
+              "members": [
+                {
+                  "type": "PATTERN",
+                  "value": "[*_]"
+                },
+                {
+                  "type": "PATTERN",
+                  "value": "[a-zA-Z0-9]+"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "_word_space": {
       "type": "PATTERN",
-      "value": "[^\\n*_`#\\[\\]\\\\]+"
+      "value": "[ \\t]+"
+    },
+    "_word_other": {
+      "type": "PATTERN",
+      "value": "[^\\na-zA-Z0-9 \\t*_`#\\[\\]\\\\]+"
     },
     "_delimiter_char": {
       "type": "PATTERN",
@@ -553,6 +708,22 @@
     {
       "type": "SYMBOL",
       "name": "subject_content"
+    },
+    {
+      "type": "SYMBOL",
+      "name": "_strong_open"
+    },
+    {
+      "type": "SYMBOL",
+      "name": "_strong_close"
+    },
+    {
+      "type": "SYMBOL",
+      "name": "_emphasis_open"
+    },
+    {
+      "type": "SYMBOL",
+      "name": "_emphasis_close"
     }
   ],
   "inline": [],
