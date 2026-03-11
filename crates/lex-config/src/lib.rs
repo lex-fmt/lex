@@ -23,6 +23,9 @@ pub struct LexConfig {
     /// Format-specific conversion options.
     #[config(nested)]
     pub convert: ConvertConfig,
+    /// Diagnostics options.
+    #[config(nested)]
+    pub diagnostics: DiagnosticsConfig,
 }
 
 /// Formatting-related configuration groups.
@@ -31,6 +34,9 @@ pub struct FormattingConfig {
     /// Formatting rules for lex output.
     #[config(nested)]
     pub rules: FormattingRulesConfig,
+    /// Automatically format documents on save (consumed by editors).
+    #[config(default = false)]
+    pub format_on_save: bool,
 }
 
 /// Mirrors the knobs exposed by the Lex formatter.
@@ -159,6 +165,14 @@ pub struct HtmlConfig {
     pub theme: String,
     /// Optional path to a custom CSS file to append after the baseline CSS.
     pub custom_css: Option<String>,
+}
+
+/// Diagnostics options.
+#[derive(Debug, Clone, Config, Serialize, Deserialize)]
+pub struct DiagnosticsConfig {
+    /// Enable spellcheck diagnostics.
+    #[config(default = true)]
+    pub spellcheck: bool,
 }
 
 #[cfg(test)]
