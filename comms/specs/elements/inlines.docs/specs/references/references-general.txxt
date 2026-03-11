@@ -6,6 +6,8 @@ Complete specification for the general reference system - the foundation for lin
 
 :: note :: This specification describes the specific characteristics of reference inline elements. For the general inline token pattern, universal grammar, parsing architecture, and AST foundation shared by all inline elements, see [../inlines-general.lex].
 
+
+
 1. Purpose
 
     References provide the mechanism for linking content within documents and connecting to external resources. They enable cross-references to document sections, links to external URLs, file references, and integration with citation systems. The reference system maintains the plain text philosophy while providing powerful connectivity and navigation capabilities.
@@ -41,6 +43,17 @@ Complete specification for the general reference system - the foundation for lin
         - Session patterns (`#number`) → Session cross-references
         - Plain text → General document references
 
+    2.3 Implicit Anchors
+
+        In HTML, hence Markdown and most markdup langugages, the analogous elements to Lex's refs are links. In these formats, the links define the destination (where the link goes), and the anchor (what in the document the link is applied to, i.e. the words ).
+        Lex uses, however, and implicit anchor, that is the link's anchor is the last word that preceeded. For example, here it would be the "website" word, as in lex's website [https://lex.ing]. The reason for this is the combination of two facts: 
+        
+        - One of the largest usabilities with Markdown is precisely the link []() (which comes first, space between? ). User interaction is very consistent on this as a source of frustration.
+        - By far most links are attached to a single word, and when they do not, no significant meaning is lost.
+
+        That is, given the large UX issues created and the reduced value it gives, Lex opts for the implicit anchor, that is say foo [http://example.com] is the equivalent for <a href="http://example.com">foo</a> in HTML land.
+        If the reference is the first word in the  text line, then the anchor becomes the first word to follow it, and , if it's the only text in a line, it's anchor becomes the url istelf (which is linked)
+        
 3. Reference Types
 
     3.1. External Links
