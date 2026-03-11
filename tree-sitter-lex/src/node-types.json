@@ -59,6 +59,33 @@
     }
   },
   {
+    "type": "annotation_inline_text",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "code_span",
+          "named": true
+        },
+        {
+          "type": "escape_sequence",
+          "named": true
+        },
+        {
+          "type": "math_span",
+          "named": true
+        },
+        {
+          "type": "reference",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "annotation_single",
     "named": true,
     "fields": {},
@@ -339,6 +366,33 @@
     }
   },
   {
+    "type": "text_content",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "code_span",
+          "named": true
+        },
+        {
+          "type": "escape_sequence",
+          "named": true
+        },
+        {
+          "type": "math_span",
+          "named": true
+        },
+        {
+          "type": "reference",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "text_line",
     "named": true,
     "fields": {},
@@ -424,11 +478,15 @@
     "named": true
   },
   {
-    "type": "annotation_inline_text",
+    "type": "annotation_marker",
     "named": true
   },
   {
-    "type": "annotation_marker",
+    "type": "code_span",
+    "named": true
+  },
+  {
+    "type": "escape_sequence",
     "named": true
   },
   {
@@ -436,11 +494,15 @@
     "named": true
   },
   {
-    "type": "subject_content",
+    "type": "math_span",
     "named": true
   },
   {
-    "type": "text_content",
+    "type": "reference",
+    "named": true
+  },
+  {
+    "type": "subject_content",
     "named": true
   }
 ]

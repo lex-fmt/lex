@@ -419,20 +419,65 @@
         }
       ]
     },
-    "subject_content": {
-      "type": "TOKEN",
+    "text_content": {
+      "type": "REPEAT1",
       "content": {
-        "type": "PREC",
-        "value": 1,
-        "content": {
-          "type": "PATTERN",
-          "value": "[^\\n]+:"
-        }
+        "type": "SYMBOL",
+        "name": "_inline"
       }
     },
-    "text_content": {
+    "_inline": {
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "code_span"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "math_span"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "reference"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "escape_sequence"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "_word"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "_delimiter_char"
+        }
+      ]
+    },
+    "code_span": {
       "type": "PATTERN",
-      "value": "[^\\n]+"
+      "value": "`[^`\\n]+`"
+    },
+    "math_span": {
+      "type": "PATTERN",
+      "value": "#[^#\\n]+#"
+    },
+    "reference": {
+      "type": "PATTERN",
+      "value": "\\[[^\\]\\n]+\\]"
+    },
+    "escape_sequence": {
+      "type": "PATTERN",
+      "value": "\\\\[^a-zA-Z0-9\\n]"
+    },
+    "_word": {
+      "type": "PATTERN",
+      "value": "[^\\n*_`#\\[\\]\\\\]+"
+    },
+    "_delimiter_char": {
+      "type": "PATTERN",
+      "value": "[*_`#\\[\\]\\\\]"
     },
     "blank_line": {
       "type": "SYMBOL",
@@ -488,6 +533,10 @@
     {
       "type": "SYMBOL",
       "name": "list_item_line"
+    },
+    {
+      "type": "SYMBOL",
+      "name": "subject_content"
     }
   ],
   "inline": [],

@@ -1,0 +1,118 @@
+==================
+Code span
+==================
+Here is `some code` in text
+---
+
+(document
+  (paragraph
+    (text_line
+      (line_content
+        (text_content
+          (code_span))))))
+
+==================
+Math span
+==================
+The formula #x + y = z# is important
+---
+
+(document
+  (paragraph
+    (text_line
+      (line_content
+        (text_content
+          (math_span))))))
+
+==================
+Reference
+==================
+See [https://example.com] for details
+---
+
+(document
+  (paragraph
+    (text_line
+      (line_content
+        (text_content
+          (reference))))))
+
+==================
+Escape sequence
+==================
+Use \* for literal asterisk
+---
+
+(document
+  (paragraph
+    (text_line
+      (line_content
+        (text_content
+          (escape_sequence))))))
+
+==================
+Multiple inline elements
+==================
+Text `code` and #math# and [ref]
+---
+
+(document
+  (paragraph
+    (text_line
+      (line_content
+        (text_content
+          (code_span)
+          (math_span)
+          (reference))))))
+
+==================
+Unmatched backtick
+==================
+This ` is not code
+---
+
+(document
+  (paragraph
+    (text_line
+      (line_content
+        (text_content)))))
+
+==================
+Escaped backtick
+==================
+This \` is escaped
+---
+
+(document
+  (paragraph
+    (text_line
+      (line_content
+        (text_content
+          (escape_sequence))))))
+
+==================
+Code span with special chars
+==================
+Run `:: not annotation ::` in shell
+---
+
+(document
+  (paragraph
+    (text_line
+      (line_content
+        (text_content
+          (code_span))))))
+
+==================
+Multiple references on one line
+==================
+See [Section 1] and [Section 2] for details
+---
+
+(document
+  (paragraph
+    (text_line
+      (line_content
+        (text_content
+          (reference)
+          (reference))))))

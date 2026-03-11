@@ -31,6 +31,7 @@ enum TokenType {
     ANNOTATION_MARKER,
     ANNOTATION_END_MARKER,
     LIST_ITEM_LINE,
+    SUBJECT_CONTENT,
 };
 
 typedef struct {
@@ -349,14 +350,67 @@ bool tree_sitter_lex_external_scanner_scan(void *payload, TSLexer *lexer,
                 lexer->result_symbol = LIST_ITEM_LINE;
                 return true;
             }
-            // Not a list marker — let grammar lexer handle it
+            // Not a list marker — fall through to subject_content check.
+            // try_list_marker may have advanced the position, but the
+            // subject_content scan continues from there to EOL.
+        }
+
+        // Try subject content: entire line ending with :
+        // The scanner verifies that : is truly the last char on the line,
+        // preventing partial matches on mid-line colons (e.g., URLs).
+        // Position may be past the start if try_list_marker ran and failed;
+        // combined with the while-loop below, the full line is consumed.
+        if (valid_symbols[SUBJECT_CONTENT]) {
+            int32_t last_char = 0;
+            while (lexer->lookahead != '\n' && !lexer->eof(lexer)) {
+                last_char = lexer->lookahead;
+                lexer->advance(lexer, false);
+            }
+            if (last_char == ':') {
+                lexer->mark_end(lexer);
+                lexer->result_symbol = SUBJECT_CONTENT;
+                return true;
+            }
+            // Line doesn't end with : — return false, position resets
             return false;
         }
 
         return false;
     }
 
-    // Not at line start — check for mid-line annotation marker (the second ::)
+    // Not at line start — but may be at content start after INDENT.
+    // Check for full-line tokens that the grammar can't detect (externals).
+
+    // Try list item line (e.g., first line after INDENT in a definition body)
+    if (valid_symbols[LIST_ITEM_LINE]) {
+        lexer->mark_end(lexer);
+        if (try_list_marker(lexer)) {
+            consume_rest_of_line(lexer);
+            lexer->mark_end(lexer);
+            lexer->result_symbol = LIST_ITEM_LINE;
+            return true;
+        }
+        // Not a list marker — fall through
+    }
+
+    // Try subject content: entire line ending with :
+    if (valid_symbols[SUBJECT_CONTENT]) {
+        lexer->mark_end(lexer);
+        int32_t last_char = 0;
+        while (lexer->lookahead != '\n' && !lexer->eof(lexer)) {
+            last_char = lexer->lookahead;
+            lexer->advance(lexer, false);
+        }
+        if (last_char == ':') {
+            lexer->mark_end(lexer);
+            lexer->result_symbol = SUBJECT_CONTENT;
+            return true;
+        }
+        // Line doesn't end with : — return false, position resets
+        return false;
+    }
+
+    // Check for mid-line annotation marker (the second ::)
     if (valid_symbols[ANNOTATION_MARKER] && lexer->lookahead == ':') {
         lexer->mark_end(lexer);
         lexer->advance(lexer, false);

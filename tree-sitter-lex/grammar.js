@@ -11,7 +11,8 @@
  * Token strategy:
  * - Scanner emits full-line tokens: list_item_line (entire line with marker)
  * - Scanner emits annotation_marker (:: prefix) and annotation_end_marker
- * - Grammar lexer emits: subject_content (line ending with :), text_content
+ * - Grammar lexer emits: subject_content (line ending with :), text_content,
+ *   inline tokens (code_span, math_span, reference, escape_sequence)
  * - INDENT/DEDENT/NEWLINE are always from scanner
  */
 module.exports = grammar({
@@ -24,6 +25,7 @@ module.exports = grammar({
     $.annotation_marker, // ":: " at line start
     $.annotation_end_marker, // "::" alone on a line (closing marker)
     $.list_item_line, // entire line starting with list marker (- , 1. , etc.)
+    $.subject_content, // entire line ending with : (scanner verifies EOL)
   ],
 
   extras: (_$) => [],
@@ -57,7 +59,6 @@ module.exports = grammar({
       ),
 
     // ===== Sessions =====
-    // title + blank line(s) + INDENT + content + DEDENT
     session: ($) =>
       prec.dynamic(
         1,
@@ -72,11 +73,6 @@ module.exports = grammar({
       ),
 
     // ===== Verbatim Blocks =====
-    // subject (ends with :) + optional blank lines + INDENT + content + DEDENT
-    // + closing annotation (:: label params ::)
-    // Content is structurally parsed as blocks but represents raw/verbatim text.
-    // Higher dynamic precedence than definition/session — closing annotation
-    // disambiguates via GLR.
     verbatim_block: ($) =>
       prec.dynamic(
         4,
@@ -93,7 +89,6 @@ module.exports = grammar({
       ),
 
     // ===== Definitions =====
-    // subject (ends with :) + INDENT immediately
     definition: ($) =>
       prec.dynamic(
         2,
@@ -107,7 +102,6 @@ module.exports = grammar({
       ),
 
     // ===== Lists =====
-    // 2+ list items required
     list: ($) =>
       prec.dynamic(3, prec.right(seq($.list_item, repeat1($.list_item)))),
 
@@ -119,7 +113,6 @@ module.exports = grammar({
       ),
 
     // ===== Annotations =====
-    // Block: :: header :: [text] \n INDENT blocks DEDENT [:: \n]
     annotation_block: ($) =>
       seq(
         $.annotation_marker,
@@ -133,7 +126,6 @@ module.exports = grammar({
         optional(seq($.annotation_end_marker, $._newline)),
       ),
 
-    // Single-line / marker: :: header :: [text] \n
     annotation_single: ($) =>
       seq(
         $.annotation_marker,
@@ -148,20 +140,46 @@ module.exports = grammar({
     // ===== Paragraphs =====
     paragraph: ($) => prec.right(-1, repeat1($.text_line)),
 
-    // Scanner emits synthetic NEWLINE at EOF, so every line ends with one
     text_line: ($) => seq($.line_content, $._newline),
 
-    // Any single line of content (including list-marker lines that didn't
-    // form a list of 2+ items). Named rule so it can participate in conflicts.
     line_content: ($) =>
       choice($.list_item_line, $.subject_content, $.text_content),
 
-    // Lines ending with colon — higher lexer precedence breaks ties with
-    // text_content when both match the same length
-    subject_content: (_$) => token(prec(1, /[^\n]+:/)),
+    // subject_content is an external token (scanner detects lines ending with :)
 
-    // Any non-empty line content (fallback)
-    text_content: (_$) => /[^\n]+/,
+    // ===== Inline-Aware Text Content =====
+    // Replaces the old monolithic /[^\n]+/ regex with inline element parsing.
+    // subject_content still wins for colon-ending lines (longer match + prec).
+    // list_item_line still wins for list lines (external scanner priority).
+    text_content: ($) => repeat1($._inline),
+
+    _inline: ($) =>
+      choice(
+        $.code_span,
+        $.math_span,
+        $.reference,
+        $.escape_sequence,
+        $._word,
+        $._delimiter_char,
+      ),
+
+    // Literal inline spans — matched as single regex tokens.
+    // Lexer longest-match ensures these win over _delimiter_char for
+    // the opening character when a closing delimiter exists on the line.
+    code_span: (_$) => /`[^`\n]+`/,
+    math_span: (_$) => /#[^#\n]+#/,
+    reference: (_$) => /\[[^\]\n]+\]/,
+
+    // Backslash before non-alphanumeric = escape (removes backslash).
+    // Backslash before alphanumeric = preserved (falls through to
+    // _delimiter_char for \ + _word for the letter).
+    escape_sequence: (_$) => /\\[^a-zA-Z0-9\n]/,
+
+    // Plain text — everything that isn't an inline delimiter or newline
+    _word: (_$) => /[^\n*_`#\[\]\\]+/,
+
+    // Fallback for unmatched delimiters (orphan *, _, `, #, [, ], \)
+    _delimiter_char: (_$) => /[*_`#\[\]\\]/,
 
     blank_line: ($) => $._newline,
   },
