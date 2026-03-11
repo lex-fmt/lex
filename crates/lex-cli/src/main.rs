@@ -19,7 +19,7 @@
 //
 // Configuration:
 //
-// Settings are loaded from lex.toml files (CWD, project root, platform config dir),
+// Settings are loaded from .lex.toml files (CWD, project root, platform config dir),
 // environment variables (LEX__*), and CLI flags. Use `lex config` to manage settings.
 
 use lex_cli::transforms;
@@ -30,7 +30,7 @@ use lex_babel::{
     formats::lex::formatting_rules::FormattingRules, transforms::serialize_to_lex_with_rules,
     FormatRegistry, SerializedDocument,
 };
-use lex_config::{LexConfig, PdfPageSize};
+use lex_config::{LexConfig, PdfPageSize, CONFIG_FILE_NAME};
 use lex_core::lex::ast::{find_node_path_at_position, Position};
 use std::collections::HashMap;
 use std::fs;
@@ -46,7 +46,7 @@ fn build_cli() -> Command {
             - convert: Transform between document formats (lex, markdown, HTML, etc.)\n  \
             - config:  Manage configuration (list, get, set, gen)\n\n\
             Configuration:\n  \
-            Settings are loaded from lex.toml files, LEX__* env vars, and CLI flags.\n  \
+            Settings are loaded from .lex.toml files, LEX__* env vars, and CLI flags.\n  \
             Use `lex config list` to see resolved settings.\n\n\
             Examples:\n  \
             lex inspect file.lex                    # View AST tree visualization\n  \
@@ -70,7 +70,7 @@ fn build_cli() -> Command {
             Arg::new("config-path")
                 .long("config")
                 .value_name("PATH")
-                .help("Path to a lex.toml configuration file")
+                .help("Path to a .lex.toml configuration file")
                 .value_hint(ValueHint::FilePath)
                 .global(true),
         )
@@ -432,7 +432,7 @@ fn main() {
 fn make_builder(matches: &ArgMatches) -> ClapfigBuilder<LexConfig> {
     let mut builder = Clapfig::builder::<LexConfig>()
         .app_name("lex")
-        .file_name("lex.toml")
+        .file_name(CONFIG_FILE_NAME)
         .search_paths(vec![
             SearchPath::Platform,
             SearchPath::Ancestors(Boundary::Marker(".git")),

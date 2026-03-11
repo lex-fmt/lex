@@ -20,6 +20,8 @@ path = "src/bin/lex-lsp.rs"
 lex-core = { workspace = true }
 lex-analysis = { workspace = true }
 lex-babel = { workspace = true }
+lex-config = { workspace = true }
+clapfig = { workspace = true }
 tower-lsp = "0.20"
 lsp-types = { workspace = true }
 tokio = { workspace = true }

@@ -8,7 +8,7 @@ fn format_respects_indent_from_config() {
     let input_path = dir.path().join("doc.lex");
     fs::write(&input_path, "Session:\n    Body\n").unwrap();
 
-    let config_path = dir.path().join("lex.toml");
+    let config_path = dir.path().join(".lex.toml");
     fs::write(
         &config_path,
         r#"[formatting.rules]

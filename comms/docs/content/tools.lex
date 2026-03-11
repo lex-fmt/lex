@@ -101,7 +101,7 @@ Tools
 
 5. Configuration
 
-    Settings are loaded from `lex.toml` files, `LEX__*` environment variables, and CLI flags. Use `lex config` to manage settings.
+    Settings are loaded from `.lex.toml` files, `LEX__*` environment variables, and CLI flags. Use `lex config` to manage settings.
 
         # Show all resolved settings
         lex config list
@@ -110,10 +110,10 @@ Tools
         lex config set convert.html.theme fancy-serif
 
         # Generate a template config file
-        lex config gen -o lex.toml
+        lex config gen -o .lex.toml
 
         # Override the config file path
-        lex document.lex --to html --config ./my-lex.toml
+        lex document.lex --to html --config ./my-.lex.toml
     :: shell ::
     Definition:
         Format-specific flags:
@@ -128,7 +128,7 @@ Tools
             # Inspect with full AST properties
             lex inspect document.lex --ast-full
         :: shell ::
-    Example `lex.toml`:
+    Example `.lex.toml`:
 
         [formatting.rules]
         session_blank_lines_before = 2

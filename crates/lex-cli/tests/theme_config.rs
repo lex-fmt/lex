@@ -9,7 +9,7 @@ fn convert_uses_default_theme_from_config() {
     fs::write(&input_path, "Session:\n    Body\n").unwrap();
 
     // Create a config file with a custom default theme
-    let config_path = dir.path().join("lex.toml");
+    let config_path = dir.path().join(".lex.toml");
     fs::write(
         &config_path,
         r#"[convert.html]
@@ -81,7 +81,7 @@ fn convert_cli_override_precedes_config() {
     let input_path = dir.path().join("doc.lex");
     fs::write(&input_path, "Session:\n    Body\n").unwrap();
 
-    let config_path = dir.path().join("lex.toml");
+    let config_path = dir.path().join(".lex.toml");
     fs::write(
         &config_path,
         r#"[convert.html]
