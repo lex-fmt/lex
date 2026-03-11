@@ -8,6 +8,9 @@ use confique::Config;
 use lex_babel::formats::lex::formatting_rules::FormattingRules;
 use serde::{Deserialize, Serialize};
 
+/// Canonical config file name used by the CLI and LSP.
+pub const CONFIG_FILE_NAME: &str = ".lex.toml";
+
 /// Top-level configuration consumed by Lex applications.
 #[derive(Debug, Clone, Config, Serialize, Deserialize)]
 pub struct LexConfig {

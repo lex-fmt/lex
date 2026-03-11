@@ -15,6 +15,7 @@ use crate::features::references::find_references;
 use crate::features::semantic_tokens::{
     collect_semantic_tokens, LexSemanticToken, SEMANTIC_TOKEN_KINDS,
 };
+use clapfig::{Boundary, Clapfig, SearchPath};
 use lex_analysis::completion::{completion_items, CompletionCandidate, CompletionWorkspace};
 use lex_analysis::diagnostics::{
     analyze as analyze_diagnostics, AnalysisDiagnostic, DiagnosticKind,
@@ -23,6 +24,7 @@ use lex_babel::formats::lex::formatting_rules::FormattingRules;
 use lex_babel::templates::{
     build_asset_snippet, build_verbatim_snippet, AssetSnippetRequest, VerbatimSnippetRequest,
 };
+use lex_config::{LexConfig, CONFIG_FILE_NAME};
 use lex_core::lex::ast::links::{DocumentLink as AstDocumentLink, LinkType};
 use lex_core::lex::ast::range::SourceLocation;
 use lex_core::lex::ast::{Document, Position as AstPosition, Range as AstRange};
@@ -259,6 +261,7 @@ pub struct LexLanguageServer<C = Client, P = DefaultFeatureProvider> {
     documents: DocumentStore,
     features: Arc<P>,
     workspace_roots: RwLock<Vec<PathBuf>>,
+    config: RwLock<LexConfig>,
 }
 
 impl LexLanguageServer<Client, DefaultFeatureProvider> {
@@ -273,11 +276,13 @@ where
     P: FeatureProvider,
 {
     pub fn with_features(client: C, features: Arc<P>) -> Self {
+        let config = load_config(None);
         Self {
             _client: client,
             documents: DocumentStore::default(),
             features,
             workspace_roots: RwLock::new(Vec::new()),
+            config: RwLock::new(config),
         }
     }
 
@@ -341,6 +346,42 @@ where
             document_path,
         })
     }
+
+    /// Build formatting rules from stored config, with per-request LSP overrides on top.
+    async fn resolve_formatting_rules(&self, options: &FormattingOptions) -> FormattingRules {
+        let config = self.config.read().await;
+        let mut rules = FormattingRules::from(&config.formatting.rules);
+
+        // Layer per-request LSP overrides (editors can send lex.* properties)
+        apply_formatting_overrides(&mut rules, options);
+
+        rules
+    }
+}
+
+/// Load a [`LexConfig`] via clapfig, searching from an optional workspace root.
+fn load_config(workspace_root: Option<&Path>) -> LexConfig {
+    let mut search_paths = vec![SearchPath::Platform];
+    if let Some(root) = workspace_root {
+        search_paths.push(SearchPath::Path(root.to_path_buf()));
+    } else {
+        search_paths.push(SearchPath::Ancestors(Boundary::Marker(".git")));
+        search_paths.push(SearchPath::Cwd);
+    }
+    Clapfig::builder::<LexConfig>()
+        .app_name("lex")
+        .file_name(CONFIG_FILE_NAME)
+        .search_paths(search_paths)
+        .load()
+        .unwrap_or_else(|_| {
+            // Fall back to compiled defaults if config loading fails
+            Clapfig::builder::<LexConfig>()
+                .app_name("lex")
+                .no_env()
+                .search_paths(vec![])
+                .load()
+                .expect("compiled defaults must load")
+        })
 }
 
 fn best_matching_root(roots: &[PathBuf], document_path: &Path) -> Option<PathBuf> {
@@ -397,7 +438,7 @@ fn to_formatting_line_range(range: &Range) -> FormattingLineRange {
 
 use lsp_types::{FormattingOptions, FormattingProperty};
 
-/// Extract FormattingRules from LSP FormattingOptions.
+/// Apply per-request LSP overrides onto existing formatting rules.
 ///
 /// Clients can pass custom Lex formatting options through the `properties` field
 /// of FormattingOptions. Supported keys (all under "lex." prefix):
@@ -409,24 +450,7 @@ use lsp_types::{FormattingOptions, FormattingProperty};
 /// - lex.indent_string
 /// - lex.preserve_trailing_blanks
 /// - lex.normalize_verbatim_markers
-fn extract_formatting_rules(options: &FormattingOptions) -> Option<FormattingRules> {
-    // Check if any lex-specific properties are present
-    let has_lex_options = options.properties.keys().any(|k| k.starts_with("lex."));
-
-    if !has_lex_options {
-        return None;
-    }
-
-    let mut rules = FormattingRules::default();
-
-    // Apply tab_size/insert_spaces from LSP standard options
-    if options.insert_spaces {
-        rules.indent_string = " ".repeat(options.tab_size as usize);
-    } else {
-        rules.indent_string = "\t".to_string();
-    }
-
-    // Apply lex-specific overrides from properties
+fn apply_formatting_overrides(rules: &mut FormattingRules, options: &FormattingOptions) {
     for (key, value) in &options.properties {
         match key.as_str() {
             "lex.session_blank_lines_before" => {
@@ -474,8 +498,6 @@ fn extract_formatting_rules(options: &FormattingOptions) -> Option<FormattingRul
             _ => {}
         }
     }
-
-    Some(rules)
 }
 
 fn from_lsp_position(position: Position) -> AstPosition {
@@ -679,6 +701,14 @@ where
 {
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
         self.update_workspace_roots(&params).await;
+
+        // Reload config now that we know the workspace root
+        {
+            let roots = self.workspace_roots.read().await;
+            let root = roots.first().map(|p| p.as_path());
+            *self.config.write().await = load_config(root);
+        }
+
         let capabilities = ServerCapabilities {
             text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::FULL)),
             hover_provider: Some(HoverProviderCapability::Simple(true)),
@@ -753,6 +783,13 @@ where
     }
 
     async fn did_change_configuration(&self, _params: DidChangeConfigurationParams) {
+        // Reload config from disk (e.g. .lex.toml changed)
+        {
+            let roots = self.workspace_roots.read().await;
+            let root = roots.first().map(|p| p.as_path());
+            *self.config.write().await = load_config(root);
+        }
+
         // Re-check all documents with new settings
         let uris: Vec<Url> = self
             .documents
@@ -901,10 +938,10 @@ where
         let uri = params.text_document.uri;
         if let Some(entry) = self.document_entry(&uri).await {
             let DocumentEntry { document, text } = entry;
-            let rules = extract_formatting_rules(&params.options);
+            let rules = self.resolve_formatting_rules(&params.options).await;
             let edits = self
                 .features
-                .format_document(&document, text.as_str(), rules);
+                .format_document(&document, text.as_str(), Some(rules));
             Ok(Some(spans_to_text_edits(text.as_str(), edits)))
         } else {
             Ok(None)
@@ -919,10 +956,10 @@ where
         if let Some(entry) = self.document_entry(&uri).await {
             let DocumentEntry { document, text } = entry;
             let line_range = to_formatting_line_range(&params.range);
-            let rules = extract_formatting_rules(&params.options);
-            let edits = self
-                .features
-                .format_range(&document, text.as_str(), line_range, rules);
+            let rules = self.resolve_formatting_rules(&params.options).await;
+            let edits =
+                self.features
+                    .format_range(&document, text.as_str(), line_range, Some(rules));
             Ok(Some(spans_to_text_edits(text.as_str(), edits)))
         } else {
             Ok(None)
@@ -1864,7 +1901,7 @@ mod tests {
     }
 
     #[test]
-    fn extract_formatting_rules_returns_none_without_lex_properties() {
+    fn apply_formatting_overrides_noop_without_lex_properties() {
         let options = FormattingOptions {
             tab_size: 4,
             insert_spaces: true,
@@ -1873,11 +1910,15 @@ mod tests {
             insert_final_newline: None,
             trim_final_newlines: None,
         };
-        assert!(extract_formatting_rules(&options).is_none());
+        let mut rules = FormattingRules::default();
+        let original = rules.clone();
+        apply_formatting_overrides(&mut rules, &options);
+        assert_eq!(rules.indent_string, original.indent_string);
+        assert_eq!(rules.max_blank_lines, original.max_blank_lines);
     }
 
     #[test]
-    fn extract_formatting_rules_parses_lex_properties() {
+    fn apply_formatting_overrides_applies_lex_properties() {
         use std::collections::HashMap;
 
         let mut properties = HashMap::new();
@@ -1907,7 +1948,8 @@ mod tests {
             trim_final_newlines: None,
         };
 
-        let rules = extract_formatting_rules(&options).expect("should return Some");
+        let mut rules = FormattingRules::default();
+        apply_formatting_overrides(&mut rules, &options);
         assert_eq!(rules.indent_string, "  ");
         assert_eq!(rules.max_blank_lines, 3);
         assert!(!rules.normalize_seq_markers);
