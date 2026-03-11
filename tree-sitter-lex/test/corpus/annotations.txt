@@ -1,0 +1,78 @@
+==================
+Single-line annotation
+==================
+:: note :: This is a note
+---
+
+(document
+  (annotation_single
+    (annotation_marker)
+    (annotation_header)
+    (annotation_marker)
+    (annotation_inline_text)))
+
+==================
+Single-line annotation without text
+==================
+:: warning ::
+---
+
+(document
+  (annotation_single
+    (annotation_marker)
+    (annotation_header)
+    (annotation_marker)))
+
+==================
+Block annotation
+==================
+:: info ::
+    Some information here
+---
+
+(document
+  (annotation_block
+    (annotation_marker)
+    (annotation_header)
+    (annotation_marker)
+    (paragraph
+      (text_line
+        (line_content
+          (text_content))))))
+
+==================
+Block annotation with closing marker
+==================
+:: code ::
+    function hello() {}
+::
+---
+
+(document
+  (annotation_block
+    (annotation_marker)
+    (annotation_header)
+    (annotation_marker)
+    (paragraph
+      (text_line
+        (line_content
+          (text_content))))
+    (annotation_end_marker)))
+
+==================
+Block annotation with inline text and body
+==================
+:: note :: Important
+    Details follow here
+---
+
+(document
+  (annotation_block
+    (annotation_marker)
+    (annotation_header)
+    (annotation_marker)
+    (annotation_inline_text)
+    (paragraph
+      (text_line
+        (line_content
+          (text_content))))))

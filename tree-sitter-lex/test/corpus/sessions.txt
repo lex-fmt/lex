@@ -1,0 +1,62 @@
+==================
+Simple session
+==================
+My Session Title
+
+    Content inside session
+---
+
+(document
+  (session
+    title: (line_content
+      (text_content))
+    (blank_line)
+    (paragraph
+      (text_line
+        (line_content
+          (text_content))))))
+
+==================
+Session with multiple blank lines before indent
+==================
+Title Here
+
+
+    Body text
+---
+
+(document
+  (session
+    title: (line_content
+      (text_content))
+    (blank_line)
+    (blank_line)
+    (paragraph
+      (text_line
+        (line_content
+          (text_content))))))
+
+==================
+Session with multiple body blocks
+==================
+Session Name
+
+    First paragraph
+
+    Second paragraph
+---
+
+(document
+  (session
+    title: (line_content
+      (text_content))
+    (blank_line)
+    (paragraph
+      (text_line
+        (line_content
+          (text_content))))
+    (blank_line)
+    (paragraph
+      (text_line
+        (line_content
+          (text_content))))))

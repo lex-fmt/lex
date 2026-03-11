@@ -1,0 +1,79 @@
+==================
+Single line paragraph
+==================
+Hello world
+---
+
+(document
+  (paragraph
+    (text_line
+      (line_content
+        (text_content)))))
+
+==================
+Multi-line paragraph
+==================
+First line
+Second line
+---
+
+(document
+  (paragraph
+    (text_line
+      (line_content
+        (text_content)))
+    (text_line
+      (line_content
+        (text_content)))))
+
+==================
+Two paragraphs separated by blank line
+==================
+First paragraph
+
+Second paragraph
+---
+
+(document
+  (paragraph
+    (text_line
+      (line_content
+        (text_content))))
+  (blank_line)
+  (paragraph
+    (text_line
+      (line_content
+        (text_content)))))
+
+==================
+Multiple blank lines between paragraphs
+==================
+First paragraph
+
+
+Second paragraph
+---
+
+(document
+  (paragraph
+    (text_line
+      (line_content
+        (text_content))))
+  (blank_line)
+  (blank_line)
+  (paragraph
+    (text_line
+      (line_content
+        (text_content)))))
+
+==================
+Paragraph with special characters
+==================
+Hello :: world :: test
+---
+
+(document
+  (paragraph
+    (text_line
+      (line_content
+        (text_content)))))
