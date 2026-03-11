@@ -306,7 +306,21 @@ fn parse_inline_content(node: Node) -> Result<Vec<InlineContent>, FormatError> {
                 }
                 "eref" => {
                     let target = child.attribute("target").unwrap_or("?");
-                    content.push(InlineContent::Reference(target.to_string()));
+                    let mut inner_text = String::new();
+                    for c in child.children() {
+                        if c.node_type() == NodeType::Text {
+                            inner_text.push_str(c.text().unwrap_or(""));
+                        }
+                    }
+                    let text = if !inner_text.trim().is_empty() {
+                        inner_text
+                    } else {
+                        target.to_string()
+                    };
+                    content.push(InlineContent::Link {
+                        text,
+                        href: target.to_string(),
+                    });
                 }
                 _ => {
                     content.extend(parse_inline_content(child)?);

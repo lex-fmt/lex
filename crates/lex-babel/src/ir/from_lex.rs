@@ -141,17 +141,21 @@ fn extract_attached_annotations(item: &LexContentItem, level: usize) -> Vec<DocN
         .collect()
 }
 
-/// Converts TextContent to IR InlineContent
+/// Converts TextContent to IR InlineContent, resolving implicit anchors for linkable references.
 fn convert_inline_content(text: &TextContent) -> Vec<InlineContent> {
+    use crate::common::links::resolve_implicit_anchors;
+
     // Get inline items from TextContent
     let inline_items = text.inline_items();
 
-    if inline_items.is_empty() {
+    let content = if inline_items.is_empty() {
         // If no inline items, use raw string
         vec![InlineContent::Text(text.as_string().to_string())]
     } else {
         inline_items.iter().map(convert_inline_node).collect()
-    }
+    };
+
+    resolve_implicit_anchors(content)
 }
 
 /// Converts a single InlineNode to IR InlineContent

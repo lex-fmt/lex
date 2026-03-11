@@ -149,6 +149,13 @@ pub enum InlineContent {
     Code(String),
     Math(String),
     Reference(String),
+    /// A resolved link with explicit anchor text and href.
+    /// Produced by resolving implicit anchors from Lex references,
+    /// or by importing from formats that have explicit link anchors (Markdown, HTML).
+    Link {
+        text: String,
+        href: String,
+    },
     Marker(String),
     Image(Image),
 }

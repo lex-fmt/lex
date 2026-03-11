@@ -329,6 +329,7 @@ fn inline_to_text(inline: &InlineContent) -> String {
         InlineContent::Code(code) => format!("`{code}`"),
         InlineContent::Math(math) => format!("#{math}#"),
         InlineContent::Reference(ref_text) => format!("[{ref_text}]"),
+        InlineContent::Link { text, href } => format!("{text} [{href}]"),
         InlineContent::Marker(marker) => marker.clone(),
         InlineContent::Image(image) => {
             let mut text = format!("![{}]({})", image.alt, image.src);
@@ -357,6 +358,7 @@ fn inline_content_to_text(content: &[InlineContent]) -> String {
             InlineContent::Code(code) => format!("`{code}`"),
             InlineContent::Math(math) => format!("#{math}#"),
             InlineContent::Reference(ref_text) => format!("[{ref_text}]"),
+            InlineContent::Link { text, href } => format!("{text} [{href}]"),
             InlineContent::Marker(marker) => marker.clone(),
             InlineContent::Image(image) => {
                 let mut text = format!("![{}]({})", image.alt, image.src);

@@ -327,15 +327,14 @@ fn test_reference_anchor_converted_to_link() {
     let lex_doc = STRING_TO_AST.run(lex_src.to_string()).unwrap();
     let md = MarkdownFormat.serialize(&lex_doc).unwrap();
 
-    // Anchors should be converted to Markdown links [text](url)
-    // The # in link text is escaped as \# which is correct Markdown
+    // Implicit anchor: the word before the reference ("section") becomes the link text
     assert!(
         md.contains("(#introduction)"),
         "Anchor should link to #introduction"
     );
     assert!(
-        md.contains("[\\#introduction]") || md.contains("[#introduction]"),
-        "Anchor text should contain #introduction"
+        md.contains("[section]"),
+        "Link text should be the implicit anchor word 'section'"
     );
 }
 

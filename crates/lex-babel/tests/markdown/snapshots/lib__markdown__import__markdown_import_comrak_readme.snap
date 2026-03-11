@@ -1,5 +1,5 @@
 ---
-source: lex-babel/tests/markdown/import.rs
+source: crates/lex-babel/tests/markdown/import.rs
 expression: serialized
 ---
 <document>
@@ -7,13 +7,13 @@ expression: serialized
     <text-line>Comrak</text-line>
   </paragraph>
   <paragraph>1 line(s)
-    <text-line>[https://github.com/kivikakk/comrak/actions/workfl…</text-line>
+    <text-line>Build status [https://github.com/kivikakk/comrak/a…</text-line>
   </paragraph>
   <paragraph>1 line(s)
-    <text-line>Rust port of [https://github.com/github/cmark-gfm]…</text-line>
+    <text-line>Rust port of github&apos;s  [https://github.com/github/…</text-line>
   </paragraph>
   <paragraph>1 line(s)
-    <text-line>Compliant with [https://spec.commonmark.org/0.31.2…</text-line>
+    <text-line>Compliant with CommonMark 0.31.2 [https://spec.com…</text-line>
   </paragraph>
   <session>Installation
     <paragraph>1 line(s)
@@ -85,7 +85,7 @@ expression: serialized
         </list-item>
       </list>
       <paragraph>1 line(s)
-        <text-line>You can also find builds I&apos;ve published in [https:…</text-line>
+        <text-line>You can also find builds I&apos;ve published in GitHub …</text-line>
       </paragraph>
     </session>
   </session>
@@ -281,7 +281,7 @@ expression: serialized
   </session>
   <session>Security
     <paragraph>1 line(s)
-      <text-line>As with [https://github.com/commonmark/cmark] and …</text-line>
+      <text-line>As with  [https://github.com/commonmark/cmark] and…</text-line>
     </paragraph>
     <paragraph>1 line(s)
       <text-line>To allow these, use the `unsafe_` option (or `--un…</text-line>
@@ -296,35 +296,35 @@ expression: serialized
         <marker>-</marker>
         <text></text>
         <paragraph>1 line(s)
-          <text-line>[https://github.github.com/gfm/#tables-extension-]</text-line>
+          <text-line>Tables [https://github.github.com/gfm/#tables-exte…</text-line>
         </paragraph>
       </list-item>
       <list-item>
         <marker>-</marker>
         <text></text>
         <paragraph>1 line(s)
-          <text-line>[https://github.github.com/gfm/#task-list-items-ex…</text-line>
+          <text-line>Task list items [https://github.github.com/gfm/#ta…</text-line>
         </paragraph>
       </list-item>
       <list-item>
         <marker>-</marker>
         <text></text>
         <paragraph>1 line(s)
-          <text-line>[https://github.github.com/gfm/#strikethrough-exte…</text-line>
+          <text-line>Strikethrough [https://github.github.com/gfm/#stri…</text-line>
         </paragraph>
       </list-item>
       <list-item>
         <marker>-</marker>
         <text></text>
         <paragraph>1 line(s)
-          <text-line>[https://github.github.com/gfm/#autolinks-extensio…</text-line>
+          <text-line>Autolinks [https://github.github.com/gfm/#autolink…</text-line>
         </paragraph>
       </list-item>
       <list-item>
         <marker>-</marker>
         <text></text>
         <paragraph>1 line(s)
-          <text-line>[https://github.github.com/gfm/#disallowed-raw-htm…</text-line>
+          <text-line>Disallowed Raw HTML [https://github.github.com/gfm…</text-line>
         </paragraph>
       </list-item>
     </list>
@@ -434,14 +434,14 @@ expression: serialized
       </paragraph>
       <session>Syntect
         <paragraph>1 line(s)
-          <text-line>[https://github.com/trishume/syntect] is a syntax …</text-line>
+          <text-line> [https://github.com/trishume/syntect] is a syntax…</text-line>
         </paragraph>
       </session>
     </session>
   </session>
   <session>Related projects
     <paragraph>1 line(s)
-      <text-line>Comrak&apos;s design goal is to model the upstream [htt…</text-line>
+      <text-line>Comrak&apos;s design goal is to model the upstream  [ht…</text-line>
     </paragraph>
     <paragraph>1 line(s)
       <text-line>The downside, of course, is that the code often di…</text-line>
@@ -451,14 +451,14 @@ expression: serialized
         <marker>-</marker>
         <text></text>
         <paragraph>1 line(s)
-          <text-line>[https://github.com/raphlinus]&apos;s [https://github.c…</text-line>
+          <text-line>Raph Levien [https://github.com/raphlinus]&apos;s  [htt…</text-line>
         </paragraph>
       </list-item>
       <list-item>
         <marker>-</marker>
         <text></text>
         <paragraph>1 line(s)
-          <text-line>[https://github.com/wooorm/markdown-rs] (1.x) look…</text-line>
+          <text-line>markdown-rs [https://github.com/wooorm/markdown-rs…</text-line>
         </paragraph>
       </list-item>
       <list-item>
@@ -475,7 +475,7 @@ expression: serialized
   </session>
   <session>Benchmarking
     <paragraph>1 line(s)
-      <text-line>You&apos;ll need to [https://github.com/sharkdp/hyperfi…</text-line>
+      <text-line>You&apos;ll need to install hyperfine [https://github.c…</text-line>
     </paragraph>
     <paragraph>1 line(s)
       <text-line>If you want to just run the benchmark for the `com…</text-line>
@@ -505,14 +505,14 @@ expression: serialized
       <text-line>Contributions are *highly encouraged*; if you&apos;d li…</text-line>
     </paragraph>
     <paragraph>1 line(s)
-      <text-line>Where possible I practice [http://hintjens.com/blo…</text-line>
+      <text-line>Where possible I practice Optimistic Merging [http…</text-line>
     </paragraph>
     <paragraph>1 line(s)
       <text-line>Thank you to Comrak&apos;s many contributors for PRs an…</text-line>
     </paragraph>
     <session>Code Contributors
       <paragraph>1 line(s)
-        <text-line>[https://github.com/kivikakk/comrak/graphs/contrib…</text-line>
+        <text-line>Small chart showing Comrak contributors. [https://…</text-line>
       </paragraph>
     </session>
     <session>Financial Contributors
@@ -524,7 +524,7 @@ expression: serialized
           <marker>-</marker>
           <text></text>
           <paragraph>1 line(s)
-            <text-line>[https://github.com/sponsors/kivikakk]</text-line>
+            <text-line>GitHub Sponsors [https://github.com/sponsors/kivik…</text-line>
           </paragraph>
         </list-item>
       </list>
@@ -543,7 +543,7 @@ expression: serialized
       <text-line>`cmark` itself is is copyright (c) 2014, John MacF…</text-line>
     </paragraph>
     <paragraph>1 line(s)
-      <text-line>See [COPYING] for all the details.</text-line>
+      <text-line>See COPYING [COPYING] for all the details.</text-line>
     </paragraph>
   </session>
 </document>

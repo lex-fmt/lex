@@ -1,17 +1,17 @@
 ---
-source: lex-babel/tests/markdown/import.rs
+source: crates/lex-babel/tests/markdown/import.rs
 expression: serialized
 ---
 <document>
-  <session>[https://comrak.ee/]
+  <session>Comrak [https://comrak.ee/]
     <paragraph>1 line(s)
-      <text-line>[https://github.com/kivikakk/comrak/actions/workfl…</text-line>
+      <text-line>Build status [https://github.com/kivikakk/comrak/a…</text-line>
     </paragraph>
     <paragraph>1 line(s)
-      <text-line>[https://comrak.ee/] is a [https://commonmark.org/…</text-line>
+      <text-line>Comrak [https://comrak.ee/] is a CommonMark [https…</text-line>
     </paragraph>
     <paragraph>1 line(s)
-      <text-line>Compliant with [https://spec.commonmark.org/0.31.2…</text-line>
+      <text-line>Compliant with CommonMark 0.31.2 [https://spec.com…</text-line>
     </paragraph>
     <session>Installation
       <paragraph>1 line(s)
@@ -46,7 +46,7 @@ expression: serialized
                 <marker>-</marker>
                 <text></text>
                 <paragraph>1 line(s)
-                  <text-line>[https://github.com/cargo-bins/cargo-binstall] com…</text-line>
+                  <text-line>cargo binstall [https://github.com/cargo-bins/carg…</text-line>
                 </paragraph>
               </list-item>
             </list>
@@ -90,7 +90,7 @@ expression: serialized
           </list-item>
         </list>
         <paragraph>1 line(s)
-          <text-line>You can also find builds I&apos;ve published in [https:…</text-line>
+          <text-line>You can also find builds I&apos;ve published in GitHub …</text-line>
         </paragraph>
       </session>
     </session>
@@ -294,7 +294,7 @@ expression: serialized
     </session>
     <session>Security
       <paragraph>1 line(s)
-        <text-line>As with [https://github.com/commonmark/cmark] and …</text-line>
+        <text-line>As with  [https://github.com/commonmark/cmark] and…</text-line>
       </paragraph>
       <paragraph>1 line(s)
         <text-line>To allow these, use the `r#unsafe` option (or `--u…</text-line>
@@ -309,35 +309,35 @@ expression: serialized
           <marker>-</marker>
           <text></text>
           <paragraph>1 line(s)
-            <text-line>[https://github.github.com/gfm/#tables-extension-]</text-line>
+            <text-line>Tables [https://github.github.com/gfm/#tables-exte…</text-line>
           </paragraph>
         </list-item>
         <list-item>
           <marker>-</marker>
           <text></text>
           <paragraph>1 line(s)
-            <text-line>[https://github.github.com/gfm/#task-list-items-ex…</text-line>
+            <text-line>Task list items [https://github.github.com/gfm/#ta…</text-line>
           </paragraph>
         </list-item>
         <list-item>
           <marker>-</marker>
           <text></text>
           <paragraph>1 line(s)
-            <text-line>[https://github.github.com/gfm/#strikethrough-exte…</text-line>
+            <text-line>Strikethrough [https://github.github.com/gfm/#stri…</text-line>
           </paragraph>
         </list-item>
         <list-item>
           <marker>-</marker>
           <text></text>
           <paragraph>1 line(s)
-            <text-line>[https://github.github.com/gfm/#autolinks-extensio…</text-line>
+            <text-line>Autolinks [https://github.github.com/gfm/#autolink…</text-line>
           </paragraph>
         </list-item>
         <list-item>
           <marker>-</marker>
           <text></text>
           <paragraph>1 line(s)
-            <text-line>[https://github.github.com/gfm/#disallowed-raw-htm…</text-line>
+            <text-line>Disallowed Raw HTML [https://github.github.com/gfm…</text-line>
           </paragraph>
         </list-item>
       </list>
@@ -440,7 +440,7 @@ expression: serialized
           <marker>-</marker>
           <text></text>
           <paragraph>1 line(s)
-            <text-line>[https://github.com/tats-u/markdown-cjk-friendly]</text-line>
+            <text-line>CJK friendly emphasis [https://github.com/tats-u/m…</text-line>
           </paragraph>
         </list-item>
       </list>
@@ -466,7 +466,7 @@ expression: serialized
         </paragraph>
         <session>Syntect
           <paragraph>1 line(s)
-            <text-line>[https://github.com/trishume/syntect] is a syntax …</text-line>
+            <text-line> [https://github.com/trishume/syntect] is a syntax…</text-line>
           </paragraph>
         </session>
       </session>
@@ -479,7 +479,7 @@ expression: serialized
         <text-line>Over the years, we have increasingly opted to fix …</text-line>
       </paragraph>
       <paragraph>1 line(s)
-        <text-line>This library offers an AST backed by [https://gith…</text-line>
+        <text-line>This library offers an AST backed by  [https://git…</text-line>
       </paragraph>
       <paragraph>1 line(s)
         <text-line>For whatever reason, Comrak may not meet your requ…</text-line>
@@ -489,28 +489,28 @@ expression: serialized
           <marker>-</marker>
           <text></text>
           <paragraph>1 line(s)
-            <text-line>[https://github.com/raphlinus]&apos;s [https://github.c…</text-line>
+            <text-line>Raph Levien [https://github.com/raphlinus]&apos;s  [htt…</text-line>
           </paragraph>
         </list-item>
         <list-item>
           <marker>-</marker>
           <text></text>
           <paragraph>1 line(s)
-            <text-line>[https://github.com/wooorm/markdown-rs] looks real…</text-line>
+            <text-line>markdown-rs [https://github.com/wooorm/markdown-rs…</text-line>
           </paragraph>
         </list-item>
         <list-item>
           <marker>-</marker>
           <text></text>
           <paragraph>1 line(s)
-            <text-line>[https://github.com/markdown-it-rust/markdown-it] …</text-line>
+            <text-line>markdown-it [https://github.com/markdown-it-rust/m…</text-line>
           </paragraph>
         </list-item>
         <list-item>
           <marker>-</marker>
           <text></text>
           <paragraph>1 line(s)
-            <text-line>[https://babelmark.github.io/] lets you compare ma…</text-line>
+            <text-line>babelmark [https://babelmark.github.io/] lets you …</text-line>
           </paragraph>
         </list-item>
         <list-item>
@@ -527,35 +527,35 @@ expression: serialized
             <marker>-</marker>
             <text></text>
             <paragraph>1 line(s)
-              <text-line>[https://github.com/gjtorikian/commonmarker] — Rub…</text-line>
+              <text-line>Commonmarker [https://github.com/gjtorikian/common…</text-line>
             </paragraph>
           </list-item>
           <list-item>
             <marker>-</marker>
             <text></text>
             <paragraph>1 line(s)
-              <text-line>[https://github.com/leandrocp/mdex] — Elixir bindi…</text-line>
+              <text-line>MDEx [https://github.com/leandrocp/mdex] — Elixir …</text-line>
             </paragraph>
           </list-item>
           <list-item>
             <marker>-</marker>
             <text></text>
             <paragraph>1 line(s)
-              <text-line>[https://github.com/lmmx/comrak] — Python bindings…</text-line>
+              <text-line>comrak [https://github.com/lmmx/comrak] — Python b…</text-line>
             </paragraph>
           </list-item>
           <list-item>
             <marker>-</marker>
             <text></text>
             <paragraph>1 line(s)
-              <text-line>[https://github.com/Martin005/comrak-ext] — Python…</text-line>
+              <text-line>comrak-ext [https://github.com/Martin005/comrak-ex…</text-line>
             </paragraph>
           </list-item>
           <list-item>
             <marker>-</marker>
             <text></text>
             <paragraph>1 line(s)
-              <text-line>[https://github.com/nberlette/comrak-wasm] — TypeS…</text-line>
+              <text-line>comrak-wasm [https://github.com/nberlette/comrak-w…</text-line>
             </paragraph>
           </list-item>
         </list>
@@ -569,42 +569,42 @@ expression: serialized
             <marker>-</marker>
             <text></text>
             <paragraph>1 line(s)
-              <text-line>[https://crates.io], [https://docs.rs] and [https:…</text-line>
+              <text-line>crates.io [https://crates.io], docs.rs [https://do…</text-line>
             </paragraph>
           </list-item>
           <list-item>
             <marker>-</marker>
             <text></text>
             <paragraph>1 line(s)
-              <text-line>[https://gitlab.com] uses Comrak to render Markdow…</text-line>
+              <text-line>GitLab [https://gitlab.com] uses Comrak to render …</text-line>
             </paragraph>
           </list-item>
           <list-item>
             <marker>-</marker>
             <text></text>
             <paragraph>1 line(s)
-              <text-line>[https://deno.com] uses Comrak to render documenta…</text-line>
+              <text-line>Deno [https://deno.com] uses Comrak to render docu…</text-line>
             </paragraph>
           </list-item>
           <list-item>
             <marker>-</marker>
             <text></text>
             <paragraph>1 line(s)
-              <text-line>[https://reddit.com]&apos;s new-style site uses a Comra…</text-line>
+              <text-line>Reddit [https://reddit.com]&apos;s new-style site uses …</text-line>
             </paragraph>
           </list-item>
           <list-item>
             <marker>-</marker>
             <text></text>
             <paragraph>1 line(s)
-              <text-line>[https://lockbook.net/] is a Markdown-based secure…</text-line>
+              <text-line>Lockbook [https://lockbook.net/] is a Markdown-bas…</text-line>
             </paragraph>
           </list-item>
           <list-item>
             <marker>-</marker>
             <text></text>
             <paragraph>1 line(s)
-              <text-line>[https://github.com/kivikakk/comrak/network/depend…</text-line>
+              <text-line>many [https://github.com/kivikakk/comrak/network/d…</text-line>
             </paragraph>
           </list-item>
         </list>
@@ -621,7 +621,7 @@ expression: serialized
         <text-line>We offer some tools to perform stdin-to-stdout ben…</text-line>
       </paragraph>
       <paragraph>1 line(s)
-        <text-line>You&apos;ll need to [https://github.com/sharkdp/hyperfi…</text-line>
+        <text-line>You&apos;ll need to install hyperfine [https://github.c…</text-line>
       </paragraph>
       <paragraph>1 line(s)
         <text-line>If you want to just run the benchmark for the `com…</text-line>
@@ -651,19 +651,19 @@ expression: serialized
         <text-line>Contributions are *highly encouraged*; if you&apos;d li…</text-line>
       </paragraph>
       <paragraph>1 line(s)
-        <text-line>Where possible I practice [http://hintjens.com/blo…</text-line>
+        <text-line>Where possible I practice Optimistic Merging [http…</text-line>
       </paragraph>
       <paragraph>1 line(s)
         <text-line>Thank you to Comrak&apos;s many contributors for PRs an…</text-line>
       </paragraph>
       <session>Code Contributors
         <paragraph>1 line(s)
-          <text-line>[https://github.com/kivikakk/comrak/graphs/contrib…</text-line>
+          <text-line>Small chart showing Comrak contributors. [https://…</text-line>
         </paragraph>
       </session>
       <session>Financial Contributors
         <paragraph>1 line(s)
-          <text-line>Since September 2025, the scope of my [https://abo…</text-line>
+          <text-line>Since September 2025, the scope of my day job [htt…</text-line>
         </paragraph>
         <paragraph>1 line(s)
           <text-line>If you feel like you would like to do so anyway, h…</text-line>
@@ -683,7 +683,7 @@ expression: serialized
         <text-line>`cmark` itself is is copyright (c) 2014, John MacF…</text-line>
       </paragraph>
       <paragraph>1 line(s)
-        <text-line>See [COPYING] for all the details.</text-line>
+        <text-line>See COPYING [COPYING] for all the details.</text-line>
       </paragraph>
     </session>
   </session>

@@ -144,6 +144,8 @@ fn walk_node(node: &DocNode, events: &mut Vec<Event>) {
                                 text_content.push_str(t);
                             } else if let InlineContent::Reference(r) = inline {
                                 text_content.push_str(r);
+                            } else if let InlineContent::Link { text, .. } = inline {
+                                text_content.push_str(text);
                             }
                             // Ignore other inline types for now or implement full serialization
                         }
