@@ -41,7 +41,7 @@ Line numbers appear on the left. Indentation shows nesting.
 ### Full AST (with all properties)
 
 ```sh
-lex inspect file.lex --extra-ast-full
+lex inspect file.lex --ast-full
 ```
 
 Shows session titles, definition subjects, annotation labels/parameters, list markers.
@@ -95,7 +95,7 @@ Check that:
 ### 2. Check parse tree structure
 ```sh
 lex inspect problem.lex ast-treeviz         # overview
-lex inspect problem.lex --extra-ast-full    # with labels/subjects
+lex inspect problem.lex --ast-full    # with labels/subjects
 lex inspect problem.lex ast-tag             # precise structure
 ```
 

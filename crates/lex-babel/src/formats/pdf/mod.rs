@@ -122,7 +122,7 @@ fn parse_bool_flag(
             "true" | "1" | "yes" | "y" => Ok(true),
             "false" | "0" | "no" | "n" => Ok(false),
             other => Err(FormatError::SerializationError(format!(
-                "Invalid boolean value '{other}' for --extra-{key}"
+                "Invalid boolean value '{other}' for option '{key}'"
             ))),
         }
     } else {

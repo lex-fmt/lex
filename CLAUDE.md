@@ -68,7 +68,7 @@ LEX_LSP_PATH=./target/debug/lex-lsp
 lex inspect file.lex                    # AST tree visualization (default)
 lex inspect file.lex ast-tag            # XML-like AST
 lex inspect file.lex ast-json           # JSON AST
-lex inspect file.lex --extra-ast-full   # Full AST with all properties
+lex inspect file.lex --ast-full         # Full AST with all properties
 lex inspect file.lex token-line-simple  # Token stream (line-classified)
 lex inspect file.lex ir-json            # Intermediate representation
 lex file.lex --to markdown              # Convert formats

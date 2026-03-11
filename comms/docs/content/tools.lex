@@ -63,7 +63,7 @@ Tools
             lex inspect document.lex token-core-json
             
             # Show all AST properties
-            lex inspect document.lex --extra-ast-full
+            lex inspect document.lex --ast-full
         :: shell ::
         Available transforms:
             - ast-treeviz
@@ -101,22 +101,32 @@ Tools
 
 5. Configuration
 
-    The CLI reads `lex.toml`. Override the path with `--config`.
+    Settings are loaded from `lex.toml` files, `LEX__*` environment variables, and CLI flags. Use `lex config` to manage settings.
 
+        # Show all resolved settings
+        lex config list
+
+        # Persist a setting
+        lex config set convert.html.theme fancy-serif
+
+        # Generate a template config file
+        lex config gen -o lex.toml
+
+        # Override the config file path
         lex document.lex --to html --config ./my-lex.toml
     :: shell ::
     Definition:
-        Format-specific options:
-            Use `--extra-<name>` to pass renderer parameters.
+        Format-specific flags:
+            Convert and inspect subcommands accept format-specific flags.
 
-            # HTML with dark theme
-            lex document.lex --to html --extra-theme dark
-            
+            # HTML with theme
+            lex document.lex --to html --theme fancy-serif
+
             # PDF with mobile page size
-            lex document.lex --to pdf --extra-size-mobile -o out.pdf
-            
+            lex document.lex --to pdf --pdf-size mobile -o out.pdf
+
             # Inspect with full AST properties
-            lex inspect document.lex --extra-ast-full
+            lex inspect document.lex --ast-full
         :: shell ::
     Example `lex.toml`:
 

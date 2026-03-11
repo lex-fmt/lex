@@ -39,7 +39,8 @@ printf '%%PDF-1.7\n%%%%EOF\n' > "$OUTPUT"
             .arg("pdf")
             .arg("-o")
             .arg(&output_pdf)
-            .arg("--extra-size-mobile");
+            .arg("--pdf-size")
+            .arg("mobile");
 
         cmd.assert().success();
 

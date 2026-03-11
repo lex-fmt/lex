@@ -1,41 +1,61 @@
-//! Shared configuration loader for the Lex toolchain.
+//! Shared configuration for the Lex toolchain.
 //!
-//! `defaults/lex.default.toml` is embedded into every binary so that docs and
-//! runtime behavior stay in sync. Applications layer user-specific files on top
-//! of those defaults via [`Loader`] before deserializing into [`LexConfig`].
+//! Defines [`LexConfig`] — the config struct consumed by all Lex applications.
+//! Defaults are compiled into the struct via `#[config(default)]`. Loading and
+//! layering is handled by [clapfig](https://docs.rs/clapfig) in the CLI.
 
-use config::builder::DefaultState;
-use config::{Config, ConfigBuilder, ConfigError, File, FileFormat, ValueKind};
+use confique::Config;
 use lex_babel::formats::lex::formatting_rules::FormattingRules;
-use serde::Deserialize;
-use std::path::Path;
-
-const DEFAULT_TOML: &str = include_str!("../defaults/lex.default.toml");
+use serde::{Deserialize, Serialize};
 
 /// Top-level configuration consumed by Lex applications.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Config, Serialize, Deserialize)]
 pub struct LexConfig {
+    /// Formatting rules.
+    #[config(nested)]
     pub formatting: FormattingConfig,
+    /// Inspect output options.
+    #[config(nested)]
     pub inspect: InspectConfig,
+    /// Format-specific conversion options.
+    #[config(nested)]
     pub convert: ConvertConfig,
 }
 
 /// Formatting-related configuration groups.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Config, Serialize, Deserialize)]
 pub struct FormattingConfig {
+    /// Formatting rules for lex output.
+    #[config(nested)]
     pub rules: FormattingRulesConfig,
 }
 
 /// Mirrors the knobs exposed by the Lex formatter.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Config, Serialize, Deserialize)]
 pub struct FormattingRulesConfig {
+    /// Number of blank lines inserted before a session title.
+    #[config(default = 1)]
     pub session_blank_lines_before: usize,
+    /// Number of blank lines inserted after a session title.
+    #[config(default = 1)]
     pub session_blank_lines_after: usize,
+    /// Normalize list markers to predictable markers.
+    #[config(default = true)]
     pub normalize_seq_markers: bool,
+    /// Character for unordered list items when normalization is enabled.
+    #[config(default = "-")]
     pub unordered_seq_marker: char,
+    /// Maximum consecutive blank lines kept in output.
+    #[config(default = 2)]
     pub max_blank_lines: usize,
+    /// Whitespace string for each indentation level.
+    #[config(default = "    ")]
     pub indent_string: String,
+    /// Preserve trailing blank lines at the end of a document.
+    #[config(default = false)]
     pub preserve_trailing_blanks: bool,
+    /// Normalize verbatim fences back to canonical :: form.
+    #[config(default = true)]
     pub normalize_verbatim_markers: bool,
 }
 
@@ -70,38 +90,58 @@ impl From<&FormattingRulesConfig> for FormattingRules {
 }
 
 /// Controls AST-related inspect output.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Config, Serialize, Deserialize)]
 pub struct InspectConfig {
+    /// AST visualization options.
+    #[config(nested)]
     pub ast: InspectAstConfig,
+    /// Nodemap visualization options.
+    #[config(nested)]
     pub nodemap: NodemapConfig,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Config, Serialize, Deserialize)]
 pub struct InspectAstConfig {
+    /// Include annotations, titles, markers, and other metadata in AST visualizations.
+    #[config(default = false)]
     pub include_all_properties: bool,
+    /// Show line numbers next to AST entries.
+    #[config(default = true)]
     pub show_line_numbers: bool,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Config, Serialize, Deserialize)]
 pub struct NodemapConfig {
+    /// Render ANSI-colored blocks instead of Base2048 glyphs.
+    #[config(default = false)]
     pub color_blocks: bool,
+    /// Render Base2048 glyphs but color them with ANSI codes.
+    #[config(default = false)]
     pub color_characters: bool,
+    /// Append high-level summary statistics under the node map output.
+    #[config(default = false)]
     pub show_summary: bool,
 }
 
 /// Format-specific conversion knobs.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Config, Serialize, Deserialize)]
 pub struct ConvertConfig {
+    /// PDF export options.
+    #[config(nested)]
     pub pdf: PdfConfig,
+    /// HTML export options.
+    #[config(nested)]
     pub html: HtmlConfig,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Config, Serialize, Deserialize)]
 pub struct PdfConfig {
+    /// Page profile used when exporting to PDF ("lexed" or "mobile").
+    #[config(default = "lexed")]
     pub size: PdfPageSize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PdfPageSize {
     #[serde(rename = "lexed")]
     LexEd,
@@ -109,96 +149,39 @@ pub enum PdfPageSize {
     Mobile,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Config, Serialize, Deserialize)]
 pub struct HtmlConfig {
+    /// Theme for HTML export.
+    #[config(default = "default")]
     pub theme: String,
     /// Optional path to a custom CSS file to append after the baseline CSS.
-    #[serde(default)]
     pub custom_css: Option<String>,
-}
-
-/// Helper for layering user overrides over the built-in defaults.
-#[derive(Debug, Clone)]
-pub struct Loader {
-    builder: ConfigBuilder<DefaultState>,
-}
-
-impl Loader {
-    /// Start a loader seeded with the embedded defaults.
-    pub fn new() -> Self {
-        let builder = Config::builder().add_source(File::from_str(DEFAULT_TOML, FileFormat::Toml));
-        Self { builder }
-    }
-
-    /// Layer a configuration file. Missing files trigger an error.
-    pub fn with_file(mut self, path: impl AsRef<Path>) -> Self {
-        let source = File::from(path.as_ref())
-            .format(FileFormat::Toml)
-            .required(true);
-        self.builder = self.builder.add_source(source);
-        self
-    }
-
-    /// Layer an optional configuration file (ignored if the file is absent).
-    pub fn with_optional_file(mut self, path: impl AsRef<Path>) -> Self {
-        let source = File::from(path.as_ref())
-            .format(FileFormat::Toml)
-            .required(false);
-        self.builder = self.builder.add_source(source);
-        self
-    }
-
-    /// Apply a single key/value override (useful for CLI settings).
-    pub fn set_override<I>(mut self, key: &str, value: I) -> Result<Self, ConfigError>
-    where
-        I: Into<ValueKind>,
-    {
-        self.builder = self.builder.set_override(key, value)?;
-        Ok(self)
-    }
-
-    /// Finalize the builder and deserialize the resulting configuration.
-    pub fn build(self) -> Result<LexConfig, ConfigError> {
-        self.builder.build()?.try_deserialize()
-    }
-}
-
-impl Default for Loader {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Convenience helper for callers that only need the defaults.
-pub fn load_defaults() -> Result<LexConfig, ConfigError> {
-    Loader::new().build()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn load_defaults() -> LexConfig {
+        clapfig::Clapfig::builder::<LexConfig>()
+            .app_name("lex")
+            .no_env()
+            .search_paths(vec![])
+            .load()
+            .expect("defaults to load")
+    }
+
     #[test]
     fn loads_default_config() {
-        let config = load_defaults().expect("defaults to deserialize");
+        let config = load_defaults();
         assert_eq!(config.formatting.rules.session_blank_lines_before, 1);
         assert!(config.inspect.ast.show_line_numbers);
         assert_eq!(config.convert.pdf.size, PdfPageSize::LexEd);
     }
 
     #[test]
-    fn supports_overrides() {
-        let config = Loader::new()
-            .set_override("convert.pdf.size", "mobile")
-            .expect("override to apply")
-            .build()
-            .expect("config to build");
-        assert_eq!(config.convert.pdf.size, PdfPageSize::Mobile);
-    }
-
-    #[test]
     fn formatting_rules_config_converts_to_formatting_rules() {
-        let config = load_defaults().expect("defaults to deserialize");
+        let config = load_defaults();
         let rules: FormattingRules = config.formatting.rules.into();
         assert_eq!(rules.session_blank_lines_before, 1);
         assert_eq!(rules.session_blank_lines_after, 1);

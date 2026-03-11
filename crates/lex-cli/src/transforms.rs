@@ -19,16 +19,16 @@
 //!    - `ast-treeviz`: Tree visualization with Unicode icons
 //!    - `ast-json`: JSON representation
 //!
-//! ## Extra Parameters
+//! ## Parameters
 //!
-//! Transforms can accept extra parameters via `--extra-<name> [value]`:
+//! Transforms accept parameters via CLI flags, config files, or env vars:
 //!
-//! - `ast-full`: When set to "true", shows complete AST including:
+//! - `--ast-full`: Shows complete AST including:
 //!   * Document-level annotations
 //!   * All node properties (labels, subjects, parameters, etc.)
 //!   * Session titles, list item markers, definition subjects
 //!
-//! Example: `lex inspect file.lex ast-tag --extra-ast-full`
+//! Example: `lex inspect file.lex ast-tag --ast-full`
 
 use lex_babel::formats::{
     linetreeviz::to_linetreeviz_str_with_params, nodemap::to_nodemap_str_with_params,
@@ -186,8 +186,7 @@ pub fn execute_transform(
             let doc = loader
                 .parse()
                 .map_err(|e| format!("Transform failed: {e}"))?;
-            // Pass extra_params to to_treeviz_str
-            // Supports: --extra-ast-full true
+            // Supports: --ast-full
             Ok(to_treeviz_str_with_params(&doc, &params))
         }
         "ast-linetreeviz" => {

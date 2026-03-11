@@ -54,7 +54,7 @@ for hosting, with page content authored in lex format.
 
    1. Lex → HTML (./build)
       For each content/*.lex file:
-      - Run: lex <file> --to html --extras-css-path css/lex-content.css
+      - Run: lex <file> --to html --css-path css/lex-content.css
       - Extract the <div class="lex-document">...</div> fragment
       - Write to _includes/_lex/<name>.html
    2. Jekyll Build

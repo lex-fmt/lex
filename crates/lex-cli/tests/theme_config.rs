@@ -97,7 +97,7 @@ theme = "modern"
         .arg("html")
         .arg("--config")
         .arg(config_path.as_os_str())
-        .arg("--extra-theme")
+        .arg("--theme")
         .arg("fancy-serif");
 
     let _output = cmd.assert().success().get_output().stdout.clone();

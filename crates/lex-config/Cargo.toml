@@ -10,6 +10,9 @@ keywords = ["config", "lex"]
 categories = ["config"]
 
 [dependencies]
-config = { workspace = true }
+confique = { workspace = true }
 serde = { workspace = true }
 lex-babel = { workspace = true }
+
+[dev-dependencies]
+clapfig = { workspace = true }
