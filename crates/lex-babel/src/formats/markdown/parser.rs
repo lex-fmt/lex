@@ -371,7 +371,11 @@ fn collect_inline_events<'a>(
         }
 
         NodeValue::Link(link) => {
-            events.push(Event::Inline(InlineContent::Reference(link.url.clone())));
+            let text = collect_text_from_children(node);
+            events.push(Event::Inline(InlineContent::Link {
+                text,
+                href: link.url.clone(),
+            }));
         }
 
         NodeValue::SoftBreak | NodeValue::LineBreak => {
@@ -442,7 +446,11 @@ fn collect_inline_content<'a>(
         }
 
         NodeValue::Link(link) => {
-            content.push(InlineContent::Reference(link.url.clone()));
+            let text = collect_text_from_children(node);
+            content.push(InlineContent::Link {
+                text,
+                href: link.url.clone(),
+            });
         }
 
         NodeValue::SoftBreak | NodeValue::LineBreak => {

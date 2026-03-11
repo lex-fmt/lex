@@ -1,5 +1,5 @@
 ---
-source: lex-babel/tests/markdown/import.rs
+source: crates/lex-babel/tests/markdown/import.rs
 expression: serialized
 ---
 <document>
@@ -8,10 +8,10 @@ expression: serialized
       <text-line>CommonMark is a rationalized version of Markdown s…</text-line>
     </paragraph>
     <paragraph>1 line(s)
-      <text-line>[https://spec.commonmark.org/dingus/]</text-line>
+      <text-line>Try it now! [https://spec.commonmark.org/dingus/]</text-line>
     </paragraph>
     <paragraph>1 line(s)
-      <text-line>For more details, see [https://commonmark.org].</text-line>
+      <text-line>For more details, see https://commonmark.org [http…</text-line>
     </paragraph>
     <paragraph>1 line(s)
       <text-line>This repository contains the spec itself, along wi…</text-line>
@@ -24,14 +24,14 @@ expression: serialized
         <marker>-</marker>
         <text></text>
         <paragraph>1 line(s)
-          <text-line>[https://github.com/commonmark/cmark] (C)</text-line>
+          <text-line>https://github.com/commonmark/cmark [https://githu…</text-line>
         </paragraph>
       </list-item>
       <list-item>
         <marker>-</marker>
         <text></text>
         <paragraph>1 line(s)
-          <text-line>[https://github.com/commonmark/commonmark.js] (Jav…</text-line>
+          <text-line>https://github.com/commonmark/commonmark.js [https…</text-line>
         </paragraph>
       </list-item>
     </list>
@@ -40,7 +40,7 @@ expression: serialized
     </paragraph>
     <session>Running tests against the spec
       <paragraph>1 line(s)
-        <text-line>[https://spec.commonmark.org/] contains over 500 e…</text-line>
+        <text-line>The spec [https://spec.commonmark.org/] contains o…</text-line>
       </paragraph>
       <verbatim-block>
         <verbatim-group>
@@ -74,7 +74,7 @@ expression: serialized
     </session>
     <session>The spec
       <paragraph>1 line(s)
-        <text-line>The source of [https://spec.commonmark.org/] is `s…</text-line>
+        <text-line>The source of the spec [https://spec.commonmark.or…</text-line>
       </paragraph>
       <verbatim-block>
         <verbatim-group>
@@ -92,7 +92,7 @@ expression: serialized
         <text-line>The spec is written from the point of view of the …</text-line>
       </paragraph>
       <paragraph>1 line(s)
-        <text-line>Because John Gruber&apos;s [https://daringfireball.net/…</text-line>
+        <text-line>Because John Gruber&apos;s canonical syntax description…</text-line>
       </paragraph>
       <paragraph>1 line(s)
         <text-line>For the most part, we have limited ourselves to th…</text-line>
@@ -188,7 +188,7 @@ expression: serialized
     </session>
     <session>Contributing
       <paragraph>1 line(s)
-        <text-line>There is a [https://talk.commonmark.org]; you shou…</text-line>
+        <text-line>There is a forum for discussing CommonMark [https:…</text-line>
       </paragraph>
     </session>
     <session>Authors

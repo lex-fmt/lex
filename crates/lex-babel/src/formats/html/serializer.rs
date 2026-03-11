@@ -491,7 +491,7 @@ fn add_inline_to_node(parent: &Handle, inline: &InlineContent) -> Result<(), For
         }
 
         InlineContent::Reference(ref_text) => {
-            // Convert to anchor
+            // Unresolved reference (non-linkable types like citations, footnotes, etc.)
             // Handle citations (@...) by targeting a reference ID
             let href = if let Some(citation) = ref_text.strip_prefix('@') {
                 format!("#ref-{citation}")
@@ -501,6 +501,13 @@ fn add_inline_to_node(parent: &Handle, inline: &InlineContent) -> Result<(), For
 
             let anchor = create_element("a", vec![("href", &href)]);
             let anchor_text = create_text(ref_text);
+            anchor.children.borrow_mut().push(anchor_text);
+            parent.children.borrow_mut().push(anchor);
+        }
+
+        InlineContent::Link { text, href } => {
+            let anchor = create_element("a", vec![("href", href)]);
+            let anchor_text = create_text(text);
             anchor.children.borrow_mut().push(anchor_text);
             parent.children.borrow_mut().push(anchor);
         }

@@ -191,6 +191,69 @@ pub fn insert_reference_with_anchor(
     content
 }
 
+/// Returns true if the reference raw text looks like a linkable target
+/// (URL, file path, or document anchor).
+fn is_linkable_reference(raw: &str) -> bool {
+    raw.starts_with("http://")
+        || raw.starts_with("https://")
+        || raw.starts_with("mailto:")
+        || raw.starts_with("./")
+        || raw.starts_with('/')
+        || raw.starts_with('#')
+}
+
+/// Resolve implicit anchors in inline content.
+///
+/// Scans for `Reference` nodes that are linkable (URLs, file paths) and extracts
+/// the implicit anchor word from adjacent text, producing `Link` nodes.
+///
+/// Rules (per spec section 2.3):
+/// - Default: anchor is the last word **before** the reference
+/// - If reference is first in inline content: anchor is the first word **after**
+/// - If reference is the only content: anchor is the URL itself
+pub fn resolve_implicit_anchors(content: Vec<InlineContent>) -> Vec<InlineContent> {
+    // Find indices of linkable references
+    let ref_indices: Vec<usize> = content
+        .iter()
+        .enumerate()
+        .filter_map(|(i, item)| match item {
+            InlineContent::Reference(raw) if is_linkable_reference(raw) => Some(i),
+            _ => None,
+        })
+        .collect();
+
+    if ref_indices.is_empty() {
+        return content;
+    }
+
+    // Process one reference at a time (from last to first to preserve indices)
+    let mut result = content;
+    for &ref_idx in ref_indices.iter().rev() {
+        if let Some((anchor, href, modified)) = extract_anchor_for_reference(&result, ref_idx) {
+            // Replace content with modified version + insert Link where the reference was
+            let insert_at = ref_idx.min(modified.len());
+            let mut new_result = Vec::with_capacity(modified.len() + 1);
+            let mut inserted = false;
+            for (i, item) in modified.into_iter().enumerate() {
+                if !inserted && i >= insert_at {
+                    new_result.push(InlineContent::Link {
+                        text: anchor.clone(),
+                        href: href.clone(),
+                    });
+                    inserted = true;
+                }
+                new_result.push(item);
+            }
+            if !inserted {
+                new_result.push(InlineContent::Link { text: anchor, href });
+            }
+            result = new_result;
+        }
+    }
+
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -263,5 +326,72 @@ mod tests {
         assert!(matches!(&modified[1], InlineContent::Text(t) if t == "bahamas"));
         assert!(matches!(&modified[2], InlineContent::Text(t) if t == " "));
         assert!(matches!(&modified[3], InlineContent::Reference(r) if r == "bahamas.gov"));
+    }
+
+    #[test]
+    fn test_resolve_implicit_anchors_word_before() {
+        let content = vec![
+            InlineContent::Text("visit the website ".to_string()),
+            InlineContent::Reference("https://example.com".to_string()),
+        ];
+        let resolved = resolve_implicit_anchors(content);
+        assert!(resolved
+            .iter()
+            .any(|i| matches!(i, InlineContent::Link { text, href }
+            if text == "website" && href == "https://example.com")));
+        // "website" should be removed from text
+        assert!(resolved
+            .iter()
+            .any(|i| matches!(i, InlineContent::Text(t) if t == "visit the ")));
+    }
+
+    #[test]
+    fn test_resolve_implicit_anchors_word_after() {
+        let content = vec![
+            InlineContent::Reference("https://example.com".to_string()),
+            InlineContent::Text(" Example is great".to_string()),
+        ];
+        let resolved = resolve_implicit_anchors(content);
+        assert!(resolved
+            .iter()
+            .any(|i| matches!(i, InlineContent::Link { text, href }
+            if text == "Example" && href == "https://example.com")));
+    }
+
+    #[test]
+    fn test_resolve_implicit_anchors_only_ref() {
+        // Reference is the only content — anchor should be the URL itself
+        let content = vec![InlineContent::Reference("https://example.com".to_string())];
+        let resolved = resolve_implicit_anchors(content);
+        assert!(resolved
+            .iter()
+            .any(|i| matches!(i, InlineContent::Link { text, href }
+            if text == "https://example.com" && href == "https://example.com")));
+    }
+
+    #[test]
+    fn test_resolve_non_linkable_references_untouched() {
+        // Non-linkable references (footnotes, citations, etc.) stay as Reference
+        let content = vec![
+            InlineContent::Text("See ".to_string()),
+            InlineContent::Reference("@smith2023".to_string()),
+        ];
+        let resolved = resolve_implicit_anchors(content);
+        assert_eq!(resolved.len(), 2);
+        assert!(matches!(&resolved[1], InlineContent::Reference(r) if r == "@smith2023"));
+    }
+
+    #[test]
+    fn test_resolve_session_reference() {
+        // Session references (#...) are linkable
+        let content = vec![
+            InlineContent::Text("See section ".to_string()),
+            InlineContent::Reference("#introduction".to_string()),
+        ];
+        let resolved = resolve_implicit_anchors(content);
+        assert!(resolved
+            .iter()
+            .any(|i| matches!(i, InlineContent::Link { text, href }
+            if text == "section" && href == "#introduction")));
     }
 }
