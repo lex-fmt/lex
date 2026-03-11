@@ -10,7 +10,6 @@ My Session Title
   (session
     title: (line_content
       (text_content))
-    (blank_line)
     (paragraph
       (text_line
         (line_content
@@ -29,8 +28,6 @@ Title Here
   (session
     title: (line_content
       (text_content))
-    (blank_line)
-    (blank_line)
     (paragraph
       (text_line
         (line_content
@@ -50,7 +47,6 @@ Session Name
   (session
     title: (line_content
       (text_content))
-    (blank_line)
     (paragraph
       (text_line
         (line_content

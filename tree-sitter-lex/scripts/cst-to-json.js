@@ -88,11 +88,21 @@ function parseXML(xml) {
   return nodes[0]; // root document node
 }
 
+// Decode XML entities
+function decodeXML(text) {
+  return text
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'");
+}
+
 // Extract text content from a node.
 // Only leaf nodes (no children) carry real text; non-leaf text is XML whitespace.
 function extractText(node) {
   if (!node) return "";
-  if (node.children.length === 0) return node.text || "";
+  if (node.children.length === 0) return decodeXML(node.text || "");
   let result = "";
   for (const child of node.children) {
     result += extractText(child);
@@ -216,21 +226,37 @@ function convertNode(node) {
         }
       }
 
+      // Document title detection: first single-line paragraph followed by
+      // BlankLineGroup, NOT followed by a container (session/definition).
+      // Matches the lex rule: <title-line> <blank-line>+ (?!<container>)
+      let title = "";
+      if (children.length >= 2) {
+        const first = children[0];
+        const second = children[1];
+        const third = children[2];
+        const isTitle =
+          first &&
+          first.type === "Paragraph" &&
+          first.lines &&
+          first.lines.length === 1 &&
+          second &&
+          second.type === "BlankLineGroup" &&
+          // NOT followed by a container (session or definition)
+          (!third ||
+            (third.type !== "Session" && third.type !== "Definition"));
+
+        if (isTitle) {
+          title = first.lines[0].content;
+          // Remove the title paragraph and its trailing blank from children
+          children.splice(0, 2);
+        }
+      }
+
       const doc = {
         type: "Document",
-        title: "",
+        title,
         children,
       };
-
-      // Check if first child is a paragraph with subject_content (potential title)
-      // The lex parser extracts document titles from first subject lines
-      if (
-        children.length > 0 &&
-        children[0].type === "Paragraph" &&
-        children[0]._hasSubject
-      ) {
-        doc.title = children[0]._subjectText || "";
-      }
 
       if (annotations.length > 0) {
         doc.annotations = annotations;

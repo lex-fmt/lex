@@ -74,7 +74,6 @@ Code:
   (verbatim_block
     subject: (line_content
       (subject_content))
-    (blank_line)
     (paragraph
       (text_line
         (line_content

@@ -65,15 +65,8 @@
             "name": "_newline"
           },
           {
-            "type": "REPEAT1",
-            "content": {
-              "type": "SYMBOL",
-              "name": "blank_line"
-            }
-          },
-          {
             "type": "SYMBOL",
-            "name": "_indent"
+            "name": "_session_break"
           },
           {
             "type": "REPEAT1",
@@ -108,13 +101,6 @@
             "name": "_newline"
           },
           {
-            "type": "REPEAT",
-            "content": {
-              "type": "SYMBOL",
-              "name": "blank_line"
-            }
-          },
-          {
             "type": "CHOICE",
             "members": [
               {
@@ -122,7 +108,7 @@
                 "members": [
                   {
                     "type": "SYMBOL",
-                    "name": "_indent"
+                    "name": "_session_break"
                   },
                   {
                     "type": "REPEAT1",
@@ -138,7 +124,44 @@
                 ]
               },
               {
-                "type": "BLANK"
+                "type": "SEQ",
+                "members": [
+                  {
+                    "type": "REPEAT",
+                    "content": {
+                      "type": "SYMBOL",
+                      "name": "blank_line"
+                    }
+                  },
+                  {
+                    "type": "CHOICE",
+                    "members": [
+                      {
+                        "type": "SEQ",
+                        "members": [
+                          {
+                            "type": "SYMBOL",
+                            "name": "_indent"
+                          },
+                          {
+                            "type": "REPEAT1",
+                            "content": {
+                              "type": "SYMBOL",
+                              "name": "_block"
+                            }
+                          },
+                          {
+                            "type": "SYMBOL",
+                            "name": "_dedent"
+                          }
+                        ]
+                      },
+                      {
+                        "type": "BLANK"
+                      }
+                    ]
+                  }
+                ]
               }
             ]
           },
@@ -662,7 +685,6 @@
       "line_content"
     ],
     [
-      "session",
       "verbatim_block",
       "text_line"
     ],
@@ -724,6 +746,10 @@
     {
       "type": "SYMBOL",
       "name": "_emphasis_close"
+    },
+    {
+      "type": "SYMBOL",
+      "name": "_session_break"
     }
   ],
   "inline": [],

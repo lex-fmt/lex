@@ -5,7 +5,17 @@
  * - Indentation-based structure (INDENT/DEDENT tokens)
  * - NEWLINE emission at line boundaries and EOF
  * - Line-start detection for annotation markers (::) and list items (full line)
+ * - Session boundary detection via lookahead (_session_break)
  * - Emphasis delimiter validation (*strong* and _emphasis_) with flanking rules
+ *
+ * Session break lookahead:
+ *   When a blank line is encountered, the scanner peeks ahead past additional
+ *   blank lines to check if the next non-blank line has increased indent.
+ *   If yes, it emits _session_break (which encompasses the blank lines and
+ *   indent whitespace, also pushing the new indent level onto the stack).
+ *   If no, it emits a regular NEWLINE for the blank line. This eliminates
+ *   the GLR ambiguity between sessions and paragraphs that caused nested
+ *   sessions to parse incorrectly.
  *
  * Flanking context tracking:
  *   The scanner tracks `last_char_class` to know what preceded the current
@@ -31,6 +41,7 @@
  *   8: _strong_close
  *   9: _emphasis_open
  *  10: _emphasis_close
+ *  11: _session_break
  *
  * Flanking validation for emphasis delimiters:
  *   Opening: prev char must not be alphanumeric (WORD class), next must be WORD.
@@ -44,6 +55,9 @@
 #include "tree_sitter/parser.h"
 
 #include <string.h>
+#ifdef SCANNER_DEBUG
+#include <stdio.h>
+#endif
 
 #define MAX_INDENT_DEPTH 64
 #define INDENT_WIDTH 4
@@ -60,6 +74,7 @@ enum TokenType {
     STRONG_CLOSE,
     EMPHASIS_OPEN,
     EMPHASIS_CLOSE,
+    SESSION_BREAK,
 };
 
 // Character class for flanking rule context tracking.
@@ -76,6 +91,8 @@ typedef struct {
     bool at_line_start;
     bool emitted_eof_newline;
     uint8_t last_char_class;
+    int line_indent;       // measured indent of current line (avoids re-measurement after DEDENT)
+    bool indent_measured;  // true when line_indent is valid for the current line
 } Scanner;
 
 static uint8_t classify_char(int32_t c) {
@@ -94,6 +111,8 @@ void *tree_sitter_lex_external_scanner_create(void) {
     scanner->at_line_start = true;
     scanner->emitted_eof_newline = false;
     scanner->last_char_class = CHAR_CLASS_NONE;
+    scanner->line_indent = 0;
+    scanner->indent_measured = false;
     return scanner;
 }
 
@@ -111,6 +130,10 @@ unsigned tree_sitter_lex_external_scanner_serialize(void *payload,
     buffer[offset++] = (char)scanner->at_line_start;
     buffer[offset++] = (char)scanner->emitted_eof_newline;
     buffer[offset++] = (char)scanner->last_char_class;
+    buffer[offset++] = (char)scanner->indent_measured;
+    int16_t li = (int16_t)scanner->line_indent;
+    memcpy(buffer + offset, &li, 2);
+    offset += 2;
 
     for (int i = 0; i <= scanner->indent_depth; i++) {
         int16_t val = (int16_t)scanner->indent_stack[i];
@@ -133,6 +156,8 @@ void tree_sitter_lex_external_scanner_deserialize(void *payload,
         scanner->at_line_start = true;
         scanner->emitted_eof_newline = false;
         scanner->last_char_class = CHAR_CLASS_NONE;
+        scanner->line_indent = 0;
+        scanner->indent_measured = false;
         return;
     }
 
@@ -142,6 +167,11 @@ void tree_sitter_lex_external_scanner_deserialize(void *payload,
     scanner->at_line_start = (bool)buffer[offset++];
     scanner->emitted_eof_newline = (bool)buffer[offset++];
     scanner->last_char_class = (uint8_t)(unsigned char)buffer[offset++];
+    scanner->indent_measured = (bool)buffer[offset++];
+    int16_t li;
+    memcpy(&li, buffer + offset, 2);
+    scanner->line_indent = li;
+    offset += 2;
 
     for (int i = 0; i <= scanner->indent_depth; i++) {
         int16_t val;
@@ -259,6 +289,23 @@ bool tree_sitter_lex_external_scanner_scan(void *payload, TSLexer *lexer,
                                             const bool *valid_symbols) {
     Scanner *scanner = (Scanner *)payload;
 
+#ifdef SCANNER_DEBUG
+    fprintf(stderr, "SCAN: at_line_start=%d depth=%d stack=[",
+            scanner->at_line_start, scanner->indent_depth);
+    for (int i = 0; i <= scanner->indent_depth; i++) {
+        fprintf(stderr, "%d%s", scanner->indent_stack[i],
+                i < scanner->indent_depth ? "," : "");
+    }
+    fprintf(stderr, "] pending=%d lookahead='%c'(%d) valid=[",
+            scanner->pending_dedents, lexer->lookahead > 31 ? lexer->lookahead : '?',
+            lexer->lookahead);
+    const char *names[] = {"IND","DED","NL","AM","AEM","LIL","SC","SO","SCl","EO","ECl","SB"};
+    for (int i = 0; i <= 11; i++) {
+        if (valid_symbols[i]) fprintf(stderr, "%s ", names[i]);
+    }
+    fprintf(stderr, "]\n");
+#endif
+
     // Emit pending DEDENT tokens
     if (scanner->pending_dedents > 0 && valid_symbols[DEDENT]) {
         scanner->pending_dedents--;
@@ -268,22 +315,113 @@ bool tree_sitter_lex_external_scanner_scan(void *payload, TSLexer *lexer,
 
     // At line start, calculate indentation and detect line-start tokens
     if (scanner->at_line_start) {
-        int indent = 0;
-        while (lexer->lookahead == ' ' || lexer->lookahead == '\t') {
-            if (lexer->lookahead == '\t') {
-                indent += INDENT_WIDTH;
-            } else {
-                indent++;
+        int indent;
+        if (scanner->indent_measured) {
+            // Indent was already measured for this line (we're re-entering
+            // after a DEDENT emission). Don't re-count — the whitespace
+            // was already consumed by the prior scan.
+            indent = scanner->line_indent;
+        } else {
+            indent = 0;
+            while (lexer->lookahead == ' ' || lexer->lookahead == '\t') {
+                if (lexer->lookahead == '\t') {
+                    indent += INDENT_WIDTH;
+                } else {
+                    indent++;
+                }
+                lexer->advance(lexer, true);
             }
-            lexer->advance(lexer, true);
+            scanner->line_indent = indent;
+            scanner->indent_measured = true;
         }
 
-        // Blank line — emit NEWLINE
+        // Blank line — check for session break or emit NEWLINE
         if (lexer->lookahead == '\n') {
+            // Session break detection: blank line(s) followed by indent increase.
+            // The scanner peeks ahead to determine if this blank line starts a
+            // session boundary. If yes, emit SESSION_BREAK (encompassing the
+            // blank lines + indent whitespace). If no, emit regular NEWLINE.
+            if (valid_symbols[SESSION_BREAK]) {
+                // Consume the first \n — this is our minimum token
+                lexer->advance(lexer, false);
+                lexer->mark_end(lexer);
+
+                // Peek ahead: skip additional blank lines
+                while (lexer->lookahead == '\n') {
+                    lexer->advance(lexer, false);
+                    lexer->mark_end(lexer);
+                }
+
+                // If EOF after blank lines, not a session break
+                if (lexer->eof(lexer)) {
+                    lexer->result_symbol = NEWLINE;
+                    scanner->at_line_start = true;
+                    scanner->indent_measured = false;
+                    scanner->last_char_class = CHAR_CLASS_NONE;
+                    return true;
+                }
+
+                // Count indent of next non-blank line.
+                // Advance with skip=false so the whitespace is consumed as
+                // part of the SESSION_BREAK token (hidden). If we used
+                // skip=true past mark_end, tree-sitter would NOT consume
+                // them, leaving leading spaces as visible content.
+                int next_indent = 0;
+                while (lexer->lookahead == ' ' || lexer->lookahead == '\t') {
+                    if (lexer->lookahead == '\t') {
+                        next_indent += INDENT_WIDTH;
+                    } else {
+                        next_indent++;
+                    }
+                    lexer->advance(lexer, false);
+                }
+
+                // Check if next line has a second \n (another blank line we
+                // missed because it has leading whitespace)
+                if (lexer->lookahead == '\n') {
+                    // The "next non-blank line" is actually another blank line
+                    // with leading whitespace. Not a session break — emit
+                    // NEWLINE for the first blank line only.
+                    // mark_end includes all blank lines we consumed, which is
+                    // fine — they'll appear as multiple blank_line nodes.
+                    lexer->result_symbol = NEWLINE;
+                    scanner->at_line_start = true;
+                    scanner->indent_measured = false;
+                    scanner->last_char_class = CHAR_CLASS_NONE;
+                    return true;
+                }
+
+                int current_indent =
+                    scanner->indent_stack[scanner->indent_depth];
+                if (next_indent > current_indent) {
+                    // Session break confirmed! Push new indent level.
+                    // mark_end includes blank lines + indent whitespace.
+                    lexer->mark_end(lexer);
+                    scanner->indent_depth++;
+                    scanner->indent_stack[scanner->indent_depth] = next_indent;
+                    scanner->at_line_start = false;
+                    scanner->last_char_class = CHAR_CLASS_NONE;
+                    lexer->result_symbol = SESSION_BREAK;
+                    return true;
+                }
+
+                // Not a session break. Emit NEWLINE for the blank line(s).
+                // mark_end is after the blank lines. The indent whitespace
+                // was consumed with skip=true and is past mark_end, so it
+                // won't be included in the token and will be re-scanned.
+                lexer->result_symbol = NEWLINE;
+                scanner->at_line_start = true;
+                scanner->indent_measured = false;
+                scanner->last_char_class = CHAR_CLASS_NONE;
+                return true;
+            }
+
+            // No session break context — regular blank line NEWLINE
             if (valid_symbols[NEWLINE]) {
                 lexer->advance(lexer, false);
                 lexer->result_symbol = NEWLINE;
                 scanner->at_line_start = true;
+                scanner->indent_measured = false;
                 scanner->last_char_class = CHAR_CLASS_NONE;
                 return true;
             }
@@ -599,6 +737,7 @@ bool tree_sitter_lex_external_scanner_scan(void *payload, TSLexer *lexer,
             lexer->advance(lexer, false);
             lexer->result_symbol = NEWLINE;
             scanner->at_line_start = true;
+            scanner->indent_measured = false;
             scanner->last_char_class = CHAR_CLASS_NONE;
             return true;
         }
@@ -606,6 +745,7 @@ bool tree_sitter_lex_external_scanner_scan(void *payload, TSLexer *lexer,
             scanner->emitted_eof_newline = true;
             lexer->result_symbol = NEWLINE;
             scanner->at_line_start = true;
+            scanner->indent_measured = false;
             scanner->last_char_class = CHAR_CLASS_NONE;
             return true;
         }

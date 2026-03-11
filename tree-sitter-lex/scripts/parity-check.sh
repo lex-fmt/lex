@@ -48,11 +48,11 @@ JQ_BLOCKS='walk(
     end
 )'
 
-# jq filter for content-level: keep text, strip annotations
+# jq filter for content-level: keep text, strip annotations and markers
 JQ_CONTENT='walk(
     if type == "object" then
         del(.annotations, .parameters, .closing_parameters, .mode,
-            ._hasSubject, ._subjectText)
+            .marker, ._hasSubject, ._subjectText)
     else .
     end
 )'

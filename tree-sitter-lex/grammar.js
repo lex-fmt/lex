@@ -13,9 +13,18 @@
  * - Scanner emits annotation_marker (:: prefix) and annotation_end_marker
  * - Scanner emits emphasis delimiters: _strong_open, _strong_close,
  *   _emphasis_open, _emphasis_close (with flanking validation)
+ * - Scanner emits _session_break: blank line(s) + indent increase (lookahead)
  * - Grammar lexer emits: subject_content (line ending with :), text_content,
  *   inline tokens (code_span, math_span, reference, escape_sequence)
  * - INDENT/DEDENT/NEWLINE are always from scanner
+ *
+ * Session disambiguation:
+ *   Sessions and paragraphs share the same prefix (line_content + newline).
+ *   Without _session_break, tree-sitter's GLR creates forks at every text
+ *   line, and the wrong fork (flat paragraphs) can win. The _session_break
+ *   token is emitted by the scanner when a blank line is followed by an
+ *   indent increase, eliminating the ambiguity: only confirmed session
+ *   boundaries receive _session_break, so paragraphs never compete.
  */
 module.exports = grammar({
   name: "lex",
@@ -32,6 +41,7 @@ module.exports = grammar({
     $._strong_close, // closing * validated by scanner flanking rules
     $._emphasis_open, // opening _ validated by scanner flanking rules
     $._emphasis_close, // closing _ validated by scanner flanking rules
+    $._session_break, // blank line(s) + indent increase (scanner lookahead)
   ],
 
   extras: (_$) => [],
@@ -39,8 +49,8 @@ module.exports = grammar({
   conflicts: ($) => [
     // list_item_line can start a list_item or line_content (paragraph text)
     [$.list_item, $.line_content],
-    // line_content _newline: text_line vs session/verbatim (blank lines case)
-    [$.session, $.verbatim_block, $.text_line],
+    // line_content _newline: text_line vs verbatim (blank lines case)
+    [$.verbatim_block, $.text_line],
     // after dedent: session done vs verbatim continues with closing annotation
     [$.session, $.verbatim_block],
     // verbatim_block shares structure with definition (no blank lines case)
@@ -65,14 +75,17 @@ module.exports = grammar({
       ),
 
     // ===== Sessions =====
+    // _session_break replaces the old "blank+ indent" sequence. The scanner
+    // emits it after confirming blank line(s) followed by increased indent
+    // via lookahead. This eliminates the GLR fork between session and
+    // paragraph, fixing nested session nesting.
     session: ($) =>
       prec.dynamic(
         1,
         seq(
           field("title", $.line_content),
           $._newline,
-          repeat1($.blank_line),
-          $._indent,
+          $._session_break,
           repeat1($._block),
           $._dedent,
         ),
@@ -85,8 +98,15 @@ module.exports = grammar({
         seq(
           field("subject", $.line_content),
           $._newline,
-          repeat($.blank_line),
-          optional(seq($._indent, repeat1($._block), $._dedent)),
+          choice(
+            // Blank line(s) + indent: scanner emits _session_break
+            seq($._session_break, repeat1($._block), $._dedent),
+            // No blank line, direct indent (or no content at all)
+            seq(
+              repeat($.blank_line),
+              optional(seq($._indent, repeat1($._block), $._dedent)),
+            ),
+          ),
           $.annotation_marker,
           $.annotation_header,
           $.annotation_marker,
@@ -167,13 +187,6 @@ module.exports = grammar({
       ),
 
     // ===== Strong and Emphasis =====
-    // Scanner-validated delimiters enable proper nesting:
-    //   *bold _italic_ inside* — emphasis nested inside strong
-    //   _italic *bold* inside_ — strong nested inside emphasis
-    // Same-type nesting is blocked by _no_star / _no_underscore variants.
-    // First content token must be _word_alnum — this enforces the Lex rule
-    // that "next char after opening delimiter must be alphanumeric".
-    // The scanner validates the "prev" constraint; the grammar validates "next".
     strong: ($) =>
       seq(
         $._strong_open,
@@ -190,7 +203,6 @@ module.exports = grammar({
         $._emphasis_close,
       ),
 
-    // Inline content inside *strong* — excludes strong to prevent same-type nesting
     _inline_no_star: ($) =>
       choice(
         $.emphasis,
@@ -202,7 +214,6 @@ module.exports = grammar({
         $._delimiter_char,
       ),
 
-    // Inline content inside _emphasis_ — excludes emphasis to prevent same-type nesting
     _inline_no_underscore: ($) =>
       choice(
         $.strong,
@@ -214,27 +225,17 @@ module.exports = grammar({
         $._delimiter_char,
       ),
 
-    // Inline spans — matched as single regex tokens by the grammar lexer.
     code_span: (_$) => /`[^`\n]+`/,
     math_span: (_$) => /#[^#\n]+#/,
     reference: (_$) => /\[[^\]\n]+\]/,
-
-    // Backslash before non-alphanumeric = escape (removes backslash).
     escape_sequence: (_$) => /\\[^a-zA-Z0-9\n]/,
 
-    // Plain text — everything that isn't an inline delimiter or newline.
-    // Split into three tokens so the scanner can infer the character class
-    // of the last consumed character for emphasis flanking validation:
-    //   _word_alnum always ends with an alphanumeric char (class WORD)
-    //   _word_space always ends with whitespace (class WHITESPACE)
-    //   _word_other always ends with punctuation (class PUNCTUATION)
     _word: ($) => choice($._word_alnum, $._word_space, $._word_other),
     _word_alnum: (_$) =>
       token(seq(/[a-zA-Z0-9]+/, repeat(seq(/[*_]/, /[a-zA-Z0-9]+/)))),
     _word_space: (_$) => /[ \t]+/,
     _word_other: (_$) => /[^\na-zA-Z0-9 \t*_`#\[\]\\]+/,
 
-    // Fallback for unmatched delimiters (orphan *, _, `, #, [, ], \)
     _delimiter_char: (_$) => /[*_`#\[\]\\]/,
 
     blank_line: ($) => $._newline,
