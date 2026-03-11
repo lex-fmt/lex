@@ -250,12 +250,15 @@ impl SequenceMarker {
             return Some(DecorationStyle::Numerical);
         }
 
-        // Check for roman numeral (all uppercase I, V, X, L, C, D, M)
-        // Check this BEFORE Alphabetical to correctly classify "I", "V", etc.
-        if segment
+        // Check for roman numeral (uppercase I, V, X, L, C, D, M or lowercase i, v, x, l, c, d, m)
+        // Check this BEFORE Alphabetical to correctly classify "I", "V", "ii", etc.
+        let is_upper_roman = segment
             .chars()
-            .all(|c| matches!(c, 'I' | 'V' | 'X' | 'L' | 'C' | 'D' | 'M'))
-        {
+            .all(|c| matches!(c, 'I' | 'V' | 'X' | 'L' | 'C' | 'D' | 'M'));
+        let is_lower_roman = segment
+            .chars()
+            .all(|c| matches!(c, 'i' | 'v' | 'x' | 'l' | 'c' | 'd' | 'm'));
+        if is_upper_roman || is_lower_roman {
             return Some(DecorationStyle::Roman);
         }
 
@@ -393,6 +396,22 @@ mod tests {
         assert_eq!(marker.separator, Separator::Parenthesis);
         assert_eq!(marker.form, Form::Extended);
         assert_eq!(marker.as_str(), "1.a.2)");
+    }
+
+    #[test]
+    fn test_parse_lowercase_roman() {
+        let marker = SequenceMarker::parse("ii.", None).unwrap();
+        assert_eq!(marker.style, DecorationStyle::Roman);
+        assert_eq!(marker.separator, Separator::Period);
+        assert_eq!(marker.form, Form::Short);
+    }
+
+    #[test]
+    fn test_parse_extended_with_lowercase_roman() {
+        let marker = SequenceMarker::parse("1.a.ii.", None).unwrap();
+        assert_eq!(marker.style, DecorationStyle::Numerical);
+        assert_eq!(marker.form, Form::Extended);
+        assert_eq!(marker.as_str(), "1.a.ii.");
     }
 
     #[test]

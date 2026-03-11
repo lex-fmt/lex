@@ -11,6 +11,8 @@
 //! - Verbatim groups (multiple subject/content pairs)
 
 use lex_core::lex::ast::elements::ContentItem;
+use lex_core::lex::ast::range::Range;
+use lex_core::lex::ast::traits::Visitor;
 use lex_core::lex::parsing::parse_document;
 use proptest::prelude::*;
 
@@ -545,4 +547,291 @@ Example:
             "back0",
         ]
     );
+}
+
+// =============================================================================
+// Span Bounds Validation
+// =============================================================================
+
+/// A visitor that collects all Range spans from every AST node it encounters.
+struct SpanCollector {
+    spans: Vec<(String, Range)>,
+}
+
+impl SpanCollector {
+    fn new() -> Self {
+        Self { spans: Vec::new() }
+    }
+
+    fn record(&mut self, node_type: &str, range: &Range) {
+        self.spans.push((node_type.to_string(), range.clone()));
+    }
+}
+
+impl Visitor for SpanCollector {
+    fn visit_session(&mut self, s: &lex_core::lex::ast::Session) {
+        use lex_core::lex::ast::traits::AstNode;
+        self.record("Session", s.range());
+    }
+
+    fn visit_definition(&mut self, d: &lex_core::lex::ast::Definition) {
+        use lex_core::lex::ast::traits::AstNode;
+        self.record("Definition", d.range());
+    }
+
+    fn visit_list(&mut self, l: &lex_core::lex::ast::List) {
+        use lex_core::lex::ast::traits::AstNode;
+        self.record("List", l.range());
+    }
+
+    fn visit_list_item(&mut self, li: &lex_core::lex::ast::ListItem) {
+        use lex_core::lex::ast::traits::AstNode;
+        self.record("ListItem", li.range());
+    }
+
+    fn visit_paragraph(&mut self, p: &lex_core::lex::ast::Paragraph) {
+        use lex_core::lex::ast::traits::AstNode;
+        self.record("Paragraph", p.range());
+    }
+
+    fn visit_text_line(&mut self, tl: &lex_core::lex::ast::elements::paragraph::TextLine) {
+        use lex_core::lex::ast::traits::AstNode;
+        self.record("TextLine", tl.range());
+    }
+
+    fn visit_verbatim_block(&mut self, vb: &lex_core::lex::ast::Verbatim) {
+        use lex_core::lex::ast::traits::AstNode;
+        self.record("VerbatimBlock", vb.range());
+    }
+
+    fn visit_verbatim_line(&mut self, vl: &lex_core::lex::ast::elements::VerbatimLine) {
+        use lex_core::lex::ast::traits::AstNode;
+        self.record("VerbatimLine", vl.range());
+    }
+
+    fn visit_annotation(&mut self, a: &lex_core::lex::ast::Annotation) {
+        use lex_core::lex::ast::traits::AstNode;
+        self.record("Annotation", a.range());
+    }
+
+    fn visit_blank_line_group(
+        &mut self,
+        blg: &lex_core::lex::ast::elements::blank_line_group::BlankLineGroup,
+    ) {
+        use lex_core::lex::ast::traits::AstNode;
+        self.record("BlankLineGroup", blg.range());
+    }
+}
+
+/// Parse a document and assert that every AST node's span is within source bounds.
+/// Returns the number of spans checked (for test diagnostics).
+fn assert_all_spans_in_bounds(source: &str) -> usize {
+    use lex_core::lex::ast::traits::AstNode;
+
+    let doc = parse_document(source).unwrap_or_else(|e| {
+        panic!("Parse failed for:\n---\n{source}\n---\nError: {e}");
+    });
+
+    let mut collector = SpanCollector::new();
+
+    // Visit the root session
+    doc.root.accept(&mut collector);
+
+    // Also visit document-level annotations
+    for ann in &doc.annotations {
+        ann.accept(&mut collector);
+    }
+
+    let source_len = source.len();
+    for (node_type, range) in &collector.spans {
+        assert!(
+            range.span.start <= range.span.end,
+            "Span start > end for {node_type}: span={:?}, source_len={source_len}\nSource:\n---\n{source}\n---",
+            range.span
+        );
+        assert!(
+            range.span.end <= source_len,
+            "Span end ({}) exceeds source length ({source_len}) for {node_type}: span={:?}\nSource:\n---\n{source}\n---",
+            range.span.end,
+            range.span
+        );
+    }
+
+    collector.spans.len()
+}
+
+// =============================================================================
+// Property Tests: Span Bounds on Verbatim Documents
+// =============================================================================
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(200))]
+
+    /// All AST node spans are within source bounds for flat verbatim blocks.
+    #[test]
+    fn span_bounds_flat_verbatim(
+        subject in subject_strategy(),
+        label in label_strategy(),
+        content in mixed_content_lines(),
+    ) {
+        let content_refs: Vec<&str> = content.iter().map(|s| s.as_str()).collect();
+        let (source, _) = verbatim_source(&subject, &label, &content_refs);
+        let count = assert_all_spans_in_bounds(&source);
+        // Should have at least the VerbatimBlock + its VerbatimLine children + root session
+        assert!(count >= 2, "Expected at least 2 spans, got {count} for source:\n{source}");
+    }
+
+    /// All AST node spans are within source bounds for verbatim in session.
+    #[test]
+    fn span_bounds_verbatim_in_session(
+        session_title in "[A-Z][a-zA-Z0-9]{0,10}",
+        subject in subject_strategy(),
+        label in label_strategy(),
+        content in mixed_content_lines(),
+    ) {
+        let content_refs: Vec<&str> = content.iter().map(|s| s.as_str()).collect();
+        let (verb_source, _) = verbatim_source(&subject, &label, &content_refs);
+        let source = wrap_in_session(&verb_source, &session_title, 0);
+        assert_all_spans_in_bounds(&source);
+    }
+
+    /// All AST node spans are within source bounds for verbatim in definition.
+    #[test]
+    fn span_bounds_verbatim_in_definition(
+        def_subject in "[A-Z][a-zA-Z0-9 ]{0,10}".prop_map(|s| s.trim_end().to_string()),
+        subject in subject_strategy(),
+        label in label_strategy(),
+        content in mixed_content_lines(),
+    ) {
+        let content_refs: Vec<&str> = content.iter().map(|s| s.as_str()).collect();
+        let (verb_source, _) = verbatim_source(&subject, &label, &content_refs);
+        let source = wrap_in_definition(&verb_source, &def_subject, 0);
+        assert_all_spans_in_bounds(&source);
+    }
+
+    /// All AST node spans are within source bounds for deep nesting.
+    #[test]
+    fn span_bounds_deep_nesting(
+        s1_title in "[A-Z][a-zA-Z0-9]{0,8}",
+        s2_title in "[A-Z][a-zA-Z0-9]{0,8}",
+        def_subject in "[A-Z][a-zA-Z0-9 ]{0,8}".prop_map(|s| s.trim_end().to_string()),
+        subject in subject_strategy(),
+        label in label_strategy(),
+        content in code_like_content(),
+    ) {
+        let content_refs: Vec<&str> = content.iter().map(|s| s.as_str()).collect();
+        let (verb_source, _) = verbatim_source(&subject, &label, &content_refs);
+        let def_source = wrap_in_definition(&verb_source, &def_subject, 0);
+        let s2_source = wrap_in_session(&def_source, &s2_title, 0);
+        let source = wrap_in_session(&s2_source, &s1_title, 0);
+        assert_all_spans_in_bounds(&source);
+    }
+
+    /// All AST node spans are within source bounds for nested definitions.
+    #[test]
+    fn span_bounds_nested_definitions(
+        d1_subject in "[A-Z][a-zA-Z0-9 ]{0,8}".prop_map(|s| s.trim_end().to_string()),
+        d2_subject in "[A-Z][a-zA-Z0-9 ]{0,8}".prop_map(|s| s.trim_end().to_string()),
+        subject in subject_strategy(),
+        label in label_strategy(),
+        content in code_like_content(),
+    ) {
+        let content_refs: Vec<&str> = content.iter().map(|s| s.as_str()).collect();
+        let (verb_source, _) = verbatim_source(&subject, &label, &content_refs);
+        let d2_source = wrap_in_definition(&verb_source, &d2_subject, 0);
+        let source = wrap_in_definition(&d2_source, &d1_subject, 0);
+        assert_all_spans_in_bounds(&source);
+    }
+
+    /// All AST node spans are within source bounds with tricky content.
+    #[test]
+    fn span_bounds_tricky_content(
+        s_title in "[A-Z][a-zA-Z0-9]{0,6}",
+        d_subject in "[A-Z][a-zA-Z0-9]{0,6}",
+        subject in subject_strategy(),
+        label in label_strategy(),
+        content in mixed_content_lines(),
+    ) {
+        let content_refs: Vec<&str> = content.iter().map(|s| s.as_str()).collect();
+        let (verb_source, _) = verbatim_source(&subject, &label, &content_refs);
+        let def_source = wrap_in_definition(&verb_source, &d_subject, 0);
+        let source = wrap_in_session(&def_source, &s_title, 0);
+        assert_all_spans_in_bounds(&source);
+    }
+}
+
+// =============================================================================
+// Deterministic Span Bounds Tests
+// =============================================================================
+
+#[test]
+fn span_bounds_simple_verbatim() {
+    let source = "\
+Example:
+    def foo():
+        return bar
+    x = 1
+:: python ::";
+    let count = assert_all_spans_in_bounds(source);
+    assert!(
+        count >= 3,
+        "Expected at least 3 spans (session, verbatim block, verbatim lines), got {count}"
+    );
+}
+
+#[test]
+fn span_bounds_verbatim_in_session_deterministic() {
+    let source = "\
+Title
+
+    Example:
+        def foo():
+            return bar
+        x = 1
+    :: python ::";
+    assert_all_spans_in_bounds(source);
+}
+
+#[test]
+fn span_bounds_verbatim_deep_nesting_deterministic() {
+    let source = "\
+Section
+
+    Category:
+        Language:
+            Example:
+                def foo():
+                    return bar
+                x = 1
+            :: python ::";
+    assert_all_spans_in_bounds(source);
+}
+
+#[test]
+fn span_bounds_empty_verbatim_content() {
+    // Verbatim block with no content lines (binary marker)
+    let source = "\
+Image:
+:: png ::";
+    assert_all_spans_in_bounds(source);
+}
+
+#[test]
+fn span_bounds_single_char_verbatim() {
+    let source = "\
+X:
+    a
+:: t ::";
+    assert_all_spans_in_bounds(source);
+}
+
+#[test]
+fn span_bounds_verbatim_with_fake_annotations() {
+    let source = "\
+Example:
+    line one
+    :: not_an_annotation ::
+    line three
+:: text ::";
+    assert_all_spans_in_bounds(source);
 }

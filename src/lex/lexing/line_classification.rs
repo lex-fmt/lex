@@ -371,14 +371,19 @@ fn is_segment(token: &Token) -> bool {
 }
 
 /// Check if a string is a Roman numeral (I, II, III, IV, V, etc.)
+/// Supports both uppercase (I, V, X, L, C, D, M) and lowercase (i, v, x, l, c, d, m).
 fn is_roman_numeral(s: &str) -> bool {
     if s.is_empty() {
         return false;
     }
-    // Check if all characters are valid Roman numeral characters
-    s.chars()
-        .all(|c| matches!(c, 'I' | 'V' | 'X' | 'L' | 'C' | 'D' | 'M'))
-        && s.chars().next().is_some_and(|c| c.is_uppercase())
+    // All characters must be valid Roman numeral characters, in a single case
+    let is_upper = s
+        .chars()
+        .all(|c| matches!(c, 'I' | 'V' | 'X' | 'L' | 'C' | 'D' | 'M'));
+    let is_lower = s
+        .chars()
+        .all(|c| matches!(c, 'i' | 'v' | 'x' | 'l' | 'c' | 'd' | 'm'));
+    is_upper || is_lower
 }
 
 /// Detect the decoration style from a marker segment token
@@ -575,6 +580,43 @@ mod tests {
         assert_eq!(parsed.marker_end, 5);
         assert_eq!(parsed.body_start, 6);
 
+        assert_eq!(classify_line_tokens(&tokens), LineType::ListLine);
+    }
+
+    #[test]
+    fn test_extended_marker_with_lowercase_roman() {
+        // 1.a.ii. Item  — extended form with mixed styles including lowercase roman
+        let tokens = vec![
+            Token::Number("1".to_string()),
+            Token::Period,
+            Token::Text("a".to_string()),
+            Token::Period,
+            Token::Text("ii".to_string()),
+            Token::Period,
+            Token::Whitespace(1),
+            Token::Text("Item".to_string()),
+        ];
+
+        let parsed = parse_seq_marker(&tokens).expect("expected extended marker");
+        assert_eq!(parsed.form, Form::Extended);
+        assert_eq!(parsed.style, DecorationStyle::Numerical);
+        assert_eq!(parsed.separator, Separator::Period);
+        assert_eq!(classify_line_tokens(&tokens), LineType::ListLine);
+    }
+
+    #[test]
+    fn test_lowercase_roman_short_marker() {
+        // ii. Item
+        let tokens = vec![
+            Token::Text("ii".to_string()),
+            Token::Period,
+            Token::Whitespace(1),
+            Token::Text("Item".to_string()),
+        ];
+
+        let parsed = parse_seq_marker(&tokens).expect("expected short roman marker");
+        assert_eq!(parsed.form, Form::Short);
+        assert_eq!(parsed.style, DecorationStyle::Roman);
         assert_eq!(classify_line_tokens(&tokens), LineType::ListLine);
     }
 

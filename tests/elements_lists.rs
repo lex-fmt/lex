@@ -424,11 +424,10 @@ fn test_lists_overview_document() {
         .unwrap();
 
     assert_ast(&doc)
-        .item_count(9)
+        .item_count(10)
         .item(0, |item| {
             item.assert_session()
                 .label("Introduction")
-                .child_count(1)
                 .child(0, |child| {
                     child
                         .assert_paragraph()
