@@ -83,7 +83,9 @@ fn file_target_strategy() -> impl Strategy<Value = String> {
 fn general_target_strategy() -> impl Strategy<Value = String> {
     "[A-Z][a-zA-Z0-9 ]{1,20}"
         .prop_map(|s| s.trim_end().to_string())
-        .prop_filter("must not be empty", |s| !s.is_empty())
+        .prop_filter("must not be empty or reserved", |s| {
+            !s.is_empty() && !s.eq_ignore_ascii_case("TK")
+        })
 }
 
 // =============================================================================
