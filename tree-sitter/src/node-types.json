@@ -255,11 +255,11 @@
     "named": true,
     "fields": {},
     "children": {
-      "multiple": false,
+      "multiple": true,
       "required": true,
       "types": [
         {
-          "type": "list_item_line",
+          "type": "list_marker",
           "named": true
         },
         {
@@ -317,7 +317,7 @@
           "named": true
         },
         {
-          "type": "list_item_line",
+          "type": "list_marker",
           "named": true
         },
         {
@@ -326,6 +326,10 @@
         },
         {
           "type": "session",
+          "named": true
+        },
+        {
+          "type": "text_content",
           "named": true
         },
         {
@@ -568,7 +572,7 @@
     "named": true
   },
   {
-    "type": "list_item_line",
+    "type": "list_marker",
     "named": true
   },
   {

@@ -38,11 +38,10 @@
   (list) @markup.raw)
 
 ; === Lists ===
-; List item lines — ONLY inside list_item nodes (LSP: ListMarker + ListItemText)
-; list_item_line also appears as line_content in session titles, where it
-; should NOT be tagged as a list item (it's a heading in that context).
+; List marker (- , 1. , a) , etc.) — captures just the marker portion
+; (LSP: ListMarker). Content is handled by inline captures below.
 (list_item
-  (list_item_line) @markup.list)
+  (list_marker) @markup.list)
 
 ; === Annotations (generic) ===
 ; Annotation delimiters (LSP: part of AnnotationLabel)

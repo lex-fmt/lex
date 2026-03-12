@@ -4,18 +4,19 @@
 /**
  * Tree-sitter grammar for the Lex document format.
  *
- * The external scanner detects line-level tokens (list lines, annotation
+ * The external scanner detects line-level tokens (list markers, annotation
  * markers) because tree-sitter's longest-match lexer rule would otherwise
  * always prefer text_content (/[^\n]+/) over shorter prefixes.
  *
  * Token strategy:
- * - Scanner emits full-line tokens: list_item_line (entire line with marker)
+ * - Scanner emits list_marker (just the marker: "- ", "1. ", etc.)
+ * - Scanner emits full-line token: subject_content (line ending with :)
  * - Scanner emits annotation_marker (:: prefix) and annotation_end_marker
  * - Scanner emits emphasis delimiters: _strong_open, _strong_close,
  *   _emphasis_open, _emphasis_close (with flanking validation)
  * - Scanner emits _session_break: blank line(s) + indent increase (lookahead)
- * - Grammar lexer emits: subject_content (line ending with :), text_content,
- *   inline tokens (code_span, math_span, reference, escape_sequence)
+ * - Grammar lexer emits: text_content (inline-aware), inline tokens
+ *   (code_span, math_span, reference, escape_sequence)
  * - INDENT/DEDENT/NEWLINE are always from scanner
  *
  * Session disambiguation:
@@ -35,7 +36,7 @@ module.exports = grammar({
     $._newline,
     $.annotation_marker, // ":: " at line start
     $.annotation_end_marker, // "::" alone on a line (closing marker)
-    $.list_item_line, // entire line starting with list marker (- , 1. , etc.)
+    $.list_marker, // list marker only: "- ", "1. ", "a) ", etc.
     $.subject_content, // entire line ending with : (scanner verifies EOL)
     $._strong_open, // opening * validated by scanner flanking rules
     $._strong_close, // closing * validated by scanner flanking rules
@@ -47,7 +48,7 @@ module.exports = grammar({
   extras: (_$) => [],
 
   conflicts: ($) => [
-    // list_item_line can start a list_item or line_content (paragraph text)
+    // list_marker can start a list_item or line_content (paragraph/session text)
     [$.list_item, $.line_content],
     // blank_line after dedent: part of list_item's trailing blanks or next block
     [$.list_item],
@@ -133,7 +134,8 @@ module.exports = grammar({
 
     list_item: ($) =>
       seq(
-        $.list_item_line,
+        $.list_marker,
+        optional($.text_content),
         $._newline,
         optional(
           seq(
@@ -182,7 +184,11 @@ module.exports = grammar({
     text_line: ($) => seq($.line_content, $._newline),
 
     line_content: ($) =>
-      choice($.list_item_line, $.subject_content, $.text_content),
+      choice(
+        seq($.list_marker, optional($.text_content)),
+        $.subject_content,
+        $.text_content,
+      ),
 
     // ===== Inline-Aware Text Content =====
     text_content: ($) => repeat1($._inline),

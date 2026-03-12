@@ -4,7 +4,7 @@
  * Handles:
  * - Indentation-based structure (INDENT/DEDENT tokens)
  * - NEWLINE emission at line boundaries and EOF
- * - Line-start detection for annotation markers (::) and list items (full line)
+ * - Line-start detection for annotation markers (::) and list markers
  * - Session boundary detection via lookahead (_session_break)
  * - Emphasis delimiter validation (*strong* and _emphasis_) with flanking rules
  *
@@ -35,7 +35,7 @@
  *   2: _newline
  *   3: annotation_marker
  *   4: annotation_end_marker
- *   5: list_item_line
+ *   5: list_marker
  *   6: subject_content
  *   7: _strong_open
  *   8: _strong_close
@@ -68,7 +68,7 @@ enum TokenType {
     NEWLINE,
     ANNOTATION_MARKER,
     ANNOTATION_END_MARKER,
-    LIST_ITEM_LINE,
+    LIST_MARKER,
     SUBJECT_CONTENT,
     STRONG_OPEN,
     STRONG_CLOSE,
@@ -313,7 +313,7 @@ bool tree_sitter_lex_external_scanner_scan(void *payload, TSLexer *lexer,
     fprintf(stderr, "] pending=%d lookahead='%c'(%d) valid=[",
             scanner->pending_dedents, lexer->lookahead > 31 ? lexer->lookahead : '?',
             lexer->lookahead);
-    const char *names[] = {"IND","DED","NL","AM","AEM","LIL","SC","SO","SCl","EO","ECl","SB"};
+    const char *names[] = {"IND","DED","NL","AM","AEM","LM","SC","SO","SCl","EO","ECl","SB"};
     for (int i = 0; i <= 11; i++) {
         if (valid_symbols[i]) fprintf(stderr, "%s ", names[i]);
     }
@@ -596,13 +596,15 @@ bool tree_sitter_lex_external_scanner_scan(void *payload, TSLexer *lexer,
             return false;
         }
 
-        // Try list item line: marker + rest of line (full line token)
-        if (valid_symbols[LIST_ITEM_LINE]) {
+        // Try list marker: just the marker portion (- , 1. , a) , etc.)
+        // Content after the marker is handled by the grammar's text_content
+        // rule, which decomposes inline elements (bold, references, etc.).
+        if (valid_symbols[LIST_MARKER]) {
             if (try_list_marker(lexer)) {
-                // Marker matched — consume the rest of the line
-                consume_rest_of_line(lexer);
                 lexer->mark_end(lexer);
-                lexer->result_symbol = LIST_ITEM_LINE;
+                lexer->result_symbol = LIST_MARKER;
+                // Marker ends with a space — set class for emphasis flanking
+                scanner->last_char_class = CHAR_CLASS_WHITESPACE;
                 return true;
             }
             // Not a list marker — fall through to subject_content check.
@@ -635,13 +637,13 @@ bool tree_sitter_lex_external_scanner_scan(void *payload, TSLexer *lexer,
 
     // === Not at line start ===
 
-    // Try list item line (e.g., first line after INDENT in a definition body)
-    if (valid_symbols[LIST_ITEM_LINE]) {
+    // Try list marker (e.g., first line after INDENT in a definition body)
+    if (valid_symbols[LIST_MARKER]) {
         lexer->mark_end(lexer);
         if (try_list_marker(lexer)) {
-            consume_rest_of_line(lexer);
             lexer->mark_end(lexer);
-            lexer->result_symbol = LIST_ITEM_LINE;
+            lexer->result_symbol = LIST_MARKER;
+            scanner->last_char_class = CHAR_CLASS_WHITESPACE;
             return true;
         }
         // Not a list marker — fall through
