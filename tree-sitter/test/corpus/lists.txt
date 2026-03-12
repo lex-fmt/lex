@@ -100,7 +100,8 @@ List item with inline formatting
       (list_marker)
       (text_content
         (strong)
-        (reference)))
+        (reference
+          (general_reference))))
     (list_item
       (list_marker)
       (text_content

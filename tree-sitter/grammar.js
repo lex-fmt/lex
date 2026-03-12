@@ -246,7 +246,71 @@ module.exports = grammar({
 
     code_span: (_$) => /`[^`\n]+`/,
     math_span: (_$) => /#[^#\n]+#/,
-    reference: (_$) => /\[[^\]\n]+\]/,
+
+    // Reference types — lexically distinguished by prefix/content.
+    // Mirrors the classification in lex-core/src/lex/inlines/references.rs.
+    // Order matters: token.immediate() alternatives are tried by specificity.
+    reference: ($) =>
+      choice(
+        $.citation_reference,
+        $.footnote_reference,
+        $.url_reference,
+        $.file_reference,
+        $.session_reference,
+        $.tocome_reference,
+        $.number_reference,
+        $.general_reference,
+      ),
+
+    // [@key] or [@key, p.42] — citation
+    citation_reference: (_$) => token(seq("[", "@", /[^\]\n]+/, "]")),
+
+    // [^label] — labeled footnote
+    footnote_reference: (_$) => token(seq("[", "^", /[^\]\n]+/, "]")),
+
+    // [https://...], [http://...], [mailto:...] — URL
+    url_reference: (_$) =>
+      token(
+        choice(
+          seq("[", "https://", /[^\]\n]+/, "]"),
+          seq("[", "http://", /[^\]\n]+/, "]"),
+          seq("[", "mailto:", /[^\]\n]+/, "]"),
+        ),
+      ),
+
+    // [./...], [../...], [/...] — file path
+    file_reference: (_$) =>
+      token(
+        choice(
+          seq("[", "./", /[^\]\n]*/, "]"),
+          seq("[", "../", /[^\]\n]*/, "]"),
+          seq("[", "/", /[^\]\n]+/, "]"),
+        ),
+      ),
+
+    // [#digits.dashes] — session reference
+    session_reference: (_$) => token(seq("[", "#", /[0-9][0-9.\-]*/, "]")),
+
+    // [TK] or [TK-identifier] — to-come placeholder (case insensitive)
+    tocome_reference: (_$) =>
+      token(
+        choice(
+          seq("[", choice("TK", "tk", "Tk", "tK"), "]"),
+          seq(
+            "[",
+            choice("TK-", "tk-", "Tk-", "tK-"),
+            /[a-z0-9]+/,
+            "]",
+          ),
+        ),
+      ),
+
+    // [42] — numbered footnote (digits only)
+    number_reference: (_$) => token(seq("[", /[0-9]+/, "]")),
+
+    // [anything else] — general reference (fallback)
+    general_reference: (_$) => /\[[^\]\n]+\]/,
+
     escape_sequence: (_$) => /\\[^a-zA-Z0-9\n]/,
 
     _word: ($) => choice($._word_alnum, $._word_space, $._word_other),

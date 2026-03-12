@@ -103,5 +103,6 @@ Annotation inline text with multiple inlines
     (annotation_header)
     (annotation_marker)
     (annotation_inline_text
-      (reference)
+      (reference
+        (general_reference))
       (code_span))))

@@ -72,5 +72,17 @@
 (emphasis) @markup.italic
 (code_span) @markup.raw.inline
 (math_span) @markup.math
-(reference) @markup.link
 (escape_sequence) @string.escape
+
+; === References (typed) ===
+; Generic fallback — all references are links
+(reference) @markup.link
+
+; Specific reference type overrides (later = higher priority)
+(citation_reference) @markup.link
+(footnote_reference) @markup.link
+(url_reference) @markup.link.url
+(file_reference) @markup.link.url
+(session_reference) @markup.link
+(tocome_reference) @constant.builtin
+(number_reference) @markup.link
