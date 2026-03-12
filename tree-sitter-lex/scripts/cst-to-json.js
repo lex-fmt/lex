@@ -158,21 +158,7 @@ function convertBlockChildren(node) {
     })
     .filter((n) => n !== null);
 
-  // Remove BlankLineGroups immediately before VerbatimBlocks
-  // (lex-cli absorbs leading blank lines into the verbatim block)
-  const result = [];
-  for (let i = 0; i < converted.length; i++) {
-    if (
-      converted[i] &&
-      converted[i].type === "BlankLineGroup" &&
-      converted[i + 1] &&
-      converted[i + 1].type === "VerbatimBlock"
-    ) {
-      continue; // skip the BlankLineGroup
-    }
-    result.push(converted[i]);
-  }
-  return result;
+  return converted;
 }
 
 // Extract list marker from list_item_line text (e.g., "- First item" → "-")
@@ -280,6 +266,108 @@ function attachAnnotationsClean(blocks) {
   return { annotations: containerAnnotations, children };
 }
 
+
+// Verbatim group merger: merge Sessions/Definitions preceding a VerbatimBlock
+// into groups within that VerbatimBlock, and detect standalone Annotations
+// that close a verbatim block (Pattern B).
+//
+// Pattern A: Session*, VerbatimBlock → merged VerbatimBlock
+// Pattern B: (Session|Definition|Paragraph)*, Annotation → VerbatimBlock
+//
+// In Lex, a verbatim block can span multiple subject+content pairs (groups),
+// all closed by a single :: annotation :: line. Tree-sitter parses each
+// subject+content as a separate Session/Definition, with only the last one
+// becoming a VerbatimBlock (when it can see the closing annotation).
+function mergeVerbatimGroups(blocks) {
+  // Helper: check if a block has a subject (could be a verbatim group header)
+  const hasSubject = (b) => {
+    if (!b) return false;
+    if (b.type === "Session" && b.title && b.title.endsWith(":")) return true;
+    if (b.type === "Definition") return true;
+    if (b.type === "Paragraph" && b._hasSubject) return true;
+    // Check paragraph lines for subject-like patterns (line ending with :)
+    if (b.type === "Paragraph" && b.lines) {
+      return b.lines.some((l) => l.content && l.content.trim().endsWith(":"));
+    }
+    return false;
+  };
+
+  const result = [];
+
+  for (let i = 0; i < blocks.length; i++) {
+    const block = blocks[i];
+
+    // Pattern A: merge preceding sessions/definitions into VerbatimBlock
+    if (block && block.type === "VerbatimBlock") {
+      // Look backward in result for consecutive Sessions/Definitions
+      // (with optional BlankLineGroups between them)
+      let mergeStart = result.length;
+      let foundSubjectBlock = false;
+      while (mergeStart > 0) {
+        const prev = result[mergeStart - 1];
+        if (prev && prev.type === "BlankLineGroup") {
+          mergeStart--;
+        } else if (hasSubject(prev)) {
+          mergeStart--;
+          foundSubjectBlock = true;
+        } else {
+          break;
+        }
+      }
+
+      // Only merge if we found at least one subject-bearing block
+      if (foundSubjectBlock && mergeStart < result.length) {
+        const merged = result.splice(mergeStart);
+        block._mergedGroups = merged;
+      }
+      result.push(block);
+      continue;
+    }
+
+    // Pattern B: standalone Annotation preceded by subject-bearing content
+    // → create a VerbatimBlock
+    if (
+      block &&
+      block.type === "Annotation" &&
+      (!block.children || block.children.length === 0)
+    ) {
+      // Look backward for content with at least one subject-bearing block
+      let mergeStart = result.length;
+      let foundSubject = false;
+      while (mergeStart > 0) {
+        const prev = result[mergeStart - 1];
+        if (prev && prev.type === "BlankLineGroup") {
+          mergeStart--;
+        } else if (hasSubject(prev)) {
+          mergeStart--;
+          foundSubject = true;
+        } else if (prev && prev.type === "Paragraph" && !prev._hasSubject) {
+          // Non-subject paragraphs between groups (fullwidth content,
+          // or text between subject groups)
+          mergeStart--;
+        } else {
+          break;
+        }
+      }
+
+      if (foundSubject && mergeStart < result.length) {
+        const merged = result.splice(mergeStart);
+        result.push({
+          type: "VerbatimBlock",
+          closing_label: block.label || "",
+          groups: [{ subject: "", lines: [] }],
+          _mergedGroups: merged,
+        });
+        continue;
+      }
+    }
+
+    result.push(block);
+  }
+
+  return result;
+}
+
 // Convert a single CST node to canonical JSON
 function convertNode(node) {
   if (!node || !node.tag) return null;
@@ -314,15 +402,39 @@ function convertNode(node) {
           first.lines.length >= 1 &&
           second &&
           second.type === "BlankLineGroup" &&
-          // NOT followed by a container (session or definition)
+          // NOT followed by a container (session, definition, or verbatim)
           (!third ||
-            (third.type !== "Session" && third.type !== "Definition"));
+            (third.type !== "Session" &&
+              third.type !== "Definition" &&
+              third.type !== "VerbatimBlock"));
 
         if (isTitle) {
           title = first.lines.map((l) => l.content).join("\n");
           // Remove the title paragraph and its trailing blank
           blocks.splice(0, 2);
         }
+      }
+
+      // Verbatim group merging: merge Sessions/Definitions preceding
+      // a VerbatimBlock (or standalone Annotation) into verbatim groups
+      blocks = mergeVerbatimGroups(blocks);
+
+      // Strip BLGs immediately before VerbatimBlocks
+      // (lex-cli absorbs leading blank lines into verbatim blocks)
+      {
+        const cleaned = [];
+        for (let i = 0; i < blocks.length; i++) {
+          if (
+            blocks[i] &&
+            blocks[i].type === "BlankLineGroup" &&
+            blocks[i + 1] &&
+            blocks[i + 1].type === "VerbatimBlock"
+          ) {
+            continue;
+          }
+          cleaned.push(blocks[i]);
+        }
+        blocks = cleaned;
       }
 
       // Annotation attachment: remove annotations from children and
@@ -342,10 +454,16 @@ function convertNode(node) {
       }
 
       // Clean up internal markers
-      for (const child of children) {
-        delete child._hasSubject;
-        delete child._subjectText;
-      }
+      const cleanMarkers = (blocks) => {
+        for (const child of blocks) {
+          if (!child) continue;
+          delete child._hasSubject;
+          delete child._subjectText;
+          delete child._mergedGroups;
+          if (child.children) cleanMarkers(child.children);
+        }
+      };
+      cleanMarkers(children);
 
       return doc;
     }
@@ -363,7 +481,27 @@ function convertNode(node) {
       ) {
         startIdx++;
       }
-      const trimmed = blocks.slice(startIdx).filter((b) => b !== null);
+      let trimmed = blocks.slice(startIdx).filter((b) => b !== null);
+
+      // Verbatim group merging within session
+      trimmed = mergeVerbatimGroups(trimmed);
+
+      // Strip BLGs before VerbatimBlocks
+      {
+        const cleaned = [];
+        for (let i = 0; i < trimmed.length; i++) {
+          if (
+            trimmed[i] &&
+            trimmed[i].type === "BlankLineGroup" &&
+            trimmed[i + 1] &&
+            trimmed[i + 1].type === "VerbatimBlock"
+          ) {
+            continue;
+          }
+          cleaned.push(trimmed[i]);
+        }
+        trimmed = cleaned;
+      }
 
       // Annotation attachment within session
       const attached = attachAnnotationsClean(trimmed);
@@ -381,9 +519,11 @@ function convertNode(node) {
 
       // Clean internal markers
       for (const child of children) {
+        if (!child) continue;
         delete child._hasSubject;
         delete child._subjectText;
         delete child._isTitle;
+        delete child._mergedGroups;
       }
 
       return session;
@@ -392,12 +532,26 @@ function convertNode(node) {
     case "definition": {
       const subjectNode = findField(node, "subject");
       const subject = subjectNode ? extractSubject(subjectNode) : "";
-      const blocks = convertBlockChildren(node);
+      let blocks = convertBlockChildren(node);
+
+      // Strip BLGs before VerbatimBlocks inside definitions
+      const cleaned = [];
+      for (let i = 0; i < blocks.length; i++) {
+        if (
+          blocks[i] &&
+          blocks[i].type === "BlankLineGroup" &&
+          blocks[i + 1] &&
+          blocks[i + 1].type === "VerbatimBlock"
+        ) {
+          continue;
+        }
+        cleaned.push(blocks[i]);
+      }
 
       return {
         type: "Definition",
         subject,
-        children: blocks.filter((b) => b !== null),
+        children: cleaned.filter((b) => b !== null),
       };
     }
 
