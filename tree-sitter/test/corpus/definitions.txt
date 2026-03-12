@@ -1,0 +1,76 @@
+==================
+Simple definition
+==================
+Term:
+    Description here
+---
+
+(document
+  (definition
+    subject: (subject_content)
+    (paragraph
+      (text_line
+        (line_content
+          (text_content))))))
+
+==================
+Definition with multiple body lines
+==================
+Concept:
+    First line of description
+    Second line of description
+---
+
+(document
+  (definition
+    subject: (subject_content)
+    (paragraph
+      (text_line
+        (line_content
+          (text_content)))
+      (text_line
+        (line_content
+          (text_content))))))
+
+==================
+Two definitions
+==================
+First:
+    Body one
+
+Second:
+    Body two
+---
+
+(document
+  (definition
+    subject: (subject_content)
+    (paragraph
+      (text_line
+        (line_content
+          (text_content))))
+    (blank_line))
+  (definition
+    subject: (subject_content)
+    (paragraph
+      (text_line
+        (line_content
+          (text_content))))))
+
+==================
+Nested definitions
+==================
+Outer:
+    Inner:
+        Deep content
+---
+
+(document
+  (definition
+    subject: (subject_content)
+    (definition
+      subject: (subject_content)
+      (paragraph
+        (text_line
+          (line_content
+            (text_content)))))))

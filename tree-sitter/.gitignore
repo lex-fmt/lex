@@ -1,0 +1,4 @@
+src/parser.c
+src/tree_sitter/
+build/
+node_modules/

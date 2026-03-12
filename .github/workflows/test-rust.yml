@@ -39,6 +39,23 @@ jobs:
       - name: Test
         run: cargo nextest run --workspace --exclude lex-wasm
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install tree-sitter CLI
+        run: npm install --prefix tree-sitter
+
+      - name: Generate tree-sitter parser
+        run: cd tree-sitter && npx tree-sitter generate
+
+      - name: Tree-sitter corpus tests
+        run: cd tree-sitter && npx tree-sitter test
+
+      - name: Tree-sitter error-free parsing check
+        run: tree-sitter/scripts/error-check.sh
+
   docs:
     name: Documentation
     runs-on: ubuntu-latest

@@ -1,0 +1,26 @@
+{
+  "grammars": [
+    {
+      "name": "lex",
+      "camelcase": "Lex",
+      "scope": "source.lex",
+      "path": ".",
+      "file-types": ["lex"],
+      "highlights": "queries/highlights.scm",
+      "injections": "queries/injections.scm"
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "MIT",
+    "description": "Tree-sitter grammar for the Lex document format",
+    "authors": [
+      {
+        "name": "Lex Format"
+      }
+    ],
+    "links": {
+      "repository": "https://github.com/lex-fmt/lex"
+    }
+  }
+}

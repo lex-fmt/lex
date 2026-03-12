@@ -1,0 +1,77 @@
+==================
+Simple dash list
+==================
+- First item
+- Second item
+---
+
+(document
+  (list
+    (list_item
+      (list_item_line))
+    (list_item
+      (list_item_line))))
+
+==================
+Three item dash list
+==================
+- Alpha
+- Beta
+- Gamma
+---
+
+(document
+  (list
+    (list_item
+      (list_item_line))
+    (list_item
+      (list_item_line))
+    (list_item
+      (list_item_line))))
+
+==================
+Numbered list
+==================
+1. First
+2. Second
+---
+
+(document
+  (list
+    (list_item
+      (list_item_line))
+    (list_item
+      (list_item_line))))
+
+==================
+List item with nested content
+==================
+- Item one
+    Continuation text
+- Item two
+---
+
+(document
+  (list
+    (list_item
+      (list_item_line)
+      (paragraph
+        (text_line
+          (line_content
+            (text_content)))))
+    (list_item
+      (list_item_line))))
+
+==================
+Alphabetical list
+==================
+a. First
+b. Second
+---
+
+(document
+  (list
+    (list_item
+      (list_item_line))
+    (list_item
+      (list_item_line))))
