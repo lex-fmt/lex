@@ -133,8 +133,8 @@ function extractTitle(node) {
   return extractText(titleNode);
 }
 
-// Convert blank_line nodes into BlankLineGroup nodes (one per blank line,
-// matching lex-cli which emits separate BlankLineGroup(count=1) per line)
+// Convert blank_line nodes into BlankLineGroup(count=1) nodes.
+// Lex-cli emits one separate BlankLineGroup per blank line.
 function groupBlanks(children) {
   const result = [];
   for (const child of children) {
@@ -375,9 +375,10 @@ function convertNode(node) {
   switch (node.tag) {
     case "document": {
       let blocks = convertBlockChildren(node);
-      // Strip trailing BlankLineGroup (tree-sitter emits blank_line for
-      // every trailing newline; lex AST does not include these)
-      while (
+      // Strip the EOF blank_line that tree-sitter always appends as the
+      // last blank_line node. We pop only the very last BLG (the EOF one).
+      // Any real trailing blank lines remain as document children.
+      if (
         blocks.length > 0 &&
         blocks[blocks.length - 1] &&
         blocks[blocks.length - 1].type === "BlankLineGroup"
@@ -419,8 +420,11 @@ function convertNode(node) {
       // a VerbatimBlock (or standalone Annotation) into verbatim groups
       blocks = mergeVerbatimGroups(blocks);
 
-      // Strip BLGs immediately before VerbatimBlocks
-      // (lex-cli absorbs leading blank lines into verbatim blocks)
+      // Strip BLGs before VerbatimBlocks when lex-cli would absorb
+      // the preceding blank into the verbatim structure:
+      // - Merged VerbatimBlocks always absorb preceding blanks
+      // - Direct VerbatimBlocks absorb when preceded by a Paragraph
+      //   (or nothing), but NOT when preceded by a List or Session
       {
         const cleaned = [];
         for (let i = 0; i < blocks.length; i++) {
@@ -430,18 +434,55 @@ function convertNode(node) {
             blocks[i + 1] &&
             blocks[i + 1].type === "VerbatimBlock"
           ) {
-            continue;
+            if (blocks[i + 1]._mergedGroups) {
+              continue; // merged verbatim always absorbs
+            }
+            // Find the element before this BLG
+            const prev = cleaned[cleaned.length - 1];
+            const prevType = prev ? prev.type : null;
+            if (!prevType || prevType === "Paragraph" || prevType === "VerbatimBlock") {
+              continue; // absorbed into verbatim's leading blank
+            }
           }
           cleaned.push(blocks[i]);
         }
         blocks = cleaned;
       }
 
+      // Merge consecutive BLGs that follow a VerbatimBlock into a single
+      // BLG with accumulated count (lex-cli merges these during assembly).
+      {
+        const merged = [];
+        for (let i = 0; i < blocks.length; i++) {
+          const prev = merged[merged.length - 1];
+          if (
+            blocks[i] &&
+            blocks[i].type === "BlankLineGroup" &&
+            prev &&
+            prev.type === "BlankLineGroup"
+          ) {
+            // Check if there's a VerbatimBlock before this BLG run
+            let vbBefore = false;
+            for (let j = merged.length - 2; j >= 0; j--) {
+              if (merged[j] && merged[j].type === "BlankLineGroup") continue;
+              if (merged[j] && merged[j].type === "VerbatimBlock") vbBefore = true;
+              break;
+            }
+            if (vbBefore) {
+              prev.count += blocks[i].count;
+              continue;
+            }
+          }
+          merged.push(blocks[i]);
+        }
+        blocks = merged;
+      }
+
       // Annotation attachment: remove annotations from children and
       // attach to nearest sibling or collect as container-level
       const attached = attachAnnotationsClean(blocks);
       const annotations = attached.annotations;
-      const children = attached.children;
+      let children = attached.children;
 
       const doc = {
         type: "Document",
@@ -486,7 +527,8 @@ function convertNode(node) {
       // Verbatim group merging within session
       trimmed = mergeVerbatimGroups(trimmed);
 
-      // Strip BLGs before VerbatimBlocks
+      // Strip BLGs before VerbatimBlocks inside sessions
+      // (lex-cli absorbs leading blanks into verbatim blocks in containers)
       {
         const cleaned = [];
         for (let i = 0; i < trimmed.length; i++) {
