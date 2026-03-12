@@ -33,6 +33,14 @@
 (verbatim_block
   (list) @markup.raw)
 
+; Verbatim closing metadata — annotation nodes inside verbatim_block are
+; the closing `:: label ::` line (LSP: VerbatimLanguage/VerbatimAttribute).
+; These MUST appear before generic annotation captures to take priority.
+(verbatim_block
+  (annotation_marker) @markup.raw.block)
+(verbatim_block
+  (annotation_header) @markup.raw.block)
+
 ; === Lists ===
 ; List item lines — ONLY inside list_item nodes (LSP: ListMarker + ListItemText)
 ; list_item_line also appears as line_content in session titles, where it
