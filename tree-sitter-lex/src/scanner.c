@@ -285,6 +285,20 @@ static void consume_rest_of_line(TSLexer *lexer) {
     }
 }
 
+/// Scan ahead (without marking) to check if a matching delimiter exists on
+/// the rest of the current line. Used to avoid emitting _strong_open or
+/// _emphasis_open when no closer exists — which would produce ERROR nodes
+/// for cases like "*List preceding blank" or "_not emphasized".
+static bool has_matching_closer(TSLexer *lexer, int32_t delimiter) {
+    while (lexer->lookahead != '\n' && !lexer->eof(lexer)) {
+        if (lexer->lookahead == delimiter) {
+            return true;
+        }
+        lexer->advance(lexer, false);
+    }
+    return false;
+}
+
 bool tree_sitter_lex_external_scanner_scan(void *payload, TSLexer *lexer,
                                             const bool *valid_symbols) {
     Scanner *scanner = (Scanner *)payload;
@@ -544,9 +558,11 @@ bool tree_sitter_lex_external_scanner_scan(void *payload, TSLexer *lexer,
             int32_t next_char = lexer->lookahead; // char after delimiter
             lexer->mark_end(lexer);               // mark at X+1 (1-char token)
 
-            // Scan rest of line to check for trailing :
+            // Scan rest of line to check for trailing : and matching closer
             int32_t last_char = next_char;
+            bool has_closer = false;
             while (lexer->lookahead != '\n' && !lexer->eof(lexer)) {
+                if (lexer->lookahead == delimiter) has_closer = true;
                 last_char = lexer->lookahead;
                 lexer->advance(lexer, false);
             }
@@ -559,14 +575,15 @@ bool tree_sitter_lex_external_scanner_scan(void *payload, TSLexer *lexer,
             }
 
             // Not a subject. Try emphasis open — mark_end is at X+1.
-            // Grammar enforces "next must be word" via _word_alnum after open.
-            if (delimiter == '*' && valid_symbols[STRONG_OPEN] &&
+            // Only emit if a matching closer exists on this line,
+            // otherwise the unclosed delimiter produces ERROR nodes.
+            if (has_closer && delimiter == '*' && valid_symbols[STRONG_OPEN] &&
                 classify_char(next_char) == CHAR_CLASS_WORD) {
                 scanner->last_char_class = CHAR_CLASS_PUNCTUATION;
                 lexer->result_symbol = STRONG_OPEN;
                 return true;
             }
-            if (delimiter == '_' && valid_symbols[EMPHASIS_OPEN] &&
+            if (has_closer && delimiter == '_' && valid_symbols[EMPHASIS_OPEN] &&
                 classify_char(next_char) == CHAR_CLASS_WORD) {
                 scanner->last_char_class = CHAR_CLASS_PUNCTUATION;
                 lexer->result_symbol = EMPHASIS_OPEN;
@@ -675,10 +692,16 @@ bool tree_sitter_lex_external_scanner_scan(void *payload, TSLexer *lexer,
             lexer->mark_end(lexer);
             lexer->advance(lexer, false);
             if (classify_char(lexer->lookahead) == CHAR_CLASS_WORD) {
+                // Check that a matching * exists on the rest of the line.
+                // Without this, unclosed * (e.g., "*List..." or "mass*accel")
+                // would emit _strong_open and produce ERROR nodes.
                 lexer->mark_end(lexer);
-                lexer->result_symbol = STRONG_OPEN;
-                scanner->last_char_class = CHAR_CLASS_PUNCTUATION;
-                return true;
+                if (has_matching_closer(lexer, '*')) {
+                    lexer->result_symbol = STRONG_OPEN;
+                    scanner->last_char_class = CHAR_CLASS_PUNCTUATION;
+                    return true;
+                }
+                // No closer found — don't emit, let grammar handle * as text
             }
         }
     }
@@ -705,10 +728,14 @@ bool tree_sitter_lex_external_scanner_scan(void *payload, TSLexer *lexer,
             lexer->mark_end(lexer);
             lexer->advance(lexer, false);
             if (classify_char(lexer->lookahead) == CHAR_CLASS_WORD) {
+                // Check that a matching _ exists on the rest of the line
                 lexer->mark_end(lexer);
-                lexer->result_symbol = EMPHASIS_OPEN;
-                scanner->last_char_class = CHAR_CLASS_PUNCTUATION;
-                return true;
+                if (has_matching_closer(lexer, '_')) {
+                    lexer->result_symbol = EMPHASIS_OPEN;
+                    scanner->last_char_class = CHAR_CLASS_PUNCTUATION;
+                    return true;
+                }
+                // No closer found — don't emit, let grammar handle _ as text
             }
         }
     }

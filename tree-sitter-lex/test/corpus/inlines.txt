@@ -330,3 +330,40 @@ Calculate 7 * 8 + 3 * 4
     (text_line
       (line_content
         (text_content)))))
+
+==================
+Unclosed asterisk at line start
+==================
+*List preceding blank: at root level, lists require a blank line.
+---
+
+(document
+  (paragraph
+    (text_line
+      (line_content
+        (text_content)))))
+
+==================
+Unclosed underscore at line start
+==================
+_value is stored in the database and never cleared.
+---
+
+(document
+  (paragraph
+    (text_line
+      (line_content
+        (text_content)))))
+
+==================
+Bold with unclosed asterisk on same line
+==================
+A formula: F = m*a where *a* is acceleration.
+---
+
+(document
+  (paragraph
+    (text_line
+      (line_content
+        (text_content
+          (strong))))))

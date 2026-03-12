@@ -171,7 +171,10 @@ module.exports = grammar({
         $._newline,
       ),
 
-    annotation_header: (_$) => /[^\n:]+/,
+    // Annotation header: everything between the :: markers.
+    // Allows single colons inside (e.g., :: author: Name ::) but stops
+    // before :: (double colon) which the scanner handles as annotation_marker.
+    annotation_header: (_$) => /([^:\n]|:[^:\n])+/,
 
     // ===== Paragraphs =====
     paragraph: ($) => prec.right(-1, repeat1($.text_line)),
