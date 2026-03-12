@@ -159,12 +159,28 @@ function groupBlanks(children) {
 // and convert block children to canonical JSON
 function convertBlockChildren(node) {
   const grouped = groupBlanks(node.children);
-  return grouped
+  const converted = grouped
     .map((child) => {
       if (child.type === "BlankLineGroup") return child;
       return convertNode(child);
     })
     .filter((n) => n !== null);
+
+  // Remove BlankLineGroups immediately before VerbatimBlocks
+  // (lex-cli absorbs leading blank lines into the verbatim block)
+  const result = [];
+  for (let i = 0; i < converted.length; i++) {
+    if (
+      converted[i] &&
+      converted[i].type === "BlankLineGroup" &&
+      converted[i + 1] &&
+      converted[i + 1].type === "VerbatimBlock"
+    ) {
+      continue; // skip the BlankLineGroup
+    }
+    result.push(converted[i]);
+  }
+  return result;
 }
 
 // Extract list marker from list_item_line text (e.g., "- First item" → "-")
@@ -199,6 +215,79 @@ function extractListItemText(text) {
   return text;
 }
 
+// Annotation attachment: remove Annotation blocks from a children array and
+// attach them to their nearest sibling element (by blank-line distance).
+// Returns { annotations: [...], children: [...] } where annotations are
+// container-level (no valid attachment target) and children has annotations
+// removed.
+function attachAnnotationsClean(blocks) {
+  // Phase 1: identify annotations and their attachment targets
+  const isContent = (b) => b && b.type !== "Annotation" && b.type !== "BlankLineGroup";
+
+  // Build list of content element indices
+  const contentIndices = [];
+  for (let i = 0; i < blocks.length; i++) {
+    if (isContent(blocks[i])) contentIndices.push(i);
+  }
+
+  const containerAnnotations = [];
+  const attachments = new Map(); // target index → [annotations]
+
+  for (let i = 0; i < blocks.length; i++) {
+    if (!blocks[i] || blocks[i].type !== "Annotation") continue;
+
+    // Find previous content element and count blank lines between
+    let prevIdx = -1;
+    let blanksBefore = 0;
+    for (let j = i - 1; j >= 0; j--) {
+      if (isContent(blocks[j])) { prevIdx = j; break; }
+      if (blocks[j] && blocks[j].type === "BlankLineGroup") blanksBefore += (blocks[j].count || 1);
+    }
+
+    // Find next content element and count blank lines between
+    let nextIdx = -1;
+    let blanksAfter = 0;
+    for (let j = i + 1; j < blocks.length; j++) {
+      if (isContent(blocks[j])) { nextIdx = j; break; }
+      if (blocks[j] && blocks[j].type === "BlankLineGroup") blanksAfter += (blocks[j].count || 1);
+    }
+
+    let targetIdx = -1;
+    if (prevIdx >= 0 && nextIdx >= 0) {
+      targetIdx = blanksBefore < blanksAfter ? prevIdx : nextIdx; // tie → next
+    } else if (nextIdx >= 0) {
+      // No previous content — could be document-level or attach to next
+      // At document level, leading annotations are document-level
+      containerAnnotations.push(blocks[i]);
+      continue;
+    } else if (prevIdx >= 0) {
+      // No next content — container-level
+      containerAnnotations.push(blocks[i]);
+      continue;
+    } else {
+      containerAnnotations.push(blocks[i]);
+      continue;
+    }
+
+    if (!attachments.has(targetIdx)) attachments.set(targetIdx, []);
+    attachments.get(targetIdx).push(blocks[i]);
+  }
+
+  // Phase 2: build result without annotations, attaching where needed
+  const children = [];
+  for (let i = 0; i < blocks.length; i++) {
+    if (!blocks[i]) continue;
+    if (blocks[i].type === "Annotation") continue; // skip — already handled
+    children.push(blocks[i]);
+    if (attachments.has(i)) {
+      if (!blocks[i].annotations) blocks[i].annotations = [];
+      blocks[i].annotations.push(...attachments.get(i));
+    }
+  }
+
+  return { annotations: containerAnnotations, children };
+}
+
 // Convert a single CST node to canonical JSON
 function convertNode(node) {
   if (!node || !node.tag) return null;
@@ -215,30 +304,22 @@ function convertNode(node) {
       ) {
         blocks.pop();
       }
-      // Separate document-level annotations from content
-      const annotations = [];
-      const children = [];
-      for (const block of blocks) {
-        if (block && block.type === "Annotation" && children.length === 0) {
-          annotations.push(block);
-        } else if (block) {
-          children.push(block);
-        }
-      }
 
-      // Document title detection: first single-line paragraph followed by
-      // BlankLineGroup, NOT followed by a container (session/definition).
-      // Matches the lex rule: <title-line> <blank-line>+ (?!<container>)
+      // Document title detection BEFORE annotation attachment.
+      // Title = first paragraph followed by BlankLineGroup,
+      // NOT followed by a container (session/definition).
+      // Must check original structure so annotation removal doesn't
+      // create false positives.
       let title = "";
-      if (children.length >= 2) {
-        const first = children[0];
-        const second = children[1];
-        const third = children[2];
+      if (blocks.length >= 2) {
+        const first = blocks[0];
+        const second = blocks[1];
+        const third = blocks[2];
         const isTitle =
           first &&
           first.type === "Paragraph" &&
           first.lines &&
-          first.lines.length === 1 &&
+          first.lines.length >= 1 &&
           second &&
           second.type === "BlankLineGroup" &&
           // NOT followed by a container (session or definition)
@@ -246,11 +327,17 @@ function convertNode(node) {
             (third.type !== "Session" && third.type !== "Definition"));
 
         if (isTitle) {
-          title = first.lines[0].content;
-          // Remove the title paragraph and its trailing blank from children
-          children.splice(0, 2);
+          title = first.lines.map((l) => l.content).join("\n");
+          // Remove the title paragraph and its trailing blank
+          blocks.splice(0, 2);
         }
       }
+
+      // Annotation attachment: remove annotations from children and
+      // attach to nearest sibling or collect as container-level
+      const attached = attachAnnotationsClean(blocks);
+      const annotations = attached.annotations;
+      const children = attached.children;
 
       const doc = {
         type: "Document",
@@ -284,13 +371,21 @@ function convertNode(node) {
       ) {
         startIdx++;
       }
-      const children = blocks.slice(startIdx).filter((b) => b !== null);
+      const trimmed = blocks.slice(startIdx).filter((b) => b !== null);
+
+      // Annotation attachment within session
+      const attached = attachAnnotationsClean(trimmed);
+      const children = attached.children;
 
       const session = {
         type: "Session",
         title,
         children,
       };
+
+      if (attached.annotations.length > 0) {
+        session.annotations = attached.annotations;
+      }
 
       // Clean internal markers
       for (const child of children) {
