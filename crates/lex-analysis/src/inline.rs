@@ -105,15 +105,20 @@ impl<'a> ReferenceWalker<'a> {
             }
             let raw_ch = self.raw[self.cursor..].chars().next().unwrap();
             if raw_ch == '\\' {
-                let next_ch = self.raw[self.cursor + 1..].chars().next();
-                match next_ch {
-                    Some(nc) if !nc.is_alphanumeric() => {
-                        // Escaped: raw `\X` → unescaped `X`
-                        self.cursor += 1 + nc.len_utf8();
-                    }
-                    _ => {
-                        // Literal backslash
-                        self.cursor += 1;
+                if self.cursor + 1 >= self.raw.len() {
+                    // Trailing backslash: treat as literal to avoid out-of-bounds slicing.
+                    self.cursor += 1;
+                } else {
+                    let next_ch = self.raw[self.cursor + 1..].chars().next();
+                    match next_ch {
+                        Some(nc) if !nc.is_alphanumeric() => {
+                            // Escaped: raw `\X` → unescaped `X`
+                            self.cursor += 1 + nc.len_utf8();
+                        }
+                        _ => {
+                            // Literal backslash
+                            self.cursor += 1;
+                        }
                     }
                 }
             } else {
@@ -211,5 +216,18 @@ mod tests {
         let text = TextContent::from_string("Hello [world]".to_string(), None);
         let refs = extract_references(&text);
         assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn trailing_backslash_does_not_panic() {
+        // Double backslash in raw text: `Hello\\` — should not panic.
+        let text = text_with_range("Hello\\\\", 0, 0);
+        let refs = extract_references(&text);
+        assert!(refs.is_empty());
+
+        // Single trailing backslash in raw text: `Hello\` — the critical edge case.
+        let text2 = text_with_range("Hello\\", 0, 0);
+        let refs2 = extract_references(&text2);
+        assert!(refs2.is_empty());
     }
 }
