@@ -85,6 +85,10 @@ echo "Tests OK"
 # 5. Tree-sitter grammar checks (if tree-sitter-lex exists)
 if [ -d "tree-sitter" ]; then
     echo ""
+    echo "Generating tree-sitter parser..."
+    (cd tree-sitter && npx tree-sitter generate) || { echo "tree-sitter generate failed!"; exit 1; }
+
+    echo ""
     echo "Running tree-sitter grammar tests..."
     if ! (cd tree-sitter && npx tree-sitter test); then
         echo ""

@@ -107,6 +107,9 @@ jobs:
       - name: Install tree-sitter CLI
         run: npm install --prefix tree-sitter
 
+      - name: Generate tree-sitter parser
+        run: cd tree-sitter && npx tree-sitter generate
+
       - name: Build WASM
         run: cd tree-sitter && npx tree-sitter build --wasm
 
