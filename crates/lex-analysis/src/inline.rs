@@ -1,249 +1,155 @@
+//! Inline-level analysis utilities.
+//!
+//! Extracts positioned references from text content by walking the AST's InlineNode
+//! tree and raw source text in parallel to compute correct byte positions.
+
 use lex_core::lex::ast::{Position, Range, TextContent};
-use lex_core::lex::inlines::{parse_inlines, InlineNode, ReferenceType};
+use lex_core::lex::inlines::{InlineNode, ReferenceInline, ReferenceType};
 
+/// A reference found in inline text, with its source position and classified type.
 #[derive(Debug, Clone, PartialEq)]
-pub enum InlineSpanKind {
-    Strong,
-    Emphasis,
-    Code,
-    Math,
-    Reference(ReferenceType),
-    StrongMarkerStart,
-    StrongMarkerEnd,
-    EmphasisMarkerStart,
-    EmphasisMarkerEnd,
-    CodeMarkerStart,
-    CodeMarkerEnd,
-    MathMarkerStart,
-    MathMarkerEnd,
-    RefMarkerStart,
-    RefMarkerEnd,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct InlineSpan {
-    pub kind: InlineSpanKind,
+pub struct PositionedReference {
     pub range: Range,
+    pub reference_type: ReferenceType,
     pub raw: String,
 }
 
-/// Extract inline spans (formatting + references) from a text node.
-pub fn extract_inline_spans(text: &TextContent) -> Vec<InlineSpan> {
+/// Extract all references from a text node with their source positions.
+///
+/// Walks the InlineNode tree (from `TextContent::inline_items()`) and the raw source
+/// text in parallel. Non-reference nodes (Plain, Strong, Emphasis, Code, Math) are
+/// skipped over — only Reference nodes produce output.
+pub fn extract_references(text: &TextContent) -> Vec<PositionedReference> {
     let Some(base_range) = text.location.as_ref() else {
         return Vec::new();
     };
-
-    let content = text.as_string();
-    if content.is_empty() {
+    let raw = text.as_string();
+    if raw.is_empty() {
         return Vec::new();
     }
-
-    let mut spans = Vec::new();
-    spans.extend(spans_from_marker(
-        content,
+    let nodes = text.inline_items();
+    let mut walker = ReferenceWalker {
+        raw,
         base_range,
-        '*',
-        InlineSpanKind::Strong,
-        InlineSpanKind::StrongMarkerStart,
-        InlineSpanKind::StrongMarkerEnd,
-    ));
-    spans.extend(spans_from_marker(
-        content,
-        base_range,
-        '_',
-        InlineSpanKind::Emphasis,
-        InlineSpanKind::EmphasisMarkerStart,
-        InlineSpanKind::EmphasisMarkerEnd,
-    ));
-    spans.extend(spans_from_marker(
-        content,
-        base_range,
-        '`',
-        InlineSpanKind::Code,
-        InlineSpanKind::CodeMarkerStart,
-        InlineSpanKind::CodeMarkerEnd,
-    ));
-    spans.extend(spans_from_marker(
-        content,
-        base_range,
-        '#',
-        InlineSpanKind::Math,
-        InlineSpanKind::MathMarkerStart,
-        InlineSpanKind::MathMarkerEnd,
-    ));
-    spans.extend(reference_spans(content, base_range));
-    spans
+        cursor: 0,
+        refs: Vec::new(),
+    };
+    walker.walk_nodes(&nodes);
+    walker.refs
 }
 
-fn spans_from_marker(
-    text: &str,
-    base_range: &Range,
-    marker: char,
-    content_kind: InlineSpanKind,
-    start_marker_kind: InlineSpanKind,
-    end_marker_kind: InlineSpanKind,
-) -> Vec<InlineSpan> {
-    let mut spans = Vec::new();
-    for (start, end) in scan_symmetric_pairs(text, marker) {
-        let marker_len = marker.len_utf8();
-        let inner_start = start + marker_len;
-        let inner_end = end.saturating_sub(marker_len);
-        if inner_end <= inner_start {
-            continue;
-        }
-
-        // Opening marker
-        spans.push(InlineSpan {
-            kind: start_marker_kind.clone(),
-            range: sub_range(base_range, text, start, inner_start),
-            raw: marker.to_string(),
-        });
-
-        // Content
-        spans.push(InlineSpan {
-            kind: content_kind.clone(),
-            range: sub_range(base_range, text, inner_start, inner_end),
-            raw: text[inner_start..inner_end].to_string(),
-        });
-
-        // Closing marker
-        spans.push(InlineSpan {
-            kind: end_marker_kind.clone(),
-            range: sub_range(base_range, text, inner_end, end),
-            raw: marker.to_string(),
-        });
-    }
-    spans
+struct ReferenceWalker<'a> {
+    raw: &'a str,
+    base_range: &'a Range,
+    cursor: usize,
+    refs: Vec<PositionedReference>,
 }
 
-fn reference_spans(text: &str, base_range: &Range) -> Vec<InlineSpan> {
-    let mut spans = Vec::new();
-    for (start, end) in scan_bracket_pairs(text) {
-        let inner_start = start + '['.len_utf8();
-        let inner_end = end.saturating_sub(']'.len_utf8());
-        if inner_end <= inner_start {
-            continue;
-        }
-        let raw = text[inner_start..inner_end].to_string();
-        let reference_type = classify_reference(&raw);
-
-        // Opening bracket
-        spans.push(InlineSpan {
-            kind: InlineSpanKind::RefMarkerStart,
-            range: sub_range(base_range, text, start, inner_start),
-            raw: "[".to_string(),
-        });
-
-        // Reference content
-        spans.push(InlineSpan {
-            kind: InlineSpanKind::Reference(reference_type),
-            range: sub_range(base_range, text, inner_start, inner_end),
-            raw,
-        });
-
-        // Closing bracket
-        spans.push(InlineSpan {
-            kind: InlineSpanKind::RefMarkerEnd,
-            range: sub_range(base_range, text, inner_end, end),
-            raw: "]".to_string(),
-        });
-    }
-    spans
-}
-
-fn classify_reference(raw: &str) -> ReferenceType {
-    let wrapped = format!("[{raw}]");
-    for node in parse_inlines(&wrapped) {
-        if let InlineNode::Reference { data, .. } = node {
-            return data.reference_type;
+impl<'a> ReferenceWalker<'a> {
+    fn walk_nodes(&mut self, nodes: &[InlineNode]) {
+        for node in nodes {
+            self.walk_node(node);
         }
     }
-    ReferenceType::NotSure
-}
 
-fn scan_symmetric_pairs(text: &str, marker: char) -> Vec<(usize, usize)> {
-    let mut spans = Vec::new();
-    let mut open: Option<usize> = None;
-    let mut escape = false;
-    for (idx, ch) in text.char_indices() {
-        if escape {
-            escape = false;
-            continue;
+    fn walk_node(&mut self, node: &InlineNode) {
+        match node {
+            InlineNode::Plain { text, .. } => self.skip_plain(text),
+            InlineNode::Strong { content, .. } => self.skip_container(content, '*'),
+            InlineNode::Emphasis { content, .. } => self.skip_container(content, '_'),
+            InlineNode::Code { text, .. } => self.skip_literal(text, '`'),
+            InlineNode::Math { text, .. } => self.skip_literal(text, '#'),
+            InlineNode::Reference { data, .. } => self.collect_reference(data),
         }
-        if ch == '\\' {
-            escape = true;
-            continue;
+    }
+
+    fn skip_plain(&mut self, text: &str) {
+        self.advance_unescaped(text);
+    }
+
+    fn skip_container(&mut self, content: &[InlineNode], marker: char) {
+        self.cursor += marker.len_utf8(); // opening marker
+        self.walk_nodes(content);
+        self.cursor += marker.len_utf8(); // closing marker
+    }
+
+    fn skip_literal(&mut self, text: &str, marker: char) {
+        self.cursor += marker.len_utf8(); // opening marker
+        self.cursor += text.len(); // verbatim content
+        self.cursor += marker.len_utf8(); // closing marker
+    }
+
+    fn collect_reference(&mut self, data: &ReferenceInline) {
+        self.cursor += 1; // opening '['
+
+        let content_start = self.cursor;
+        self.cursor += data.raw.len();
+        let content_end = self.cursor;
+
+        self.cursor += 1; // closing ']'
+
+        if content_start < content_end {
+            self.refs.push(PositionedReference {
+                range: self.make_range(content_start, content_end),
+                reference_type: data.reference_type.clone(),
+                raw: data.raw.clone(),
+            });
         }
-        if ch == marker {
-            if let Some(start_idx) = open {
-                if idx > start_idx + marker.len_utf8() {
-                    spans.push((start_idx, idx + marker.len_utf8()));
+    }
+
+    /// Advance cursor through raw text matching unescaped plain text.
+    fn advance_unescaped(&mut self, text: &str) {
+        for _expected in text.chars() {
+            if self.cursor >= self.raw.len() {
+                break;
+            }
+            let raw_ch = self.raw[self.cursor..].chars().next().unwrap();
+            if raw_ch == '\\' {
+                let next_ch = self.raw[self.cursor + 1..].chars().next();
+                match next_ch {
+                    Some(nc) if !nc.is_alphanumeric() => {
+                        // Escaped: raw `\X` → unescaped `X`
+                        self.cursor += 1 + nc.len_utf8();
+                    }
+                    _ => {
+                        // Literal backslash
+                        self.cursor += 1;
+                    }
                 }
-                open = None;
             } else {
-                open = Some(idx);
+                self.cursor += raw_ch.len_utf8();
             }
         }
     }
-    spans
-}
 
-fn scan_bracket_pairs(text: &str) -> Vec<(usize, usize)> {
-    let mut spans = Vec::new();
-    let mut open: Option<usize> = None;
-    let mut escape = false;
-    for (idx, ch) in text.char_indices() {
-        if escape {
-            escape = false;
-            continue;
-        }
-        if ch == '\\' {
-            escape = true;
-            continue;
-        }
-        if ch == '[' {
-            if open.is_none() {
-                open = Some(idx);
-            }
-        } else if ch == ']' {
-            if let Some(start_idx) = open.take() {
-                if idx > start_idx + '['.len_utf8() {
-                    spans.push((start_idx, idx + ']'.len_utf8()));
-                }
+    fn make_range(&self, start: usize, end: usize) -> Range {
+        let start_pos = self.position_at(start);
+        let end_pos = self.position_at(end);
+        Range::new(
+            (self.base_range.span.start + start)..(self.base_range.span.start + end),
+            start_pos,
+            end_pos,
+        )
+    }
+
+    fn position_at(&self, offset: usize) -> Position {
+        let mut line = self.base_range.start.line;
+        let mut column = self.base_range.start.column;
+        for ch in self.raw[..offset].chars() {
+            if ch == '\n' {
+                line += 1;
+                column = 0;
+            } else {
+                column += ch.len_utf8();
             }
         }
+        Position::new(line, column)
     }
-    spans
-}
-
-fn sub_range(base: &Range, text: &str, start: usize, end: usize) -> Range {
-    let start_pos = position_for_offset(base, text, start);
-    let end_pos = position_for_offset(base, text, end);
-    Range::new(
-        (base.span.start + start)..(base.span.start + end),
-        start_pos,
-        end_pos,
-    )
-}
-
-fn position_for_offset(base: &Range, text: &str, offset: usize) -> Position {
-    let mut line = base.start.line;
-    let mut column = base.start.column;
-    for ch in text[..offset].chars() {
-        if ch == '\n' {
-            line += 1;
-            column = 0;
-        } else {
-            column += ch.len_utf8();
-        }
-    }
-    Position::new(line, column)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lex_core::lex::ast::Range;
 
     fn text_with_range(content: &str, line: usize, column: usize) -> TextContent {
         let start = Position::new(line, column);
@@ -253,51 +159,57 @@ mod tests {
     }
 
     #[test]
-    fn detects_basic_inline_spans() {
-        let text = text_with_range("*bold* _em_ `code` #math#", 2, 4);
-        let spans = extract_inline_spans(&text);
-        // Each inline produces 3 spans: start marker, content, end marker
-        assert_eq!(spans.len(), 12);
-        assert!(spans
+    fn extracts_references_with_classification() {
+        let text = text_with_range("See [^note] and [@spec2024] plus [42]", 0, 0);
+        let refs = extract_references(&text);
+        assert_eq!(refs.len(), 3);
+        assert!(refs
             .iter()
-            .any(|span| matches!(span.kind, InlineSpanKind::Strong)));
-        assert!(spans
+            .any(|r| matches!(r.reference_type, ReferenceType::FootnoteLabeled { .. })));
+        assert!(refs
             .iter()
-            .any(|span| matches!(span.kind, InlineSpanKind::Emphasis)));
-        assert!(spans
+            .any(|r| matches!(r.reference_type, ReferenceType::Citation(_))));
+        assert!(refs
             .iter()
-            .any(|span| matches!(span.kind, InlineSpanKind::Code)));
-        assert!(spans
-            .iter()
-            .any(|span| matches!(span.kind, InlineSpanKind::Math)));
-        assert!(spans
-            .iter()
-            .any(|span| matches!(span.kind, InlineSpanKind::StrongMarkerStart)));
-        assert!(spans
-            .iter()
-            .any(|span| matches!(span.kind, InlineSpanKind::StrongMarkerEnd)));
+            .any(|r| matches!(r.reference_type, ReferenceType::FootnoteNumber { .. })));
     }
 
     #[test]
-    fn detects_references_with_classification() {
-        let text = text_with_range("See [^note] and [@spec2024] plus [42]", 0, 0);
-        let spans = extract_inline_spans(&text);
-        let kinds: Vec<_> = spans
-            .iter()
-            .filter_map(|span| match &span.kind {
-                InlineSpanKind::Reference(reference) => Some(reference.clone()),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(kinds.len(), 3);
-        assert!(kinds
-            .iter()
-            .any(|kind| matches!(kind, ReferenceType::FootnoteLabeled { .. })));
-        assert!(kinds
-            .iter()
-            .any(|kind| matches!(kind, ReferenceType::Citation(_))));
-        assert!(kinds
-            .iter()
-            .any(|kind| matches!(kind, ReferenceType::FootnoteNumber { .. })));
+    fn reference_ranges_are_correct() {
+        let text = text_with_range("Hello [world] end", 0, 0);
+        let refs = extract_references(&text);
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].raw, "world");
+        // "world" starts at byte 7 (after "Hello ["), ends at byte 12
+        assert_eq!(refs[0].range.span, 7..12);
+    }
+
+    #[test]
+    fn references_inside_formatting() {
+        let text = text_with_range("*bold [ref]* end", 0, 0);
+        let refs = extract_references(&text);
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].raw, "ref");
+    }
+
+    #[test]
+    fn escaped_brackets_not_references() {
+        let text = text_with_range("\\[not a ref\\]", 0, 0);
+        let refs = extract_references(&text);
+        assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn empty_text_returns_nothing() {
+        let text = text_with_range("", 0, 0);
+        let refs = extract_references(&text);
+        assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn no_location_returns_nothing() {
+        let text = TextContent::from_string("Hello [world]".to_string(), None);
+        let refs = extract_references(&text);
+        assert!(refs.is_empty());
     }
 }

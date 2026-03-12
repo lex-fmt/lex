@@ -1,4 +1,4 @@
-use crate::inline::{extract_inline_spans, InlineSpan, InlineSpanKind};
+use crate::inline::{extract_references, PositionedReference};
 use lex_core::lex::ast::traits::AstNode;
 use lex_core::lex::ast::{
     Annotation, ContentItem, Definition, Document, Position, Session, TextContent,
@@ -259,15 +259,18 @@ pub fn session_identifier(session: &Session) -> Option<String> {
     extract_session_identifier(session.title.as_string())
 }
 
-pub fn reference_span_at_position(document: &Document, position: Position) -> Option<InlineSpan> {
+pub fn reference_at_position(
+    document: &Document,
+    position: Position,
+) -> Option<PositionedReference> {
     let mut result = None;
     for_each_text_content(document, &mut |text| {
         if result.is_some() {
             return;
         }
-        for span in extract_inline_spans(text) {
-            if matches!(span.kind, InlineSpanKind::Reference(_)) && span.range.contains(position) {
-                result = Some(span);
+        for reference in extract_references(text) {
+            if reference.range.contains(position) {
+                result = Some(reference);
                 break;
             }
         }

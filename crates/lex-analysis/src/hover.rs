@@ -1,7 +1,6 @@
-use crate::inline::{extract_inline_spans, InlineSpanKind};
 use crate::utils::{
     find_annotation_at_position, find_definition_by_subject, find_session_at_position,
-    for_each_text_content, session_identifier,
+    reference_at_position, session_identifier,
 };
 use lex_core::lex::ast::{Annotation, ContentItem, Document, Position, Range};
 use lex_core::lex::inlines::ReferenceType;
@@ -19,26 +18,13 @@ pub fn hover(document: &Document, position: Position) -> Option<HoverResult> {
 }
 
 fn inline_hover(document: &Document, position: Position) -> Option<HoverResult> {
-    let mut result = None;
-    for_each_text_content(document, &mut |text| {
-        if result.is_some() {
-            return;
-        }
-        for span in extract_inline_spans(text) {
-            if span.range.contains(position) {
-                result = match span.kind {
-                    InlineSpanKind::Reference(reference_type) => {
-                        hover_for_reference(document, &span.range, &span.raw, reference_type)
-                    }
-                    _ => None,
-                };
-                if result.is_some() {
-                    break;
-                }
-            }
-        }
-    });
-    result
+    let reference = reference_at_position(document, position)?;
+    hover_for_reference(
+        document,
+        &reference.range,
+        &reference.raw,
+        reference.reference_type,
+    )
 }
 
 fn hover_for_reference(

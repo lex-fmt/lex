@@ -1,4 +1,4 @@
-use crate::inline::{extract_inline_spans, InlineSpanKind};
+use crate::inline::extract_references;
 use crate::reference_targets::{
     targets_from_annotation, targets_from_definition, targets_from_reference_type,
     targets_from_session, ReferenceTarget,
@@ -6,7 +6,7 @@ use crate::reference_targets::{
 use crate::utils::{
     find_annotation_at_position, find_definition_at_position, find_definitions_by_subject,
     find_session_at_position, find_sessions_by_identifier, for_each_text_content,
-    reference_span_at_position,
+    reference_at_position,
 };
 use lex_core::lex::ast::traits::AstNode;
 use lex_core::lex::ast::{Document, Position, Range};
@@ -31,12 +31,10 @@ pub fn find_references(
 }
 
 fn determine_targets(document: &Document, position: Position) -> Vec<ReferenceTarget> {
-    if let Some(span) = reference_span_at_position(document, position) {
-        if let InlineSpanKind::Reference(reference_type) = span.kind {
-            let targets = targets_from_reference_type(&reference_type);
-            if !targets.is_empty() {
-                return targets;
-            }
+    if let Some(reference) = reference_at_position(document, position) {
+        let targets = targets_from_reference_type(&reference.reference_type);
+        if !targets.is_empty() {
+            return targets;
         }
     }
 
@@ -115,14 +113,12 @@ fn definition_ranges(document: &Document, subject: &str) -> Vec<Range> {
 pub fn reference_occurrences(document: &Document, targets: &[ReferenceTarget]) -> Vec<Range> {
     let mut matches = Vec::new();
     for_each_text_content(document, &mut |text| {
-        for span in extract_inline_spans(text) {
-            if let InlineSpanKind::Reference(reference_type) = span.kind {
-                if targets
-                    .iter()
-                    .any(|target| reference_matches(&reference_type, target))
-                {
-                    matches.push(span.range.clone());
-                }
+        for reference in extract_references(text) {
+            if targets
+                .iter()
+                .any(|target| reference_matches(&reference.reference_type, target))
+            {
+                matches.push(reference.range);
             }
         }
     });
