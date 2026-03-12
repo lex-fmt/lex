@@ -346,10 +346,12 @@ bool tree_sitter_lex_external_scanner_scan(void *payload, TSLexer *lexer,
                 lexer->advance(lexer, false);
                 lexer->mark_end(lexer);
 
-                // Peek ahead: skip additional blank lines
+                // Peek ahead past additional blank lines WITHOUT updating
+                // mark_end. If SESSION_BREAK fires, we'll update mark_end
+                // to include everything. If not, the token only covers
+                // the first blank line (so each blank becomes its own node).
                 while (lexer->lookahead == '\n') {
                     lexer->advance(lexer, false);
-                    lexer->mark_end(lexer);
                 }
 
                 // If EOF after blank lines, not a session break
@@ -362,10 +364,8 @@ bool tree_sitter_lex_external_scanner_scan(void *payload, TSLexer *lexer,
                 }
 
                 // Count indent of next non-blank line.
-                // Advance with skip=false so the whitespace is consumed as
-                // part of the SESSION_BREAK token (hidden). If we used
-                // skip=true past mark_end, tree-sitter would NOT consume
-                // them, leaving leading spaces as visible content.
+                // Advance with skip=false so characters are consumed
+                // if SESSION_BREAK fires (we'll call mark_end then).
                 int next_indent = 0;
                 while (lexer->lookahead == ' ' || lexer->lookahead == '\t') {
                     if (lexer->lookahead == '\t') {
@@ -376,14 +376,11 @@ bool tree_sitter_lex_external_scanner_scan(void *payload, TSLexer *lexer,
                     lexer->advance(lexer, false);
                 }
 
-                // Check if next line has a second \n (another blank line we
-                // missed because it has leading whitespace)
+                // Check if next line is actually another blank line
+                // (with leading whitespace)
                 if (lexer->lookahead == '\n') {
-                    // The "next non-blank line" is actually another blank line
-                    // with leading whitespace. Not a session break — emit
-                    // NEWLINE for the first blank line only.
-                    // mark_end includes all blank lines we consumed, which is
-                    // fine — they'll appear as multiple blank_line nodes.
+                    // Not a session break — emit NEWLINE for just the
+                    // first blank line (mark_end is already after it).
                     lexer->result_symbol = NEWLINE;
                     scanner->at_line_start = true;
                     scanner->indent_measured = false;
@@ -394,8 +391,8 @@ bool tree_sitter_lex_external_scanner_scan(void *payload, TSLexer *lexer,
                 int current_indent =
                     scanner->indent_stack[scanner->indent_depth];
                 if (next_indent > current_indent) {
-                    // Session break confirmed! Push new indent level.
-                    // mark_end includes blank lines + indent whitespace.
+                    // Session break confirmed! Update mark_end to include
+                    // all blank lines + indent whitespace.
                     lexer->mark_end(lexer);
                     scanner->indent_depth++;
                     scanner->indent_stack[scanner->indent_depth] = next_indent;
@@ -405,10 +402,10 @@ bool tree_sitter_lex_external_scanner_scan(void *payload, TSLexer *lexer,
                     return true;
                 }
 
-                // Not a session break. Emit NEWLINE for the blank line(s).
-                // mark_end is after the blank lines. The indent whitespace
-                // was consumed with skip=true and is past mark_end, so it
-                // won't be included in the token and will be re-scanned.
+                // Not a session break. Emit NEWLINE for just the first
+                // blank line. mark_end is after the first \n only —
+                // subsequent blank lines and indent whitespace are past
+                // mark_end and will be re-scanned.
                 lexer->result_symbol = NEWLINE;
                 scanner->at_line_start = true;
                 scanner->indent_measured = false;

@@ -130,7 +130,7 @@
         "required": true,
         "types": [
           {
-            "type": "line_content",
+            "type": "subject_content",
             "named": true
           }
         ]
@@ -494,7 +494,7 @@
         "required": true,
         "types": [
           {
-            "type": "line_content",
+            "type": "subject_content",
             "named": true
           }
         ]

@@ -8,8 +8,7 @@ Code:
 
 (document
   (verbatim_block
-    subject: (line_content
-      (subject_content))
+    subject: (subject_content)
     (paragraph
       (text_line
         (line_content
@@ -30,8 +29,7 @@ Code:
 
 (document
   (verbatim_block
-    subject: (line_content
-      (subject_content))
+    subject: (subject_content)
     (paragraph
       (text_line
         (line_content
@@ -55,8 +53,7 @@ Photo:
 
 (document
   (verbatim_block
-    subject: (line_content
-      (subject_content))
+    subject: (subject_content)
     (annotation_marker)
     (annotation_header)
     (annotation_marker)))
@@ -72,8 +69,7 @@ Code:
 
 (document
   (verbatim_block
-    subject: (line_content
-      (subject_content))
+    subject: (subject_content)
     (paragraph
       (text_line
         (line_content
@@ -92,8 +88,7 @@ API Response:
 
 (document
   (verbatim_block
-    subject: (line_content
-      (subject_content))
+    subject: (subject_content)
     (paragraph
       (text_line
         (line_content

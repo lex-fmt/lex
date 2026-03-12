@@ -93,7 +93,7 @@
             "name": "subject",
             "content": {
               "type": "SYMBOL",
-              "name": "line_content"
+              "name": "subject_content"
             }
           },
           {
@@ -195,7 +195,7 @@
             "name": "subject",
             "content": {
               "type": "SYMBOL",
-              "name": "line_content"
+              "name": "subject_content"
             }
           },
           {
@@ -275,6 +275,13 @@
                 {
                   "type": "SYMBOL",
                   "name": "_dedent"
+                },
+                {
+                  "type": "REPEAT",
+                  "content": {
+                    "type": "SYMBOL",
+                    "name": "blank_line"
+                  }
                 }
               ]
             },
@@ -685,8 +692,12 @@
       "line_content"
     ],
     [
+      "list_item"
+    ],
+    [
       "verbatim_block",
-      "text_line"
+      "definition",
+      "line_content"
     ],
     [
       "session",
@@ -695,10 +706,6 @@
     [
       "verbatim_block",
       "definition"
-    ],
-    [
-      "verbatim_block",
-      "text_line"
     ]
   ],
   "precedences": [],

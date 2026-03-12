@@ -7,8 +7,7 @@ Term:
 
 (document
   (definition
-    subject: (line_content
-      (subject_content))
+    subject: (subject_content)
     (paragraph
       (text_line
         (line_content
@@ -24,8 +23,7 @@ Concept:
 
 (document
   (definition
-    subject: (line_content
-      (subject_content))
+    subject: (subject_content)
     (paragraph
       (text_line
         (line_content
@@ -46,16 +44,14 @@ Second:
 
 (document
   (definition
-    subject: (line_content
-      (subject_content))
+    subject: (subject_content)
     (paragraph
       (text_line
         (line_content
           (text_content))))
     (blank_line))
   (definition
-    subject: (line_content
-      (subject_content))
+    subject: (subject_content)
     (paragraph
       (text_line
         (line_content
@@ -71,11 +67,9 @@ Outer:
 
 (document
   (definition
-    subject: (line_content
-      (subject_content))
+    subject: (subject_content)
     (definition
-      subject: (line_content
-        (subject_content))
+      subject: (subject_content)
       (paragraph
         (text_line
           (line_content

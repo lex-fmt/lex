@@ -49,14 +49,14 @@ module.exports = grammar({
   conflicts: ($) => [
     // list_item_line can start a list_item or line_content (paragraph text)
     [$.list_item, $.line_content],
-    // line_content _newline: text_line vs verbatim (blank lines case)
-    [$.verbatim_block, $.text_line],
+    // blank_line after dedent: part of list_item's trailing blanks or next block
+    [$.list_item],
+    // subject_content: definition vs verbatim vs line_content (paragraph text)
+    [$.verbatim_block, $.definition, $.line_content],
     // after dedent: session done vs verbatim continues with closing annotation
     [$.session, $.verbatim_block],
     // verbatim_block shares structure with definition (no blank lines case)
     [$.verbatim_block, $.definition],
-    // verbatim without content: subject + closing annotation vs paragraph
-    [$.verbatim_block, $.text_line],
   ],
 
   rules: {
@@ -96,7 +96,7 @@ module.exports = grammar({
       prec.dynamic(
         4,
         seq(
-          field("subject", $.line_content),
+          field("subject", $.subject_content),
           $._newline,
           choice(
             // Blank line(s) + indent: scanner emits _session_break
@@ -119,7 +119,7 @@ module.exports = grammar({
       prec.dynamic(
         2,
         seq(
-          field("subject", $.line_content),
+          field("subject", $.subject_content),
           $._newline,
           $._indent,
           repeat1($._block),
@@ -135,7 +135,17 @@ module.exports = grammar({
       seq(
         $.list_item_line,
         $._newline,
-        optional(seq($._indent, repeat1($._block), $._dedent)),
+        optional(
+          seq(
+            $._indent,
+            repeat1($._block),
+            $._dedent,
+            // Trailing blank lines after nested content — these appear
+            // between the DEDENT (end of nested blocks) and the next
+            // list item at the same level, keeping the list open.
+            repeat($.blank_line),
+          ),
+        ),
       ),
 
     // ===== Annotations =====
