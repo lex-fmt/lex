@@ -5,7 +5,9 @@
       "camelcase": "Lex",
       "scope": "source.lex",
       "path": ".",
-      "file-types": ["lex"]
+      "file-types": ["lex"],
+      "highlights": "queries/highlights.scm",
+      "injections": "queries/injections.scm"
     }
   ],
   "metadata": {
@@ -18,7 +20,7 @@
       }
     ],
     "links": {
-      "repository": "https://github.com/lex-fmt/lex-core"
+      "repository": "https://github.com/lex-fmt/lex"
     }
   }
 }
