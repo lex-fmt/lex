@@ -1,5 +1,5 @@
 {
-  "name": "tree-sitter-lex",
+  "name": "tree-sitter-lex-fmt",
   "version": "0.1.0",
   "description": "Tree-sitter grammar for the Lex document format",
   "main": "bindings/node",

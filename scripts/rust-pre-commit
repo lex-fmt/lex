@@ -83,10 +83,10 @@ fi
 echo "Tests OK"
 
 # 5. Tree-sitter grammar checks (if tree-sitter-lex exists)
-if [ -d "tree-sitter-lex" ]; then
+if [ -d "tree-sitter" ]; then
     echo ""
     echo "Running tree-sitter grammar tests..."
-    if ! (cd tree-sitter-lex && npx tree-sitter test); then
+    if ! (cd tree-sitter && npx tree-sitter test); then
         echo ""
         echo "Tree-sitter corpus tests failed!"
         exit 1
@@ -95,7 +95,7 @@ if [ -d "tree-sitter-lex" ]; then
 
     echo ""
     echo "Running tree-sitter error-free parsing check..."
-    if ! tree-sitter-lex/scripts/error-check.sh; then
+    if ! tree-sitter/scripts/error-check.sh; then
         echo ""
         echo "Tree-sitter error-check failed!"
         exit 1

@@ -93,9 +93,46 @@ jobs:
           name: lex-lsp-${{ matrix.target }}
           path: lex-lsp-${{ matrix.target }}.*
 
+  tree-sitter:
+    name: Build tree-sitter artifact
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install tree-sitter CLI
+        run: npm install --prefix tree-sitter
+
+      - name: Build WASM
+        run: cd tree-sitter && npx tree-sitter build --wasm
+
+      - name: Package tree-sitter artifact
+        run: |
+          mkdir -p tree-sitter-dist
+          cp tree-sitter/grammar.js tree-sitter-dist/
+          cp tree-sitter/tree-sitter.json tree-sitter-dist/
+          cp tree-sitter/package.json tree-sitter-dist/
+          cp tree-sitter/README.txt tree-sitter-dist/
+          cp -r tree-sitter/src tree-sitter-dist/src
+          cp -r tree-sitter/queries tree-sitter-dist/queries
+          if [ -f tree-sitter/tree-sitter-lex.wasm ]; then
+            cp tree-sitter/tree-sitter-lex.wasm tree-sitter-dist/
+          fi
+          tar -czvf tree-sitter.tar.gz -C tree-sitter-dist .
+
+      - name: Upload tree-sitter artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tree-sitter
+          path: tree-sitter.tar.gz
+
   release:
     name: Create Release
-    needs: build
+    needs: [build, tree-sitter]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

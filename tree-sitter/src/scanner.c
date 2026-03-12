@@ -1,5 +1,5 @@
 /**
- * External scanner for tree-sitter-lex.
+ * External scanner for tree-sitter (lex-fmt/lex).
  *
  * Handles:
  * - Indentation-based structure (INDENT/DEDENT tokens)
