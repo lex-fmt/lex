@@ -1,4 +1,4 @@
-use crate::inline::{extract_inline_spans, InlineSpanKind};
+use crate::inline::extract_references;
 use crate::utils::for_each_text_content;
 use lex_core::lex::ast::{Document, Range};
 use lex_core::lex::inlines::ReferenceType;
@@ -26,17 +26,9 @@ fn check_footnotes(document: &Document, diagnostics: &mut Vec<AnalysisDiagnostic
     // 1. Collect all footnote references
     let mut references = Vec::new();
     for_each_text_content(document, &mut |text| {
-        for span in extract_inline_spans(text) {
-            if let InlineSpanKind::Reference(ReferenceType::FootnoteNumber { number }) = span.kind {
-                references.push((number, span.range));
-            } else if let InlineSpanKind::Reference(ReferenceType::FootnoteLabeled { label: _ }) =
-                span.kind
-            {
-                // We handle numeric footnotes primarily as per request, but let's track labels too if needed.
-                // For now, the user specifically mentioned numeric reordering and validation.
-                // Let's stick to numeric for the specific "footnote" validation if the user context implies it.
-                // Actually, the user said "add diagnotics for mismatched footnotes".
-                // Let's handle both if possible, but the renumbering task implies numeric.
+        for reference in extract_references(text) {
+            if let ReferenceType::FootnoteNumber { number } = reference.reference_type {
+                references.push((number, reference.range));
             }
         }
     });

@@ -1,4 +1,4 @@
-use lex_analysis::inline::{extract_inline_spans, InlineSpanKind};
+use lex_analysis::inline::extract_references;
 use lex_analysis::utils::{collect_all_annotations, find_notes_session};
 use lex_core::lex::ast::traits::AstNode;
 use lex_core::lex::ast::{ContentItem, Document, Range, Session, TextContent};
@@ -13,10 +13,9 @@ pub fn reorder_footnotes(document: &Document, source: &str) -> String {
     // 1. Collect all footnote references in order
     // Use local traversal to avoid issues with lex-analysis traversal
     traverse_document(document, &mut |text| {
-        let spans = extract_inline_spans(text);
-        for span in spans {
-            if let InlineSpanKind::Reference(ReferenceType::FootnoteNumber { number }) = span.kind {
-                references.push((number, span.range));
+        for reference in extract_references(text) {
+            if let ReferenceType::FootnoteNumber { number } = reference.reference_type {
+                references.push((number, reference.range));
             }
         }
     });

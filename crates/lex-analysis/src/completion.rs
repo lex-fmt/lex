@@ -15,8 +15,7 @@
 //! in the current document. For cross-document completion (e.g., bibliography
 //! entries), the LSP layer would need to aggregate from multiple sources.
 
-use crate::inline::InlineSpanKind;
-use crate::utils::{for_each_annotation, reference_span_at_position, session_identifier};
+use crate::utils::{for_each_annotation, reference_at_position, session_identifier};
 use ignore::WalkBuilder;
 use lex_core::lex::ast::links::LinkType;
 use lex_core::lex::ast::{ContentItem, Document, Position, Session};
@@ -191,10 +190,7 @@ fn detect_context(
     if is_at_potential_verbatim_start(document, position, current_line) {
         return CompletionContext::VerbatimLabel;
     }
-    if reference_span_at_position(document, position)
-        .map(|span| matches!(span.kind, InlineSpanKind::Reference(_)))
-        .unwrap_or(false)
-    {
+    if reference_at_position(document, position).is_some() {
         return CompletionContext::Reference;
     }
     CompletionContext::General
