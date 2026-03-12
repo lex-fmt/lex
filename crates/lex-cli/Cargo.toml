@@ -19,6 +19,7 @@ doctest = false
 
 [dependencies]
 lex-core = { workspace = true }
+lex-analysis = { workspace = true }
 lex-babel = { workspace = true }
 lex-config = { workspace = true }
 clapfig = { workspace = true }

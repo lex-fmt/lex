@@ -1055,6 +1055,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "clapfig",
+ "lex-analysis",
  "lex-babel",
  "lex-config",
  "lex-core",

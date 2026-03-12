@@ -26,6 +26,7 @@ use lex_cli::transforms;
 
 use clap::{Arg, ArgAction, ArgMatches, Command, ValueHint};
 use clapfig::{Boundary, Clapfig, ClapfigBuilder, ConfigCommand, SearchPath};
+use lex_analysis::semantic_tokens::collect_semantic_tokens;
 use lex_babel::{
     formats::lex::formatting_rules::FormattingRules, transforms::serialize_to_lex_with_rules,
     FormatRegistry, SerializedDocument,
@@ -282,6 +283,31 @@ fn build_cli() -> Command {
                 ),
         )
         .subcommand(
+            Command::new("token-at")
+                .about("Get the semantic token at a specific position")
+                .arg(
+                    Arg::new("path")
+                        .help("Path to the lex file")
+                        .required(true)
+                        .index(1)
+                        .value_hint(ValueHint::FilePath),
+                )
+                .arg(
+                    Arg::new("row")
+                        .help("Row number (1-based)")
+                        .required(true)
+                        .index(2)
+                        .value_parser(clap::value_parser!(usize)),
+                )
+                .arg(
+                    Arg::new("col")
+                        .help("Column number (1-based)")
+                        .required(true)
+                        .index(3)
+                        .value_parser(clap::value_parser!(usize)),
+                ),
+        )
+        .subcommand(
             Command::new("generate-lex-css")
                 .about("Output the default CSS used for HTML export")
                 .long_about(
@@ -315,6 +341,7 @@ fn main() {
                     "config",
                     "format",
                     "element-at",
+                    "token-at",
                     "generate-lex-css",
                     "help",
                 ]
@@ -415,6 +442,18 @@ fn main() {
                         .expect("col is required");
                     let all = sub_matches.get_flag("all");
                     handle_element_at_command(path, row, col, all);
+                }
+                Some(("token-at", sub_matches)) => {
+                    let path = sub_matches
+                        .get_one::<String>("path")
+                        .expect("path is required");
+                    let row = *sub_matches
+                        .get_one::<usize>("row")
+                        .expect("row is required");
+                    let col = *sub_matches
+                        .get_one::<usize>("col")
+                        .expect("col is required");
+                    handle_token_at_command(path, row, col);
                 }
                 Some(("generate-lex-css", _)) => {
                     handle_generate_lex_css_command();
@@ -612,6 +651,83 @@ fn handle_element_at_command(path: &str, row: usize, col: usize, all: bool) {
         }
     } else if let Some(node) = path_nodes.last() {
         println!("{}: {}", node.node_type(), node.display_label());
+    }
+}
+
+/// Handle the token-at command
+fn handle_token_at_command(path: &str, row: usize, col: usize) {
+    let source = fs::read_to_string(path).unwrap_or_else(|e| {
+        eprintln!("Error reading file '{path}': {e}");
+        std::process::exit(1);
+    });
+
+    let registry = FormatRegistry::default();
+    let doc = registry.parse(&source, "lex").unwrap_or_else(|e| {
+        eprintln!("Parse error: {e}");
+        std::process::exit(1);
+    });
+
+    // Convert 1-based row/col to 0-based
+    let target_line = row.saturating_sub(1);
+    let target_col = col.saturating_sub(1);
+    let tokens = collect_semantic_tokens(&doc);
+    let lines: Vec<&str> = source.lines().collect();
+
+    let matching: Vec<_> = tokens
+        .iter()
+        .filter(|t| {
+            let s = &t.range.start;
+            let e = &t.range.end;
+            if s.line == e.line {
+                // Single-line token
+                s.line == target_line && target_col >= s.column && target_col < e.column
+            } else {
+                // Multi-line token
+                if target_line == s.line {
+                    target_col >= s.column
+                } else if target_line == e.line {
+                    target_col < e.column
+                } else {
+                    target_line > s.line && target_line < e.line
+                }
+            }
+        })
+        .collect();
+
+    if matching.is_empty() {
+        println!("No semantic token at {row}:{col}");
+    } else {
+        for token in &matching {
+            let start = &token.range.start;
+            let end = &token.range.end;
+            let excerpt = if start.line == end.line {
+                lines
+                    .get(start.line)
+                    .map(|l| {
+                        let s = start.column.min(l.len());
+                        let e = end.column.min(l.len());
+                        &l[s..e]
+                    })
+                    .unwrap_or("")
+            } else {
+                lines
+                    .get(start.line)
+                    .map(|l| {
+                        let s = start.column.min(l.len());
+                        &l[s..]
+                    })
+                    .unwrap_or("")
+            };
+            println!(
+                "{}:{}-{}:{}  {}  \"{}\"",
+                start.line + 1,
+                start.column + 1,
+                end.line + 1,
+                end.column + 1,
+                token.kind.as_str(),
+                excerpt,
+            );
+        }
     }
 }
 
