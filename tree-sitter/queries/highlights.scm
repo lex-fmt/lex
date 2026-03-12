@@ -18,6 +18,12 @@
 (session
   title: (line_content) @markup.heading)
 
+; Session sequence marker (LSP: SessionMarker) — numbered titles like "1. Title"
+; list_marker inside a session title is structural, not a list item
+(session
+  title: (line_content
+    (list_marker) @punctuation.definition.heading))
+
 ; === Definitions ===
 ; Definition subjects are terms being defined (LSP: DefinitionSubject)
 ; NOT headings — they are variable/term definitions
