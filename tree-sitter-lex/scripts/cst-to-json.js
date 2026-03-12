@@ -133,24 +133,16 @@ function extractTitle(node) {
   return extractText(titleNode);
 }
 
-// Convert consecutive blank_line nodes into BlankLineGroup
+// Convert blank_line nodes into BlankLineGroup nodes (one per blank line,
+// matching lex-cli which emits separate BlankLineGroup(count=1) per line)
 function groupBlanks(children) {
   const result = [];
-  let blankCount = 0;
-
   for (const child of children) {
     if (child.tag === "blank_line") {
-      blankCount++;
+      result.push({ type: "BlankLineGroup", count: 1 });
     } else {
-      if (blankCount > 0) {
-        result.push({ type: "BlankLineGroup", count: blankCount });
-        blankCount = 0;
-      }
       result.push(child);
     }
-  }
-  if (blankCount > 0) {
-    result.push({ type: "BlankLineGroup", count: blankCount });
   }
   return result;
 }
