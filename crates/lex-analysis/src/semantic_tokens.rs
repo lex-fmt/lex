@@ -619,15 +619,21 @@ impl<'a> InlineWalker<'a> {
             }
             let raw_ch = self.raw[self.cursor..].chars().next().unwrap();
             if raw_ch == '\\' {
-                let next_ch = self.raw[self.cursor + 1..].chars().next();
-                match next_ch {
-                    Some(nc) if !nc.is_alphanumeric() => {
-                        // Escaped: raw `\X` maps to unescaped `X`
-                        self.cursor += 1 + nc.len_utf8();
-                    }
-                    _ => {
-                        // Literal backslash: raw `\` stays as `\` in the node
-                        self.cursor += 1;
+                if self.cursor + 1 >= self.raw.len() {
+                    // Trailing backslash: treat as literal to mirror parser behavior and
+                    // avoid out-of-bounds slicing on `self.raw[self.cursor + 1..]`.
+                    self.cursor += 1;
+                } else {
+                    let next_ch = self.raw[self.cursor + 1..].chars().next();
+                    match next_ch {
+                        Some(nc) if !nc.is_alphanumeric() => {
+                            // Escaped: raw `\X` maps to unescaped `X`
+                            self.cursor += 1 + nc.len_utf8();
+                        }
+                        _ => {
+                            // Literal backslash: raw `\` stays as `\` in the node
+                            self.cursor += 1;
+                        }
                     }
                 }
             } else {
