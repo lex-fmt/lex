@@ -25,7 +25,7 @@ Useful Mental Models when Parsing Lex
 
         - Every indentation is a visual cue that a <container> node is inserted.
         - Container nodes are mandatory for mixed-type items.
-        - The only non-mixed types are paragraphs (lines) and list's list items.
+        - The only non-mixed types are paragraphs (lines), list's list items, and verbatim's verbatim lines.
 
         That is why paragraphs do not indent, nor do flat lists. But consider:
 
@@ -88,9 +88,11 @@ Useful Mental Models when Parsing Lex
         | Definition | Optional    | SubjectLine         | No       | Yes      | dedent           |
         | Verbatim   | Optional    | SubjectLine         | Optional | Optional | dedent + DataLine|
         | Annotation | Optional    | AnnotationStartLine | Yes      | Yes      | AnnotationEnd    |
-        | List       | Optional    | ListLine            | No       | Optional | dedent           |
+        | List       | Optional*   | ListLine            | No       | Optional | dedent           |
         | Paragraph  | Optional    | Any Line            | -        | -        | BlankLine/Dedent |
     :: doc.table ::
+
+    *List preceding blank: at root level, lists require a preceding blank line. Inside containers, they do not. See the list spec and grammar patterns list vs list_no_blank for details.
 
     In short:
 
@@ -135,7 +137,7 @@ Useful Mental Models when Parsing Lex
         1. Verbatim and Definitions both start with a subject line.
         2. Verbatim requires an annotation end marker, at the same indentation level as the subject line, while definitions require a dedent.
 
-        Annotations start with an annotation marker, hence can be confused with a verbatim block end.
+        Annotations start with an annotation marker, hence can be confused with a verbatim block end. In practice this is not ambiguous: verbatim blocks are tried first in the grammar, and their imperative matcher identifies the closing annotation at the same indentation as the subject. By the time annotations are tried, any data line that closes a verbatim has already been consumed.
 
     5.4 Verbatim Blocks
 
@@ -174,3 +176,24 @@ Useful Mental Models when Parsing Lex
             :: table ::
 
             The use of 2 is to precisely make clear that no valid indentation is possible but stretched, and this is detected on parsing the first non-blank content line (see the verbatim spec for details).
+
+    5.5 Annotation Attachment
+
+        While not strictly required for parsing, annotation attachment is what makes lex's first-class metadata genuinely useful for tooling. Without it, annotations are just free-floating markers; with it, every annotation has a clear target element.
+
+        The attachment rules are:
+
+        1. An annotation attaches to the closest content element, measured by blank lines separating them.
+        2. On equal distance, the next element wins over the previous.
+        3. Annotations at document start followed by a blank line attach to the Document itself.
+        4. When an annotation is the last element in a container, the container becomes the "next" element for distance comparison.
+
+        This is handled as a post-parsing assembly stage, not during grammar matching. See assembling/stages/attach_annotations.rs for the full logic and distance calculation.
+
+    5.6 Document Title vs Session Title
+
+        A subtle but important distinction: the document title and session titles look identical in the source text but are parsed differently.
+
+        A session requires: heading + blank line + indented content. A document title is the first paragraph of the document followed by blank lines but *not* followed by indented content. That negative lookahead is what distinguishes them: if there is a container after the blank, it is a session; if not, it is the document title.
+
+        The grammar tries the document_title pattern before session, and uses a synthetic DocumentStart token (injected by the lexing pipeline) to mark where document content begins. The title is then promoted into the root session's title field during AST assembly. See grammar.rs (document_title pattern) and building/ast_tree.rs (extract_document_title).
