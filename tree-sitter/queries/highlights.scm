@@ -8,6 +8,10 @@
 ;
 ; Reference: lex-analysis/src/semantic_tokens.rs defines the authoritative
 ; LSP token types. This file mirrors that mapping at CST granularity.
+;
+; PRECEDENCE: In tree-sitter queries, LATER patterns override earlier ones
+; when multiple patterns match the same node. Specific overrides (e.g.
+; verbatim closing markers) must appear AFTER their generic counterparts.
 
 ; === Sessions ===
 ; Session titles are headings (LSP: SessionTitleText)
@@ -33,14 +37,6 @@
 (verbatim_block
   (list) @markup.raw)
 
-; Verbatim closing metadata — annotation nodes inside verbatim_block are
-; the closing `:: label ::` line (LSP: VerbatimLanguage/VerbatimAttribute).
-; These MUST appear before generic annotation captures to take priority.
-(verbatim_block
-  (annotation_marker) @markup.raw.block)
-(verbatim_block
-  (annotation_header) @markup.raw.block)
-
 ; === Lists ===
 ; List item lines — ONLY inside list_item nodes (LSP: ListMarker + ListItemText)
 ; list_item_line also appears as line_content in session titles, where it
@@ -48,7 +44,7 @@
 (list_item
   (list_item_line) @markup.list)
 
-; === Annotations ===
+; === Annotations (generic) ===
 ; Annotation delimiters (LSP: part of AnnotationLabel)
 (annotation_marker) @punctuation.special
 (annotation_end_marker) @punctuation.special
@@ -62,6 +58,15 @@
 ; Annotation block body content (LSP: AnnotationContent)
 (annotation_block
   (_) @comment)
+
+; === Verbatim closing metadata (overrides generic annotation captures) ===
+; Annotation nodes inside verbatim_block are the closing `:: label ::` line
+; (LSP: VerbatimLanguage/VerbatimAttribute). These MUST appear AFTER generic
+; annotation captures so they take priority.
+(verbatim_block
+  (annotation_marker) @markup.raw.block)
+(verbatim_block
+  (annotation_header) @markup.raw.block)
 
 ; === Inline formatting ===
 (strong) @markup.bold
