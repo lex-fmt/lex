@@ -590,6 +590,10 @@
         {
           "type": "verbatim_block",
           "named": true
+        },
+        {
+          "type": "verbatim_content",
+          "named": true
         }
       ]
     }
@@ -656,6 +660,10 @@
   },
   {
     "type": "url_reference",
+    "named": true
+  },
+  {
+    "type": "verbatim_content",
     "named": true
   }
 ]
