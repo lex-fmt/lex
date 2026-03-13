@@ -1,2 +1,0 @@
-- Hi mom!!.
-- Hi kiddo.
