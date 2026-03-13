@@ -1,6 +1,6 @@
 use crate::utils::{
-    find_annotation_at_position, find_definition_by_subject, find_session_at_position,
-    reference_at_position, session_identifier,
+    find_annotation_at_position, find_definition_at_position, find_definition_by_subject,
+    find_session_at_position, reference_at_position, session_identifier,
 };
 use lex_core::lex::ast::{Annotation, ContentItem, Document, Position, Range};
 use lex_core::lex::inlines::ReferenceType;
@@ -14,6 +14,7 @@ pub struct HoverResult {
 pub fn hover(document: &Document, position: Position) -> Option<HoverResult> {
     inline_hover(document, position)
         .or_else(|| annotation_hover(document, position))
+        .or_else(|| definition_subject_hover(document, position))
         .or_else(|| session_hover(document, position))
 }
 
@@ -144,6 +145,31 @@ fn annotation_hover_result(annotation: &Annotation) -> HoverResult {
     }
 }
 
+fn definition_subject_hover(document: &Document, position: Position) -> Option<HoverResult> {
+    let definition = find_definition_at_position(document, position)?;
+    let header = definition.header_location()?;
+    if !header.contains(position) {
+        return None;
+    }
+    let subject = definition.subject.as_string().trim().to_string();
+    let mut body_lines = Vec::new();
+    if let Some(preview) = preview_from_items(definition.children.iter()) {
+        body_lines.push(preview);
+    }
+    Some(HoverResult {
+        range: header.clone(),
+        contents: format!(
+            "**Definition: {}**\n\n{}",
+            subject,
+            if body_lines.is_empty() {
+                "(no content)".to_string()
+            } else {
+                body_lines.join("\n\n")
+            }
+        ),
+    })
+}
+
 fn session_hover(document: &Document, position: Position) -> Option<HoverResult> {
     let session = find_session_at_position(document, position)?;
     let header = session.header_location()?;
@@ -237,9 +263,14 @@ fn collect_preview<'a>(
                 collect_preview(session.children.iter(), lines, limit);
             }
             ContentItem::VerbatimBlock(verbatim) => {
-                let subject = verbatim.subject.as_string().trim().to_string();
-                if !subject.is_empty() {
-                    lines.push(subject);
+                for group in verbatim.group() {
+                    if lines.len() >= limit {
+                        break;
+                    }
+                    let subject = group.subject.as_string().trim().to_string();
+                    if !subject.is_empty() {
+                        lines.push(subject);
+                    }
                 }
             }
             ContentItem::TextLine(_)
@@ -344,5 +375,26 @@ mod tests {
         let hover = hover(&document, position).expect("hover expected for session");
         assert!(hover.contents.contains("Session"));
         assert!(hover.contents.contains("Intro"));
+    }
+
+    #[test]
+    fn hover_on_definition_subject_shows_body_preview() {
+        use lex_core::lex::parsing;
+        let doc = parsing::parse_document("Term:\n    The definition body.\n").unwrap();
+        // Position on the subject line "Term"
+        let result =
+            hover(&doc, Position::new(0, 1)).expect("hover expected on definition subject");
+        assert!(result.contents.contains("Definition"));
+        assert!(result.contents.contains("Term"));
+        assert!(result.contents.contains("definition body"));
+    }
+
+    #[test]
+    fn hover_on_definition_body_returns_none() {
+        use lex_core::lex::parsing;
+        let doc = parsing::parse_document("Term:\n    The definition body.\n").unwrap();
+        // Position inside the body, not on the subject
+        let result = hover(&doc, Position::new(1, 6));
+        assert!(result.is_none());
     }
 }
