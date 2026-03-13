@@ -45,6 +45,18 @@
 (verbatim_block
   (verbatim_content) @markup.raw)
 
+; Verbatim group item subjects and content
+(verbatim_group_item
+  subject: (subject_content) @markup.raw.block)
+(verbatim_group_item
+  (paragraph) @markup.raw)
+(verbatim_group_item
+  (definition) @markup.raw)
+(verbatim_group_item
+  (list) @markup.raw)
+(verbatim_group_item
+  (verbatim_content) @markup.raw)
+
 ; === Lists ===
 ; List marker (- , 1. , a) , etc.) — captures just the marker portion
 ; (LSP: ListMarker). Content is handled by inline captures below.

@@ -39,3 +39,39 @@
   (annotation_header) @injection.language)
  (#gsub! @injection.language "^%s*(%S+).*$" "%1")
  (#set! injection.combined))
+
+; === Verbatim group items ===
+; Content inside group items also gets language injection from the
+; shared closing annotation.
+
+; Group item paragraphs
+((verbatim_block
+  (verbatim_group_item
+    (paragraph) @injection.content)
+  (annotation_header) @injection.language)
+ (#gsub! @injection.language "^%s*(%S+).*$" "%1")
+ (#set! injection.combined))
+
+; Group item definitions
+((verbatim_block
+  (verbatim_group_item
+    (definition) @injection.content)
+  (annotation_header) @injection.language)
+ (#gsub! @injection.language "^%s*(%S+).*$" "%1")
+ (#set! injection.combined))
+
+; Group item lists
+((verbatim_block
+  (verbatim_group_item
+    (list) @injection.content)
+  (annotation_header) @injection.language)
+ (#gsub! @injection.language "^%s*(%S+).*$" "%1")
+ (#set! injection.combined))
+
+; Group item sessions
+((verbatim_block
+  (verbatim_group_item
+    (session) @injection.content)
+  (annotation_header) @injection.language)
+ (#gsub! @injection.language "^%s*(%S+).*$" "%1")
+ (#set! injection.combined))
