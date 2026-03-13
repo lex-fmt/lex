@@ -96,3 +96,71 @@ API Response:
     (annotation_marker)
     (annotation_header)
     (annotation_marker)))
+
+==================
+Fullwidth verbatim block
+==================
+Table:
+ Header | Value
+ Data   | More
+:: table ::
+---
+
+(document
+  (verbatim_block
+    subject: (subject_content)
+    (verbatim_content)
+    (annotation_marker)
+    (annotation_header)
+    (annotation_marker)))
+
+==================
+Fullwidth with blank line after subject
+==================
+Table:
+
+ Header | Value
+ Data   | More
+:: table ::
+---
+
+(document
+  (verbatim_block
+    subject: (subject_content)
+    (blank_line)
+    (verbatim_content)
+    (annotation_marker)
+    (annotation_header)
+    (annotation_marker)))
+
+==================
+Fullwidth with mixed indent content
+==================
+Wide Table:
+ Alpha  | 10    | baseline
+Beta   | 25    | extended
+ Gamma  | 30    | final
+:: data ::
+---
+
+(document
+  (verbatim_block
+    subject: (subject_content)
+    (verbatim_content)
+    (annotation_marker)
+    (annotation_header)
+    (annotation_marker)))
+
+==================
+Fullwidth without content
+==================
+Empty:
+:: label ::
+---
+
+(document
+  (verbatim_block
+    subject: (subject_content)
+    (annotation_marker)
+    (annotation_header)
+    (annotation_marker)))

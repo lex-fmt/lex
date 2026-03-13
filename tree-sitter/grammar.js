@@ -43,6 +43,7 @@ module.exports = grammar({
     $._emphasis_open, // opening _ validated by scanner flanking rules
     $._emphasis_close, // closing _ validated by scanner flanking rules
     $._session_break, // blank line(s) + indent increase (scanner lookahead)
+    $.verbatim_content, // fullwidth verbatim: opaque multi-line content block
   ],
 
   extras: (_$) => [],
@@ -107,6 +108,9 @@ module.exports = grammar({
               repeat($.blank_line),
               optional(seq($._indent, repeat1($._block), $._dedent)),
             ),
+            // Fullwidth: content at column 1 (sub-indent-width), scanner
+            // emits an opaque multi-line verbatim_content token
+            seq(repeat($.blank_line), $.verbatim_content),
           ),
           $.annotation_marker,
           $.annotation_header,

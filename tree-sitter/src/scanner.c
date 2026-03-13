@@ -42,6 +42,7 @@
  *   9: _emphasis_open
  *  10: _emphasis_close
  *  11: _session_break
+ *  12: verbatim_content
  *
  * Flanking validation for emphasis delimiters:
  *   Opening: prev char must not be alphanumeric (WORD class), next must be WORD.
@@ -75,6 +76,7 @@ enum TokenType {
     EMPHASIS_OPEN,
     EMPHASIS_CLOSE,
     SESSION_BREAK,
+    VERBATIM_CONTENT,
 };
 
 // Character class for flanking rule context tracking.
@@ -313,8 +315,8 @@ bool tree_sitter_lex_external_scanner_scan(void *payload, TSLexer *lexer,
     fprintf(stderr, "] pending=%d lookahead='%c'(%d) valid=[",
             scanner->pending_dedents, lexer->lookahead > 31 ? lexer->lookahead : '?',
             lexer->lookahead);
-    const char *names[] = {"IND","DED","NL","AM","AEM","LM","SC","SO","SCl","EO","ECl","SB"};
-    for (int i = 0; i <= 11; i++) {
+    const char *names[] = {"IND","DED","NL","AM","AEM","LM","SC","SO","SCl","EO","ECl","SB","VC"};
+    for (int i = 0; i <= 12; i++) {
         if (valid_symbols[i]) fprintf(stderr, "%s ", names[i]);
     }
     fprintf(stderr, "]\n");
@@ -405,6 +407,19 @@ bool tree_sitter_lex_external_scanner_scan(void *payload, TSLexer *lexer,
                 int current_indent =
                     scanner->indent_stack[scanner->indent_depth];
                 if (next_indent > current_indent) {
+                    // Fullwidth suppression: if the indent increase is
+                    // sub-INDENT_WIDTH (1-3 spaces) and VERBATIM_CONTENT
+                    // is valid, this is fullwidth verbatim content, not a
+                    // session break. Emit NEWLINE for just the blank line
+                    // so the grammar's fullwidth branch can match.
+                    if (next_indent < INDENT_WIDTH &&
+                        valid_symbols[VERBATIM_CONTENT]) {
+                        lexer->result_symbol = NEWLINE;
+                        scanner->at_line_start = true;
+                        scanner->indent_measured = false;
+                        scanner->last_char_class = CHAR_CLASS_NONE;
+                        return true;
+                    }
                     // Session break confirmed! Update mark_end to include
                     // all blank lines + indent whitespace.
                     lexer->mark_end(lexer);
@@ -458,6 +473,80 @@ bool tree_sitter_lex_external_scanner_scan(void *payload, TSLexer *lexer,
         }
 
         int current_indent = scanner->indent_stack[scanner->indent_depth];
+
+        // Fullwidth verbatim content: indent 1-3 (sub-INDENT_WIDTH) is never
+        // valid normal lex indentation. When VERBATIM_CONTENT is valid (the
+        // grammar is exploring the fullwidth branch of verbatim_block), consume
+        // all lines until :: at subject indent level as an opaque token.
+        // This MUST run before indent handling to prevent spurious DEDENT/INDENT.
+        if (indent > 0 && indent < INDENT_WIDTH &&
+            valid_symbols[VERBATIM_CONTENT]) {
+            int subject_indent = current_indent;
+
+            // Consume the rest of the current line
+            while (lexer->lookahead != '\n' && !lexer->eof(lexer)) {
+                lexer->advance(lexer, false);
+            }
+            if (!lexer->eof(lexer)) {
+                lexer->advance(lexer, false); // consume \n
+            }
+            lexer->mark_end(lexer);
+
+            // Consume subsequent lines until closing :: at subject indent
+            while (!lexer->eof(lexer)) {
+                // Measure indent of this line
+                int line_indent = 0;
+                while (lexer->lookahead == ' ' || lexer->lookahead == '\t') {
+                    if (lexer->lookahead == '\t') {
+                        line_indent += INDENT_WIDTH;
+                    } else {
+                        line_indent++;
+                    }
+                    // Skip leading indentation so it is not part of VERBATIM_CONTENT,
+                    // matching how the first content line's indent is handled.
+                    lexer->advance(lexer, true);
+                }
+
+                // Blank line — include in content
+                if (lexer->lookahead == '\n') {
+                    lexer->advance(lexer, false);
+                    lexer->mark_end(lexer);
+                    continue;
+                }
+
+                if (lexer->eof(lexer)) break;
+
+                // Check for closing :: at subject indent
+                if (line_indent == subject_indent && lexer->lookahead == ':') {
+                    lexer->advance(lexer, false);
+                    if (lexer->lookahead == ':') {
+                        // Found closing annotation — stop.
+                        // mark_end is after the last content line's \n.
+                        break;
+                    }
+                    // Single colon at subject indent — still content
+                    consume_rest_of_line(lexer);
+                    if (!lexer->eof(lexer)) {
+                        lexer->advance(lexer, false); // \n
+                    }
+                    lexer->mark_end(lexer);
+                    continue;
+                }
+
+                // Regular content line
+                consume_rest_of_line(lexer);
+                if (!lexer->eof(lexer)) {
+                    lexer->advance(lexer, false); // \n
+                }
+                lexer->mark_end(lexer);
+            }
+
+            scanner->at_line_start = true;
+            scanner->indent_measured = false;
+            scanner->last_char_class = CHAR_CLASS_NONE;
+            lexer->result_symbol = VERBATIM_CONTENT;
+            return true;
+        }
 
         // Handle indentation changes
         if (indent > current_indent) {

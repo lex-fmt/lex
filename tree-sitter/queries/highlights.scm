@@ -42,6 +42,8 @@
   (definition) @markup.raw)
 (verbatim_block
   (list) @markup.raw)
+(verbatim_block
+  (verbatim_content) @markup.raw)
 
 ; === Lists ===
 ; List marker (- , 1. , a) , etc.) — captures just the marker portion
