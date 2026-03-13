@@ -44,6 +44,8 @@
   (list) @markup.raw)
 (verbatim_block
   (verbatim_content) @markup.raw)
+(verbatim_block
+  (session) @markup.raw)
 
 ; Verbatim group item subjects and content
 (verbatim_group_item
@@ -56,6 +58,8 @@
   (list) @markup.raw)
 (verbatim_group_item
   (verbatim_content) @markup.raw)
+(verbatim_group_item
+  (session) @markup.raw)
 
 ; === Lists ===
 ; List marker (- , 1. , a) , etc.) — captures just the marker portion
