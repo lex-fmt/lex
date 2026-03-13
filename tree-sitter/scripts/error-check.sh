@@ -30,6 +30,11 @@ ALLOWLIST=(
     # grammar-inline.lex deliberately shows invalid inline syntax examples
     # (e.g., "*text *" where has_matching_closer finds * but flanking rejects it)
     "comms/specs/grammar-inline.lex"
+    # Inline element specs contain deliberate valid/invalid syntax examples
+    "comms/specs/elements/inlines.docs/specs/formatting/formatting.lex"
+    "comms/specs/elements/inlines.docs/specs/formatting/inlines-general.lex"
+    "comms/specs/elements/inlines.docs/specs/references/citations.lex"
+    "comms/specs/elements/inlines.docs/specs/references/references-general.lex"
 )
 
 is_allowlisted() {
