@@ -8,11 +8,21 @@
 ;
 ; Reference: lex-analysis/src/semantic_tokens.rs defines the authoritative
 ; LSP token types. This file mirrors that mapping at CST granularity.
+;
+; PRECEDENCE: In tree-sitter queries, LATER patterns override earlier ones
+; when multiple patterns match the same node. Specific overrides (e.g.
+; verbatim closing markers) must appear AFTER their generic counterparts.
 
 ; === Sessions ===
 ; Session titles are headings (LSP: SessionTitleText)
 (session
   title: (line_content) @markup.heading)
+
+; Session sequence marker (LSP: SessionMarker) — numbered titles like "1. Title"
+; list_marker inside a session title is structural, not a list item
+(session
+  title: (line_content
+    (list_marker) @punctuation.definition.heading))
 
 ; === Definitions ===
 ; Definition subjects are terms being defined (LSP: DefinitionSubject)
@@ -33,22 +43,13 @@
 (verbatim_block
   (list) @markup.raw)
 
-; Verbatim closing metadata — annotation nodes inside verbatim_block are
-; the closing `:: label ::` line (LSP: VerbatimLanguage/VerbatimAttribute).
-; These MUST appear before generic annotation captures to take priority.
-(verbatim_block
-  (annotation_marker) @markup.raw.block)
-(verbatim_block
-  (annotation_header) @markup.raw.block)
-
 ; === Lists ===
-; List item lines — ONLY inside list_item nodes (LSP: ListMarker + ListItemText)
-; list_item_line also appears as line_content in session titles, where it
-; should NOT be tagged as a list item (it's a heading in that context).
+; List marker (- , 1. , a) , etc.) — captures just the marker portion
+; (LSP: ListMarker). Content is handled by inline captures below.
 (list_item
-  (list_item_line) @markup.list)
+  (list_marker) @markup.list)
 
-; === Annotations ===
+; === Annotations (generic) ===
 ; Annotation delimiters (LSP: part of AnnotationLabel)
 (annotation_marker) @punctuation.special
 (annotation_end_marker) @punctuation.special
@@ -63,10 +64,31 @@
 (annotation_block
   (_) @comment)
 
+; === Verbatim closing metadata (overrides generic annotation captures) ===
+; Annotation nodes inside verbatim_block are the closing `:: label ::` line
+; (LSP: VerbatimLanguage/VerbatimAttribute). These MUST appear AFTER generic
+; annotation captures so they take priority.
+(verbatim_block
+  (annotation_marker) @markup.raw.block)
+(verbatim_block
+  (annotation_header) @markup.raw.block)
+
 ; === Inline formatting ===
 (strong) @markup.bold
 (emphasis) @markup.italic
 (code_span) @markup.raw.inline
 (math_span) @markup.math
-(reference) @markup.link
 (escape_sequence) @string.escape
+
+; === References (typed) ===
+; Generic fallback — all references are links
+(reference) @markup.link
+
+; Specific reference type overrides (later = higher priority)
+(citation_reference) @markup.link
+(footnote_reference) @markup.link
+(url_reference) @markup.link.url
+(file_reference) @markup.link.url
+(session_reference) @markup.link
+(tocome_reference) @constant.builtin
+(number_reference) @markup.link

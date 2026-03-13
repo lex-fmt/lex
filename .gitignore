@@ -31,3 +31,4 @@ comms/specs/**/*.treeviz.*
 
 # Proptest regression files
 **/proptest-regressions/
+.padz

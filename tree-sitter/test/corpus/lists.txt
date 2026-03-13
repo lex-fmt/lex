@@ -8,9 +8,11 @@ Simple dash list
 (document
   (list
     (list_item
-      (list_item_line))
+      (list_marker)
+      (text_content))
     (list_item
-      (list_item_line))))
+      (list_marker)
+      (text_content))))
 
 ==================
 Three item dash list
@@ -23,11 +25,14 @@ Three item dash list
 (document
   (list
     (list_item
-      (list_item_line))
+      (list_marker)
+      (text_content))
     (list_item
-      (list_item_line))
+      (list_marker)
+      (text_content))
     (list_item
-      (list_item_line))))
+      (list_marker)
+      (text_content))))
 
 ==================
 Numbered list
@@ -39,9 +44,11 @@ Numbered list
 (document
   (list
     (list_item
-      (list_item_line))
+      (list_marker)
+      (text_content))
     (list_item
-      (list_item_line))))
+      (list_marker)
+      (text_content))))
 
 ==================
 List item with nested content
@@ -54,13 +61,15 @@ List item with nested content
 (document
   (list
     (list_item
-      (list_item_line)
+      (list_marker)
+      (text_content)
       (paragraph
         (text_line
           (line_content
             (text_content)))))
     (list_item
-      (list_item_line))))
+      (list_marker)
+      (text_content))))
 
 ==================
 Alphabetical list
@@ -72,6 +81,63 @@ b. Second
 (document
   (list
     (list_item
-      (list_item_line))
+      (list_marker)
+      (text_content))
     (list_item
-      (list_item_line))))
+      (list_marker)
+      (text_content))))
+
+==================
+List item with inline formatting
+==================
+- Item with *bold* and [ref]
+- Second _italic_ item
+---
+
+(document
+  (list
+    (list_item
+      (list_marker)
+      (text_content
+        (strong)
+        (reference
+          (general_reference))))
+    (list_item
+      (list_marker)
+      (text_content
+        (emphasis)))))
+
+==================
+List item with code span
+==================
+- Use `command` here
+- Another item
+---
+
+(document
+  (list
+    (list_item
+      (list_marker)
+      (text_content
+        (code_span)))
+    (list_item
+      (list_marker)
+      (text_content))))
+
+==================
+Numbered session title with marker
+==================
+1. Introduction
+
+    Session content here
+---
+
+(document
+  (session
+    title: (line_content
+      (list_marker)
+      (text_content))
+    (paragraph
+      (text_line
+        (line_content
+          (text_content))))))

@@ -131,30 +131,9 @@ function extractTitle(node) {
   return extractText(titleNode);
 }
 
-// Extract list marker from list_item_line text (e.g., "- First item" → "-")
-function extractListMarker(text) {
-  if (text.startsWith("- ")) return "-";
-
-  const parenMatch = text.match(/^\(([^)]+)\)\s/);
-  if (parenMatch) return `(${parenMatch[1]})`;
-
-  const orderedMatch = text.match(/^([0-9a-zA-Z.]+[.)]) /);
-  if (orderedMatch) return orderedMatch[1];
-
-  return "";
-}
-
-// Extract list item text (everything after marker)
-function extractListItemText(text) {
-  if (text.startsWith("- ")) return text.substring(2);
-
-  const parenMatch = text.match(/^\([^)]+\)\s(.*)/);
-  if (parenMatch) return parenMatch[1];
-
-  const orderedMatch = text.match(/^[0-9a-zA-Z.]+[.)]\s(.*)/);
-  if (orderedMatch) return orderedMatch[1];
-
-  return text;
+// Extract list marker text, stripping trailing space (e.g., "- " → "-")
+function extractListMarkerText(markerNode) {
+  return extractText(markerNode).replace(/\s+$/, "");
 }
 
 // Convert block children: map blank_lines to BlankLineGroups, convert others
@@ -215,14 +194,17 @@ function convertNode(node) {
     }
 
     case "list_item": {
-      const lineNode = node.children.find((c) => c.tag === "list_item_line");
-      const lineText = lineNode ? extractText(lineNode) : "";
-      const marker = extractListMarker(lineText);
-      const text = extractListItemText(lineText);
+      const markerNode = node.children.find((c) => c.tag === "list_marker");
+      const marker = markerNode ? extractListMarkerText(markerNode) : "";
+      const contentNode = node.children.find((c) => c.tag === "text_content");
+      const text = contentNode ? extractText(contentNode) : "";
 
       const nestedBlocks = convertBlockChildren({
         children: node.children.filter(
-          (c) => c.tag !== "list_item_line" && c.tag !== "blank_line",
+          (c) =>
+            c.tag !== "list_marker" &&
+            c.tag !== "text_content" &&
+            c.tag !== "blank_line",
         ),
       });
 

@@ -76,3 +76,33 @@ Block annotation with inline text and body
       (text_line
         (line_content
           (text_content))))))
+
+==================
+Annotation inline text with formatting
+==================
+:: note :: This is *important* text
+---
+
+(document
+  (annotation_single
+    (annotation_marker)
+    (annotation_header)
+    (annotation_marker)
+    (annotation_inline_text
+      (strong))))
+
+==================
+Annotation inline text with multiple inlines
+==================
+:: note :: See [ref] and `code` here
+---
+
+(document
+  (annotation_single
+    (annotation_marker)
+    (annotation_header)
+    (annotation_marker)
+    (annotation_inline_text
+      (reference
+        (general_reference))
+      (code_span))))
