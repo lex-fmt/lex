@@ -24,7 +24,7 @@
 
 use super::super::range::{Position, Range};
 use super::super::text_content::TextContent;
-use super::super::traits::{AstNode, Container, TextNode, Visitor, VisualStructure};
+use super::super::traits::{AstNode, Container, Visitor, VisualStructure};
 use super::annotation::Annotation;
 use super::content_item::ContentItem;
 use std::fmt;
@@ -209,27 +209,6 @@ impl AstNode for Paragraph {
         // Visit child TextLines
         super::super::traits::visit_children(visitor, &self.lines);
         visitor.leave_paragraph(self);
-    }
-}
-
-impl TextNode for Paragraph {
-    fn text(&self) -> String {
-        self.lines
-            .iter()
-            .filter_map(|item| {
-                if let super::content_item::ContentItem::TextLine(tl) = item {
-                    Some(tl.text().to_string())
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-    fn lines(&self) -> &[TextContent] {
-        // This is a compatibility method - we no longer store raw TextContent
-        // Return empty slice since we've moved to ContentItem::TextLine
-        &[]
     }
 }
 

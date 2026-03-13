@@ -6,7 +6,6 @@
 use super::elements::ContentItem;
 use super::elements::VerbatimLine;
 use super::range::{Position, Range};
-use super::text_content::TextContent;
 
 /// Visitor trait for traversing the AST
 ///
@@ -97,12 +96,6 @@ pub trait Container: AstNode {
     fn label(&self) -> &str;
     fn children(&self) -> &[ContentItem];
     fn children_mut(&mut self) -> &mut Vec<ContentItem>;
-}
-
-/// Trait for leaf nodes that contain text
-pub trait TextNode: AstNode {
-    fn text(&self) -> String;
-    fn lines(&self) -> &[TextContent];
 }
 
 /// Trait describing visual/structural properties of nodes for line-oriented rendering
