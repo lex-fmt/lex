@@ -7,7 +7,7 @@
 //!   - doc.root.find_paragraphs(|p| ...)
 //!     etc.
 
-use crate::lex::ast::traits::{Container, TextNode};
+use crate::lex::ast::traits::Container;
 use crate::lex::ast::{ContentItem, Document, Paragraph};
 
 // ===== Assertion helpers =====
@@ -39,7 +39,7 @@ pub fn documents_match(doc1: &Document, doc2: &Document) -> bool {
 pub fn content_items_match(item1: &ContentItem, item2: &ContentItem) -> bool {
     use ContentItem::*;
     match (item1, item2) {
-        (Paragraph(p1), Paragraph(p2)) => p1.lines().len() == p2.lines().len(),
+        (Paragraph(p1), Paragraph(p2)) => p1.lines.len() == p2.lines.len(),
         (Session(s1), Session(s2)) => {
             s1.label() == s2.label()
                 && s1.children().len() == s2.children().len()

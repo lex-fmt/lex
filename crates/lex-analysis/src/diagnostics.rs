@@ -23,33 +23,53 @@ pub fn analyze(document: &Document) -> Vec<AnalysisDiagnostic> {
 }
 
 fn check_footnotes(document: &Document, diagnostics: &mut Vec<AnalysisDiagnostic>) {
-    // 1. Collect all footnote references
-    let mut references = Vec::new();
+    // 1. Collect all footnote references (both numbered and labeled)
+    let mut numbered_refs = Vec::new();
+    let mut labeled_refs = Vec::new();
     for_each_text_content(document, &mut |text| {
         for reference in extract_references(text) {
-            if let ReferenceType::FootnoteNumber { number } = reference.reference_type {
-                references.push((number, reference.range));
+            match &reference.reference_type {
+                ReferenceType::FootnoteNumber { number } => {
+                    numbered_refs.push((*number, reference.range));
+                }
+                ReferenceType::FootnoteLabeled { label } => {
+                    labeled_refs.push((label.clone(), reference.range));
+                }
+                _ => {}
             }
         }
     });
 
     // 2. Collect all footnote definitions (annotations and list items)
     let definitions_list = crate::utils::collect_footnote_definitions(document);
-    let mut definitions = std::collections::HashSet::new();
+    let mut numeric_definitions = std::collections::HashSet::new();
+    let mut label_definitions = std::collections::HashSet::new();
 
-    for (label, _) in definitions_list {
+    for (label, _) in &definitions_list {
+        label_definitions.insert(label.to_lowercase());
         if let Ok(number) = label.parse::<u32>() {
-            definitions.insert(number);
+            numeric_definitions.insert(number);
         }
     }
 
-    // 3. Check for missing definitions
-    for (number, range) in &references {
-        if !definitions.contains(number) {
+    // 3. Check for missing definitions (numbered)
+    for (number, range) in &numbered_refs {
+        if !numeric_definitions.contains(number) {
             diagnostics.push(AnalysisDiagnostic {
                 range: range.clone(),
                 kind: DiagnosticKind::MissingFootnoteDefinition,
                 message: format!("Footnote [{number}] is referenced but not defined"),
+            });
+        }
+    }
+
+    // 4. Check for missing definitions (labeled)
+    for (label, range) in &labeled_refs {
+        if !label_definitions.contains(&label.to_lowercase()) {
+            diagnostics.push(AnalysisDiagnostic {
+                range: range.clone(),
+                kind: DiagnosticKind::MissingFootnoteDefinition,
+                message: format!("Footnote [^{label}] is referenced but not defined"),
             });
         }
     }
@@ -85,6 +105,29 @@ mod tests {
     fn ignores_valid_list_footnote() {
         // "Notes" session with list item "1."
         let doc = parse("Text [1].\n\nNotes\n\n1. Note.\n");
+        let diags = analyze(&doc);
+        assert_eq!(diags.len(), 0);
+    }
+
+    #[test]
+    fn detects_missing_labeled_footnote_definition() {
+        let doc = parse("Text with [^source] reference.");
+        let diags = analyze(&doc);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].kind, DiagnosticKind::MissingFootnoteDefinition);
+        assert!(diags[0].message.contains("[^source]"));
+    }
+
+    #[test]
+    fn ignores_valid_labeled_footnote() {
+        let doc = parse("Text [^source].\n\n:: source :: The source material.\n");
+        let diags = analyze(&doc);
+        assert_eq!(diags.len(), 0);
+    }
+
+    #[test]
+    fn labeled_footnote_match_is_case_insensitive() {
+        let doc = parse("Text [^Source].\n\n:: source :: The source material.\n");
         let diags = analyze(&doc);
         assert_eq!(diags.len(), 0);
     }
