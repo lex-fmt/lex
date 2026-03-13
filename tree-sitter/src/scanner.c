@@ -502,7 +502,9 @@ bool tree_sitter_lex_external_scanner_scan(void *payload, TSLexer *lexer,
                     } else {
                         line_indent++;
                     }
-                    lexer->advance(lexer, false);
+                    // Skip leading indentation so it is not part of VERBATIM_CONTENT,
+                    // matching how the first content line's indent is handled.
+                    lexer->advance(lexer, true);
                 }
 
                 // Blank line — include in content
