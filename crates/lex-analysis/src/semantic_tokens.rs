@@ -352,6 +352,11 @@ impl TokenCollector {
             if let Some(location) = &group.subject.location {
                 self.push_range(location, LexSemanticTokenKind::VerbatimSubject);
             }
+            for child in group.children {
+                if let ContentItem::VerbatimLine(line) = child {
+                    self.push_range(&line.location, LexSemanticTokenKind::VerbatimContent);
+                }
+            }
         }
 
         self.push_range(
@@ -360,13 +365,6 @@ impl TokenCollector {
         );
         for parameter in &verbatim.closing_data.parameters {
             self.push_range(&parameter.location, LexSemanticTokenKind::VerbatimAttribute);
-        }
-
-        // Highlight verbatim content lines
-        for child in &verbatim.children {
-            if let ContentItem::VerbatimLine(line) = child {
-                self.push_range(&line.location, LexSemanticTokenKind::VerbatimContent);
-            }
         }
 
         self.process_annotations(verbatim.annotations());
