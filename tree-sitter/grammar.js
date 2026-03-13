@@ -55,10 +55,10 @@ module.exports = grammar({
     [$.list_item],
     // subject_content: definition vs verbatim vs line_content (paragraph text)
     [$.verbatim_block, $.definition, $.line_content],
-    // after dedent: session done vs verbatim continues with closing annotation
-    [$.session, $.verbatim_block],
     // verbatim_block shares structure with definition (no blank lines case)
     [$.verbatim_block, $.definition],
+    // blank lines between verbatim groups: body's repeat vs group_item's repeat
+    [$.verbatim_group_item],
   ],
 
   rules: {
@@ -94,6 +94,9 @@ module.exports = grammar({
       ),
 
     // ===== Verbatim Blocks =====
+    // Verbatim blocks can contain multiple subject/content pairs (groups)
+    // sharing a single closing annotation. The first subject/content lives
+    // directly in verbatim_block; additional pairs are verbatim_group_item nodes.
     verbatim_block: ($) =>
       prec.dynamic(
         4,
@@ -112,10 +115,32 @@ module.exports = grammar({
             // emits an opaque multi-line verbatim_content token
             seq(repeat($.blank_line), $.verbatim_content),
           ),
+          repeat($.verbatim_group_item),
           $.annotation_marker,
           $.annotation_header,
           $.annotation_marker,
           $._newline,
+        ),
+      ),
+
+    // Additional subject/content pair in a verbatim group.
+    verbatim_group_item: ($) =>
+      prec.dynamic(
+        4,
+        prec.right(
+          seq(
+            repeat($.blank_line),
+            field("subject", $.subject_content),
+            $._newline,
+            choice(
+              seq($._session_break, repeat1($._block), $._dedent),
+              seq(
+                repeat($.blank_line),
+                optional(seq($._indent, repeat1($._block), $._dedent)),
+              ),
+              seq(repeat($.blank_line), $.verbatim_content),
+            ),
+          ),
         ),
       ),
 

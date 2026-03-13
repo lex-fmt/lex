@@ -594,6 +594,68 @@
         {
           "type": "verbatim_content",
           "named": true
+        },
+        {
+          "type": "verbatim_group_item",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "verbatim_group_item",
+    "named": true,
+    "fields": {
+      "subject": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "subject_content",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "annotation_block",
+          "named": true
+        },
+        {
+          "type": "annotation_single",
+          "named": true
+        },
+        {
+          "type": "blank_line",
+          "named": true
+        },
+        {
+          "type": "definition",
+          "named": true
+        },
+        {
+          "type": "list",
+          "named": true
+        },
+        {
+          "type": "paragraph",
+          "named": true
+        },
+        {
+          "type": "session",
+          "named": true
+        },
+        {
+          "type": "verbatim_block",
+          "named": true
+        },
+        {
+          "type": "verbatim_content",
+          "named": true
         }
       ]
     }

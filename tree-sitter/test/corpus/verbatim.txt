@@ -164,3 +164,142 @@ Empty:
     (annotation_marker)
     (annotation_header)
     (annotation_marker)))
+
+==================
+Verbatim group with two pairs
+==================
+Install:
+    $ brew install lex
+Run:
+    $ lex help
+:: shell ::
+---
+
+(document
+  (verbatim_block
+    subject: (subject_content)
+    (paragraph
+      (text_line
+        (line_content
+          (text_content))))
+    (verbatim_group_item
+      subject: (subject_content)
+      (paragraph
+        (text_line
+          (line_content
+            (text_content)))))
+    (annotation_marker)
+    (annotation_header)
+    (annotation_marker)))
+
+==================
+Verbatim group with three pairs
+==================
+Step one:
+    $ ls
+Step two:
+    $ pwd
+Step three:
+    $ whoami
+:: shell ::
+---
+
+(document
+  (verbatim_block
+    subject: (subject_content)
+    (paragraph
+      (text_line
+        (line_content
+          (text_content))))
+    (verbatim_group_item
+      subject: (subject_content)
+      (paragraph
+        (text_line
+          (line_content
+            (text_content)))))
+    (verbatim_group_item
+      subject: (subject_content)
+      (paragraph
+        (text_line
+          (line_content
+            (text_content)))))
+    (annotation_marker)
+    (annotation_header)
+    (annotation_marker)))
+
+==================
+Verbatim group with blank lines between pairs
+==================
+First:
+    content1
+
+Second:
+
+    content2
+:: python ::
+---
+
+(document
+  (verbatim_block
+    subject: (subject_content)
+    (paragraph
+      (text_line
+        (line_content
+          (text_content))))
+    (blank_line)
+    (verbatim_group_item
+      subject: (subject_content)
+      (paragraph
+        (text_line
+          (line_content
+            (text_content)))))
+    (annotation_marker)
+    (annotation_header)
+    (annotation_marker)))
+
+==================
+Verbatim group with no content
+==================
+Label A:
+Label B:
+:: tag ::
+---
+
+(document
+  (verbatim_block
+    subject: (subject_content)
+    (verbatim_group_item
+      subject: (subject_content))
+    (annotation_marker)
+    (annotation_header)
+    (annotation_marker)))
+
+==================
+Verbatim group mixed content and no content
+==================
+Has content:
+    $ echo hello
+No content:
+Also has content:
+    $ echo world
+:: shell ::
+---
+
+(document
+  (verbatim_block
+    subject: (subject_content)
+    (paragraph
+      (text_line
+        (line_content
+          (text_content))))
+    (verbatim_group_item
+      subject: (subject_content))
+    (verbatim_group_item
+      subject: (subject_content)
+      (paragraph
+        (text_line
+          (line_content
+            (text_content)))))
+    (annotation_marker)
+    (annotation_header)
+    (annotation_marker)))

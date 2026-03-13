@@ -45,3 +45,5 @@
 ; === Parameters (@parameter.outer) ===
 ; List items as "parameters" for item-level navigation
 (list_item) @parameter.outer
+; Verbatim group items for navigating between group pairs
+(verbatim_group_item) @parameter.outer
