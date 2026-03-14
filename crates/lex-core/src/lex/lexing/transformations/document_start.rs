@@ -60,7 +60,6 @@ impl DocumentStartMarker {
     /// Document-level annotations are:
     /// - AnnotationStartLine at root level
     /// - Followed by their content (possibly including Indent/Dedent for nested content)
-    /// - Optionally followed by AnnotationEndLine
     /// - Possibly followed by BlankLines
     fn find_content_start(tokens: &[LineToken]) -> usize {
         let mut pos = 0;
@@ -84,11 +83,6 @@ impl DocumentStartMarker {
                 LineType::AnnotationStartLine if indent_depth == 0 => {
                     pos += 1;
                     // Continue to consume the annotation's content
-                }
-
-                // Annotation end at root level - part of document metadata
-                LineType::AnnotationEndLine if indent_depth == 0 => {
-                    pos += 1;
                 }
 
                 // Blank lines between annotations at root level - skip
@@ -231,27 +225,6 @@ mod tests {
         assert_eq!(result[3].line_type, LineType::Dedent);
         assert_eq!(result[4].line_type, LineType::DocumentStart);
         assert_eq!(result[5].line_type, LineType::ParagraphLine);
-    }
-
-    #[test]
-    fn test_annotation_with_end_marker() {
-        // Document: AnnotationStartLine, Indent, content, Dedent, AnnotationEndLine, content
-        let tokens = vec![
-            make_line(LineType::AnnotationStartLine),
-            make_indent(),
-            make_line(LineType::ParagraphLine),
-            make_dedent(),
-            make_line(LineType::AnnotationEndLine),
-            make_line(LineType::ParagraphLine),
-        ];
-
-        let result = DocumentStartMarker::mark(tokens);
-
-        // DocumentStart should be after AnnotationEndLine
-        assert_eq!(result.len(), 7);
-        assert_eq!(result[4].line_type, LineType::AnnotationEndLine);
-        assert_eq!(result[5].line_type, LineType::DocumentStart);
-        assert_eq!(result[6].line_type, LineType::ParagraphLine);
     }
 
     #[test]

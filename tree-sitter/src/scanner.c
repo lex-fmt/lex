@@ -34,15 +34,14 @@
  *   1: _dedent
  *   2: _newline
  *   3: annotation_marker
- *   4: annotation_end_marker
- *   5: list_marker
- *   6: subject_content
- *   7: _strong_open
- *   8: _strong_close
- *   9: _emphasis_open
- *  10: _emphasis_close
- *  11: _session_break
- *  12: verbatim_content
+ *   4: list_marker
+ *   5: subject_content
+ *   6: _strong_open
+ *   7: _strong_close
+ *   8: _emphasis_open
+ *   9: _emphasis_close
+ *  10: _session_break
+ *  11: verbatim_content
  *
  * Flanking validation for emphasis delimiters:
  *   Opening: prev char must not be alphanumeric (WORD class), next must be WORD.
@@ -68,7 +67,6 @@ enum TokenType {
     DEDENT,
     NEWLINE,
     ANNOTATION_MARKER,
-    ANNOTATION_END_MARKER,
     LIST_MARKER,
     SUBJECT_CONTENT,
     STRONG_OPEN,
@@ -315,8 +313,8 @@ bool tree_sitter_lex_external_scanner_scan(void *payload, TSLexer *lexer,
     fprintf(stderr, "] pending=%d lookahead='%c'(%d) valid=[",
             scanner->pending_dedents, lexer->lookahead > 31 ? lexer->lookahead : '?',
             lexer->lookahead);
-    const char *names[] = {"IND","DED","NL","AM","AEM","LM","SC","SO","SCl","EO","ECl","SB","VC"};
-    for (int i = 0; i <= 12; i++) {
+    const char *names[] = {"IND","DED","NL","AM","LM","SC","SO","SCl","EO","ECl","SB","VC"};
+    for (int i = 0; i <= 11; i++) {
         if (valid_symbols[i]) fprintf(stderr, "%s ", names[i]);
     }
     fprintf(stderr, "]\n");
@@ -572,7 +570,7 @@ bool tree_sitter_lex_external_scanner_scan(void *payload, TSLexer *lexer,
                 }
                 lexer->result_symbol = DEDENT;
                 // Keep at_line_start=true so next scan can detect
-                // line-start tokens (annotation_end_marker, etc.)
+                // line-start tokens (annotation_marker, etc.)
                 return true;
             }
         }
@@ -587,36 +585,6 @@ bool tree_sitter_lex_external_scanner_scan(void *payload, TSLexer *lexer,
         // false later, the grammar will consume from here, and this char's
         // class tells us what the grammar's token class will be.
         int32_t line_start_char = lexer->lookahead;
-
-        // Try annotation end marker: :: alone on a line (with optional whitespace)
-        // Must check before annotation_marker to handle closing :: correctly
-        if (valid_symbols[ANNOTATION_END_MARKER] && lexer->lookahead == ':') {
-            lexer->advance(lexer, false);
-            if (lexer->lookahead == ':') {
-                lexer->advance(lexer, false);
-                // Check that nothing else follows except whitespace and newline
-                while (lexer->lookahead == ' ' || lexer->lookahead == '\t') {
-                    lexer->advance(lexer, false);
-                }
-                if (lexer->lookahead == '\n' || lexer->eof(lexer)) {
-                    lexer->mark_end(lexer);
-                    lexer->result_symbol = ANNOTATION_END_MARKER;
-                    return true;
-                }
-            }
-            // Not an end marker — but we already consumed ::
-            // Try as annotation_marker instead
-            if (valid_symbols[ANNOTATION_MARKER]) {
-                lexer->mark_end(lexer);
-                if (lexer->lookahead == ' ') {
-                    lexer->advance(lexer, false);
-                    lexer->mark_end(lexer);
-                }
-                lexer->result_symbol = ANNOTATION_MARKER;
-                return true;
-            }
-            return false;
-        }
 
         // Try annotation marker: :: at line start
         if (valid_symbols[ANNOTATION_MARKER] && lexer->lookahead == ':') {

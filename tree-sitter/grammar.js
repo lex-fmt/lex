@@ -35,7 +35,6 @@ module.exports = grammar({
     $._dedent,
     $._newline,
     $.annotation_marker, // ":: " at line start
-    $.annotation_end_marker, // "::" alone on a line (closing marker)
     $.list_marker, // list marker only: "- ", "1. ", "a) ", etc.
     $.subject_content, // entire line ending with : (scanner verifies EOL)
     $._strong_open, // opening * validated by scanner flanking rules
@@ -190,7 +189,6 @@ module.exports = grammar({
         $._indent,
         repeat1($._block),
         $._dedent,
-        optional(seq($.annotation_end_marker, $._newline)),
       ),
 
     annotation_single: ($) =>

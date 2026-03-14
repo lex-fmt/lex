@@ -70,7 +70,6 @@
 ; === Annotations (generic) ===
 ; Annotation delimiters (LSP: part of AnnotationLabel)
 (annotation_marker) @punctuation.special
-(annotation_end_marker) @punctuation.special
 
 ; Annotation header — the label between :: markers (LSP: AnnotationLabel)
 (annotation_header) @comment

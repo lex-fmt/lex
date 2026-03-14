@@ -319,7 +319,6 @@ impl Visitor for LexSerializer {
     fn leave_annotation(&mut self, annotation: &Annotation) {
         if !annotation.children.is_empty() {
             self.indent_level -= 1;
-            self.write_line("::");
         }
     }
 
@@ -581,7 +580,7 @@ mod tests {
         let source = Lexplore::load(ElementType::Annotation, 1).source();
         let formatted = format_source(&source);
         // Document-level annotations should be preserved
-        assert_eq!(formatted, ":: note\n::\n");
+        assert_eq!(formatted, ":: note\n");
     }
 
     #[test]
@@ -589,7 +588,7 @@ mod tests {
         let source = Lexplore::load(ElementType::Annotation, 2).source();
         let formatted = format_source(&source);
         // Document-level annotations should be preserved
-        assert_eq!(formatted, ":: warning severity=high\n::\n");
+        assert_eq!(formatted, ":: warning severity=high\n");
     }
 
     #[test]
@@ -599,7 +598,7 @@ mod tests {
         // Document-level annotations should be preserved
         assert_eq!(
             formatted,
-            ":: note\n    This is an important note that requires a detailed explanation.\n::\n"
+            ":: note\n    This is an important note that requires a detailed explanation.\n"
         );
     }
 

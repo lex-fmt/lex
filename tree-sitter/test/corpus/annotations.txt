@@ -41,25 +41,6 @@ Block annotation
           (text_content))))))
 
 ==================
-Block annotation with closing marker
-==================
-:: code ::
-    function hello() {}
-::
----
-
-(document
-  (annotation_block
-    (annotation_marker)
-    (annotation_header)
-    (annotation_marker)
-    (paragraph
-      (text_line
-        (line_content
-          (text_content))))
-    (annotation_end_marker)))
-
-==================
 Block annotation with inline text and body
 ==================
 :: note :: Important

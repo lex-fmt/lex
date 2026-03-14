@@ -178,7 +178,6 @@ mod tests {
     fn fixture() -> (Document, String) {
         let source = r#":: note ::
     Something.
-::
 
 Cache:
     Definition body.
