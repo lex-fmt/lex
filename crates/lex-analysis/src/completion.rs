@@ -589,7 +589,6 @@ mod tests {
 
     const SAMPLE_DOC: &str = r#":: note ::
     Document level note.
-::
 
 Cache:
     Definition body.

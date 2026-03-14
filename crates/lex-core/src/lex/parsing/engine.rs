@@ -323,7 +323,6 @@ Paragraph before session.
 
     :: note author="system" ::
         This is an annotated note within a session
-    ::
 
     - List item 1
     - List item 2
@@ -333,7 +332,6 @@ Paragraph before session.
 :: warning severity=high ::
     - Item in annotated warning
     - Important item
-::
 
 Final paragraph.
 "#;

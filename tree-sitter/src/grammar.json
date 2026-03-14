@@ -490,27 +490,6 @@
         {
           "type": "SYMBOL",
           "name": "_dedent"
-        },
-        {
-          "type": "CHOICE",
-          "members": [
-            {
-              "type": "SEQ",
-              "members": [
-                {
-                  "type": "SYMBOL",
-                  "name": "annotation_end_marker"
-                },
-                {
-                  "type": "SYMBOL",
-                  "name": "_newline"
-                }
-              ]
-            },
-            {
-              "type": "BLANK"
-            }
-          ]
         }
       ]
     },
@@ -1240,10 +1219,6 @@
     {
       "type": "SYMBOL",
       "name": "annotation_marker"
-    },
-    {
-      "type": "SYMBOL",
-      "name": "annotation_end_marker"
     },
     {
       "type": "SYMBOL",

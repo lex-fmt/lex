@@ -234,19 +234,16 @@ mod tests {
 
     const SAMPLE: &str = r#":: note ::
     Doc note.
-::
 
 Intro:
 
     :: todo ::
         Body
-    ::
 
 Paragraph text.
 
 :: info ::
     Extra details.
-::
 "#;
 
     fn parse() -> Document {
@@ -277,7 +274,7 @@ Paragraph text.
     #[test]
     fn navigates_backward_including_wrap() {
         let document = parse();
-        let start = position_of("Paragraph text");
+        let start = position_of(":: info");
         let prev = previous_annotation(&document, start).expect("previous");
         assert_eq!(prev.label, "todo");
 

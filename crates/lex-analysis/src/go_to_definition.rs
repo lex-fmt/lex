@@ -113,11 +113,9 @@ mod tests {
     fn fixture() -> (Document, String) {
         let source = r#":: source ::
     Footnote text.
-::
 
 :: spec2025 ::
     Citation entry.
-::
 
 1. Intro
 

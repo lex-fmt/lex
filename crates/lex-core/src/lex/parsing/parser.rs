@@ -68,10 +68,6 @@ impl GrammarMatcher {
 
                     // Use captures to extract indices and build the pattern
                     let pattern = match *pattern_name {
-                        "annotation_block_with_end" => PatternMatch::AnnotationBlock {
-                            start_idx: 0,
-                            content_idx: 1,
-                        },
                         "annotation_block" => PatternMatch::AnnotationBlock {
                             start_idx: 0,
                             content_idx: 1,

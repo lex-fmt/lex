@@ -20,13 +20,12 @@
 //!
 //!     Classification follows this specific order (important for correctness):
 //!         1. Blank lines
-//!         2. Annotation end lines (only :: marker, no other content)
-//!         3. Annotation start lines (follows annotation grammar)
-//!         4. Data lines (:: label params? without closing ::)
-//!         5. List lines starting with list marker AND ending with colon -> SubjectOrListItemLine
-//!         6. List lines (starting with list marker)
-//!         7. Subject lines (ending with colon)
-//!         8. Default to paragraph
+//!         2. Annotation start lines (follows annotation grammar)
+//!         3. Data lines (:: label params? without closing ::)
+//!         4. List lines starting with list marker AND ending with colon -> SubjectOrListItemLine
+//!         5. List lines (starting with list marker)
+//!         6. Subject lines (ending with colon)
+//!         7. Default to paragraph
 //!
 //!     This ordering ensures that more specific patterns (like annotation lines) are matched before
 //!     more general ones (like subject lines).
@@ -57,8 +56,8 @@ pub struct ParsedListMarker {
 ///
 /// Classification follows this specific order (important for correctness):
 /// 1. Blank lines
-/// 2. Annotation end lines (only :: marker, no other content)
-/// 3. Annotation start lines (follows annotation grammar)
+/// 2. Annotation start lines (follows annotation grammar)
+/// 3. Data lines (:: label params? without closing ::)
 /// 4. List lines starting with list marker AND ending with colon -> SubjectOrListItemLine
 /// 5. List lines (starting with list marker)
 /// 6. Subject lines (ending with colon)
@@ -71,11 +70,6 @@ pub fn classify_line_tokens(tokens: &[Token]) -> LineType {
     // BLANK_LINE: Only whitespace and newline tokens
     if is_blank_line(tokens) {
         return LineType::BlankLine;
-    }
-
-    // ANNOTATION_END_LINE: Only :: marker (and optional whitespace/newline)
-    if is_annotation_end_line(tokens) {
-        return LineType::AnnotationEndLine;
     }
 
     // ANNOTATION_START_LINE: Follows annotation grammar with :: markers
@@ -121,26 +115,6 @@ fn is_blank_line(tokens: &[Token]) -> bool {
             Token::Whitespace(_) | Token::Indentation | Token::BlankLine(_)
         )
     })
-}
-
-/// Check if line is an annotation end line: only :: marker (and optional whitespace/newline)
-///
-/// This must be checked before annotation start lines to avoid misclassifying end markers
-/// as start markers. Annotation end lines have only a single :: marker with no other content.
-fn is_annotation_end_line(tokens: &[Token]) -> bool {
-    // Find all non-whitespace/non-newline tokens
-    let content_tokens: Vec<_> = tokens
-        .iter()
-        .filter(|t| {
-            !matches!(
-                t,
-                Token::Whitespace(_) | Token::BlankLine(_) | Token::Indentation
-            )
-        })
-        .collect();
-
-    // Must have exactly one token and it must be LexMarker
-    content_tokens.len() == 1 && matches!(content_tokens[0], Token::LexMarker)
 }
 
 /// Check if line is an annotation start line: follows annotation grammar
@@ -501,12 +475,6 @@ mod tests {
         ];
 
         assert_eq!(classify_line_tokens(&tokens), LineType::ParagraphLine);
-    }
-
-    #[test]
-    fn test_classify_annotation_end_line() {
-        let tokens = vec![Token::LexMarker, Token::BlankLine(Some("\n".to_string()))];
-        assert_eq!(classify_line_tokens(&tokens), LineType::AnnotationEndLine);
     }
 
     #[test]

@@ -12,10 +12,6 @@
           "named": true
         },
         {
-          "type": "annotation_end_marker",
-          "named": true
-        },
-        {
           "type": "annotation_header",
           "named": true
         },
@@ -659,10 +655,6 @@
         }
       ]
     }
-  },
-  {
-    "type": "annotation_end_marker",
-    "named": true
   },
   {
     "type": "annotation_header",

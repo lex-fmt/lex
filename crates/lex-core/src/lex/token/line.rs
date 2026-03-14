@@ -14,7 +14,7 @@
 //!     consequential marks in lines (blank, data, subject, list) having them denormalized is
 //!     required to have parsing simpler.
 //!
-//!     The LineType enum is the definitive set: blank, annotation start/end, data, subject, list,
+//!     The LineType enum is the definitive set: blank, annotation start, data, subject, list,
 //!     subject-or-list-item, paragraph, dialog, indent, dedent. Containers are a separate
 //!     structural node, not a line token.
 //!
@@ -23,7 +23,6 @@
 //!     These are the line tokens:
 //!
 //!         - BlankLine: empty or whitespace only
-//!         - AnnotationEndLine: a line starting with :: marker and having no further content
 //!         - AnnotationStartLine: a data node + lex marker
 //!         - DataLine: :: label params? (no closing :: marker)
 //!         - SubjectLine: Line ending with colon (could be subject/definition/session title)
@@ -94,9 +93,6 @@ pub enum LineType {
     /// Blank line (empty or whitespace only)
     BlankLine,
 
-    /// Annotation end line: a line starting with :: marker and having no further content
-    AnnotationEndLine,
-
     /// Annotation start line: follows annotation grammar <lex-marker><space><label>(<space><parameters>)? <lex-marker> <content>?
     AnnotationStartLine,
 
@@ -139,7 +135,6 @@ impl fmt::Display for LineType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = match self {
             LineType::BlankLine => "BLANK_LINE",
-            LineType::AnnotationEndLine => "ANNOTATION_END_LINE",
             LineType::AnnotationStartLine => "ANNOTATION_START_LINE",
             LineType::DataLine => "DATA_LINE",
             LineType::SubjectLine => "SUBJECT_LINE",
@@ -167,7 +162,6 @@ impl LineType {
     pub fn to_grammar_string(&self) -> String {
         let name = match self {
             LineType::BlankLine => "blank-line",
-            LineType::AnnotationEndLine => "annotation-end-line",
             LineType::AnnotationStartLine => "annotation-start-line",
             LineType::DataLine => "data-line",
             LineType::SubjectLine => "subject-line",
@@ -236,10 +230,6 @@ mod tests {
         assert_eq!(
             LineType::AnnotationStartLine.to_grammar_string(),
             "<annotation-start-line>"
-        );
-        assert_eq!(
-            LineType::AnnotationEndLine.to_grammar_string(),
-            "<annotation-end-line>"
         );
         assert_eq!(LineType::SubjectLine.to_grammar_string(), "<subject-line>");
         assert_eq!(LineType::ListLine.to_grammar_string(), "<list-line>");

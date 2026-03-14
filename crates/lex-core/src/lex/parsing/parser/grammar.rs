@@ -44,7 +44,7 @@
 //!     a few consequential marks in lines (blank, data, subject, list) having them
 //!     denormalized is required to have parsing simpler.
 //!
-//!     The definitive set is the LineType enum (blank, annotation start/end, data, subject,
+//!     The definitive set is the LineType enum (blank, annotation start, data, subject,
 //!     list, subject-or-list-item, paragraph, dialog, indent, dedent), and containers are
 //!     a separate structural node, not a line token.
 //!
@@ -52,7 +52,7 @@
 //!
 //!     Patterns are matched in declaration order for correct disambiguation:
 //!         1. verbatim-block - requires closing annotation, tried first for disambiguation
-//!         2. annotation_block - block with container between start and end markers
+//!         2. annotation_block - block annotation with indented content
 //!         3. annotation_single - single-line annotation only
 //!         4. list_no_blank - 2+ list items without preceding blank (inside containers)
 //!         5. list - requires preceding blank line + 2+ list items (at root level)
@@ -98,12 +98,7 @@ pub(super) const GRAMMAR_PATTERNS: &[(&str, &str)] = &[
     // Document start marker: synthetic boundary between metadata and content
     // Only matched when there's no document title (fallback)
     ("document_start", r"^<document-start-line>"),
-    // Annotation (multi-line with markers): <annotation-start-line><container><annotation-end-line>
-    (
-        "annotation_block_with_end",
-        r"^(?P<start><annotation-start-line>)(?P<content><container>)(?P<end><annotation-end-line>)",
-    ),
-    // Annotation (multi-line without end marker): <annotation-start-line><container>
+    // Annotation (multi-line): <annotation-start-line><container>
     (
         "annotation_block",
         r"^(?P<start><annotation-start-line>)(?P<content><container>)",
