@@ -92,6 +92,10 @@ impl InlineProcessor {
         {
             for cell in &mut row.cells {
                 self.process_text_content(&mut cell.content);
+                // Process block children if present
+                for child in cell.children.iter_mut() {
+                    self.process_content_item(child);
+                }
             }
         }
         if let Some(footnotes) = &mut table.footnotes {

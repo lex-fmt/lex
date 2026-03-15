@@ -40,9 +40,11 @@ use super::super::range::Range;
 use super::super::text_content::TextContent;
 use super::super::traits::{AstNode, Container, Visitor, VisualStructure};
 use super::annotation::Annotation;
+use super::container::GeneralContainer;
 use super::content_item::ContentItem;
 use super::data::Data;
 use super::list::List;
+use super::typed_content::ContentElement;
 use super::verbatim::VerbatimBlockMode;
 use std::fmt;
 
@@ -64,6 +66,8 @@ pub enum TableCellAlignment {
 pub struct TableCell {
     /// The cell's inline content (trimmed text, inline-parsed)
     pub content: TextContent,
+    /// Block-level children (lists, definitions, etc.) when cell has block content
+    pub children: GeneralContainer,
     /// Number of columns this cell spans (1 = no merge)
     pub colspan: usize,
     /// Number of rows this cell spans (1 = no merge)
@@ -80,12 +84,23 @@ impl TableCell {
     pub fn new(content: TextContent) -> Self {
         Self {
             content,
+            children: GeneralContainer::empty(),
             colspan: 1,
             rowspan: 1,
             align: TableCellAlignment::None,
             header: false,
             location: Range::default(),
         }
+    }
+
+    pub fn with_children(mut self, children: Vec<ContentElement>) -> Self {
+        self.children = GeneralContainer::from_typed(children);
+        self
+    }
+
+    /// Whether this cell has block-level content (lists, definitions, etc.)
+    pub fn has_block_content(&self) -> bool {
+        !self.children.is_empty()
     }
 
     pub fn with_span(mut self, colspan: usize, rowspan: usize) -> Self {

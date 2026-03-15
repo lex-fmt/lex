@@ -362,14 +362,36 @@ fn build_annotation_snapshot(ann: &Annotation, include_all: bool) -> AstSnapshot
     snapshot
 }
 
-fn build_table_snapshot(t: &super::Table, _include_all: bool) -> AstSnapshot {
+fn build_table_snapshot(t: &super::Table, include_all: bool) -> AstSnapshot {
     let label = format!(
         "{} ({} header + {} body rows)",
         t.display_label(),
         t.header_rows.len(),
         t.body_rows.len()
     );
-    let snapshot = AstSnapshot::new("Table".to_string(), label, t.range().clone());
+    let mut snapshot = AstSnapshot::new("Table".to_string(), label, t.range().clone());
+
+    // Include cell children with block content
+    if include_all {
+        for row in t.all_rows() {
+            for cell in &row.cells {
+                if cell.has_block_content() {
+                    let mut cell_snapshot = AstSnapshot::new(
+                        "TableCell".to_string(),
+                        cell.content.as_string().to_string(),
+                        cell.location.clone(),
+                    );
+                    for child in cell.children.iter() {
+                        cell_snapshot
+                            .children
+                            .push(snapshot_from_content_with_options(child, include_all));
+                    }
+                    snapshot.children.push(cell_snapshot);
+                }
+            }
+        }
+    }
+
     snapshot
 }
 

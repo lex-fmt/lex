@@ -23,10 +23,14 @@ use std::ops::Range as ByteRange;
 #[derive(Debug, Clone)]
 pub(in crate::lex::building) struct TableCellData {
     pub text: String,
+    /// Raw text preserving indentation (for block content parsing in multi-line mode)
+    pub raw_text: Option<String>,
     pub byte_range: ByteRange<usize>,
     pub colspan: usize,
     pub rowspan: usize,
     pub is_header: bool,
+    /// Block content parsed from multi-line cell text, if any.
+    pub block_content: Option<Vec<crate::lex::ast::elements::typed_content::ContentElement>>,
 }
 
 /// Extracted data for a single table row (pre-AST).
@@ -91,6 +95,16 @@ pub(in crate::lex::building) fn extract_table_data(
     // Resolve merge markers
     let mut rows = resolve_merges(raw_rows);
 
+    // Parse block content in multi-line cells
+    if is_multiline {
+        for row in &mut rows {
+            for cell in &mut row.cells {
+                let parse_text = cell.raw_text.as_deref().unwrap_or(&cell.text);
+                cell.block_content = parse_cell_content(parse_text);
+            }
+        }
+    }
+
     // Split into header/body based on closing annotation parameters
     let header_count = extract_header_count(closing_data);
     let (header_rows, body_rows) = split_header_body(&mut rows, header_count);
@@ -124,7 +138,10 @@ fn parse_pipe_rows(content_lines: &[(String, ByteRange<usize>)]) -> Vec<TableRow
 enum LineKind<'a> {
     /// A pipe row with parsed cell texts
     PipeRow {
+        /// Trimmed cell texts (for merge markers, compact mode)
         cells: Vec<&'a str>,
+        /// Raw cell texts preserving leading whitespace (for block content in multi-line mode)
+        raw_cells: Vec<&'a str>,
         line_range: &'a ByteRange<usize>,
     },
     /// A blank line (row group separator in multi-line mode)
@@ -156,9 +173,12 @@ fn classify_lines<'a>(content_lines: &'a [(String, ByteRange<usize>)]) -> Vec<Li
                 } else {
                     segments.len()
                 };
-                let cells = segments[start..end].iter().map(|s| s.trim()).collect();
+                let cells: Vec<&str> = segments[start..end].iter().map(|s| s.trim()).collect();
+                let raw_cells: Vec<&str> =
+                    segments[start..end].iter().map(|s| s.trim_end()).collect();
                 LineKind::PipeRow {
                     cells,
+                    raw_cells,
                     line_range: range,
                 }
             } else {
@@ -200,15 +220,20 @@ fn parse_compact_rows(lines: &[LineKind]) -> Vec<TableRowData> {
     lines
         .iter()
         .filter_map(|line| {
-            if let LineKind::PipeRow { cells, line_range } = line {
+            if let LineKind::PipeRow {
+                cells, line_range, ..
+            } = line
+            {
                 let cell_data = cells
                     .iter()
                     .map(|text| TableCellData {
                         text: text.to_string(),
+                        raw_text: None,
                         byte_range: (*line_range).clone(),
                         colspan: 1,
                         rowspan: 1,
                         is_header: false,
+                        block_content: None,
                     })
                     .collect();
                 Some(TableRowData {
@@ -259,7 +284,12 @@ fn parse_multiline_rows(lines: &[LineKind]) -> Vec<TableRowData> {
 ///
 /// The first line establishes the cells. Continuation lines append to the
 /// corresponding cell's text (joined with newline). Whitespace-only
-/// continuation cells add nothing.
+/// continuation cells represent blank lines (paragraph separators) when the
+/// cell already has content.
+///
+/// Two texts are built per cell:
+/// - `merged_texts`: trimmed cell content (for inline use and merge markers)
+/// - `merged_raw`: raw cell content preserving leading whitespace (for block parsing)
 fn merge_group(group: &[&LineKind]) -> Option<TableRowData> {
     if group.is_empty() {
         return None;
@@ -268,6 +298,7 @@ fn merge_group(group: &[&LineKind]) -> Option<TableRowData> {
     // Extract the first line's cells as the base
     let LineKind::PipeRow {
         cells: first_cells,
+        raw_cells: first_raw,
         line_range: first_range,
     } = group[0]
     else {
@@ -275,12 +306,14 @@ fn merge_group(group: &[&LineKind]) -> Option<TableRowData> {
     };
 
     let mut merged_texts: Vec<String> = first_cells.iter().map(|s| s.to_string()).collect();
+    let mut merged_raw: Vec<String> = first_raw.iter().map(|s| s.to_string()).collect();
     let mut row_range = (*first_range).clone();
 
     // Append continuation lines
     for line in &group[1..] {
         let LineKind::PipeRow {
             cells: cont_cells,
+            raw_cells: cont_raw,
             line_range: cont_range,
         } = line
         else {
@@ -292,26 +325,49 @@ fn merge_group(group: &[&LineKind]) -> Option<TableRowData> {
 
         for (col, cell_text) in cont_cells.iter().enumerate() {
             if col < merged_texts.len() {
-                // Whitespace-only continuation cells add nothing
                 if !cell_text.is_empty() {
+                    // Non-empty continuation: append with newline
                     if !merged_texts[col].is_empty() {
                         merged_texts[col].push('\n');
                     }
                     merged_texts[col].push_str(cell_text);
+                } else if !merged_texts[col].is_empty() {
+                    // Whitespace-only continuation on a non-empty cell: blank line
+                    // (This creates paragraph separators for block content)
+                    merged_raw[col].push('\n');
                 }
             }
-            // Extra columns in continuation lines are ignored
+
+            // Build raw text for all columns
+            if col < merged_raw.len() {
+                let raw = cont_raw.get(col).copied().unwrap_or("");
+                if !raw.trim().is_empty() {
+                    merged_raw[col].push('\n');
+                    merged_raw[col].push_str(raw);
+                } else if !merged_raw[col].is_empty() {
+                    // Blank line separator in raw text
+                    merged_raw[col].push('\n');
+                }
+            }
         }
+    }
+
+    // Dedent raw text: compute per-cell indentation baseline and strip it
+    for raw in &mut merged_raw {
+        dedent_cell_text(raw);
     }
 
     let cells = merged_texts
         .into_iter()
-        .map(|text| TableCellData {
+        .zip(merged_raw)
+        .map(|(text, raw)| TableCellData {
             text,
+            raw_text: if group.len() > 1 { Some(raw) } else { None },
             byte_range: row_range.clone(),
             colspan: 1,
             rowspan: 1,
             is_header: false,
+            block_content: None,
         })
         .collect();
 
@@ -319,6 +375,85 @@ fn merge_group(group: &[&LineKind]) -> Option<TableRowData> {
         cells,
         byte_range: row_range,
     })
+}
+
+/// Dedent cell text by stripping the common leading whitespace from all non-empty lines.
+fn dedent_cell_text(text: &mut String) {
+    let baseline = text
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| line.len() - line.trim_start().len())
+        .min()
+        .unwrap_or(0);
+
+    if baseline > 0 {
+        let dedented: String = text
+            .lines()
+            .map(|line| {
+                if line.trim().is_empty() {
+                    ""
+                } else if line.len() > baseline {
+                    &line[baseline..]
+                } else {
+                    line.trim_start()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        *text = dedented;
+    }
+}
+
+/// Parse cell text to detect block-level content.
+///
+/// For multi-line cells, re-parses the merged text as a standalone document.
+/// Returns `None` if the cell is inline-only (single paragraph matching original text).
+/// Returns `Some(children)` if the cell contains block content.
+fn parse_cell_content(
+    text: &str,
+) -> Option<Vec<crate::lex::ast::elements::typed_content::ContentElement>> {
+    use crate::lex::ast::elements::typed_content::ContentElement;
+    use crate::lex::ast::ContentItem;
+    use crate::lex::parsing::parse_document;
+
+    // Single-line cells are always inline
+    if !text.contains('\n') {
+        return None;
+    }
+
+    // Try to parse the cell text as a standalone document
+    let cell_source = format!("{text}\n");
+    let mut doc = parse_document(&cell_source).ok()?;
+
+    let items: Vec<&ContentItem> = doc
+        .root
+        .children
+        .iter()
+        .filter(|item| !matches!(item, ContentItem::BlankLineGroup(_)))
+        .collect();
+
+    // If it's a single paragraph, check if it matches the original text
+    if items.len() == 1 {
+        if let ContentItem::Paragraph(p) = items[0] {
+            let para_text = p.text();
+            if para_text.trim() == text.trim() {
+                return None; // Just a plain paragraph — stay inline
+            }
+        }
+    }
+
+    // Convert to ContentElement (filtering out blank lines and sessions)
+    let children: Vec<ContentElement> = std::mem::take(doc.root.children.as_mut_vec())
+        .into_iter()
+        .filter_map(|item| ContentElement::try_from(item).ok())
+        .filter(|item| !matches!(item, ContentElement::BlankLineGroup(_)))
+        .collect();
+
+    if children.is_empty() {
+        None
+    } else {
+        Some(children)
+    }
 }
 
 /// Check if a line is a separator (cosmetic) line.
@@ -545,6 +680,8 @@ mod tests {
                     colspan: 1,
                     rowspan: 1,
                     is_header: false,
+                    raw_text: None,
+                    block_content: None,
                 },
                 TableCellData {
                     text: ">>".to_string(),
@@ -552,6 +689,8 @@ mod tests {
                     colspan: 1,
                     rowspan: 1,
                     is_header: false,
+                    raw_text: None,
+                    block_content: None,
                 },
                 TableCellData {
                     text: "normal".to_string(),
@@ -559,6 +698,8 @@ mod tests {
                     colspan: 1,
                     rowspan: 1,
                     is_header: false,
+                    raw_text: None,
+                    block_content: None,
                 },
             ],
             byte_range: 0..20,
@@ -578,17 +719,21 @@ mod tests {
                 cells: vec![
                     TableCellData {
                         text: "tall".to_string(),
+                        raw_text: None,
                         byte_range: 0..4,
                         colspan: 1,
                         rowspan: 1,
                         is_header: false,
+                        block_content: None,
                     },
                     TableCellData {
                         text: "b".to_string(),
+                        raw_text: None,
                         byte_range: 0..1,
                         colspan: 1,
                         rowspan: 1,
                         is_header: false,
+                        block_content: None,
                     },
                 ],
                 byte_range: 0..10,
@@ -597,17 +742,21 @@ mod tests {
                 cells: vec![
                     TableCellData {
                         text: "^^".to_string(),
+                        raw_text: None,
                         byte_range: 0..2,
                         colspan: 1,
                         rowspan: 1,
                         is_header: false,
+                        block_content: None,
                     },
                     TableCellData {
                         text: "d".to_string(),
+                        raw_text: None,
                         byte_range: 0..1,
                         colspan: 1,
                         rowspan: 1,
                         is_header: false,
+                        block_content: None,
                     },
                 ],
                 byte_range: 0..10,

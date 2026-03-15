@@ -484,11 +484,17 @@ fn build_table_cell(
         .copied()
         .unwrap_or(TableCellAlignment::None);
 
-    TableCell::new(content)
+    let mut cell = TableCell::new(content)
         .with_span(cell_data.colspan, cell_data.rowspan)
         .with_align(align)
         .with_header(cell_data.is_header)
-        .at(cell_location)
+        .at(cell_location);
+
+    if let Some(block_content) = cell_data.block_content {
+        cell = cell.with_children(block_content);
+    }
+
+    cell
 }
 
 fn build_footnote_list(footnotes: Vec<FootnoteLineData>, source_location: &SourceLocation) -> List {
