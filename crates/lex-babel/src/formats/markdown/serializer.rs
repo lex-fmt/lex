@@ -599,8 +599,26 @@ fn build_comrak_ast<'a>(
                 // Nothing needed
             }
 
-            Event::StartTable => {
+            Event::StartTable { caption, .. } => {
                 current_heading = None;
+
+                // Render caption as bold paragraph before the table
+                if let Some(caption_inlines) = caption {
+                    let para = arena.alloc(AstNode::new(RefCell::new(Ast::new(
+                        NodeValue::Paragraph,
+                        (0, 0).into(),
+                    ))));
+                    current_parent.append(para);
+                    let strong = arena.alloc(AstNode::new(RefCell::new(Ast::new(
+                        NodeValue::Strong,
+                        (0, 0).into(),
+                    ))));
+                    para.append(strong);
+                    for inline in caption_inlines {
+                        add_inline_to_node(arena, strong, inline)?;
+                    }
+                }
+
                 let table_node = arena.alloc(AstNode::new(RefCell::new(Ast::new(
                     NodeValue::Table(NodeTable {
                         alignments: vec![],
@@ -637,7 +655,17 @@ fn build_comrak_ast<'a>(
                 })?;
             }
 
-            Event::StartTableCell { header: _, align } => {
+            Event::StartTableFootnotes => {
+                // Markdown doesn't have table footnotes; render as content after the table
+            }
+
+            Event::EndTableFootnotes => {
+                // No-op in Markdown
+            }
+
+            Event::StartTableCell {
+                header: _, align, ..
+            } => {
                 let cell_node = arena.alloc(AstNode::new(RefCell::new(Ast::new(
                     NodeValue::TableCell,
                     (0, 0).into(),

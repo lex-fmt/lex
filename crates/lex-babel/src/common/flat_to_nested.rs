@@ -130,6 +130,8 @@ enum StackNode {
         rows: Vec<TableRow>,
         header: Vec<TableRow>,
         caption: Option<Vec<InlineContent>>,
+        footnotes: Vec<DocNode>,
+        fullwidth: bool,
     },
     TableRow {
         cells: Vec<TableCell>,
@@ -139,6 +141,11 @@ enum StackNode {
         content: Vec<DocNode>,
         header: bool,
         align: TableCellAlignment,
+        colspan: usize,
+        rowspan: usize,
+    },
+    TableFootnotes {
+        content: Vec<DocNode>,
     },
 }
 
@@ -234,10 +241,14 @@ impl StackNode {
                 rows,
                 header,
                 caption,
+                footnotes,
+                fullwidth,
             } => DocNode::Table(Table {
                 rows,
                 header,
                 caption,
+                footnotes,
+                fullwidth,
             }),
             StackNode::TableRow { cells: _, .. } => {
                 // TableRow is not a DocNode, it's part of Table
@@ -247,6 +258,9 @@ impl StackNode {
             StackNode::TableCell { .. } => {
                 // TableCell is not a DocNode
                 panic!("TableCell cannot be converted directly to DocNode")
+            }
+            StackNode::TableFootnotes { .. } => {
+                panic!("TableFootnotes cannot be converted directly to DocNode")
             }
         }
     }
@@ -265,6 +279,7 @@ impl StackNode {
             StackNode::Table { .. } => "Table",
             StackNode::TableRow { .. } => "TableRow",
             StackNode::TableCell { .. } => "TableCell",
+            StackNode::TableFootnotes { .. } => "TableFootnotes",
         }
     }
 
@@ -313,6 +328,10 @@ impl StackNode {
                 Ok(())
             }
             StackNode::TableCell { content, .. } => {
+                content.push(child);
+                Ok(())
+            }
+            StackNode::TableFootnotes { content, .. } => {
                 content.push(child);
                 Ok(())
             }
@@ -760,11 +779,13 @@ pub fn events_to_tree(events: &[Event]) -> Result<Document, ConversionError> {
                 )?;
             }
 
-            Event::StartTable => {
+            Event::StartTable { caption, fullwidth } => {
                 stack.push(StackNode::Table {
                     rows: vec![],
                     header: vec![],
-                    caption: None,
+                    caption: caption.clone(),
+                    footnotes: vec![],
+                    fullwidth: *fullwidth,
                 });
             }
 
@@ -827,11 +848,18 @@ pub fn events_to_tree(events: &[Event]) -> Result<Document, ConversionError> {
                 }
             }
 
-            Event::StartTableCell { header, align } => {
+            Event::StartTableCell {
+                header,
+                align,
+                colspan,
+                rowspan,
+            } => {
                 stack.push(StackNode::TableCell {
                     content: vec![],
                     header: *header,
                     align: *align,
+                    colspan: *colspan,
+                    rowspan: *rowspan,
                 });
             }
 
@@ -846,11 +874,15 @@ pub fn events_to_tree(events: &[Event]) -> Result<Document, ConversionError> {
                         content,
                         header,
                         align,
+                        colspan,
+                        rowspan,
                     } => {
                         let cell = TableCell {
                             content,
                             header,
                             align,
+                            colspan,
+                            rowspan,
                         };
                         let parent = stack.last_mut().ok_or_else(|| {
                             ConversionError::UnexpectedEnd("No parent for table cell".to_string())
@@ -870,6 +902,41 @@ pub fn events_to_tree(events: &[Event]) -> Result<Document, ConversionError> {
                     other => {
                         return Err(ConversionError::MismatchedEvents {
                             expected: "TableCell".to_string(),
+                            found: other.type_name().to_string(),
+                        })
+                    }
+                }
+            }
+
+            Event::StartTableFootnotes => {
+                stack.push(StackNode::TableFootnotes { content: vec![] });
+            }
+
+            Event::EndTableFootnotes => {
+                let node = stack.pop().ok_or_else(|| {
+                    ConversionError::UnexpectedEnd("EndTableFootnotes with empty stack".to_string())
+                })?;
+                match node {
+                    StackNode::TableFootnotes { content } => {
+                        let parent = stack.last_mut().ok_or_else(|| {
+                            ConversionError::UnexpectedEnd(
+                                "No parent for table footnotes".to_string(),
+                            )
+                        })?;
+                        match parent {
+                            StackNode::Table { footnotes, .. } => {
+                                *footnotes = content;
+                                Ok(())
+                            }
+                            _ => Err(ConversionError::MismatchedEvents {
+                                expected: "Table".to_string(),
+                                found: parent.type_name().to_string(),
+                            }),
+                        }?;
+                    }
+                    other => {
+                        return Err(ConversionError::MismatchedEvents {
+                            expected: "TableFootnotes".to_string(),
                             found: other.type_name().to_string(),
                         })
                     }

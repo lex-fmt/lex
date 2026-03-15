@@ -258,7 +258,10 @@ fn collect_events_from_node<'a>(
         }
 
         NodeValue::Table(_) => {
-            events.push(Event::StartTable);
+            events.push(Event::StartTable {
+                caption: None,
+                fullwidth: false,
+            });
             for child in node.children() {
                 collect_events_from_node(child, events)?;
             }
@@ -275,7 +278,12 @@ fn collect_events_from_node<'a>(
 
         NodeValue::TableCell => {
             let (header, align) = get_table_cell_info(node);
-            events.push(Event::StartTableCell { header, align });
+            events.push(Event::StartTableCell {
+                header,
+                align,
+                colspan: 1,
+                rowspan: 1,
+            });
 
             events.push(Event::StartParagraph);
             for child in node.children() {

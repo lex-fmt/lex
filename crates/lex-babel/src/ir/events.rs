@@ -44,7 +44,10 @@ pub enum Event {
     EndAnnotation {
         label: String,
     },
-    StartTable,
+    StartTable {
+        caption: Option<Vec<crate::ir::nodes::InlineContent>>,
+        fullwidth: bool,
+    },
     EndTable,
     StartTableRow {
         header: bool,
@@ -53,8 +56,13 @@ pub enum Event {
     StartTableCell {
         header: bool,
         align: crate::ir::nodes::TableCellAlignment,
+        colspan: usize,
+        rowspan: usize,
     },
     EndTableCell,
+    /// Table-scoped footnotes, emitted after all rows and before EndTable
+    StartTableFootnotes,
+    EndTableFootnotes,
     Image(crate::ir::nodes::Image),
     Video(crate::ir::nodes::Video),
     Audio(crate::ir::nodes::Audio),

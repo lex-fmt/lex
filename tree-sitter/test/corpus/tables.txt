@@ -1,0 +1,98 @@
+==================
+Simple table
+==================
+Results:
+    | A | B |
+    | 1 | 2 |
+:: table ::
+---
+
+(document
+  (verbatim_block
+    subject: (subject_content)
+    (paragraph
+      (text_line
+        (line_content
+          (text_content)))
+      (text_line
+        (line_content
+          (text_content))))
+    (annotation_marker)
+    (annotation_header)
+    (annotation_marker)))
+
+==================
+Table with parameters
+==================
+Data:
+    | Name  | Value |
+    | Alpha | 100   |
+:: table align=lcr header=1 ::
+---
+
+(document
+  (verbatim_block
+    subject: (subject_content)
+    (paragraph
+      (text_line
+        (line_content
+          (text_content)))
+      (text_line
+        (line_content
+          (text_content))))
+    (annotation_marker)
+    (annotation_header)
+    (annotation_marker)))
+
+==================
+Table with inline formatting in cells
+==================
+Stats:
+    | *Name* | `Code` |
+    | _test_ | #42#   |
+:: table ::
+---
+
+(document
+  (verbatim_block
+    subject: (subject_content)
+    (paragraph
+      (text_line
+        (line_content
+          (text_content
+            (strong)
+            (code_span))))
+      (text_line
+        (line_content
+          (text_content
+            (emphasis)
+            (math_span)))))
+    (annotation_marker)
+    (annotation_header)
+    (annotation_marker)))
+
+==================
+Table nested in definition
+==================
+Summary:
+    Results:
+        | A | B |
+        | 1 | 2 |
+    :: table ::
+---
+
+(document
+  (definition
+    subject: (subject_content)
+    (verbatim_block
+      subject: (subject_content)
+      (paragraph
+        (text_line
+          (line_content
+            (text_content)))
+        (text_line
+          (line_content
+            (text_content))))
+      (annotation_marker)
+      (annotation_header)
+      (annotation_marker))))

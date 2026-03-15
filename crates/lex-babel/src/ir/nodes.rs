@@ -115,6 +115,8 @@ pub struct Table {
     pub rows: Vec<TableRow>,
     pub header: Vec<TableRow>,
     pub caption: Option<Vec<InlineContent>>,
+    pub footnotes: Vec<DocNode>,
+    pub fullwidth: bool,
 }
 
 /// Represents a table row.
@@ -129,6 +131,8 @@ pub struct TableCell {
     pub content: Vec<DocNode>,
     pub header: bool,
     pub align: TableCellAlignment,
+    pub colspan: usize,
+    pub rowspan: usize,
 }
 
 /// Alignment of a table cell.

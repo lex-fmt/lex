@@ -19,7 +19,7 @@
 (definition
   (_) @block.inner)
 
-; Verbatim blocks
+; Verbatim blocks (including tables — same CST node)
 (verbatim_block) @block.outer
 
 ; === Classes/Sections (@class.outer / @class.inner) ===

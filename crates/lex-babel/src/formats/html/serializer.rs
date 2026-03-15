@@ -310,9 +310,25 @@ fn build_html_dom(events: &[Event]) -> Result<RcDom, FormatError> {
                 })?;
             }
 
-            Event::StartTable => {
+            Event::StartTable { caption, fullwidth } => {
                 current_heading = None;
-                let table = create_element("table", vec![("class", "lex-table")]);
+                let mut table_attrs = vec![("class", "lex-table")];
+                let fullwidth_class;
+                if *fullwidth {
+                    fullwidth_class = "lex-table lex-table-fullwidth".to_string();
+                    table_attrs = vec![("class", &fullwidth_class)];
+                }
+                let table = create_element("table", table_attrs);
+
+                // Render caption if present
+                if let Some(caption_inlines) = caption {
+                    let caption_el = create_element("caption", vec![]);
+                    for inline in caption_inlines {
+                        add_inline_to_node(&caption_el, inline)?;
+                    }
+                    table.children.borrow_mut().push(caption_el);
+                }
+
                 current_parent.children.borrow_mut().push(table.clone());
                 parent_stack.push(current_parent.clone());
                 current_parent = table;
@@ -321,6 +337,19 @@ fn build_html_dom(events: &[Event]) -> Result<RcDom, FormatError> {
             Event::EndTable => {
                 current_parent = parent_stack.pop().ok_or_else(|| {
                     FormatError::SerializationError("Unbalanced table end".to_string())
+                })?;
+            }
+
+            Event::StartTableFootnotes => {
+                let footer = create_element("tfoot", vec![("class", "lex-table-footnotes")]);
+                current_parent.children.borrow_mut().push(footer.clone());
+                parent_stack.push(current_parent.clone());
+                current_parent = footer;
+            }
+
+            Event::EndTableFootnotes => {
+                current_parent = parent_stack.pop().ok_or_else(|| {
+                    FormatError::SerializationError("Unbalanced table footnotes end".to_string())
                 })?;
             }
 
@@ -337,17 +366,36 @@ fn build_html_dom(events: &[Event]) -> Result<RcDom, FormatError> {
                 })?;
             }
 
-            Event::StartTableCell { header, align } => {
+            Event::StartTableCell {
+                header,
+                align,
+                colspan,
+                rowspan,
+            } => {
                 let tag = if *header { "th" } else { "td" };
-                let mut attrs = vec![];
+                let mut attrs: Vec<(&str, String)> = vec![];
                 match align {
-                    TableCellAlignment::Left => attrs.push(("style", "text-align: left")),
-                    TableCellAlignment::Right => attrs.push(("style", "text-align: right")),
-                    TableCellAlignment::Center => attrs.push(("style", "text-align: center")),
+                    TableCellAlignment::Left => {
+                        attrs.push(("style", "text-align: left".to_string()))
+                    }
+                    TableCellAlignment::Right => {
+                        attrs.push(("style", "text-align: right".to_string()))
+                    }
+                    TableCellAlignment::Center => {
+                        attrs.push(("style", "text-align: center".to_string()))
+                    }
                     TableCellAlignment::None => {}
                 }
+                if *colspan > 1 {
+                    attrs.push(("colspan", colspan.to_string()));
+                }
+                if *rowspan > 1 {
+                    attrs.push(("rowspan", rowspan.to_string()));
+                }
 
-                let cell = create_element(tag, attrs);
+                let str_attrs: Vec<(&str, &str)> =
+                    attrs.iter().map(|(k, v)| (*k, v.as_str())).collect();
+                let cell = create_element(tag, str_attrs);
                 current_parent.children.borrow_mut().push(cell.clone());
                 parent_stack.push(current_parent.clone());
                 current_parent = cell;
