@@ -11,12 +11,16 @@
 ; Content inside verbatim blocks may be parsed as any block type (paragraph,
 ; definition, list, etc.) since tree-sitter doesn't know it's verbatim content.
 ; The injection overrides this parsing with the target language's grammar.
+;
+; NOTE: Table blocks (annotation_header matching "table") are excluded from
+; injection because their content is inline-parsed lex, not a foreign language.
 
 ; Match content blocks (paragraphs) inside verbatim
 ((verbatim_block
   (paragraph) @injection.content
   (annotation_header) @injection.language)
  (#gsub! @injection.language "^%s*(%S+).*$" "%1")
+ (#not-match? @injection.language "^\\s*table")
  (#set! injection.combined))
 
 ; Match content blocks (definitions) inside verbatim
@@ -24,6 +28,7 @@
   (definition) @injection.content
   (annotation_header) @injection.language)
  (#gsub! @injection.language "^%s*(%S+).*$" "%1")
+ (#not-match? @injection.language "^\\s*table")
  (#set! injection.combined))
 
 ; Match content blocks (lists) inside verbatim
@@ -31,6 +36,7 @@
   (list) @injection.content
   (annotation_header) @injection.language)
  (#gsub! @injection.language "^%s*(%S+).*$" "%1")
+ (#not-match? @injection.language "^\\s*table")
  (#set! injection.combined))
 
 ; Match content blocks (sessions) inside verbatim
@@ -38,6 +44,7 @@
   (session) @injection.content
   (annotation_header) @injection.language)
  (#gsub! @injection.language "^%s*(%S+).*$" "%1")
+ (#not-match? @injection.language "^\\s*table")
  (#set! injection.combined))
 
 ; === Verbatim group items ===
@@ -50,6 +57,7 @@
     (paragraph) @injection.content)
   (annotation_header) @injection.language)
  (#gsub! @injection.language "^%s*(%S+).*$" "%1")
+ (#not-match? @injection.language "^\\s*table")
  (#set! injection.combined))
 
 ; Group item definitions
@@ -58,6 +66,7 @@
     (definition) @injection.content)
   (annotation_header) @injection.language)
  (#gsub! @injection.language "^%s*(%S+).*$" "%1")
+ (#not-match? @injection.language "^\\s*table")
  (#set! injection.combined))
 
 ; Group item lists
@@ -66,6 +75,7 @@
     (list) @injection.content)
   (annotation_header) @injection.language)
  (#gsub! @injection.language "^%s*(%S+).*$" "%1")
+ (#not-match? @injection.language "^\\s*table")
  (#set! injection.combined))
 
 ; Group item sessions
@@ -74,4 +84,5 @@
     (session) @injection.content)
   (annotation_header) @injection.language)
  (#gsub! @injection.language "^%s*(%S+).*$" "%1")
+ (#not-match? @injection.language "^\\s*table")
  (#set! injection.combined))
