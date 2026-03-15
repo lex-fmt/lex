@@ -442,8 +442,16 @@ fn parse_cell_content(
         }
     }
 
+    // Include document-level annotations (these end up outside root.children)
+    let mut all_items: Vec<ContentItem> = doc
+        .annotations
+        .drain(..)
+        .map(ContentItem::Annotation)
+        .collect();
+    all_items.extend(std::mem::take(doc.root.children.as_mut_vec()));
+
     // Convert to ContentElement (filtering out blank lines and sessions)
-    let children: Vec<ContentElement> = std::mem::take(doc.root.children.as_mut_vec())
+    let children: Vec<ContentElement> = all_items
         .into_iter()
         .filter_map(|item| ContentElement::try_from(item).ok())
         .filter(|item| !matches!(item, ContentElement::BlankLineGroup(_)))

@@ -48,6 +48,10 @@ fn valid_document_strategy() -> impl Strategy<Value = String> {
         // Verbatim
         (subject_strategy(), label_strategy(), "[a-zA-Z0-9]+")
             .prop_map(|(s, l, c)| format!("{s}:\n    {c}\n:: {l} ::\n")),
+        // Table (compact)
+        (subject_strategy(), list_text(), list_text()).prop_map(|(s, a, b)| {
+            format!("{s}:\n    | H1 | H2 |\n    | {a} | {b} |\n:: table ::\n")
+        }),
     ]
 }
 
@@ -110,6 +114,10 @@ fn collect_text(item: &ContentItem, out: &mut String) {
             for row in t.all_rows() {
                 for cell in &row.cells {
                     out.push_str(cell.content.as_string());
+                    // Recurse into block children
+                    for child in cell.children.iter() {
+                        collect_text(child, out);
+                    }
                 }
             }
         }

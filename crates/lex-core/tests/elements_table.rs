@@ -339,6 +339,141 @@ fn test_table_separator_only_dashes() {
     });
 }
 
+// ============================================================================
+// Block Cell Content
+// ============================================================================
+
+#[test]
+fn test_table_19_cell_with_list() {
+    let doc = Lexplore::table(19).parse().unwrap();
+
+    assert_ast(&doc).item_count(1).item(0, |item| {
+        item.assert_table()
+            .subject("Data")
+            .header_row_count(1)
+            .body_row_count(2)
+            .body_row(0, |row| {
+                row.cell_text(0, "Alice")
+                    .cell_has_block_content(0, false)
+                    .cell_has_block_content(1, true)
+                    .cell_child_count(1, 1); // One list
+            })
+            .body_row(1, |row| {
+                row.cell_text(0, "Bob").cell_has_block_content(1, false);
+            });
+    });
+}
+
+#[test]
+fn test_table_20_cell_with_definition() {
+    let doc = Lexplore::table(20).parse().unwrap();
+
+    assert_ast(&doc).item_count(1).item(0, |item| {
+        item.assert_table()
+            .subject("Data")
+            .header_row_count(1)
+            .body_row_count(2)
+            .body_row(0, |row| {
+                row.cell_text(0, "Cache").cell_has_block_content(1, true);
+            })
+            .body_row(1, |row| {
+                row.cell_has_block_content(1, false);
+            });
+    });
+}
+
+#[test]
+fn test_table_21_cell_with_verbatim() {
+    let doc = Lexplore::table(21).parse().unwrap();
+
+    assert_ast(&doc).item_count(1).item(0, |item| {
+        item.assert_table()
+            .subject("Data")
+            .header_row_count(1)
+            .body_row_count(2)
+            .body_row(0, |row| {
+                row.cell_text(0, "Python").cell_has_block_content(1, true);
+            })
+            .body_row(1, |row| {
+                row.cell_has_block_content(1, false);
+            });
+    });
+}
+
+#[test]
+fn test_table_22_cell_with_mixed_content() {
+    let doc = Lexplore::table(22).parse().unwrap();
+
+    assert_ast(&doc).item_count(1).item(0, |item| {
+        item.assert_table()
+            .subject("Data")
+            .header_row_count(1)
+            .body_row_count(2)
+            .body_row(0, |row| {
+                row.cell_text(0, "Alice").cell_has_block_content(1, true);
+            })
+            .body_row(1, |row| {
+                row.cell_text(0, "Bob").cell_has_block_content(1, false);
+            });
+    });
+}
+
+#[test]
+fn test_table_23_cell_with_annotation() {
+    let doc = Lexplore::table(23).parse().unwrap();
+
+    assert_ast(&doc).item_count(1).item(0, |item| {
+        item.assert_table()
+            .subject("Data")
+            .header_row_count(1)
+            .body_row_count(2)
+            .body_row(0, |row| {
+                row.cell_text(0, "Alpha").cell_has_block_content(1, true);
+            })
+            .body_row(1, |row| {
+                row.cell_has_block_content(1, false);
+            });
+    });
+}
+
+#[test]
+fn test_table_block_content_from_string() {
+    use lex_core::lex::parsing::parse_document;
+
+    let source = "T:\n    | Key | Value |\n\n    | A   | - item1 |\n    |     | - item2 |\n\n    | B   | plain   |\n:: table ::\n";
+    let doc = parse_document(source).unwrap();
+
+    assert_ast(&doc).item(0, |item| {
+        item.assert_table()
+            .header_row_count(1)
+            .body_row_count(2)
+            .body_row(0, |row| {
+                row.cell_text(0, "A")
+                    .cell_has_block_content(1, true)
+                    .cell_child_count(1, 1); // One list
+            })
+            .body_row(1, |row| {
+                row.cell_text(0, "B").cell_has_block_content(1, false);
+            });
+    });
+}
+
+#[test]
+fn test_table_compact_mode_no_block_content() {
+    use lex_core::lex::parsing::parse_document;
+
+    // Compact mode (no blank lines) should never produce block content
+    let source = "T:\n    | A | - item |\n    | B | plain  |\n:: table ::\n";
+    let doc = parse_document(source).unwrap();
+
+    assert_ast(&doc).item(0, |item| {
+        item.assert_table().body_row(0, |row| {
+            row.cell_has_block_content(0, false)
+                .cell_has_block_content(1, false);
+        });
+    });
+}
+
 #[test]
 fn test_table_inline_parsing_of_cells() {
     use lex_core::lex::parsing::parse_document;

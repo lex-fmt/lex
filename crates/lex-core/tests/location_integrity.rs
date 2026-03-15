@@ -116,6 +116,14 @@ fn validate_item(item: &ContentItem, source: &str) {
             for annotation in &table.annotations {
                 validate_annotation(annotation, source);
             }
+            // Validate cell children locations
+            for row in table.all_rows() {
+                for cell in &row.cells {
+                    for child in cell.children.iter() {
+                        validate_item(child, source);
+                    }
+                }
+            }
         }
         ContentItem::BlankLineGroup(_) => {}
     }

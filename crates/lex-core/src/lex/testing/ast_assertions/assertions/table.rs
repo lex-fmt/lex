@@ -237,6 +237,96 @@ impl<'a> TableAssertion<'a> {
         );
         self
     }
+
+    /// Assert that a cell has (or doesn't have) block content
+    pub fn cell_has_block_content(
+        self,
+        row_type: &str,
+        row_idx: usize,
+        col: usize,
+        expected: bool,
+    ) -> Self {
+        let rows = match row_type {
+            "header" => &self.table.header_rows,
+            "body" => &self.table.body_rows,
+            _ => panic!("row_type must be 'header' or 'body'"),
+        };
+        assert!(
+            row_idx < rows.len(),
+            "{}: {} row {} out of bounds",
+            self.context,
+            row_type,
+            row_idx
+        );
+        assert!(
+            col < rows[row_idx].cells.len(),
+            "{}: Cell {} out of bounds in {} row {}",
+            self.context,
+            col,
+            row_type,
+            row_idx
+        );
+        let actual = rows[row_idx].cells[col].has_block_content();
+        assert_eq!(
+            actual, expected,
+            "{}: Expected {}[{}] cell {} has_block_content={}, got {}",
+            self.context, row_type, row_idx, col, expected, actual
+        );
+        self
+    }
+
+    /// Assert specific child element within a cell using a callback
+    pub fn cell_child(
+        self,
+        row_type: &str,
+        row_idx: usize,
+        col: usize,
+        child_idx: usize,
+        assertion: impl FnOnce(&crate::lex::ast::ContentItem),
+    ) -> Self {
+        let rows = match row_type {
+            "header" => &self.table.header_rows,
+            "body" => &self.table.body_rows,
+            _ => panic!("row_type must be 'header' or 'body'"),
+        };
+        let cell = &rows[row_idx].cells[col];
+        let children: Vec<&crate::lex::ast::ContentItem> = cell.children.iter().collect();
+        assert!(
+            child_idx < children.len(),
+            "{}: Child index {} out of bounds ({} children in {}[{}] cell {})",
+            self.context,
+            child_idx,
+            children.len(),
+            row_type,
+            row_idx,
+            col
+        );
+        assertion(children[child_idx]);
+        self
+    }
+
+    /// Count block children in a cell
+    pub fn cell_child_count(
+        self,
+        row_type: &str,
+        row_idx: usize,
+        col: usize,
+        expected: usize,
+    ) -> Self {
+        let rows = match row_type {
+            "header" => &self.table.header_rows,
+            "body" => &self.table.body_rows,
+            _ => panic!("row_type must be 'header' or 'body'"),
+        };
+        let cell = &rows[row_idx].cells[col];
+        let actual = cell.children.len();
+        assert_eq!(
+            actual, expected,
+            "{}: Expected {} children in {}[{}] cell {}, got {}",
+            self.context, expected, row_type, row_idx, col, actual
+        );
+        self
+    }
 }
 
 pub struct RowAssertion<'a> {
@@ -307,6 +397,28 @@ impl<'a> RowAssertion<'a> {
         assert_eq!(
             self.row.cells[col].header, expected,
             "{}: Cell {} header flag mismatch",
+            self.context, col
+        );
+        self
+    }
+
+    pub fn cell_has_block_content(self, col: usize, expected: bool) -> Self {
+        assert!(col < self.row.cells.len());
+        let actual = self.row.cells[col].has_block_content();
+        assert_eq!(
+            actual, expected,
+            "{}: Cell {} has_block_content mismatch",
+            self.context, col
+        );
+        self
+    }
+
+    pub fn cell_child_count(self, col: usize, expected: usize) -> Self {
+        assert!(col < self.row.cells.len());
+        let actual = self.row.cells[col].children.len();
+        assert_eq!(
+            actual, expected,
+            "{}: Cell {} child count mismatch",
             self.context, col
         );
         self
