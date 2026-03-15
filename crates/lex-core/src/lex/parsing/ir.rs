@@ -16,6 +16,7 @@ pub type TokenLocation = (Token, Range<usize>);
 pub enum NodeType {
     Document,
     DocumentStart,
+    DocumentTitle,
     Paragraph,
     Session,
     ListItem,

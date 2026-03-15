@@ -260,8 +260,13 @@ pub fn parse_without_annotation_attachment(
         source.to_string()
     };
     let tokens = LEXING.run(source.clone()).map_err(|e| e.to_string())?;
-    let root = parse_from_flat_tokens(tokens, &source).map_err(|e| e.to_string())?;
-    let root = ParseInlines::new().run(root).map_err(|e| e.to_string())?;
-    // Assemble the root session into a Document but skip metadata attachment
-    AttachRoot::new().run(root).map_err(|e| e.to_string())
+    let mut output = parse_from_flat_tokens(tokens, &source).map_err(|e| e.to_string())?;
+    output.root = ParseInlines::new()
+        .run(output.root)
+        .map_err(|e| e.to_string())?;
+    if let Some(ref mut title) = output.title {
+        title.content.ensure_inline_parsed();
+    }
+    // Assemble into a Document but skip metadata attachment
+    AttachRoot::new().run(output).map_err(|e| e.to_string())
 }

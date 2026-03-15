@@ -15,19 +15,15 @@
 //!     from an index.
 //!
 //!     Document Title:
-//!     The document title is determined during the AST assembly phase (not by the grammar).
-//!     If the first element of the document content (after any document-level annotations) is a
-//!     single paragraph followed by blank lines, it is promoted to be the document title.
-//!     This title is stored in the root session's title field.
+//!     The document title is a first-class element, represented as a dedicated `DocumentTitle`
+//!     AST node owned directly by the `Document`. It is parsed from a single unindented line
+//!     at the start of the document, followed by blank lines, where no indented content follows
+//!     (distinguishing it from a session title). See specs/elements/document.lex.
 //!
 //!     Document Start:
 //!     A synthetic `DocumentStart` token is used to mark the boundary between document-level
 //!     annotations (metadata) and the actual document content. This allows the parser and
 //!     assembly logic to correctly identify where the body begins.
-//!
-//!     This structure makes the entire AST homogeneous - the document's content is accessed through
-//!     the standard Session interface, making traversal and transformation logic consistent
-//!     throughout the tree.
 //!
 //!     For more details on document structure and sessions, see the [ast](crate::lex::ast) module.
 //!
@@ -44,6 +40,7 @@
 //! - All body content accessible via document.root.children
 
 use super::super::range::{Position, Range};
+use super::super::text_content::TextContent;
 use super::super::traits::{AstNode, Container, Visitor};
 use super::annotation::Annotation;
 use super::content_item::ContentItem;
@@ -51,9 +48,55 @@ use super::session::Session;
 use super::typed_content;
 use std::fmt;
 
+/// A first-class document title element.
+///
+/// Represents the title of a Lex document — a single unindented line at the start
+/// of the document, followed by blank lines, with no indented content after.
+/// This is distinct from session titles and can be extended with subtitles and
+/// other structured metadata in the future.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DocumentTitle {
+    pub content: TextContent,
+    pub location: Range,
+}
+
+impl DocumentTitle {
+    pub fn new(content: TextContent, location: Range) -> Self {
+        Self { content, location }
+    }
+
+    pub fn from_string(text: String, location: Range) -> Self {
+        Self {
+            content: TextContent::from_string(text, Some(location.clone())),
+            location,
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        self.content.as_string()
+    }
+}
+
+impl AstNode for DocumentTitle {
+    fn node_type(&self) -> &'static str {
+        "DocumentTitle"
+    }
+
+    fn display_label(&self) -> String {
+        format!("DocumentTitle(\"{}\")", self.as_str())
+    }
+
+    fn range(&self) -> &Range {
+        &self.location
+    }
+
+    fn accept(&self, _visitor: &mut dyn Visitor) {}
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Document {
     pub annotations: Vec<Annotation>,
+    pub title: Option<DocumentTitle>,
     // all content is attached to the root node
     pub root: Session,
 }
@@ -62,6 +105,7 @@ impl Document {
     pub fn new() -> Self {
         Self {
             annotations: Vec::new(),
+            title: None,
             root: Session::with_title(String::new()),
         }
     }
@@ -72,6 +116,7 @@ impl Document {
         root.children = super::container::SessionContainer::from_typed(session_content);
         Self {
             annotations: Vec::new(),
+            title: None,
             root,
         }
     }
@@ -80,6 +125,16 @@ impl Document {
     pub fn from_root(root: Session) -> Self {
         Self {
             annotations: Vec::new(),
+            title: None,
+            root,
+        }
+    }
+
+    /// Construct a document from a title and root session.
+    pub fn from_title_and_root(title: Option<DocumentTitle>, root: Session) -> Self {
+        Self {
+            annotations: Vec::new(),
+            title,
             root,
         }
     }
@@ -91,7 +146,11 @@ impl Document {
         let mut root = Session::with_title(String::new());
         let session_content = typed_content::into_session_contents(content);
         root.children = super::container::SessionContainer::from_typed(session_content);
-        Self { annotations, root }
+        Self {
+            annotations,
+            title: None,
+            root,
+        }
     }
 
     pub fn with_root_location(mut self, location: Range) -> Self {
@@ -111,18 +170,24 @@ impl Document {
         self.root
     }
 
-    /// Get the document title.
+    /// Get the document title text.
     ///
-    /// This delegates to the root session's title.
+    /// Returns the title string if a DocumentTitle is present, empty string otherwise.
     pub fn title(&self) -> &str {
-        self.root.title.as_string()
+        match &self.title {
+            Some(dt) => dt.as_str(),
+            None => "",
+        }
     }
 
     /// Set the document title.
-    ///
-    /// This updates the root session's title.
     pub fn set_title(&mut self, title: String) {
-        self.root.title = crate::lex::ast::text_content::TextContent::from_string(title, None);
+        if title.is_empty() {
+            self.title = None;
+        } else {
+            let location = Range::default();
+            self.title = Some(DocumentTitle::from_string(title, location));
+        }
     }
 
     /// Returns the path of nodes at the given position, starting from the document
@@ -261,7 +326,18 @@ impl Document {
     pub fn iter_all_references(
         &self,
     ) -> Box<dyn Iterator<Item = crate::lex::inlines::ReferenceInline> + '_> {
-        self.root.iter_all_references()
+        let title_refs = self
+            .title
+            .iter()
+            .flat_map(|t| t.content.inline_items())
+            .filter_map(|node| {
+                if let crate::lex::inlines::InlineNode::Reference { data, .. } = node {
+                    Some(data)
+                } else {
+                    None
+                }
+            });
+        Box::new(title_refs.chain(self.root.iter_all_references()))
     }
 
     /// Find all references to a specific target label.
@@ -306,6 +382,9 @@ impl AstNode for Document {
     fn accept(&self, visitor: &mut dyn Visitor) {
         for annotation in &self.annotations {
             annotation.accept(visitor);
+        }
+        if let Some(title) = &self.title {
+            title.accept(visitor);
         }
         self.root.accept(visitor);
     }
@@ -400,5 +479,28 @@ mod tests {
 
         let root = doc.into_root();
         assert_eq!(root.title.as_string(), "Updated");
+    }
+
+    #[test]
+    fn test_document_title_field() {
+        let mut doc = Document::new();
+        assert!(doc.title.is_none());
+        assert_eq!(doc.title(), "");
+
+        doc.set_title("My Title".to_string());
+        assert!(doc.title.is_some());
+        assert_eq!(doc.title(), "My Title");
+
+        doc.set_title(String::new());
+        assert!(doc.title.is_none());
+        assert_eq!(doc.title(), "");
+    }
+
+    #[test]
+    fn test_from_title_and_root() {
+        let title = DocumentTitle::from_string("Test Title".to_string(), Range::default());
+        let root = Session::with_title(String::new());
+        let doc = Document::from_title_and_root(Some(title), root);
+        assert_eq!(doc.title(), "Test Title");
     }
 }

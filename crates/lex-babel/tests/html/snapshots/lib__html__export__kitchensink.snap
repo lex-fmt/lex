@@ -1,5 +1,5 @@
 ---
-source: lex-babel/tests/html/export.rs
+source: crates/lex-babel/tests/html/export.rs
 expression: snapshot_without_styles(&html)
 ---
 <!DOCTYPE html>
@@ -8,7 +8,7 @@ expression: snapshot_without_styles(&html)
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="generator" content="lex-babel">
-  <title>Kitchensink Test Document {{paragraph}}</title>
+  <title>Kitchensink Test Document {{document-title}}</title>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/github.min.css">
   <style data-lex-snapshot="removed"></style>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js"></script>

@@ -1,5 +1,5 @@
 ---
-source: lex-babel/tests/html/export.rs
+source: crates/lex-babel/tests/html/export.rs
 expression: snapshot_without_styles(&html)
 ---
 <!DOCTYPE html>

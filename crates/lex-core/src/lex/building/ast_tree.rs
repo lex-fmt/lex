@@ -14,6 +14,7 @@
 //!
 //!     See [location](super::location) for location calculation utilities.
 
+use crate::lex::ast::elements::document::DocumentTitle;
 use crate::lex::ast::elements::typed_content::{self, ContentElement, SessionContent};
 use crate::lex::ast::error::{format_source_context, ParserError, ParserResult};
 use crate::lex::ast::range::SourceLocation;
@@ -22,6 +23,12 @@ use crate::lex::ast::{AstNode, ContentItem, ListItem, Range, Session};
 use crate::lex::building::api as ast_api;
 use crate::lex::building::location::compute_location_from_locations;
 use crate::lex::parsing::ir::{NodeType, ParseNode, ParseNodePayload, TokenLocation};
+
+/// Output of the AST tree builder: a document title (if present) and the root session.
+pub struct BuildOutput {
+    pub title: Option<DocumentTitle>,
+    pub root: Session,
+}
 
 /// A builder that constructs an AST from a `ParseNode` tree.
 pub struct AstTreeBuilder<'a> {
@@ -38,34 +45,34 @@ impl<'a> AstTreeBuilder<'a> {
         }
     }
 
-    /// Builds the document's root Session from a root `ParseNode`.
-    pub fn build(&self, root_node: ParseNode) -> ParserResult<Session> {
+    /// Builds the document's root Session and optional DocumentTitle from a root `ParseNode`.
+    pub fn build(&self, root_node: ParseNode) -> ParserResult<BuildOutput> {
         if root_node.node_type != NodeType::Document {
             panic!("Expected a Document node at the root");
         }
 
-        // Extract document title if present
-        let (document_title, title_skip_range) = self.extract_document_title(&root_node.children);
-
-        // Build content items, filtering out structural markers and the title node
+        // Extract DocumentTitle node if present, and filter structural markers
+        let mut document_title: Option<DocumentTitle> = None;
         let filtered_children: Vec<ParseNode> = root_node
             .children
             .into_iter()
-            .enumerate()
-            .filter(|(idx, node)| {
-                // Skip DocumentStart
-                if node.node_type == NodeType::DocumentStart {
-                    return false;
-                }
-                // Skip the nodes used for title
-                if let Some(range) = &title_skip_range {
-                    if range.contains(idx) {
-                        return false;
+            .filter(|node| {
+                match node.node_type {
+                    NodeType::DocumentStart => false,
+                    NodeType::DocumentTitle => {
+                        // Build DocumentTitle from the parse node's tokens
+                        let title_text = ast_api::text_content_from_tokens(
+                            node.tokens.clone(),
+                            self.source,
+                            &self.source_location,
+                        );
+                        let location = title_text.location.clone().unwrap_or_default();
+                        document_title = Some(DocumentTitle::new(title_text, location));
+                        false
                     }
+                    _ => true,
                 }
-                true
             })
-            .map(|(_, node)| node)
             .collect();
 
         let content = self.build_content_items(filtered_children)?;
@@ -73,53 +80,15 @@ impl<'a> AstTreeBuilder<'a> {
             content.iter().map(|item| item.range().clone()).collect();
         let root_location = compute_location_from_locations(&content_locations);
         let session_content = typed_content::into_session_contents(content);
-        let root = Session::new(document_title, session_content);
-        Ok(root.at(root_location))
-    }
-
-    /// Extract document title from the parsed children.
-    ///
-    /// The document title is determined by the following pattern at the start of content (after DocumentStart):
-    /// 1. A single Paragraph node
-    /// 2. Followed by a BlankLineGroup
-    /// 3. NOT followed by a Container (implicitly handled because if it were a container, it wouldn't be a sibling Paragraph)
-    ///
-    /// If this pattern matches, the text of the Paragraph is used as the title, and the Paragraph node
-    /// should be skipped during content assembly.
-    fn extract_document_title(
-        &self,
-        children: &[ParseNode],
-    ) -> (TextContent, Option<std::ops::Range<usize>>) {
-        let mut start_idx = 0;
-
-        // Skip DocumentStart if present
-        if start_idx < children.len() && children[start_idx].node_type == NodeType::DocumentStart {
-            start_idx += 1;
-        }
-
-        // Check for Paragraph + BlankLineGroup pattern
-        if start_idx + 1 < children.len() {
-            let first = &children[start_idx];
-            let second = &children[start_idx + 1];
-
-            if first.node_type == NodeType::Paragraph
-                && second.node_type == NodeType::BlankLineGroup
-            {
-                // Found document title!
-                let title = ast_api::text_content_from_tokens(
-                    first.tokens.clone(),
-                    self.source,
-                    &self.source_location,
-                );
-                // Return title and the range of nodes to skip (paragraph + blank line group)
-                return (title, Some(start_idx..start_idx + 2));
-            }
-        }
-
-        (
+        let root = Session::new(
             TextContent::from_string(String::new(), None::<Range>),
-            None::<std::ops::Range<usize>>,
-        )
+            session_content,
+        );
+
+        Ok(BuildOutput {
+            title: document_title,
+            root: root.at(root_location),
+        })
     }
 
     /// Builds a vector of `ContentItem`s from a vector of `ParseNode`s.
@@ -437,7 +406,6 @@ mod tests {
 
     #[test]
     fn test_document_title_parsing() {
-        // Test that the AST builder correctly extracts title
         let source = "My Document Title\n\nContent paragraph.\n";
         let builder = AstTreeBuilder::new(source);
 
@@ -451,14 +419,8 @@ mod tests {
             tokens: vec![],
             children: vec![
                 ParseNode {
-                    node_type: NodeType::Paragraph,
+                    node_type: NodeType::DocumentTitle,
                     tokens: vec![(Token::Text("My Document Title".to_string()), 0..17)],
-                    children: vec![],
-                    payload: None,
-                },
-                ParseNode {
-                    node_type: NodeType::BlankLineGroup,
-                    tokens: vec![],
                     children: vec![],
                     payload: None,
                 },
@@ -472,11 +434,12 @@ mod tests {
             payload: None,
         };
 
-        let session = builder.build(root_node).expect("Builder failed");
+        let output = builder.build(root_node).expect("Builder failed");
 
-        assert_eq!(session.title.as_string(), "My Document Title");
-        assert_eq!(session.children.len(), 1);
-        if let ContentItem::Paragraph(p) = &session.children[0] {
+        assert!(output.title.is_some());
+        assert_eq!(output.title.unwrap().as_str(), "My Document Title");
+        assert_eq!(output.root.children.len(), 1);
+        if let ContentItem::Paragraph(p) = &output.root.children[0] {
             assert_eq!(p.text(), "Content paragraph.");
         } else {
             panic!("Expected paragraph");
@@ -485,7 +448,6 @@ mod tests {
 
     #[test]
     fn test_document_title_parsing_no_title() {
-        // Test that documents starting with a Session do not have a document title extracted
         let source = "# Section 1\n\nContent.\n";
         let builder = AstTreeBuilder::new(source);
 
@@ -514,9 +476,9 @@ mod tests {
             payload: None,
         };
 
-        let session = builder.build(root_node).expect("Builder failed");
+        let output = builder.build(root_node).expect("Builder failed");
 
-        assert_eq!(session.title.as_string(), "");
-        assert_eq!(session.children.len(), 1); // 1 session
+        assert!(output.title.is_none());
+        assert_eq!(output.root.children.len(), 1); // 1 session
     }
 }

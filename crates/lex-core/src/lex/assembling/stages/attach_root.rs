@@ -1,13 +1,14 @@
 //! Document attachment stage
 //!
-//! This stage receives the fully built root session tree from the building phase
-//! and attaches it to a `Document` node. Downstream assembling steps (like
+//! This stage receives the build output (title + root session) from the building phase
+//! and assembles it into a `Document` node. Downstream assembling steps (like
 //! annotation attachment) can then operate on the complete document structure.
 
-use crate::lex::ast::{Document, Session};
+use crate::lex::ast::Document;
+use crate::lex::building::ast_tree::BuildOutput;
 use crate::lex::transforms::{Runnable, TransformError};
 
-/// Attach the root session returned by the builder to a `Document` node.
+/// Attach the build output (title + root session) to a `Document` node.
 pub struct AttachRoot;
 
 impl AttachRoot {
@@ -22,8 +23,8 @@ impl Default for AttachRoot {
     }
 }
 
-impl Runnable<Session, Document> for AttachRoot {
-    fn run(&self, root: Session) -> Result<Document, TransformError> {
-        Ok(Document::from_root(root))
+impl Runnable<BuildOutput, Document> for AttachRoot {
+    fn run(&self, output: BuildOutput) -> Result<Document, TransformError> {
+        Ok(Document::from_title_and_root(output.title, output.root))
     }
 }

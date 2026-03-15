@@ -422,14 +422,13 @@ fn test_document_title_first_paragraph() {
 #[test]
 fn test_document_title_session_without_title() {
     // Use spec file: document starts with session (no explicit document title)
-    // Session hoisting is not currently implemented, falls back to "Lex Document"
     let lex_src = std::fs::read_to_string(
-        "../../comms/specs/elements/document.docs/document-05-title-session-hoist.lex",
+        "../../comms/specs/elements/document.docs/document-07-no-title-session-first.lex",
     )
-    .expect("document-05 spec file should exist");
+    .expect("document-07 spec file should exist");
     let html = lex_to_html(&lex_src, HtmlTheme::Modern);
 
-    // Document should fallback to default title (session hoisting not implemented)
+    // Document should fallback to default title (no document title)
     assert!(html.contains("<title>Lex Document</title>"));
 }
 

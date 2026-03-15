@@ -15,11 +15,10 @@ use std::cell::RefCell;
 /// Serialize a Lex document to Markdown
 pub fn serialize_to_markdown(doc: &Document) -> Result<String, FormatError> {
     // Extract document title before IR conversion (which loses it)
-    let document_title = doc.root.title.as_string();
-    let document_title = if document_title.is_empty() {
+    let document_title = if doc.title().is_empty() {
         None
     } else {
-        Some(document_title.to_string())
+        Some(doc.title().to_string())
     };
 
     // Step 1: Lex AST → IR

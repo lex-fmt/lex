@@ -55,6 +55,8 @@ pub(super) enum PatternMatch {
     Paragraph { start_idx: usize, end_idx: usize },
     /// Blank line group: one or more consecutive blank lines
     BlankLineGroup,
+    /// Document title: single line followed by blank lines, no indented content
+    DocumentTitle { title_idx: usize },
     /// Document start marker: synthetic boundary between metadata and content
     DocumentStart,
 }
@@ -123,8 +125,32 @@ pub(super) fn convert_pattern_to_node(
             build_paragraph(tokens, pattern_offset + start_idx, pattern_offset + end_idx)
         }
         PatternMatch::BlankLineGroup => build_blank_line_group(tokens, pattern_range.clone()),
+        PatternMatch::DocumentTitle { title_idx } => {
+            build_document_title(tokens, pattern_offset + title_idx)
+        }
         PatternMatch::DocumentStart => build_document_start(),
     }
+}
+
+/// Build a DocumentTitle node from the title line token
+fn build_document_title(tokens: &[LineContainer], title_idx: usize) -> Result<ParseNode, String> {
+    let title_tokens = match &tokens[title_idx] {
+        LineContainer::Token(line) => line
+            .source_tokens
+            .iter()
+            .zip(line.token_spans.iter())
+            .map(|(token, span)| (token.clone(), span.clone()))
+            .collect(),
+        LineContainer::Container { .. } => {
+            return Err("Expected title token, found container".to_string())
+        }
+    };
+
+    Ok(ParseNode::new(
+        crate::lex::parsing::ir::NodeType::DocumentTitle,
+        title_tokens,
+        vec![],
+    ))
 }
 
 /// Build a DocumentStart node (synthetic marker with no content)
