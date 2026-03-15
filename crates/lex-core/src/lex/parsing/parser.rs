@@ -1,11 +1,12 @@
-//! Declarative Grammar Engine - Regex-Based Parser for lex
+//! Declarative Grammar Engine - Regex & Imperative Parser for lex
 //!
-//! This module implements a unified parser using declarative regex grammar rules:
+//! This module implements a unified parser using declarative regex grammar rules
+//! with imperative fallbacks for patterns that need look-ahead:
 //! 1. Converts token sequences to grammar notation strings
 //! 2. Matches against regex patterns in declaration order
-//! 3. Extracts consumed token indices from regex match
-//! 4. Recursively descends into containers when building AST
-//! 5. No imperative pattern matching - grammar is data, not code
+//! 3. Falls back to imperative matchers (verbatim blocks, paragraphs)
+//! 4. Extracts consumed token indices from regex match
+//! 5. Recursively descends into containers when building AST
 //!
 //! The grammar patterns and AST building logic have been extracted to separate modules:
 //! - `grammar.rs` - Pattern definitions and matching order
@@ -185,10 +186,6 @@ impl GrammarMatcher {
                             subject_idx: 0,
                             content_idx: 1,
                         },
-                        "paragraph" => PatternMatch::Paragraph {
-                            start_idx: 0,
-                            end_idx: consumed_count - 1,
-                        },
                         "blank_line_group" => PatternMatch::BlankLineGroup,
                         "document_start" => PatternMatch::DocumentStart,
                         _ => continue,
@@ -199,7 +196,9 @@ impl GrammarMatcher {
             }
         }
 
-        None
+        // Paragraph: matched imperatively after all regex patterns fail.
+        // Stops before element boundaries (list starts, definition starts).
+        Self::match_paragraph(tokens, start_idx)
     }
 
     /// Convert remaining tokens to grammar notation string
@@ -226,6 +225,116 @@ impl GrammarMatcher {
     /// Each token type in angle brackets represents one token.
     fn count_consumed_tokens(grammar_str: &str) -> usize {
         grammar_str.matches('<').count()
+    }
+
+    /// Match paragraphs using imperative logic.
+    ///
+    /// Consumes content lines (paragraph, dialog, subject, list) one at a time,
+    /// stopping before sequences that form other block elements:
+    /// - Before 2+ consecutive list-like lines (list start)
+    /// - Before a subject line followed by a container (definition start)
+    fn match_paragraph(
+        tokens: &[LineContainer],
+        start_idx: usize,
+    ) -> Option<(PatternMatch, Range<usize>)> {
+        use LineType::*;
+
+        let len = tokens.len();
+        let mut idx = start_idx;
+
+        while idx < len {
+            match &tokens[idx] {
+                LineContainer::Token(t) => match t.line_type {
+                    ParagraphLine | DialogLine => {
+                        idx += 1;
+                    }
+                    SubjectLine => {
+                        // Stop if followed by container (definition start)
+                        if Self::next_is_container(tokens, idx) {
+                            break;
+                        }
+                        idx += 1;
+                    }
+                    SubjectOrListItemLine => {
+                        // Stop if followed by container (definition start)
+                        if Self::next_is_container(tokens, idx) {
+                            break;
+                        }
+                        // Stop if followed by another list-like line (list start)
+                        if Self::next_is_list_like(tokens, idx) {
+                            break;
+                        }
+                        idx += 1;
+                    }
+                    ListLine => {
+                        // Stop if followed by another list-like line, possibly
+                        // with a container in between (list start)
+                        if Self::next_is_list_continuation(tokens, idx) {
+                            break;
+                        }
+                        idx += 1;
+                    }
+                    _ => break, // Blank line, annotation, document-start, etc.
+                },
+                LineContainer::Container { .. } => break,
+            }
+        }
+
+        if idx > start_idx {
+            Some((
+                PatternMatch::Paragraph {
+                    start_idx: 0,
+                    end_idx: idx - start_idx - 1,
+                },
+                start_idx..idx,
+            ))
+        } else {
+            None
+        }
+    }
+
+    /// Check if the token after `idx` is a Container.
+    fn next_is_container(tokens: &[LineContainer], idx: usize) -> bool {
+        let next = idx + 1;
+        next < tokens.len() && matches!(&tokens[next], LineContainer::Container { .. })
+    }
+
+    /// Check if the token after `idx` is a list-like line (ListLine or SubjectOrListItemLine).
+    fn next_is_list_like(tokens: &[LineContainer], idx: usize) -> bool {
+        let next = idx + 1;
+        if next >= tokens.len() {
+            return false;
+        }
+        matches!(
+            &tokens[next],
+            LineContainer::Token(t) if matches!(t.line_type, LineType::ListLine | LineType::SubjectOrListItemLine)
+        )
+    }
+
+    /// Check if the token after `idx` starts a list continuation:
+    /// either directly another list-like line, or a container followed by a list-like line.
+    fn next_is_list_continuation(tokens: &[LineContainer], idx: usize) -> bool {
+        let next = idx + 1;
+        if next >= tokens.len() {
+            return false;
+        }
+        match &tokens[next] {
+            LineContainer::Token(t) => {
+                matches!(
+                    t.line_type,
+                    LineType::ListLine | LineType::SubjectOrListItemLine
+                )
+            }
+            LineContainer::Container { .. } => {
+                // Container after list item — check if another list item follows
+                let after = next + 1;
+                after < tokens.len()
+                    && matches!(
+                        &tokens[after],
+                        LineContainer::Token(t) if matches!(t.line_type, LineType::ListLine | LineType::SubjectOrListItemLine)
+                    )
+            }
+        }
     }
 
     /// Match verbatim blocks using imperative logic.

@@ -533,8 +533,8 @@ fn test_trifecta_050_paragraph_lists() {
     let source = Lexplore::trifecta(50).source();
     let doc = parse_document(&source).unwrap();
 
-    // 17 non-blank items after fixture fix (added blank lines before two list sections)
-    assert_ast(&doc).item_count(17);
+    // 24 non-blank items (17 original + 7 new for optional-blank-line tests)
+    assert_ast(&doc).item_count(24);
 
     // Item 0: Description
     assert_ast(&doc).item(0, |item| {
@@ -646,6 +646,134 @@ fn test_trifecta_050_paragraph_lists() {
     // Item 16: Mixed decoration list (now has blank line before it)
     assert_ast(&doc).item(16, |item| {
         item.assert_list().item_count(3);
+    });
+
+    // === NEW: Lists without preceding blank lines ===
+
+    // Item 17: Paragraph immediately before list (no blank line)
+    assert_ast(&doc).item(17, |item| {
+        item.assert_paragraph()
+            .text_contains("List without preceding blank line")
+            .line_count(1);
+    });
+
+    // Item 18: List started without preceding blank line
+    assert_ast(&doc).item(18, |item| {
+        item.assert_list()
+            .item_count(2)
+            .item(0, |li| {
+                li.text_contains("No blank needed anymore");
+            })
+            .item(1, |li| {
+                li.text_contains("Parser stops paragraph before list start");
+            });
+    });
+
+    // Item 19: Paragraph resumes after list
+    assert_ast(&doc).item(19, |item| {
+        item.assert_paragraph()
+            .text_contains("Paragraph resumes after list without blank")
+            .line_count(1);
+    });
+
+    // Item 20: Multi-line paragraph before list (no blank line)
+    assert_ast(&doc).item(20, |item| {
+        item.assert_paragraph()
+            .text_contains("Multiple paragraphs then list without blank")
+            .text_contains("Some more text in the same paragraph")
+            .line_count(2);
+    });
+
+    // Item 21: List after multi-line paragraph (no blank line)
+    assert_ast(&doc).item(21, |item| {
+        item.assert_list()
+            .item_count(2)
+            .item(0, |li| {
+                li.text_contains("First no-blank item");
+            })
+            .item(1, |li| {
+                li.text_contains("Second no-blank item");
+            });
+    });
+
+    // Item 22: Paragraph after list without blank
+    assert_ast(&doc).item(22, |item| {
+        item.assert_paragraph()
+            .text_contains("Back to paragraph after list")
+            .line_count(1);
+    });
+
+    // Item 23: Single list-like line stays in paragraph (not a list)
+    assert_ast(&doc).item(23, |item| {
+        item.assert_paragraph()
+            .text_contains("Single list-like line stays in paragraph")
+            .text_contains("- This is not a list since only one item")
+            .text_contains("And this continues the same paragraph")
+            .line_count(3);
+    });
+}
+
+#[test]
+fn test_trifecta_051_definitions_no_blank() {
+    // Test definitions without preceding blank lines
+    let source = Lexplore::from_path(workspace_path(
+        "comms/specs/trifecta/051-definitions-no-blank.lex",
+    ))
+    .source();
+    let doc = parse_document(&source).unwrap();
+
+    // 8 non-blank items (title line consumed as document title)
+    assert_ast(&doc).item_count(8);
+
+    // Item 0: Paragraph before definition (no blank line between them)
+    assert_ast(&doc).item(0, |item| {
+        item.assert_paragraph()
+            .text_contains("Paragraph before definition without blank line")
+            .line_count(1);
+    });
+
+    // Item 1: Definition without preceding blank line
+    assert_ast(&doc).item(1, |item| {
+        item.assert_definition().subject("Subject");
+    });
+
+    // Item 2: Paragraph after definition
+    assert_ast(&doc).item(2, |item| {
+        item.assert_paragraph()
+            .text_contains("Back to paragraph after definition")
+            .line_count(1);
+    });
+
+    // Item 3: Paragraph before definition with blank line
+    assert_ast(&doc).item(3, |item| {
+        item.assert_paragraph()
+            .text_contains("Paragraph before definition with blank line")
+            .line_count(1);
+    });
+
+    // Item 4: Definition with preceding blank line (still works)
+    assert_ast(&doc).item(4, |item| {
+        item.assert_definition().subject("Subject with blank");
+    });
+
+    // Item 5: Multi-line paragraph before definition (no blank)
+    assert_ast(&doc).item(5, |item| {
+        item.assert_paragraph()
+            .text_contains("Multi-line paragraph then definition")
+            .text_contains("More paragraph text here")
+            .line_count(2);
+    });
+
+    // Item 6: Definition after multi-line paragraph (no blank)
+    assert_ast(&doc).item(6, |item| {
+        item.assert_definition().subject("Another subject");
+    });
+
+    // Item 7: Paragraph after definition
+    assert_ast(&doc).item(7, |item| {
+        item.assert_paragraph()
+            .text_contains("Final paragraph")
+            .line_count(1);
     });
 }
 
