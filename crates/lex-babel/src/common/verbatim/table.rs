@@ -109,6 +109,8 @@ fn parse_pipe_table(content: &str) -> DocNode {
             rows,
             header,
             caption: None,
+            footnotes: vec![],
+            fullwidth: false,
         });
     }
 
@@ -123,6 +125,8 @@ fn parse_pipe_table(content: &str) -> DocNode {
                 })],
                 header: true,
                 align: TableCellAlignment::None,
+                colspan: 1,
+                rowspan: 1,
             });
         }
         header.push(header_row);
@@ -165,6 +169,8 @@ fn parse_pipe_table(content: &str) -> DocNode {
                 })],
                 header: false,
                 align,
+                colspan: 1,
+                rowspan: 1,
             });
         }
         rows.push(row);
@@ -183,6 +189,8 @@ fn parse_pipe_table(content: &str) -> DocNode {
         rows,
         header,
         caption: None,
+        footnotes: vec![],
+        fullwidth: false,
     })
 }
 

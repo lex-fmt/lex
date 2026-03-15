@@ -190,14 +190,26 @@ fn walk_node(node: &DocNode, events: &mut Vec<Event>) {
         DocNode::Table(Table {
             rows,
             header,
-            caption: _,
+            caption,
+            footnotes,
+            fullwidth,
         }) => {
-            events.push(Event::StartTable);
+            events.push(Event::StartTable {
+                caption: caption.clone(),
+                fullwidth: *fullwidth,
+            });
             for row in header {
                 walk_table_row(row, events, true);
             }
             for row in rows {
                 walk_table_row(row, events, false);
+            }
+            if !footnotes.is_empty() {
+                events.push(Event::StartTableFootnotes);
+                for node in footnotes {
+                    walk_node(node, events);
+                }
+                events.push(Event::EndTableFootnotes);
             }
             events.push(Event::EndTable);
         }
@@ -220,6 +232,8 @@ fn walk_table_cell(cell: &TableCell, events: &mut Vec<Event>) {
     events.push(Event::StartTableCell {
         header: cell.header,
         align: cell.align,
+        colspan: cell.colspan,
+        rowspan: cell.rowspan,
     });
     if !cell.content.is_empty() {
         events.push(Event::StartContent);

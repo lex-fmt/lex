@@ -424,6 +424,8 @@ fn from_lex_table(table: &lex_core::lex::ast::Table) -> DocNode {
                         content,
                         header: cell.header,
                         align: convert_align(cell.align),
+                        colspan: cell.colspan,
+                        rowspan: cell.rowspan,
                     }
                 })
                 .collect(),
@@ -438,10 +440,23 @@ fn from_lex_table(table: &lex_core::lex::ast::Table) -> DocNode {
         Some(convert_inline_content(&table.subject))
     };
 
+    let footnotes = table
+        .footnotes
+        .as_ref()
+        .map(|list| vec![from_lex_list(list, 2)])
+        .unwrap_or_default();
+
+    let fullwidth = matches!(
+        table.mode,
+        lex_core::lex::ast::elements::verbatim::VerbatimBlockMode::Fullwidth
+    );
+
     DocNode::Table(IrTable {
         rows,
         header,
         caption,
+        footnotes,
+        fullwidth,
     })
 }
 
