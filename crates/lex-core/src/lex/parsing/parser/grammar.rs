@@ -54,13 +54,14 @@
 //!         1. verbatim-block - requires closing annotation, tried first for disambiguation
 //!         2. annotation_block - block annotation with indented content
 //!         3. annotation_single - single-line annotation only
-//!         4. list_no_blank - 2+ list items without preceding blank (inside containers)
-//!         5. list - requires preceding blank line + 2+ list items (at root level)
-//!         6. session_with_blank - requires preceding blank + subject + blank + indent
+//!         4. list_no_blank - 2+ list items without preceding blank (anywhere)
+//!         5. list - preceding blank line + 2+ list items (blank consumed as node)
+//!         6. session - requires subject + blank + indent (with context conditions)
 //!         7. definition - requires subject + immediate indent
-//!         8. session_no_blank - requires subject + blank + indent (at container start)
-//!         9. paragraph - any content-line or sequence thereof
-//!         10. blank_line_group - one or more consecutive blank lines
+//!         8. paragraph (imperative) - any content-line or sequence thereof, stopping
+//!            before list starts (2+ list-like lines) and definition starts
+//!            (subject + container). Matched imperatively, not by regex.
+//!         9. blank_line_group - one or more consecutive blank lines
 //!
 //!     This ordering ensures that more specific patterns (like verbatim blocks) are matched
 //!     before more general ones (like paragraphs).
@@ -105,12 +106,12 @@ pub(super) const GRAMMAR_PATTERNS: &[(&str, &str)] = &[
     ),
     // Annotation (single-line): <annotation-start-line><content>
     ("annotation_single", r"^(?P<start><annotation-start-line>)"),
-    // List without preceding blank line (for lists inside containers)
+    // List without preceding blank line (matches anywhere — paragraph lookaheads yield)
     (
         "list_no_blank",
         r"^(?P<items>((<list-line>|<subject-or-list-item-line>)(<container>)?){2,})(?P<trailing_blank><blank-line>)?",
     ),
-    // List with preceding blank line (for lists at root level)
+    // List with preceding blank line (consumes blank lines as part of the match)
     (
         "list",
         r"^(?P<blank>(<blank-line>)+)(?P<items>((<list-line>|<subject-or-list-item-line>)(<container>)?){2,})(?P<trailing_blank><blank-line>)?",
@@ -125,11 +126,11 @@ pub(super) const GRAMMAR_PATTERNS: &[(&str, &str)] = &[
         "session",
         r"^(?P<subject><paragraph-line>|<subject-line>|<list-line>|<subject-or-list-item-line>)(?P<blank>(<blank-line>)+)(?P<content><container>)",
     ),
-    // Paragraph: <content-line>+
-    (
-        "paragraph",
-        r"^(?P<lines>(<paragraph-line>|<subject-line>|<list-line>|<subject-or-list-item-line>|<dialog-line>)+)",
-    ),
+    // Paragraph: matched imperatively in GrammarMatcher::match_paragraph()
+    // Scans content lines, stopping before element boundaries (list starts, definition starts).
+    // Kept here as a comment for grammar documentation; actual matching is in parser.rs.
+    //
+    // Blank lines: <blank-line-group>
     // Blank lines: <blank-line-group>
     ("blank_line_group", r"^(?P<lines>(<blank-line>)+)"),
 ];

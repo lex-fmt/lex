@@ -6,7 +6,21 @@
  * - NEWLINE emission at line boundaries and EOF
  * - Line-start detection for annotation markers (::) and list markers
  * - Session boundary detection via lookahead (_session_break)
+ * - List boundary detection via lookahead (_list_start)
+ * - Definition boundary detection via lookahead (_definition_subject)
  * - Emphasis delimiter validation (*strong* and _emphasis_) with flanking rules
+ *
+ * Block boundary lookahead:
+ *   When a list marker is detected, the scanner peeks ahead to the next line.
+ *   If the next line also starts with a list marker at the same indent level,
+ *   the scanner emits _list_start instead of list_marker. Since paragraphs only
+ *   match list_marker (not _list_start), the paragraph deterministically ends
+ *   and the list starts without needing a preceding blank line.
+ *
+ *   Similarly, when a subject line (ending with :) is detected, the scanner
+ *   peeks at the next line's indentation. If it has increased indent, the
+ *   scanner emits _definition_subject instead of subject_content. Paragraphs
+ *   only match subject_content, so definitions start without blank lines.
  *
  * Session break lookahead:
  *   When a blank line is encountered, the scanner peeks ahead past additional
@@ -42,6 +56,8 @@
  *   9: _emphasis_close
  *  10: _session_break
  *  11: verbatim_content
+ *  12: _list_start
+ *  13: _definition_subject
  *
  * Flanking validation for emphasis delimiters:
  *   Opening: prev char must not be alphanumeric (WORD class), next must be WORD.
@@ -75,6 +91,8 @@ enum TokenType {
     EMPHASIS_CLOSE,
     SESSION_BREAK,
     VERBATIM_CONTENT,
+    LIST_START,
+    DEFINITION_SUBJECT,
 };
 
 // Character class for flanking rule context tracking.
@@ -299,6 +317,89 @@ static bool has_matching_closer(TSLexer *lexer, int32_t delimiter) {
     return false;
 }
 
+/// Peek ahead to check if a subsequent line starts with a list marker at the
+/// same indent level. Call AFTER mark_end has been set for the current
+/// list marker. Advances past content lines looking for a same-level list
+/// marker. Handles nested (indented) content between list items by skipping
+/// lines with indent > expected_indent. Returns true if a list marker pattern
+/// is found at expected_indent. The lexer position advances past mark_end,
+/// but tree-sitter resets to mark_end when the token is accepted.
+static bool peek_next_line_has_list_marker(TSLexer *lexer, int expected_indent) {
+    // Consume rest of current line (content after the list marker)
+    while (lexer->lookahead != '\n' && !lexer->eof(lexer)) {
+        lexer->advance(lexer, false);
+    }
+    if (lexer->eof(lexer)) return false;
+
+    // Deep lookahead: scan through lines until we find one at expected_indent
+    // or at a lesser indent (meaning we've left the list context).
+    for (int safety = 0; safety < 1000; safety++) {
+        // Consume newline
+        if (lexer->lookahead != '\n') return false;
+        lexer->advance(lexer, false);
+
+        // Measure indent of this line
+        int next_indent = 0;
+        while (lexer->lookahead == ' ' || lexer->lookahead == '\t') {
+            if (lexer->lookahead == '\t') {
+                next_indent += INDENT_WIDTH;
+            } else {
+                next_indent++;
+            }
+            lexer->advance(lexer, false);
+        }
+
+        // Blank line: skip it (could be between nested blocks or between items)
+        if (lexer->lookahead == '\n') continue;
+        if (lexer->eof(lexer)) return false;
+
+        // Line at expected indent: check for list marker
+        if (next_indent == expected_indent) {
+            return try_list_marker(lexer);
+        }
+
+        // Line at lesser indent: we've left the list context
+        if (next_indent < expected_indent) return false;
+
+        // Line at greater indent (nested content): skip line and continue
+        while (lexer->lookahead != '\n' && !lexer->eof(lexer)) {
+            lexer->advance(lexer, false);
+        }
+        if (lexer->eof(lexer)) return false;
+    }
+
+    return false;
+}
+
+/// Peek ahead to check if the next line has increased indentation.
+/// Call AFTER mark_end has been set for the current subject content.
+/// The lexer should be positioned at the \n at end of the subject line.
+/// Returns true if the next line's indent is greater than current_indent.
+static bool peek_next_line_has_indent(TSLexer *lexer, int current_indent) {
+    // We should be at end of line (\n) or EOF
+    if (lexer->eof(lexer)) return false;
+    if (lexer->lookahead != '\n') return false;
+
+    // Consume newline
+    lexer->advance(lexer, false);
+
+    // Measure indent of next line
+    int next_indent = 0;
+    while (lexer->lookahead == ' ' || lexer->lookahead == '\t') {
+        if (lexer->lookahead == '\t') {
+            next_indent += INDENT_WIDTH;
+        } else {
+            next_indent++;
+        }
+        lexer->advance(lexer, false);
+    }
+
+    // Must not be a blank line or EOF
+    if (lexer->lookahead == '\n' || lexer->eof(lexer)) return false;
+
+    return next_indent > current_indent;
+}
+
 bool tree_sitter_lex_external_scanner_scan(void *payload, TSLexer *lexer,
                                             const bool *valid_symbols) {
     Scanner *scanner = (Scanner *)payload;
@@ -313,8 +414,8 @@ bool tree_sitter_lex_external_scanner_scan(void *payload, TSLexer *lexer,
     fprintf(stderr, "] pending=%d lookahead='%c'(%d) valid=[",
             scanner->pending_dedents, lexer->lookahead > 31 ? lexer->lookahead : '?',
             lexer->lookahead);
-    const char *names[] = {"IND","DED","NL","AM","LM","SC","SO","SCl","EO","ECl","SB","VC"};
-    for (int i = 0; i <= 11; i++) {
+    const char *names[] = {"IND","DED","NL","AM","LM","SC","SO","SCl","EO","ECl","SB","VC","LS","DS"};
+    for (int i = 0; i <= 13; i++) {
         if (valid_symbols[i]) fprintf(stderr, "%s ", names[i]);
     }
     fprintf(stderr, "]\n");
@@ -624,11 +725,19 @@ bool tree_sitter_lex_external_scanner_scan(void *payload, TSLexer *lexer,
                 lexer->advance(lexer, false);
             }
 
-            if (last_char == ':' && valid_symbols[SUBJECT_CONTENT]) {
-                // Subject line — re-mark end at EOL for full line
-                lexer->mark_end(lexer);
-                lexer->result_symbol = SUBJECT_CONTENT;
-                return true;
+            if (last_char == ':') {
+                // Subject line — check for definition subject first
+                lexer->mark_end(lexer);  // mark at EOL for full line
+                if (valid_symbols[DEFINITION_SUBJECT]) {
+                    if (peek_next_line_has_indent(lexer, scanner->line_indent)) {
+                        lexer->result_symbol = DEFINITION_SUBJECT;
+                        return true;
+                    }
+                }
+                if (valid_symbols[SUBJECT_CONTENT]) {
+                    lexer->result_symbol = SUBJECT_CONTENT;
+                    return true;
+                }
             }
 
             // Not a subject. Try emphasis open — mark_end is at X+1.
@@ -656,13 +765,27 @@ bool tree_sitter_lex_external_scanner_scan(void *payload, TSLexer *lexer,
         // Try list marker: just the marker portion (- , 1. , a) , etc.)
         // Content after the marker is handled by the grammar's text_content
         // rule, which decomposes inline elements (bold, references, etc.).
-        if (valid_symbols[LIST_MARKER]) {
+        if (valid_symbols[LIST_MARKER] || valid_symbols[LIST_START]) {
             if (try_list_marker(lexer)) {
                 lexer->mark_end(lexer);
-                lexer->result_symbol = LIST_MARKER;
-                // Marker ends with a space — set class for emphasis flanking
-                scanner->last_char_class = CHAR_CLASS_WHITESPACE;
-                return true;
+
+                // If LIST_START is valid, peek ahead to check if the next
+                // line also starts with a list marker at the same indent.
+                // If yes, emit LIST_START (paragraph can't absorb it).
+                if (valid_symbols[LIST_START]) {
+                    if (peek_next_line_has_list_marker(lexer, scanner->line_indent)) {
+                        lexer->result_symbol = LIST_START;
+                        scanner->last_char_class = CHAR_CLASS_WHITESPACE;
+                        return true;
+                    }
+                }
+
+                if (valid_symbols[LIST_MARKER]) {
+                    lexer->result_symbol = LIST_MARKER;
+                    // Marker ends with a space — set class for emphasis flanking
+                    scanner->last_char_class = CHAR_CLASS_WHITESPACE;
+                    return true;
+                }
             }
             // Not a list marker — fall through to subject_content check.
             // try_list_marker may have advanced the position, but the
@@ -670,7 +793,7 @@ bool tree_sitter_lex_external_scanner_scan(void *payload, TSLexer *lexer,
         }
 
         // Try subject content: entire line ending with :
-        if (valid_symbols[SUBJECT_CONTENT]) {
+        if (valid_symbols[SUBJECT_CONTENT] || valid_symbols[DEFINITION_SUBJECT]) {
             int32_t last_char = 0;
             while (lexer->lookahead != '\n' && !lexer->eof(lexer)) {
                 last_char = lexer->lookahead;
@@ -678,8 +801,19 @@ bool tree_sitter_lex_external_scanner_scan(void *payload, TSLexer *lexer,
             }
             if (last_char == ':') {
                 lexer->mark_end(lexer);
-                lexer->result_symbol = SUBJECT_CONTENT;
-                return true;
+
+                // If DEFINITION_SUBJECT is valid, peek ahead for indent
+                if (valid_symbols[DEFINITION_SUBJECT]) {
+                    if (peek_next_line_has_indent(lexer, scanner->line_indent)) {
+                        lexer->result_symbol = DEFINITION_SUBJECT;
+                        return true;
+                    }
+                }
+
+                if (valid_symbols[SUBJECT_CONTENT]) {
+                    lexer->result_symbol = SUBJECT_CONTENT;
+                    return true;
+                }
             }
             // Line doesn't end with : — return false, position resets to
             // mark_end (line start). Set last_char_class for the grammar
@@ -695,19 +829,30 @@ bool tree_sitter_lex_external_scanner_scan(void *payload, TSLexer *lexer,
     // === Not at line start ===
 
     // Try list marker (e.g., first line after INDENT in a definition body)
-    if (valid_symbols[LIST_MARKER]) {
+    if (valid_symbols[LIST_MARKER] || valid_symbols[LIST_START]) {
         lexer->mark_end(lexer);
         if (try_list_marker(lexer)) {
             lexer->mark_end(lexer);
-            lexer->result_symbol = LIST_MARKER;
-            scanner->last_char_class = CHAR_CLASS_WHITESPACE;
-            return true;
+
+            if (valid_symbols[LIST_START]) {
+                if (peek_next_line_has_list_marker(lexer, scanner->line_indent)) {
+                    lexer->result_symbol = LIST_START;
+                    scanner->last_char_class = CHAR_CLASS_WHITESPACE;
+                    return true;
+                }
+            }
+
+            if (valid_symbols[LIST_MARKER]) {
+                lexer->result_symbol = LIST_MARKER;
+                scanner->last_char_class = CHAR_CLASS_WHITESPACE;
+                return true;
+            }
         }
         // Not a list marker — fall through
     }
 
     // Try subject content: entire line ending with :
-    if (valid_symbols[SUBJECT_CONTENT]) {
+    if (valid_symbols[SUBJECT_CONTENT] || valid_symbols[DEFINITION_SUBJECT]) {
         lexer->mark_end(lexer);
         int32_t last_char = 0;
         while (lexer->lookahead != '\n' && !lexer->eof(lexer)) {
@@ -716,8 +861,18 @@ bool tree_sitter_lex_external_scanner_scan(void *payload, TSLexer *lexer,
         }
         if (last_char == ':') {
             lexer->mark_end(lexer);
-            lexer->result_symbol = SUBJECT_CONTENT;
-            return true;
+
+            if (valid_symbols[DEFINITION_SUBJECT]) {
+                if (peek_next_line_has_indent(lexer, scanner->line_indent)) {
+                    lexer->result_symbol = DEFINITION_SUBJECT;
+                    return true;
+                }
+            }
+
+            if (valid_symbols[SUBJECT_CONTENT]) {
+                lexer->result_symbol = SUBJECT_CONTENT;
+                return true;
+            }
         }
         // Line doesn't end with : — return false, position resets
         return false;
