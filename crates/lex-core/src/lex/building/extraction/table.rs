@@ -142,6 +142,8 @@ enum LineKind<'a> {
         cells: Vec<&'a str>,
         /// Raw cell texts preserving leading whitespace (for block content in multi-line mode)
         raw_cells: Vec<&'a str>,
+        /// Per-cell byte ranges (of trimmed text) in the source
+        cell_ranges: Vec<ByteRange<usize>>,
         line_range: &'a ByteRange<usize>,
     },
     /// A blank line (row group separator in multi-line mode)
@@ -162,6 +164,9 @@ fn classify_lines<'a>(content_lines: &'a [(String, ByteRange<usize>)]) -> Vec<Li
             if trimmed.is_empty() {
                 LineKind::Blank
             } else if trimmed.starts_with('|') && !is_separator_line(trimmed) {
+                // Offset of trimmed text within the full line text
+                let trim_offset = text.len() - text.trim_start().len();
+
                 let segments: Vec<&str> = trimmed.split('|').collect();
                 let start = if segments.first().is_some_and(|s| s.trim().is_empty()) {
                     1
@@ -173,12 +178,32 @@ fn classify_lines<'a>(content_lines: &'a [(String, ByteRange<usize>)]) -> Vec<Li
                 } else {
                     segments.len()
                 };
+
+                // Compute per-cell byte ranges by walking through the trimmed line
+                let mut cell_ranges = Vec::with_capacity(end - start);
+                let mut pos = 0; // position within trimmed
+                for (seg_idx, segment) in segments.iter().enumerate() {
+                    if seg_idx > 0 {
+                        pos += 1; // skip the `|` delimiter
+                    }
+                    if seg_idx >= start && seg_idx < end {
+                        // Find the trimmed content within this segment
+                        let seg_trim_start = segment.len() - segment.trim_start().len();
+                        let seg_trim_end = segment.trim_end().len();
+                        let cell_start = range.start + trim_offset + pos + seg_trim_start;
+                        let cell_end = range.start + trim_offset + pos + seg_trim_end;
+                        cell_ranges.push(cell_start..cell_end);
+                    }
+                    pos += segment.len();
+                }
+
                 let cells: Vec<&str> = segments[start..end].iter().map(|s| s.trim()).collect();
                 let raw_cells: Vec<&str> =
                     segments[start..end].iter().map(|s| s.trim_end()).collect();
                 LineKind::PipeRow {
                     cells,
                     raw_cells,
+                    cell_ranges,
                     line_range: range,
                 }
             } else {
@@ -221,15 +246,19 @@ fn parse_compact_rows(lines: &[LineKind]) -> Vec<TableRowData> {
         .iter()
         .filter_map(|line| {
             if let LineKind::PipeRow {
-                cells, line_range, ..
+                cells,
+                cell_ranges,
+                line_range,
+                ..
             } = line
             {
                 let cell_data = cells
                     .iter()
-                    .map(|text| TableCellData {
+                    .zip(cell_ranges.iter())
+                    .map(|(text, cell_range)| TableCellData {
                         text: text.to_string(),
                         raw_text: None,
-                        byte_range: (*line_range).clone(),
+                        byte_range: cell_range.clone(),
                         colspan: 1,
                         rowspan: 1,
                         is_header: false,
@@ -299,6 +328,7 @@ fn merge_group(group: &[&LineKind]) -> Option<TableRowData> {
     let LineKind::PipeRow {
         cells: first_cells,
         raw_cells: first_raw,
+        cell_ranges: first_cell_ranges,
         line_range: first_range,
     } = group[0]
     else {
@@ -307,6 +337,7 @@ fn merge_group(group: &[&LineKind]) -> Option<TableRowData> {
 
     let mut merged_texts: Vec<String> = first_cells.iter().map(|s| s.to_string()).collect();
     let mut merged_raw: Vec<String> = first_raw.iter().map(|s| s.to_string()).collect();
+    let merged_cell_ranges: Vec<ByteRange<usize>> = first_cell_ranges.clone();
     let mut row_range = (*first_range).clone();
 
     // Append continuation lines
@@ -315,6 +346,7 @@ fn merge_group(group: &[&LineKind]) -> Option<TableRowData> {
             cells: cont_cells,
             raw_cells: cont_raw,
             line_range: cont_range,
+            ..
         } = line
         else {
             continue;
@@ -360,10 +392,14 @@ fn merge_group(group: &[&LineKind]) -> Option<TableRowData> {
     let cells = merged_texts
         .into_iter()
         .zip(merged_raw)
-        .map(|(text, raw)| TableCellData {
+        .enumerate()
+        .map(|(i, (text, raw))| TableCellData {
             text,
             raw_text: if group.len() > 1 { Some(raw) } else { None },
-            byte_range: row_range.clone(),
+            byte_range: merged_cell_ranges
+                .get(i)
+                .cloned()
+                .unwrap_or_else(|| row_range.clone()),
             colspan: 1,
             rowspan: 1,
             is_header: false,
