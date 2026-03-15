@@ -21,14 +21,14 @@ The tree-sitter CLI requires the grammar directory to be discoverable. The gramm
 
 ```sh
 # One-time setup (persists until reboot)
-ln -sfn /Users/adebert/h/lex/core/tree-sitter /tmp/tree-sitter-lex
+ln -sfn /Users/adebert/h/lex-fmt/lex/tree-sitter /tmp/tree-sitter-lex
 echo '{"parser-directories":["/tmp"]}' > /tmp/ts-config.json
 ```
 
 Then all tree-sitter commands use `--config-path /tmp/ts-config.json`. Always run from the `tree-sitter/` directory:
 
 ```sh
-cd /Users/adebert/h/lex/core/tree-sitter
+cd /Users/adebert/h/lex-fmt/lex/tree-sitter
 ```
 
 ## Key Commands
@@ -84,7 +84,7 @@ bash scripts/parity-check.sh ../path/to/file.lex --verbose
 
 ## Comparing Tree-sitter Highlights vs LSP Semantic Tokens
 
-This is the core verification workflow. Both commands should be run from the repo root (`/Users/adebert/h/lex/core`).
+This is the core verification workflow. Both commands should be run from the repo root (`/Users/adebert/h/lex-fmt/lex`).
 
 ### Step 1: Get LSP semantic tokens
 
@@ -127,7 +127,7 @@ The canonical mapping from tree-sitter scopes to LSP token types:
 | `string.escape` | (no LSP equivalent) |
 
 This mapping is also defined in the VSCode integration test at:
-`/Users/adebert/h/lex/vscode/test/integration/treesitter_parity.test.ts`
+`/Users/adebert/h/lex-fmt/vscode/test/integration/treesitter_parity.test.ts`
 
 ## File Locations
 
@@ -141,7 +141,7 @@ This mapping is also defined in the VSCode integration test at:
 | Parity-check script | `tree-sitter/scripts/parity-check.sh` |
 | Generated parser | `tree-sitter/src/parser.c` (do not edit) |
 | Node types | `tree-sitter/src/node-types.json` (do not edit) |
-| VSCode parity test | `/Users/adebert/h/lex/vscode/test/integration/treesitter_parity.test.ts` |
+| VSCode parity test | `/Users/adebert/h/lex-fmt/vscode/test/integration/treesitter_parity.test.ts` |
 | LSP semantic tokens | `crates/lex-analysis/src/semantic_tokens.rs` |
 | Kitchen-sink benchmark | `comms/specs/benchmark/010-kitchensink.lex` |
 
