@@ -756,6 +756,7 @@ where
                     commands::COMMAND_INSERT_ASSET.to_string(),
                     commands::COMMAND_INSERT_VERBATIM.to_string(),
                     commands::COMMAND_FOOTNOTES_REORDER.to_string(),
+                    commands::COMMAND_TABLE_FORMAT.to_string(),
                 ],
                 work_done_progress_options: WorkDoneProgressOptions::default(),
             }),

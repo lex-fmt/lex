@@ -16,6 +16,7 @@ pub const COMMAND_TOGGLE_ANNOTATIONS: &str = "lex.toggle_annotations";
 pub const COMMAND_INSERT_ASSET: &str = "lex.insert_asset";
 pub const COMMAND_INSERT_VERBATIM: &str = "lex.insert_verbatim";
 pub const COMMAND_FOOTNOTES_REORDER: &str = "lex.footnotes.reorder";
+pub const COMMAND_TABLE_FORMAT: &str = "lex.table.format";
 
 pub fn execute_command(command: &str, arguments: &[Value]) -> Result<Option<Value>> {
     match command {
@@ -106,6 +107,37 @@ pub fn execute_command(command: &str, arguments: &[Value]) -> Result<Option<Valu
             let new_content = crate::features::footnotes::reorder_footnotes(&doc, content);
 
             Ok(Some(Value::String(new_content)))
+        }
+        COMMAND_TABLE_FORMAT => {
+            let content = arguments
+                .first()
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| Error::invalid_params("Missing 'content' argument"))?;
+            let line = arguments
+                .get(1)
+                .and_then(|v| v.as_u64())
+                .ok_or_else(|| Error::invalid_params("Missing 'line' argument"))?
+                as usize;
+            let column = arguments
+                .get(2)
+                .and_then(|v| v.as_u64())
+                .ok_or_else(|| Error::invalid_params("Missing 'column' argument"))?
+                as usize;
+
+            let doc = lex_core::lex::parsing::parse_document(content)
+                .map_err(|_| Error::invalid_params("Failed to parse document"))?;
+
+            let position = lex_core::lex::ast::Position::new(line, column);
+            let edit = crate::features::table_format::format_table_at(&doc, content, position);
+
+            match edit {
+                Some(edit) => Ok(Some(serde_json::json!({
+                    "start": edit.start,
+                    "end": edit.end,
+                    "newText": edit.new_text,
+                }))),
+                None => Ok(None),
+            }
         }
         _ => Err(Error::invalid_request()),
     }
