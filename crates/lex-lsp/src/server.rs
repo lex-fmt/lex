@@ -1214,11 +1214,15 @@ fn to_lsp_diagnostic(diag: AnalysisDiagnostic) -> Diagnostic {
         DiagnosticKind::UnusedFootnoteDefinition => {
             tower_lsp::lsp_types::DiagnosticSeverity::WARNING
         }
+        DiagnosticKind::TableInconsistentColumns => {
+            tower_lsp::lsp_types::DiagnosticSeverity::WARNING
+        }
     };
 
     let code = match diag.kind {
         DiagnosticKind::MissingFootnoteDefinition => "missing-footnote",
         DiagnosticKind::UnusedFootnoteDefinition => "unused-footnote",
+        DiagnosticKind::TableInconsistentColumns => "table-inconsistent-columns",
     };
 
     Diagnostic {

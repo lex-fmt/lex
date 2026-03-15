@@ -375,6 +375,11 @@ where
         }
         ContentItem::Table(table) => {
             f(&table.subject);
+            for row in table.all_rows() {
+                for cell in &row.cells {
+                    f(&cell.content);
+                }
+            }
             for annotation in table.annotations() {
                 visit_annotation_text(annotation, f);
             }

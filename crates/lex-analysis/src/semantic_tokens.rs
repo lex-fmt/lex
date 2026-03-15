@@ -377,9 +377,10 @@ impl TokenCollector {
             self.push_range(location, LexSemanticTokenKind::VerbatimSubject);
         }
 
-        // Process cell children for block content tokens
+        // Process cell content: inline text and block children
         for row in table.all_rows() {
             for cell in &row.cells {
+                self.process_text_content(&cell.content);
                 for child in cell.children.iter() {
                     self.process_content_item(child);
                 }
@@ -874,5 +875,36 @@ mod tests {
             .map(|t| &source[t.range.span.clone()])
             .collect();
         assert!(strong.contains(&"bold"));
+    }
+
+    #[test]
+    fn table_cell_inline_formatting_gets_tokens() {
+        let source = "Stats:\n    | *Name* | `code` |\n    | _test_ | #42#   |\n:: table ::\n";
+        let document = lex_core::lex::parsing::parse_document(source).expect("failed to parse");
+        let tokens = collect_semantic_tokens(&document);
+
+        let strong = snippets(&tokens, LexSemanticTokenKind::InlineStrong, source);
+        assert!(
+            strong.iter().any(|s| s.contains("Name")),
+            "Expected InlineStrong for *Name* in table cell, got: {strong:?}"
+        );
+
+        let code = snippets(&tokens, LexSemanticTokenKind::InlineCode, source);
+        assert!(
+            code.iter().any(|s| s.contains("code")),
+            "Expected InlineCode for `code` in table cell, got: {code:?}"
+        );
+
+        let emphasis = snippets(&tokens, LexSemanticTokenKind::InlineEmphasis, source);
+        assert!(
+            emphasis.iter().any(|s| s.contains("test")),
+            "Expected InlineEmphasis for _test_ in table cell, got: {emphasis:?}"
+        );
+
+        let math = snippets(&tokens, LexSemanticTokenKind::InlineMath, source);
+        assert!(
+            math.iter().any(|s| s.contains("42")),
+            "Expected InlineMath for #42# in table cell, got: {math:?}"
+        );
     }
 }
