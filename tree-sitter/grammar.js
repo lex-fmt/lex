@@ -80,10 +80,12 @@ module.exports = grammar({
   extras: (_$) => [],
 
   conflicts: ($) => [
-    // _list_start: list_start_item vs session title at _block level
+    // _list_start: list_start_item vs session/document title at _block level
     [$._list_start_item, $._session_title],
-    // list_marker: dialog_line vs session title (at _block level)
+    // list_marker: dialog_line vs session/document title (at _block level)
     [$.dialog_line, $._session_title],
+    // document_title's repeat1(blank_line) end ambiguity
+    [$.document_title],
     // blank_line after dedent: part of list_item's trailing blanks or next block
     [$.list_item],
     [$._list_start_item],
@@ -100,7 +102,28 @@ module.exports = grammar({
   ],
 
   rules: {
-    document: ($) => repeat($._block),
+    // Document optionally starts with a title, then content blocks.
+    // document_title is ONLY in this position — it cannot appear mid-document.
+    // GLR resolves the fork: if blank+indent follows → session wins via
+    // _session_break; if just blank → document_title wins via dynamic prec.
+    document: ($) =>
+      choice(
+        seq($.document_title, repeat($._block)),
+        repeat1($._block),
+      ),
+
+    // ===== Document Title =====
+    // A single line followed by blank line(s), only at document start.
+    // Dynamic precedence makes this win over the repeat1(_block) alternative.
+    document_title: ($) =>
+      prec.dynamic(
+        2,
+        seq(
+          field("title", alias($._session_title, $.line_content)),
+          $._newline,
+          repeat1($.blank_line),
+        ),
+      ),
 
     _block: ($) =>
       choice(

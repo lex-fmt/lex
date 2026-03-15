@@ -8,6 +8,9 @@
 ;   vic — select inside class/section
 ;   etc.
 
+; === Document Title ===
+(document_title) @block.outer
+
 ; === Blocks (@block.outer / @block.inner) ===
 ; Sessions are the primary structural unit
 (session) @block.outer
