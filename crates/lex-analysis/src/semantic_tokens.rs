@@ -377,6 +377,15 @@ impl TokenCollector {
             self.push_range(location, LexSemanticTokenKind::VerbatimSubject);
         }
 
+        // Process cell children for block content tokens
+        for row in table.all_rows() {
+            for cell in &row.cells {
+                for child in cell.children.iter() {
+                    self.process_content_item(child);
+                }
+            }
+        }
+
         self.push_range(
             &table.closing_data.label.location,
             LexSemanticTokenKind::VerbatimLanguage,

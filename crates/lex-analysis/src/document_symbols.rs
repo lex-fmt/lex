@@ -120,7 +120,17 @@ fn verbatim_symbol(verbatim: &Verbatim) -> LexDocumentSymbol {
 }
 
 fn table_symbol(table: &Table) -> LexDocumentSymbol {
-    let children = annotation_symbol_list(table.annotations());
+    let mut children = annotation_symbol_list(table.annotations());
+
+    // Include symbols from cell children with block content
+    for row in table.all_rows() {
+        for cell in &row.cells {
+            if cell.has_block_content() {
+                children.extend(collect_symbols_from_items(cell.children.iter()));
+            }
+        }
+    }
+
     LexDocumentSymbol {
         name: format!("Table: {}", summarize_text(&table.subject, "Table")),
         detail: Some("table".to_string()),

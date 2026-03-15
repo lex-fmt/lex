@@ -412,12 +412,19 @@ fn from_lex_table(table: &lex_core::lex::ast::Table) -> DocNode {
             cells: row
                 .cells
                 .iter()
-                .map(|cell| IrTableCell {
-                    content: vec![DocNode::Paragraph(Paragraph {
-                        content: convert_inline_content(&cell.content),
-                    })],
-                    header: cell.header,
-                    align: convert_align(cell.align),
+                .map(|cell| {
+                    let content = if cell.has_block_content() {
+                        convert_children(&cell.children, 2)
+                    } else {
+                        vec![DocNode::Paragraph(Paragraph {
+                            content: convert_inline_content(&cell.content),
+                        })]
+                    };
+                    IrTableCell {
+                        content,
+                        header: cell.header,
+                        align: convert_align(cell.align),
+                    }
                 })
                 .collect(),
         }

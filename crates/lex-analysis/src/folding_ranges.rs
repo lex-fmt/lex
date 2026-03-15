@@ -138,6 +138,14 @@ impl FoldingCollector {
 
     fn process_table(&mut self, table: &Table) {
         self.process_annotations(table.annotations());
+        // Process cell children with block content
+        for row in table.all_rows() {
+            for cell in &row.cells {
+                for child in cell.children.iter() {
+                    self.process_content_item(child);
+                }
+            }
+        }
         if let Some(subject_range) = &table.subject.location {
             if subject_range.start.line < table.range().end.line {
                 self.push_fold(
