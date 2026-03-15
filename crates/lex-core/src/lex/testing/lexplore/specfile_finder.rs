@@ -41,6 +41,7 @@ pub enum ElementType {
     Definition,
     Annotation,
     Verbatim,
+    Table,
     Document,
 }
 
@@ -61,6 +62,7 @@ impl ElementType {
             ElementType::Definition => "definition",
             ElementType::Annotation => "annotation",
             ElementType::Verbatim => "verbatim",
+            ElementType::Table => "table",
             ElementType::Document => "document",
         }
     }

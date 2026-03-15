@@ -11,6 +11,7 @@ mod inlines;
 mod list;
 mod paragraph;
 mod session;
+mod table;
 mod verbatim;
 
 pub use annotation::AnnotationAssertion;
@@ -24,6 +25,7 @@ pub use inlines::{InlineAssertion, InlineExpectation, ReferenceExpectation};
 pub use list::{ListAssertion, ListItemAssertion};
 pub use paragraph::ParagraphAssertion;
 pub use session::SessionAssertion;
+pub use table::TableAssertion;
 pub use verbatim::VerbatimBlockkAssertion;
 
 use crate::lex::ast::traits::AstNode;

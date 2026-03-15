@@ -16,6 +16,7 @@ use super::definition::Definition;
 use super::list::{List, ListItem};
 use super::paragraph::{Paragraph, TextLine};
 use super::session::Session;
+use super::table::Table;
 use super::verbatim::Verbatim;
 use super::verbatim_line::VerbatimLine;
 use std::fmt;
@@ -31,6 +32,7 @@ pub enum ContentItem {
     Definition(Definition),
     Annotation(Annotation),
     VerbatimBlock(Box<Verbatim>),
+    Table(Box<Table>),
     VerbatimLine(VerbatimLine),
     BlankLineGroup(BlankLineGroup),
 }
@@ -46,6 +48,7 @@ impl AstNode for ContentItem {
             ContentItem::Definition(d) => d.node_type(),
             ContentItem::Annotation(a) => a.node_type(),
             ContentItem::VerbatimBlock(fb) => fb.node_type(),
+            ContentItem::Table(t) => t.node_type(),
             ContentItem::VerbatimLine(fl) => fl.node_type(),
             ContentItem::BlankLineGroup(blg) => blg.node_type(),
         }
@@ -61,6 +64,7 @@ impl AstNode for ContentItem {
             ContentItem::Definition(d) => d.display_label(),
             ContentItem::Annotation(a) => a.display_label(),
             ContentItem::VerbatimBlock(fb) => fb.display_label(),
+            ContentItem::Table(t) => t.display_label(),
             ContentItem::VerbatimLine(fl) => fl.display_label(),
             ContentItem::BlankLineGroup(blg) => blg.display_label(),
         }
@@ -76,6 +80,7 @@ impl AstNode for ContentItem {
             ContentItem::Definition(d) => d.range(),
             ContentItem::Annotation(a) => a.range(),
             ContentItem::VerbatimBlock(fb) => fb.range(),
+            ContentItem::Table(t) => t.range(),
             ContentItem::VerbatimLine(fl) => fl.range(),
             ContentItem::BlankLineGroup(blg) => blg.range(),
         }
@@ -91,6 +96,7 @@ impl AstNode for ContentItem {
             ContentItem::Definition(d) => d.accept(visitor),
             ContentItem::Annotation(a) => a.accept(visitor),
             ContentItem::VerbatimBlock(fb) => fb.accept(visitor),
+            ContentItem::Table(t) => t.accept(visitor),
             ContentItem::VerbatimLine(fl) => fl.accept(visitor),
             ContentItem::BlankLineGroup(blg) => blg.accept(visitor),
         }
@@ -108,6 +114,7 @@ impl VisualStructure for ContentItem {
             ContentItem::Definition(d) => d.is_source_line_node(),
             ContentItem::Annotation(a) => a.is_source_line_node(),
             ContentItem::VerbatimBlock(fb) => fb.is_source_line_node(),
+            ContentItem::Table(t) => t.is_source_line_node(),
             ContentItem::VerbatimLine(fl) => fl.is_source_line_node(),
             ContentItem::BlankLineGroup(blg) => blg.is_source_line_node(),
         }
@@ -123,6 +130,7 @@ impl VisualStructure for ContentItem {
             ContentItem::Definition(d) => d.has_visual_header(),
             ContentItem::Annotation(a) => a.has_visual_header(),
             ContentItem::VerbatimBlock(fb) => fb.has_visual_header(),
+            ContentItem::Table(t) => t.has_visual_header(),
             ContentItem::VerbatimLine(fl) => fl.has_visual_header(),
             ContentItem::BlankLineGroup(blg) => blg.has_visual_header(),
         }
@@ -138,6 +146,7 @@ impl VisualStructure for ContentItem {
             ContentItem::Definition(d) => d.collapses_with_children(),
             ContentItem::Annotation(a) => a.collapses_with_children(),
             ContentItem::VerbatimBlock(fb) => fb.collapses_with_children(),
+            ContentItem::Table(t) => t.collapses_with_children(),
             ContentItem::VerbatimLine(fl) => fl.collapses_with_children(),
             ContentItem::BlankLineGroup(blg) => blg.collapses_with_children(),
         }
@@ -152,6 +161,7 @@ impl ContentItem {
             ContentItem::Annotation(a) => Some(a.label()),
             ContentItem::ListItem(li) => Some(li.label()),
             ContentItem::VerbatimBlock(fb) => Some(fb.subject.as_string()),
+            ContentItem::Table(t) => Some(t.subject.as_string()),
             _ => None,
         }
     }
@@ -165,6 +175,7 @@ impl ContentItem {
             ContentItem::ListItem(li) => Some(&li.children),
             ContentItem::Paragraph(p) => Some(&p.lines),
             ContentItem::VerbatimBlock(fb) => Some(&fb.children),
+            ContentItem::Table(_) => None, // Tables use structured rows/cells, not generic children
             ContentItem::TextLine(_) => None,
             ContentItem::VerbatimLine(_) => None,
             _ => None,
@@ -180,6 +191,7 @@ impl ContentItem {
             ContentItem::ListItem(li) => Some(li.children.as_mut_vec()),
             ContentItem::Paragraph(p) => Some(&mut p.lines),
             ContentItem::VerbatimBlock(fb) => Some(fb.children.as_mut_vec()),
+            ContentItem::Table(_) => None,
             ContentItem::TextLine(_) => None,
             ContentItem::VerbatimLine(_) => None,
             _ => None,
@@ -216,6 +228,10 @@ impl ContentItem {
     }
     pub fn is_verbatim_block(&self) -> bool {
         matches!(self, ContentItem::VerbatimBlock(_))
+    }
+
+    pub fn is_table(&self) -> bool {
+        matches!(self, ContentItem::Table(_))
     }
 
     pub fn is_verbatim_line(&self) -> bool {
@@ -271,6 +287,14 @@ impl ContentItem {
     pub fn as_verbatim_block(&self) -> Option<&Verbatim> {
         if let ContentItem::VerbatimBlock(fb) = self {
             Some(fb)
+        } else {
+            None
+        }
+    }
+
+    pub fn as_table(&self) -> Option<&Table> {
+        if let ContentItem::Table(t) = self {
+            Some(t)
         } else {
             None
         }
@@ -337,6 +361,14 @@ impl ContentItem {
     pub fn as_verbatim_block_mut(&mut self) -> Option<&mut Verbatim> {
         if let ContentItem::VerbatimBlock(fb) = self {
             Some(fb)
+        } else {
+            None
+        }
+    }
+
+    pub fn as_table_mut(&mut self) -> Option<&mut Table> {
+        if let ContentItem::Table(t) = self {
+            Some(t)
         } else {
             None
         }
@@ -430,6 +462,7 @@ impl ContentItem {
                 | ContentItem::Paragraph(_)
                 | ContentItem::Annotation(_)
                 | ContentItem::VerbatimBlock(_)
+                | ContentItem::Table(_)
         );
 
         if is_block && self.range().contains(pos) {
@@ -537,6 +570,14 @@ impl fmt::Display for ContentItem {
             ),
             ContentItem::VerbatimBlock(fb) => {
                 write!(f, "VerbatimBlock('{}')", fb.subject.as_string())
+            }
+            ContentItem::Table(t) => {
+                write!(
+                    f,
+                    "Table('{}', {} rows)",
+                    t.subject.as_string(),
+                    t.row_count()
+                )
             }
             ContentItem::VerbatimLine(fl) => {
                 write!(f, "VerbatimLine('{}')", fl.content.as_string())

@@ -50,6 +50,9 @@ pub trait Visitor {
     fn visit_verbatim_block(&mut self, _verbatim_block: &super::Verbatim) {}
     fn leave_verbatim_block(&mut self, _verbatim_block: &super::Verbatim) {}
 
+    fn visit_table(&mut self, _table: &super::Table) {}
+    fn leave_table(&mut self, _table: &super::Table) {}
+
     fn visit_verbatim_group(&mut self, _group: &super::elements::verbatim::VerbatimGroupItemRef) {}
     fn leave_verbatim_group(&mut self, _group: &super::elements::verbatim::VerbatimGroupItemRef) {}
 

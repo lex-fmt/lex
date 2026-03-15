@@ -43,6 +43,7 @@ use super::definition::Definition;
 use super::list::{List, ListItem};
 use super::paragraph::{Paragraph, TextLine};
 use super::session::Session;
+use super::table::Table;
 use super::verbatim::Verbatim;
 use super::verbatim_line::VerbatimLine;
 
@@ -62,6 +63,7 @@ pub enum ContentElement {
     List(List),
     Definition(Definition),
     VerbatimBlock(Box<Verbatim>),
+    Table(Box<Table>),
     TextLine(TextLine),
     VerbatimLine(VerbatimLine),
     BlankLineGroup(BlankLineGroup),
@@ -78,6 +80,7 @@ impl TryFrom<ContentItem> for ContentElement {
             ContentItem::List(l) => Ok(ContentElement::List(l)),
             ContentItem::Definition(d) => Ok(ContentElement::Definition(d)),
             ContentItem::VerbatimBlock(vb) => Ok(ContentElement::VerbatimBlock(vb)),
+            ContentItem::Table(t) => Ok(ContentElement::Table(t)),
             ContentItem::TextLine(tl) => Ok(ContentElement::TextLine(tl)),
             ContentItem::VerbatimLine(vl) => Ok(ContentElement::VerbatimLine(vl)),
             ContentItem::BlankLineGroup(blg) => Ok(ContentElement::BlankLineGroup(blg)),
@@ -94,6 +97,7 @@ impl From<ContentElement> for ContentItem {
             ContentElement::List(l) => ContentItem::List(l),
             ContentElement::Definition(d) => ContentItem::Definition(d),
             ContentElement::VerbatimBlock(vb) => ContentItem::VerbatimBlock(vb),
+            ContentElement::Table(t) => ContentItem::Table(t),
             ContentElement::TextLine(tl) => ContentItem::TextLine(tl),
             ContentElement::VerbatimLine(vl) => ContentItem::VerbatimLine(vl),
             ContentElement::BlankLineGroup(blg) => ContentItem::BlankLineGroup(blg),

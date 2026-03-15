@@ -105,6 +105,14 @@ fn collect_text(item: &ContentItem, out: &mut String) {
         ContentItem::VerbatimLine(vl) => {
             out.push_str(vl.content.as_string());
         }
+        ContentItem::Table(t) => {
+            out.push_str(t.subject.as_string());
+            for row in t.all_rows() {
+                for cell in &row.cells {
+                    out.push_str(cell.content.as_string());
+                }
+            }
+        }
         ContentItem::BlankLineGroup(_) => {}
         ContentItem::Annotation(_) => {}
     }

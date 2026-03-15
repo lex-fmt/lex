@@ -23,6 +23,7 @@ pub enum NodeType {
     Definition,
     Annotation,
     VerbatimBlock,
+    Table,
     BlankLineGroup,
 }
 
@@ -31,6 +32,12 @@ pub enum NodeType {
 pub enum ParseNodePayload {
     /// Raw line tokens needed to build a verbatim block (subject + content lines + closing data)
     VerbatimBlock {
+        subject: LineToken,
+        content_lines: Vec<LineToken>,
+        closing_data_tokens: Vec<TokenLocation>,
+    },
+    /// Raw line tokens needed to build a table (same outer structure as verbatim)
+    Table {
         subject: LineToken,
         content_lines: Vec<LineToken>,
         closing_data_tokens: Vec<TokenLocation>,

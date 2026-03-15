@@ -31,6 +31,7 @@
 //!         - Definitions: have a subject (term) and their content. See [definition](definition).
 //!         - Annotations: metadata, have a data tag and optional content. See [annotation](annotation).
 //!         - Verbatim Blocks: has a subject, optional content and data tag. See [verbatim](verbatim).
+//!         - Tables: structured tabular data with pipe-delimited cells. See [table](table).
 //!
 //! Structure, Children, Indentation and the AST
 //!
@@ -141,6 +142,7 @@ pub mod paragraph;
 pub mod parameter;
 pub mod sequence_marker;
 pub mod session;
+pub mod table;
 pub mod typed_content;
 pub mod verbatim;
 pub mod verbatim_line;
@@ -158,6 +160,7 @@ pub use paragraph::{Paragraph, TextLine};
 pub use parameter::Parameter;
 pub use sequence_marker::{DecorationStyle, Form, Separator, SequenceMarker};
 pub use session::Session;
+pub use table::{Table, TableCell, TableCellAlignment, TableRow};
 pub use typed_content::{ContentElement, ListContent, SessionContent, VerbatimContent};
 pub use verbatim::Verbatim;
 pub use verbatim_line::VerbatimLine;

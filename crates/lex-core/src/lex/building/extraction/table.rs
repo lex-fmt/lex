@@ -1,0 +1,683 @@
+//! Table Data Extraction
+//!
+//! This module handles the extraction of table content from line tokens,
+//! reusing the verbatim block's outer structure handling (mode detection,
+//! indentation wall stripping) and adding pipe-row parsing on top.
+//!
+//! # Pipeline
+//!
+//! 1. Reuse verbatim extraction for mode detection and wall stripping
+//! 2. Parse wall-stripped lines into pipe rows
+//! 3. Detect separator lines (cosmetic, discarded)
+//! 4. Detect multi-line mode (blank lines between pipe groups)
+//! 5. Resolve merge markers (>> for colspan, ^^ for rowspan)
+//! 6. Apply header/align hints from closing annotation parameters
+
+use super::verbatim::extract_verbatim_block_data;
+use crate::lex::ast::elements::verbatim::VerbatimBlockMode;
+use crate::lex::ast::Data;
+use crate::lex::token::LineToken;
+use std::ops::Range as ByteRange;
+
+/// Extracted data for a single table cell (pre-AST).
+#[derive(Debug, Clone)]
+pub(in crate::lex::building) struct TableCellData {
+    pub text: String,
+    pub byte_range: ByteRange<usize>,
+    pub colspan: usize,
+    pub rowspan: usize,
+    pub is_header: bool,
+}
+
+/// Extracted data for a single table row (pre-AST).
+#[derive(Debug, Clone)]
+pub(in crate::lex::building) struct TableRowData {
+    pub cells: Vec<TableCellData>,
+    pub byte_range: ByteRange<usize>,
+}
+
+/// Extracted data for building a Table AST node.
+#[derive(Debug, Clone)]
+pub(in crate::lex::building) struct TableData {
+    pub subject_text: String,
+    pub subject_byte_range: ByteRange<usize>,
+    pub header_rows: Vec<TableRowData>,
+    pub body_rows: Vec<TableRowData>,
+    pub mode: VerbatimBlockMode,
+}
+
+/// Extract table data from the verbatim-like outer structure.
+///
+/// Reuses verbatim extraction for wall stripping, then parses pipe rows.
+pub(in crate::lex::building) fn extract_table_data(
+    subject_token: &LineToken,
+    content_tokens: &[LineToken],
+    closing_data: &Data,
+    source: &str,
+) -> TableData {
+    // Reuse verbatim extraction for mode detection + wall stripping
+    let verbatim_data = extract_verbatim_block_data(subject_token, content_tokens, source);
+    let mode = verbatim_data.mode;
+
+    // Tables don't support groups (no multiple subject lines) — use only the first group
+    let group = verbatim_data
+        .groups
+        .into_iter()
+        .next()
+        .expect("Table must have at least one group");
+
+    let subject_text = group.subject_text;
+    let subject_byte_range = group.subject_byte_range;
+
+    // Parse the wall-stripped content lines into rows
+    let raw_rows = parse_pipe_rows(&group.content_lines);
+
+    // Resolve merge markers
+    let mut rows = resolve_merges(raw_rows);
+
+    // Split into header/body based on closing annotation parameters
+    let header_count = extract_header_count(closing_data);
+    let (header_rows, body_rows) = split_header_body(&mut rows, header_count);
+
+    TableData {
+        subject_text,
+        subject_byte_range,
+        header_rows,
+        body_rows,
+        mode,
+    }
+}
+
+/// Parse wall-stripped content lines into raw table rows.
+///
+/// Supports two modes:
+///
+/// **Compact mode** (default): Each pipe line is an independent row.
+///
+/// **Multi-line mode**: When blank lines appear between pipe groups,
+/// consecutive pipe lines within a group form a single row with multi-line
+/// cell content. Each continuation line appends to the corresponding cell
+/// (joined with newline). Whitespace-only continuation cells add nothing.
+///
+/// Mode is auto-detected: if any blank lines separate pipe groups, the
+/// table is in multi-line mode.
+fn parse_pipe_rows(content_lines: &[(String, ByteRange<usize>)]) -> Vec<TableRowData> {
+    // First, classify lines and check for multi-line mode
+    let classified = classify_lines(content_lines);
+    let is_multiline = detect_multiline(&classified);
+
+    if is_multiline {
+        parse_multiline_rows(&classified)
+    } else {
+        parse_compact_rows(&classified)
+    }
+}
+
+/// A classified content line.
+#[derive(Debug)]
+enum LineKind<'a> {
+    /// A pipe row with parsed cell texts
+    PipeRow {
+        cells: Vec<&'a str>,
+        line_range: &'a ByteRange<usize>,
+    },
+    /// A blank line (row group separator in multi-line mode)
+    Blank,
+    /// A non-pipe, non-blank line (currently skipped)
+    Other,
+}
+
+/// Classify all content lines into pipe rows, blanks, or other.
+fn classify_lines<'a>(content_lines: &'a [(String, ByteRange<usize>)]) -> Vec<LineKind<'a>> {
+    content_lines
+        .iter()
+        .map(|(text, range)| {
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                LineKind::Blank
+            } else if trimmed.starts_with('|') && !is_separator_line(trimmed) {
+                let segments: Vec<&str> = trimmed.split('|').collect();
+                let start = if segments.first().is_some_and(|s| s.trim().is_empty()) {
+                    1
+                } else {
+                    0
+                };
+                let end = if segments.last().is_some_and(|s| s.trim().is_empty()) {
+                    segments.len() - 1
+                } else {
+                    segments.len()
+                };
+                let cells = segments[start..end].iter().map(|s| s.trim()).collect();
+                LineKind::PipeRow {
+                    cells,
+                    line_range: range,
+                }
+            } else {
+                LineKind::Other
+            }
+        })
+        .collect()
+}
+
+/// Detect multi-line mode: true if any blank line appears between two pipe rows.
+fn detect_multiline(lines: &[LineKind]) -> bool {
+    let mut seen_pipe = false;
+    let mut seen_blank_after_pipe = false;
+
+    for line in lines {
+        match line {
+            LineKind::PipeRow { .. } => {
+                if seen_blank_after_pipe {
+                    return true;
+                }
+                seen_pipe = true;
+            }
+            LineKind::Blank => {
+                if seen_pipe {
+                    seen_blank_after_pipe = true;
+                }
+            }
+            LineKind::Other => {}
+        }
+    }
+    false
+}
+
+/// Compact mode: each pipe line is an independent row.
+fn parse_compact_rows(lines: &[LineKind]) -> Vec<TableRowData> {
+    lines
+        .iter()
+        .filter_map(|line| {
+            if let LineKind::PipeRow { cells, line_range } = line {
+                let cell_data = cells
+                    .iter()
+                    .map(|text| TableCellData {
+                        text: text.to_string(),
+                        byte_range: (*line_range).clone(),
+                        colspan: 1,
+                        rowspan: 1,
+                        is_header: false,
+                    })
+                    .collect();
+                Some(TableRowData {
+                    cells: cell_data,
+                    byte_range: (*line_range).clone(),
+                })
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// Multi-line mode: blank lines delimit row groups. Consecutive pipe lines
+/// within a group form a single row with multi-line cell content.
+fn parse_multiline_rows(lines: &[LineKind]) -> Vec<TableRowData> {
+    let mut rows = Vec::new();
+    let mut current_group: Vec<&LineKind> = Vec::new();
+
+    for line in lines {
+        match line {
+            LineKind::Blank => {
+                if !current_group.is_empty() {
+                    if let Some(row) = merge_group(&current_group) {
+                        rows.push(row);
+                    }
+                    current_group.clear();
+                }
+            }
+            LineKind::PipeRow { .. } => {
+                current_group.push(line);
+            }
+            LineKind::Other => {}
+        }
+    }
+
+    // Flush final group
+    if !current_group.is_empty() {
+        if let Some(row) = merge_group(&current_group) {
+            rows.push(row);
+        }
+    }
+
+    rows
+}
+
+/// Merge a group of pipe lines into a single row.
+///
+/// The first line establishes the cells. Continuation lines append to the
+/// corresponding cell's text (joined with newline). Whitespace-only
+/// continuation cells add nothing.
+fn merge_group(group: &[&LineKind]) -> Option<TableRowData> {
+    if group.is_empty() {
+        return None;
+    }
+
+    // Extract the first line's cells as the base
+    let LineKind::PipeRow {
+        cells: first_cells,
+        line_range: first_range,
+    } = group[0]
+    else {
+        return None;
+    };
+
+    let mut merged_texts: Vec<String> = first_cells.iter().map(|s| s.to_string()).collect();
+    let mut row_range = (*first_range).clone();
+
+    // Append continuation lines
+    for line in &group[1..] {
+        let LineKind::PipeRow {
+            cells: cont_cells,
+            line_range: cont_range,
+        } = line
+        else {
+            continue;
+        };
+
+        // Extend the row's byte range to cover all continuation lines
+        row_range = row_range.start..cont_range.end;
+
+        for (col, cell_text) in cont_cells.iter().enumerate() {
+            if col < merged_texts.len() {
+                // Whitespace-only continuation cells add nothing
+                if !cell_text.is_empty() {
+                    if !merged_texts[col].is_empty() {
+                        merged_texts[col].push('\n');
+                    }
+                    merged_texts[col].push_str(cell_text);
+                }
+            }
+            // Extra columns in continuation lines are ignored
+        }
+    }
+
+    let cells = merged_texts
+        .into_iter()
+        .map(|text| TableCellData {
+            text,
+            byte_range: row_range.clone(),
+            colspan: 1,
+            rowspan: 1,
+            is_header: false,
+        })
+        .collect();
+
+    Some(TableRowData {
+        cells,
+        byte_range: row_range,
+    })
+}
+
+/// Check if a line is a separator (cosmetic) line.
+///
+/// Separator lines contain only pipes, dashes, colons, pluses, and spaces.
+/// Examples: `|---|---|`, `|:---:|---:|`, `+---+---+`
+fn is_separator_line(line: &str) -> bool {
+    line.chars()
+        .all(|c| matches!(c, '|' | '-' | ':' | '+' | ' ' | '='))
+}
+
+/// Resolve merge markers (`>>` for colspan, `^^` for rowspan).
+///
+/// - `>>` means "this cell is absorbed by the cell to the left" (colspan)
+/// - `^^` means "this cell is absorbed by the cell above" (rowspan)
+///
+/// After resolution, absorbed cells are removed and the spanning cell's
+/// colspan/rowspan is incremented.
+fn resolve_merges(mut rows: Vec<TableRowData>) -> Vec<TableRowData> {
+    // First pass: resolve colspan (>> markers)
+    for row in &mut rows {
+        let mut i = 0;
+        while i < row.cells.len() {
+            if row.cells[i].text == ">>" && i > 0 {
+                // Find the cell to the left that isn't a merge marker
+                let mut target = i - 1;
+                while target > 0 && row.cells[target].text == ">>" {
+                    target -= 1;
+                }
+                row.cells[target].colspan += 1;
+                row.cells.remove(i);
+            } else {
+                i += 1;
+            }
+        }
+    }
+
+    // Second pass: resolve rowspan (^^ markers)
+    for row_idx in 0..rows.len() {
+        let mut col_idx = 0;
+        while col_idx < rows[row_idx].cells.len() {
+            if rows[row_idx].cells[col_idx].text == "^^" && row_idx > 0 {
+                // Find the cell above in the same column position
+                if col_idx < rows[row_idx - 1].cells.len() {
+                    rows[row_idx - 1].cells[col_idx].rowspan += 1;
+                }
+                rows[row_idx].cells.remove(col_idx);
+            } else {
+                col_idx += 1;
+            }
+        }
+    }
+
+    rows
+}
+
+/// Extract the header count from closing annotation parameters.
+///
+/// Looks for `header=N` parameter. Default is 1 (first row is header).
+fn extract_header_count(closing_data: &Data) -> usize {
+    for param in &closing_data.parameters {
+        if param.key == "header" {
+            if let Ok(n) = param.value.parse::<usize>() {
+                return n;
+            }
+        }
+    }
+    1 // Default: first row is header
+}
+
+/// Split rows into header and body based on header count.
+fn split_header_body(
+    rows: &mut Vec<TableRowData>,
+    header_count: usize,
+) -> (Vec<TableRowData>, Vec<TableRowData>) {
+    let split_at = header_count.min(rows.len());
+    let body_rows = rows.split_off(split_at);
+    let mut header_rows = std::mem::take(rows);
+
+    // Mark header cells
+    for row in &mut header_rows {
+        for cell in &mut row.cells {
+            cell.is_header = true;
+        }
+    }
+
+    (header_rows, body_rows)
+}
+
+/// Extract column alignment hints from closing annotation parameters.
+///
+/// Looks for `align=lcr` parameter where l=left, c=center, r=right.
+/// Returns alignment per column index.
+pub(in crate::lex::building) fn extract_alignments(
+    closing_data: &Data,
+) -> Vec<crate::lex::ast::TableCellAlignment> {
+    use crate::lex::ast::TableCellAlignment;
+
+    for param in &closing_data.parameters {
+        if param.key == "align" {
+            return param
+                .value
+                .chars()
+                .map(|c| match c {
+                    'l' | 'L' => TableCellAlignment::Left,
+                    'c' | 'C' => TableCellAlignment::Center,
+                    'r' | 'R' => TableCellAlignment::Right,
+                    _ => TableCellAlignment::None,
+                })
+                .collect();
+        }
+    }
+
+    Vec::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_separator_line() {
+        assert!(is_separator_line("|---|---|"));
+        assert!(is_separator_line("|:---:|---:|"));
+        assert!(is_separator_line("+---+---+"));
+        assert!(is_separator_line("| --- | --- |"));
+        assert!(!is_separator_line("| hello | world |"));
+        assert!(!is_separator_line("| --- | data |"));
+    }
+
+    #[test]
+    fn test_classify_lines_cell_splitting() {
+        let lines = vec![("| a | b | c |".to_string(), 0..13)];
+        let classified = classify_lines(&lines);
+        if let LineKind::PipeRow { cells, .. } = &classified[0] {
+            assert_eq!(cells, &["a", "b", "c"]);
+        } else {
+            panic!("Expected PipeRow");
+        }
+    }
+
+    #[test]
+    fn test_classify_lines_no_trailing_pipe() {
+        let lines = vec![("| a | b | c".to_string(), 0..11)];
+        let classified = classify_lines(&lines);
+        if let LineKind::PipeRow { cells, .. } = &classified[0] {
+            assert_eq!(cells.len(), 3);
+            assert_eq!(cells[2], "c");
+        } else {
+            panic!("Expected PipeRow");
+        }
+    }
+
+    #[test]
+    fn test_classify_lines_empty_cells() {
+        let lines = vec![("| a | | c |".to_string(), 0..11)];
+        let classified = classify_lines(&lines);
+        if let LineKind::PipeRow { cells, .. } = &classified[0] {
+            assert_eq!(cells.len(), 3);
+            assert_eq!(cells[1], "");
+        } else {
+            panic!("Expected PipeRow");
+        }
+    }
+
+    #[test]
+    fn test_resolve_merges_colspan() {
+        let rows = vec![TableRowData {
+            cells: vec![
+                TableCellData {
+                    text: "wide".to_string(),
+                    byte_range: 0..4,
+                    colspan: 1,
+                    rowspan: 1,
+                    is_header: false,
+                },
+                TableCellData {
+                    text: ">>".to_string(),
+                    byte_range: 0..2,
+                    colspan: 1,
+                    rowspan: 1,
+                    is_header: false,
+                },
+                TableCellData {
+                    text: "normal".to_string(),
+                    byte_range: 0..6,
+                    colspan: 1,
+                    rowspan: 1,
+                    is_header: false,
+                },
+            ],
+            byte_range: 0..20,
+        }];
+
+        let resolved = resolve_merges(rows);
+        assert_eq!(resolved[0].cells.len(), 2);
+        assert_eq!(resolved[0].cells[0].text, "wide");
+        assert_eq!(resolved[0].cells[0].colspan, 2);
+        assert_eq!(resolved[0].cells[1].text, "normal");
+    }
+
+    #[test]
+    fn test_resolve_merges_rowspan() {
+        let rows = vec![
+            TableRowData {
+                cells: vec![
+                    TableCellData {
+                        text: "tall".to_string(),
+                        byte_range: 0..4,
+                        colspan: 1,
+                        rowspan: 1,
+                        is_header: false,
+                    },
+                    TableCellData {
+                        text: "b".to_string(),
+                        byte_range: 0..1,
+                        colspan: 1,
+                        rowspan: 1,
+                        is_header: false,
+                    },
+                ],
+                byte_range: 0..10,
+            },
+            TableRowData {
+                cells: vec![
+                    TableCellData {
+                        text: "^^".to_string(),
+                        byte_range: 0..2,
+                        colspan: 1,
+                        rowspan: 1,
+                        is_header: false,
+                    },
+                    TableCellData {
+                        text: "d".to_string(),
+                        byte_range: 0..1,
+                        colspan: 1,
+                        rowspan: 1,
+                        is_header: false,
+                    },
+                ],
+                byte_range: 0..10,
+            },
+        ];
+
+        let resolved = resolve_merges(rows);
+        assert_eq!(resolved[0].cells[0].rowspan, 2);
+        assert_eq!(resolved[1].cells.len(), 1);
+        assert_eq!(resolved[1].cells[0].text, "d");
+    }
+
+    #[test]
+    fn test_parse_pipe_rows_skips_separators() {
+        let lines = vec![
+            ("| a | b |".to_string(), 0..9),
+            ("|---|---|".to_string(), 10..18),
+            ("| c | d |".to_string(), 19..28),
+        ];
+        let rows = parse_pipe_rows(&lines);
+        assert_eq!(rows.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_pipe_rows_blanks_trigger_multiline() {
+        // Blank between pipe rows → multi-line mode, but each group has 1 line → 2 rows
+        let lines = vec![
+            ("| a | b |".to_string(), 0..9),
+            ("".to_string(), 10..10),
+            ("| c | d |".to_string(), 11..20),
+        ];
+        let rows = parse_pipe_rows(&lines);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].cells[0].text, "a");
+        assert_eq!(rows[1].cells[0].text, "c");
+    }
+
+    #[test]
+    fn test_detect_multiline_false_for_compact() {
+        let lines = vec![
+            ("| a | b |".to_string(), 0..9),
+            ("| c | d |".to_string(), 10..19),
+        ];
+        let classified = classify_lines(&lines);
+        assert!(!detect_multiline(&classified));
+    }
+
+    #[test]
+    fn test_detect_multiline_true_with_blanks() {
+        let lines = vec![
+            ("| a | b |".to_string(), 0..9),
+            ("".to_string(), 10..10),
+            ("| c | d |".to_string(), 11..20),
+        ];
+        let classified = classify_lines(&lines);
+        assert!(detect_multiline(&classified));
+    }
+
+    #[test]
+    fn test_merge_group_single_line() {
+        let lines = vec![("| x | y |".to_string(), 0..9)];
+        let classified = classify_lines(&lines);
+        let refs: Vec<&LineKind> = classified.iter().collect();
+        let row = merge_group(&refs).unwrap();
+        assert_eq!(row.cells.len(), 2);
+        assert_eq!(row.cells[0].text, "x");
+        assert_eq!(row.cells[1].text, "y");
+    }
+
+    #[test]
+    fn test_merge_group_continuation() {
+        let lines = vec![
+            ("| hello | world |".to_string(), 0..17),
+            ("|       | again |".to_string(), 18..35),
+        ];
+        let classified = classify_lines(&lines);
+        let refs: Vec<&LineKind> = classified.iter().collect();
+        let row = merge_group(&refs).unwrap();
+        assert_eq!(row.cells.len(), 2);
+        assert_eq!(row.cells[0].text, "hello");
+        assert_eq!(row.cells[1].text, "world\nagain");
+    }
+
+    #[test]
+    fn test_merge_group_whitespace_only_continuation_ignored() {
+        let lines = vec![
+            ("| base | val |".to_string(), 0..14),
+            ("|      |     |".to_string(), 15..29),
+        ];
+        let classified = classify_lines(&lines);
+        let refs: Vec<&LineKind> = classified.iter().collect();
+        let row = merge_group(&refs).unwrap();
+        assert_eq!(row.cells[0].text, "base");
+        assert_eq!(row.cells[1].text, "val");
+    }
+
+    #[test]
+    fn test_multiline_rows_grouping() {
+        let lines = vec![
+            ("| H1 | H2 |".to_string(), 0..11),
+            ("".to_string(), 12..12),
+            ("| a  | line1 |".to_string(), 13..27),
+            ("|    | line2 |".to_string(), 28..42),
+            ("".to_string(), 43..43),
+            ("| b  | single |".to_string(), 44..59),
+        ];
+        let rows = parse_pipe_rows(&lines);
+        assert_eq!(rows.len(), 3); // header group, row group 1, row group 2
+        assert_eq!(rows[0].cells[0].text, "H1");
+        assert_eq!(rows[1].cells[0].text, "a");
+        assert_eq!(rows[1].cells[1].text, "line1\nline2");
+        assert_eq!(rows[2].cells[0].text, "b");
+        assert_eq!(rows[2].cells[1].text, "single");
+    }
+
+    #[test]
+    fn test_extract_alignments() {
+        use crate::lex::ast::{Label, TableCellAlignment};
+
+        let label = Label::new("table".to_string());
+        let data = Data::new(
+            label,
+            vec![crate::lex::ast::Parameter {
+                key: "align".to_string(),
+                value: "lcr".to_string(),
+                location: crate::lex::ast::Range::default(),
+            }],
+        );
+
+        let aligns = extract_alignments(&data);
+        assert_eq!(aligns.len(), 3);
+        assert_eq!(aligns[0], TableCellAlignment::Left);
+        assert_eq!(aligns[1], TableCellAlignment::Center);
+        assert_eq!(aligns[2], TableCellAlignment::Right);
+    }
+}

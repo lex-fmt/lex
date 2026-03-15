@@ -274,6 +274,42 @@ pub fn verbatim_block_from_lines(
 }
 
 // ============================================================================
+// TABLE BUILDING
+// ============================================================================
+
+/// Build a Table AST node from subject, content, and closing data.
+///
+/// Reuses verbatim block's outer structure handling (mode detection, wall stripping)
+/// and adds pipe-row parsing, merge resolution, and header/alignment extraction.
+///
+/// # Arguments
+///
+/// * `subject_token` - LineToken for the table subject/caption
+/// * `content_tokens` - LineTokens for each content line (pipe rows)
+/// * `closing_data` - The closing data node (:: table params? ::)
+/// * `source` - Original source string
+///
+/// # Returns
+///
+/// A Table ContentItem
+pub fn table_from_lines(
+    subject_token: &LineToken,
+    content_tokens: &[LineToken],
+    closing_data: Data,
+    source: &str,
+    source_location: &SourceLocation,
+) -> ContentItem {
+    // 1. Extract (reuses verbatim wall stripping + parses pipe rows)
+    let data = extraction::extract_table_data(subject_token, content_tokens, &closing_data, source);
+
+    // 2. Extract alignment hints from closing annotation
+    let alignments = extraction::table::extract_alignments(&closing_data);
+
+    // 3. Create
+    ast_nodes::table_node(data, closing_data, &alignments, source_location)
+}
+
+// ============================================================================
 // NORMALIZED TOKEN API (tokens already normalized)
 // ============================================================================
 //

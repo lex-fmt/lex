@@ -140,6 +140,7 @@ use super::definition::Definition;
 use super::list::{List, ListItem};
 use super::paragraph::Paragraph;
 use super::session::Session;
+use super::table::Table;
 use super::typed_content::{ContentElement, ListContent, SessionContent, VerbatimContent};
 use super::verbatim::Verbatim;
 use std::fmt;
@@ -588,6 +589,12 @@ impl<P: ContainerPolicy> Container<P> {
         as_annotation,
         "Recursively iterate all annotations at any depth in the container"
     );
+    impl_recursive_iterator!(
+        iter_tables_recursive,
+        Table,
+        as_table,
+        "Recursively iterate all tables at any depth in the container"
+    );
 
     // ========================================================================
     // CONVENIENCE "FIRST" METHODS
@@ -629,6 +636,12 @@ impl<P: ContainerPolicy> Container<P> {
         iter_verbatim_blocks_recursive,
         "Get the first verbatim block in the container (returns None if not found)"
     );
+    impl_first_method!(
+        first_table,
+        Table,
+        iter_tables_recursive,
+        "Get the first table in the container (returns None if not found)"
+    );
 
     // ========================================================================
     // "EXPECT" METHODS (panic if not found)
@@ -667,6 +680,11 @@ impl<P: ContainerPolicy> Container<P> {
     pub fn expect_verbatim(&self) -> &Verbatim {
         self.first_verbatim()
             .expect("No verbatim block found in container")
+    }
+
+    /// Get the first table, panicking if none found
+    pub fn expect_table(&self) -> &Table {
+        self.first_table().expect("No table found in container")
     }
 
     // ========================================================================

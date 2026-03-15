@@ -331,8 +331,10 @@ fn collect_definitions_in_item(item: &ContentItem, subjects: &mut BTreeSet<Strin
                 collect_definitions_in_item(line, subjects);
             }
         }
-        ContentItem::VerbatimBlock(_) | ContentItem::TextLine(_) | ContentItem::VerbatimLine(_) => {
-        }
+        ContentItem::VerbatimBlock(_)
+        | ContentItem::Table(_)
+        | ContentItem::TextLine(_)
+        | ContentItem::VerbatimLine(_) => {}
         ContentItem::BlankLineGroup(_) => {}
     }
 }

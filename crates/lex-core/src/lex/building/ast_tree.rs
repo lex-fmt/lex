@@ -139,6 +139,7 @@ impl<'a> AstTreeBuilder<'a> {
             NodeType::Definition => self.build_definition(node),
             NodeType::Annotation => self.build_annotation(node),
             NodeType::VerbatimBlock => Ok(self.build_verbatim_block(node)),
+            NodeType::Table => Ok(self.build_table(node)),
             NodeType::BlankLineGroup => Ok(self.build_blank_line_group(node)),
             _ => panic!("Unexpected node type"),
         }
@@ -211,12 +212,41 @@ impl<'a> AstTreeBuilder<'a> {
             subject,
             content_lines,
             closing_data_tokens,
-        } = payload;
+        } = payload
+        else {
+            panic!("Expected VerbatimBlock payload for VerbatimBlock node");
+        };
 
         let closing_data =
             ast_api::data_from_tokens(closing_data_tokens, self.source, &self.source_location);
 
         ast_api::verbatim_block_from_lines(
+            &subject,
+            &content_lines,
+            closing_data,
+            self.source,
+            &self.source_location,
+        )
+    }
+
+    fn build_table(&self, mut node: ParseNode) -> ContentItem {
+        let payload = node
+            .payload
+            .take()
+            .expect("Parser must attach table payload");
+        let ParseNodePayload::Table {
+            subject,
+            content_lines,
+            closing_data_tokens,
+        } = payload
+        else {
+            panic!("Expected Table payload for Table node");
+        };
+
+        let closing_data =
+            ast_api::data_from_tokens(closing_data_tokens, self.source, &self.source_location);
+
+        ast_api::table_from_lines(
             &subject,
             &content_lines,
             closing_data,

@@ -29,8 +29,8 @@
 //! conversion happens here using `byte_range_to_ast_range()`.
 
 use super::extraction::{
-    DataExtraction, DefinitionData, ListItemData, ParagraphData, SessionData, VerbatimBlockData,
-    VerbatimGroupData,
+    DataExtraction, DefinitionData, ListItemData, ParagraphData, SessionData, TableCellData,
+    TableData, TableRowData, VerbatimBlockData, VerbatimGroupData,
 };
 use super::location::{
     aggregate_locations, byte_range_to_ast_range, compute_location_from_locations, default_location,
@@ -44,8 +44,8 @@ use crate::lex::ast::elements::SequenceMarker;
 use crate::lex::ast::range::SourceLocation;
 use crate::lex::ast::traits::AstNode;
 use crate::lex::ast::{
-    Annotation, Data, Definition, Label, List, ListItem, Paragraph, Range, Session, TextContent,
-    TextLine, Verbatim,
+    Annotation, Data, Definition, Label, List, ListItem, Paragraph, Range, Session, Table,
+    TableCell, TableCellAlignment, TableRow, TextContent, TextLine, Verbatim,
 };
 use crate::lex::parsing::ContentItem;
 use crate::lex::token::Token;
@@ -392,6 +392,92 @@ fn build_verbatim_group(
 
     // Children are all VerbatimLines by construction - no validation needed
     (subject, children, locations)
+}
+
+// ============================================================================
+// TABLE CREATION
+// ============================================================================
+
+/// Create a Table AST node from extracted table data.
+///
+/// Converts byte ranges to AST Ranges, creates TextContent for subject and cells,
+/// and aggregates location from all components.
+pub(super) fn table_node(
+    data: TableData,
+    closing_data: Data,
+    alignments: &[TableCellAlignment],
+    source_location: &SourceLocation,
+) -> ContentItem {
+    let subject_location = byte_range_to_ast_range(data.subject_byte_range, source_location);
+    let subject = TextContent::from_string(data.subject_text, Some(subject_location.clone()));
+
+    let mut location_sources = vec![subject_location];
+
+    let header_rows: Vec<TableRow> = data
+        .header_rows
+        .into_iter()
+        .map(|row_data| {
+            let row = build_table_row(row_data, alignments, source_location);
+            location_sources.push(row.location.clone());
+            row
+        })
+        .collect();
+
+    let body_rows: Vec<TableRow> = data
+        .body_rows
+        .into_iter()
+        .map(|row_data| {
+            let row = build_table_row(row_data, alignments, source_location);
+            location_sources.push(row.location.clone());
+            row
+        })
+        .collect();
+
+    location_sources.push(closing_data.location.clone());
+    let location = compute_location_from_locations(&location_sources);
+
+    let table = Table::new(subject, header_rows, body_rows, closing_data, data.mode).at(location);
+    ContentItem::Table(Box::new(table))
+}
+
+fn build_table_row(
+    row_data: TableRowData,
+    alignments: &[TableCellAlignment],
+    source_location: &SourceLocation,
+) -> TableRow {
+    let row_location = byte_range_to_ast_range(row_data.byte_range, source_location);
+
+    let cells: Vec<TableCell> = row_data
+        .cells
+        .into_iter()
+        .enumerate()
+        .map(|(col_idx, cell_data)| {
+            build_table_cell(cell_data, col_idx, alignments, source_location)
+        })
+        .collect();
+
+    TableRow::new(cells).at(row_location)
+}
+
+fn build_table_cell(
+    cell_data: TableCellData,
+    col_idx: usize,
+    alignments: &[TableCellAlignment],
+    source_location: &SourceLocation,
+) -> TableCell {
+    let cell_location = byte_range_to_ast_range(cell_data.byte_range, source_location);
+    let content = TextContent::from_string(cell_data.text, Some(cell_location.clone()));
+
+    let align = alignments
+        .get(col_idx)
+        .copied()
+        .unwrap_or(TableCellAlignment::None);
+
+    TableCell::new(content)
+        .with_span(cell_data.colspan, cell_data.rowspan)
+        .with_align(align)
+        .with_header(cell_data.is_header)
+        .at(cell_location)
 }
 
 // ============================================================================

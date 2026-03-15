@@ -112,6 +112,11 @@ fn collect_content_annotations<'a>(item: &'a ContentItem, out: &mut Vec<&'a Anno
                 collect_annotation_recursive(annotation, out);
             }
         }
+        ContentItem::Table(table) => {
+            for annotation in table.annotations() {
+                collect_annotation_recursive(annotation, out);
+            }
+        }
         ContentItem::TextLine(_)
         | ContentItem::VerbatimLine(_)
         | ContentItem::BlankLineGroup(_) => {}
@@ -183,6 +188,11 @@ where
         ContentItem::Session(session) => visit_session_annotations(session, f),
         ContentItem::VerbatimBlock(verbatim) => {
             for annotation in verbatim.annotations() {
+                visit_annotation_recursive(annotation, f);
+            }
+        }
+        ContentItem::Table(table) => {
+            for annotation in table.annotations() {
                 visit_annotation_recursive(annotation, f);
             }
         }
@@ -360,6 +370,12 @@ where
         ContentItem::VerbatimBlock(verbatim) => {
             f(&verbatim.subject);
             for annotation in verbatim.annotations() {
+                visit_annotation_text(annotation, f);
+            }
+        }
+        ContentItem::Table(table) => {
+            f(&table.subject);
+            for annotation in table.annotations() {
                 visit_annotation_text(annotation, f);
             }
         }

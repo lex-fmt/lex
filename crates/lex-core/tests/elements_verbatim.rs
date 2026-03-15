@@ -389,7 +389,7 @@ fn test_verbatim_17_fullwidth_preserves_leading_blank_line() {
     assert_ast(&doc).item_count(1).item(0, |item| {
         item.assert_verbatim_block()
             .subject("Fullwidth Leading Blank")
-            .closing_label("table")
+            .closing_label("data")
             .mode(VerbatimBlockMode::Fullwidth)
             .line_count(3)
             .line_eq(0, "")

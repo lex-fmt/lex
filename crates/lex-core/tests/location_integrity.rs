@@ -111,6 +111,12 @@ fn validate_item(item: &ContentItem, source: &str) {
             assert_range_in_source(&line.location, source);
             validate_text_content(&line.content, source);
         }
+        ContentItem::Table(table) => {
+            validate_text_content(&table.subject, source);
+            for annotation in &table.annotations {
+                validate_annotation(annotation, source);
+            }
+        }
         ContentItem::BlankLineGroup(_) => {}
     }
 }
