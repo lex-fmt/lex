@@ -40,17 +40,33 @@ fn list_item_strategy() -> impl Strategy<Value = ListItem> {
 }
 
 fn list_item_with_children_strategy() -> impl Strategy<Value = ListItem> {
-    ("[a-zA-Z0-9]+( [a-zA-Z0-9]+)*", paragraph_strategy()).prop_map(|(text, para)| {
-        let mut children = GeneralContainer::empty();
-        children.push(ContentItem::Paragraph(para));
-        ListItem {
-            marker: TextContent::from_string("-".to_string(), None),
-            text: vec![TextContent::from_string(format!("{text}\n"), None)],
-            children,
-            annotations: vec![],
-            location: Default::default(),
-        }
-    })
+    (
+        "[a-zA-Z0-9]+( [a-zA-Z0-9]+)*",
+        paragraph_strategy(),
+        prop::option::of(list_strategy()),
+        any::<bool>(),
+    )
+        .prop_map(|(text, para, maybe_list, insert_blank)| {
+            let mut children = GeneralContainer::empty();
+            children.push(ContentItem::Paragraph(para));
+            if let Some(list) = maybe_list {
+                if insert_blank {
+                    children.push(ContentItem::BlankLineGroup(BlankLineGroup {
+                        count: 1,
+                        source_tokens: vec![],
+                        location: Default::default(),
+                    }));
+                }
+                children.push(ContentItem::List(list));
+            }
+            ListItem {
+                marker: TextContent::from_string("-".to_string(), None),
+                text: vec![TextContent::from_string(format!("{text}\n"), None)],
+                children,
+                annotations: vec![],
+                location: Default::default(),
+            }
+        })
 }
 
 fn list_strategy() -> impl Strategy<Value = List> {
@@ -72,25 +88,54 @@ fn list_strategy() -> impl Strategy<Value = List> {
     })
 }
 
+fn definition_child_strategy() -> impl Strategy<Value = ContentElement> {
+    prop_oneof![
+        paragraph_strategy().prop_map(ContentElement::Paragraph),
+        list_strategy().prop_map(ContentElement::List),
+    ]
+}
+
 fn definition_strategy() -> impl Strategy<Value = Definition> {
     (
         "[A-Z][a-zA-Z0-9 ]*".prop_map(|s| s.trim_end().to_string()),
-        prop::collection::vec(
-            paragraph_strategy().prop_map(ContentElement::Paragraph),
-            1..3,
+        prop::collection::vec(definition_child_strategy(), 1..3).prop_filter(
+            "No consecutive lists",
+            |items| {
+                let mut prev_was_list = false;
+                for item in items {
+                    let is_list = matches!(item, ContentElement::List(_));
+                    if is_list && prev_was_list {
+                        return false;
+                    }
+                    prev_was_list = is_list;
+                }
+                true
+            },
         ),
+        prop::collection::vec(any::<bool>(), 0..5),
     )
-        .prop_map(|(subject, children)| {
-            // Insert blank line groups between children so parser
-            // recognizes them as separate paragraphs
+        .prop_map(|(subject, children, blank_decisions)| {
+            // Pre-compute element types before moving
+            let is_para: Vec<bool> = children
+                .iter()
+                .map(|c| matches!(c, ContentElement::Paragraph(_)))
+                .collect();
+
             let mut spaced_children = Vec::new();
             for (i, child) in children.into_iter().enumerate() {
                 if i > 0 {
-                    spaced_children.push(ContentElement::BlankLineGroup(BlankLineGroup {
-                        count: 1,
-                        source_tokens: vec![],
-                        location: Default::default(),
-                    }));
+                    // Paragraphs merge without blank lines — always separate them.
+                    // Paragraph↔list transitions: randomly include blank line to
+                    // stress-test the parser's match_paragraph lookahead.
+                    let both_para = is_para[i - 1] && is_para[i];
+                    let want_blank = blank_decisions.get(i - 1).copied().unwrap_or(true);
+                    if both_para || want_blank {
+                        spaced_children.push(ContentElement::BlankLineGroup(BlankLineGroup {
+                            count: 1,
+                            source_tokens: vec![],
+                            location: Default::default(),
+                        }));
+                    }
                 }
                 spaced_children.push(child);
             }
@@ -172,19 +217,43 @@ fn session_strategy() -> impl Strategy<Value = Session> {
                 true
             },
         ),
+        prop::collection::vec(any::<bool>(), 0..5),
     )
-        .prop_map(|(title, content)| {
+        .prop_map(|(title, content, blank_decisions)| {
+            // Pre-compute element types before moving
+            let is_para: Vec<bool> = content
+                .iter()
+                .map(|c| matches!(c, SessionContent::Element(ContentElement::Paragraph(_))))
+                .collect();
+
             let mut spaced_content = Vec::new();
-            for c in content {
+            for (i, c) in content.into_iter().enumerate() {
+                if i > 0 {
+                    // Paragraphs merge without blank lines — always separate them.
+                    // Paragraph↔list transitions: randomly include blank line to
+                    // stress-test the parser's match_paragraph lookahead.
+                    let both_para = is_para[i - 1] && is_para[i];
+                    let want_blank = blank_decisions.get(i - 1).copied().unwrap_or(true);
+                    if both_para || want_blank {
+                        spaced_content.push(SessionContent::Element(
+                            ContentElement::BlankLineGroup(BlankLineGroup {
+                                count: 1,
+                                source_tokens: vec![],
+                                location: Default::default(),
+                            }),
+                        ));
+                    }
+                }
                 spaced_content.push(c);
-                spaced_content.push(SessionContent::Element(ContentElement::BlankLineGroup(
-                    BlankLineGroup {
-                        count: 1,
-                        source_tokens: vec![],
-                        location: Default::default(),
-                    },
-                )));
             }
+            // Trailing blank after last element (preserves session boundary behavior)
+            spaced_content.push(SessionContent::Element(ContentElement::BlankLineGroup(
+                BlankLineGroup {
+                    count: 1,
+                    source_tokens: vec![],
+                    location: Default::default(),
+                },
+            )));
 
             Session {
                 title: TextContent::from_string(title, None),
