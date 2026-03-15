@@ -4,6 +4,7 @@ pub mod commands;
 pub(crate) mod document_links;
 pub mod footnotes;
 pub mod formatting;
+pub mod table_format;
 
 // Re-export analysis features from lex-analysis
 pub use lex_analysis::{

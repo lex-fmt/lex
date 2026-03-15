@@ -756,6 +756,7 @@ where
                     commands::COMMAND_INSERT_ASSET.to_string(),
                     commands::COMMAND_INSERT_VERBATIM.to_string(),
                     commands::COMMAND_FOOTNOTES_REORDER.to_string(),
+                    commands::COMMAND_TABLE_FORMAT.to_string(),
                 ],
                 work_done_progress_options: WorkDoneProgressOptions::default(),
             }),
@@ -1214,11 +1215,15 @@ fn to_lsp_diagnostic(diag: AnalysisDiagnostic) -> Diagnostic {
         DiagnosticKind::UnusedFootnoteDefinition => {
             tower_lsp::lsp_types::DiagnosticSeverity::WARNING
         }
+        DiagnosticKind::TableInconsistentColumns => {
+            tower_lsp::lsp_types::DiagnosticSeverity::WARNING
+        }
     };
 
     let code = match diag.kind {
         DiagnosticKind::MissingFootnoteDefinition => "missing-footnote",
         DiagnosticKind::UnusedFootnoteDefinition => "unused-footnote",
+        DiagnosticKind::TableInconsistentColumns => "table-inconsistent-columns",
     };
 
     Diagnostic {

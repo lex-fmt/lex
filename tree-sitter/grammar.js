@@ -19,6 +19,9 @@
  * - Scanner emits emphasis delimiters: _strong_open, _strong_close,
  *   _emphasis_open, _emphasis_close (with flanking validation)
  * - Scanner emits _session_break: blank line(s) + indent increase (lookahead)
+ * - Scanner emits _pipe_row_start: | at line start with ≥2 pipes on the line
+ * - Scanner emits pipe_delimiter: subsequent | inside an active pipe row
+ * - Scanner emits _table_separator: full separator line (|---|---|)
  * - Grammar lexer emits: text_content (inline-aware), inline tokens
  *   (code_span, math_span, reference, escape_sequence)
  * - INDENT/DEDENT/NEWLINE are always from scanner
@@ -33,6 +36,15 @@
  *   paragraphs only match list_marker and subject_content, they deterministically
  *   end before these boundary tokens, allowing lists and definitions to start
  *   without preceding blank lines.
+ *
+ * Table row disambiguation:
+ *   Lines starting with | that have at least one more | on the line are
+ *   detected by the scanner as pipe rows. The scanner emits _pipe_row_start
+ *   for the first |, then pipe_delimiter for each subsequent |. Since
+ *   paragraphs don't match _pipe_row_start, they end before table rows.
+ *   The in_pipe_row scanner state ensures | characters within a pipe row
+ *   are intercepted as pipe_delimiter before the grammar lexer can consume
+ *   them as part of _word_other.
  *
  * Session disambiguation:
  *   Sessions and paragraphs share the same prefix (line_content + newline).
@@ -60,6 +72,9 @@ module.exports = grammar({
     $.verbatim_content, // fullwidth verbatim: opaque multi-line content block
     $._list_start, // list_marker when next line also has list marker (lookahead)
     $._definition_subject, // subject_content when next line has indent (lookahead)
+    $._pipe_row_start, // | at line start when line has pipe structure (≥2 pipes)
+    $.pipe_delimiter, // subsequent | inside an active pipe row
+    $._table_separator, // full separator line: |---|---|
   ],
 
   extras: (_$) => [],
@@ -95,6 +110,8 @@ module.exports = grammar({
         $.definition,
         $.session,
         $.list,
+        $.table_row,
+        $.table_separator_row,
         $.paragraph,
         $.blank_line,
       ),
@@ -261,6 +278,31 @@ module.exports = grammar({
           ),
         ),
       ),
+
+    // ===== Table Rows =====
+    // Pipe-delimited table rows. The scanner emits _pipe_row_start for the
+    // first | and pipe_delimiter for subsequent |. Cell content between
+    // delimiters uses the standard _inline rule — the scanner intercepts
+    // | as pipe_delimiter before the grammar lexer matches it as _word_other.
+    table_row: ($) =>
+      prec(
+        5,
+        seq(
+          alias($._pipe_row_start, $.pipe_delimiter),
+          repeat1(seq(optional($.table_cell), $.pipe_delimiter)),
+          $._newline,
+        ),
+      ),
+
+    // Table separator row (cosmetic: |---|---|). The scanner emits the
+    // entire line content as _table_separator.
+    table_separator_row: ($) =>
+      prec(6, seq($._table_separator, $._newline)),
+
+    // Cell content between pipe delimiters. Wraps text_content (named node)
+    // so that inline elements are visible in the CST. The scanner intercepts
+    // | as pipe_delimiter, so cell content naturally stops at pipe boundaries.
+    table_cell: ($) => $.text_content,
 
     // ===== Annotations =====
     annotation_block: ($) =>

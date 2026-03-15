@@ -9,8 +9,9 @@
 ; so we extract only the first word as the language name.
 ;
 ; Content inside verbatim blocks may be parsed as any block type (paragraph,
-; definition, list, etc.) since tree-sitter doesn't know it's verbatim content.
-; The injection overrides this parsing with the target language's grammar.
+; definition, list, table_row, etc.) since tree-sitter doesn't know it's
+; verbatim content until the closing annotation. The injection overrides
+; this parsing with the target language's grammar.
 ;
 ; NOTE: Table blocks (annotation_header matching "table") are excluded from
 ; injection because their content is inline-parsed lex, not a foreign language.
@@ -42,6 +43,22 @@
 ; Match content blocks (sessions) inside verbatim
 ((verbatim_block
   (session) @injection.content
+  (annotation_header) @injection.language)
+ (#gsub! @injection.language "^%s*(%S+).*$" "%1")
+ (#not-match? @injection.language "^\\s*table")
+ (#set! injection.combined))
+
+; Match table rows inside non-table verbatim blocks (e.g., | in Python code)
+((verbatim_block
+  (table_row) @injection.content
+  (annotation_header) @injection.language)
+ (#gsub! @injection.language "^%s*(%S+).*$" "%1")
+ (#not-match? @injection.language "^\\s*table")
+ (#set! injection.combined))
+
+; Match table separator rows inside non-table verbatim blocks
+((verbatim_block
+  (table_separator_row) @injection.content
   (annotation_header) @injection.language)
  (#gsub! @injection.language "^%s*(%S+).*$" "%1")
  (#not-match? @injection.language "^\\s*table")
@@ -82,6 +99,24 @@
 ((verbatim_block
   (verbatim_group_item
     (session) @injection.content)
+  (annotation_header) @injection.language)
+ (#gsub! @injection.language "^%s*(%S+).*$" "%1")
+ (#not-match? @injection.language "^\\s*table")
+ (#set! injection.combined))
+
+; Group item table rows
+((verbatim_block
+  (verbatim_group_item
+    (table_row) @injection.content)
+  (annotation_header) @injection.language)
+ (#gsub! @injection.language "^%s*(%S+).*$" "%1")
+ (#not-match? @injection.language "^\\s*table")
+ (#set! injection.combined))
+
+; Group item table separator rows
+((verbatim_block
+  (verbatim_group_item
+    (table_separator_row) @injection.content)
   (annotation_header) @injection.language)
  (#gsub! @injection.language "^%s*(%S+).*$" "%1")
  (#not-match? @injection.language "^\\s*table")

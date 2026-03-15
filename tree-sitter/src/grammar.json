@@ -38,6 +38,14 @@
         },
         {
           "type": "SYMBOL",
+          "name": "table_row"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "table_separator_row"
+        },
+        {
+          "type": "SYMBOL",
           "name": "paragraph"
         },
         {
@@ -623,6 +631,73 @@
           ]
         }
       ]
+    },
+    "table_row": {
+      "type": "PREC",
+      "value": 5,
+      "content": {
+        "type": "SEQ",
+        "members": [
+          {
+            "type": "ALIAS",
+            "content": {
+              "type": "SYMBOL",
+              "name": "_pipe_row_start"
+            },
+            "named": true,
+            "value": "pipe_delimiter"
+          },
+          {
+            "type": "REPEAT1",
+            "content": {
+              "type": "SEQ",
+              "members": [
+                {
+                  "type": "CHOICE",
+                  "members": [
+                    {
+                      "type": "SYMBOL",
+                      "name": "table_cell"
+                    },
+                    {
+                      "type": "BLANK"
+                    }
+                  ]
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "pipe_delimiter"
+                }
+              ]
+            }
+          },
+          {
+            "type": "SYMBOL",
+            "name": "_newline"
+          }
+        ]
+      }
+    },
+    "table_separator_row": {
+      "type": "PREC",
+      "value": 6,
+      "content": {
+        "type": "SEQ",
+        "members": [
+          {
+            "type": "SYMBOL",
+            "name": "_table_separator"
+          },
+          {
+            "type": "SYMBOL",
+            "name": "_newline"
+          }
+        ]
+      }
+    },
+    "table_cell": {
+      "type": "SYMBOL",
+      "name": "text_content"
     },
     "annotation_block": {
       "type": "SEQ",
@@ -1472,6 +1547,18 @@
     {
       "type": "SYMBOL",
       "name": "_definition_subject"
+    },
+    {
+      "type": "SYMBOL",
+      "name": "_pipe_row_start"
+    },
+    {
+      "type": "SYMBOL",
+      "name": "pipe_delimiter"
+    },
+    {
+      "type": "SYMBOL",
+      "name": "_table_separator"
     }
   ],
   "inline": [],
