@@ -273,7 +273,8 @@ fn collect_preview<'a>(
                     }
                 }
             }
-            ContentItem::TextLine(_)
+            ContentItem::Table(_)
+            | ContentItem::TextLine(_)
             | ContentItem::VerbatimLine(_)
             | ContentItem::BlankLineGroup(_) => {}
         }

@@ -485,6 +485,50 @@ fn content_item_to_json(item: &lex_core::lex::ast::ContentItem) -> serde_json::V
                 "content": fl.content.as_string(),
             })
         }
+        ContentItem::Table(t) => {
+            let header_rows: Vec<serde_json::Value> = t
+                .header_rows
+                .iter()
+                .map(|row| {
+                    json!({
+                        "cells": row.cells.iter().map(|cell| json!({
+                            "content": cell.content.as_string(),
+                            "header": cell.header,
+                            "align": format!("{:?}", cell.align),
+                        })).collect::<Vec<_>>(),
+                    })
+                })
+                .collect();
+            let body_rows: Vec<serde_json::Value> = t
+                .body_rows
+                .iter()
+                .map(|row| {
+                    json!({
+                        "cells": row.cells.iter().map(|cell| json!({
+                            "content": cell.content.as_string(),
+                            "header": cell.header,
+                            "align": format!("{:?}", cell.align),
+                        })).collect::<Vec<_>>(),
+                    })
+                })
+                .collect();
+            let mut node = json!({
+                "type": "Table",
+                "subject": t.subject.as_string(),
+                "mode": format!("{:?}", t.mode),
+                "closing_label": t.closing_data.label.value,
+                "header_rows": header_rows,
+                "body_rows": body_rows,
+            });
+            if !t.annotations.is_empty() {
+                node["annotations"] = json!(t
+                    .annotations
+                    .iter()
+                    .map(annotation_to_json)
+                    .collect::<Vec<_>>());
+            }
+            node
+        }
         ContentItem::BlankLineGroup(blg) => {
             json!({
                 "type": "BlankLineGroup",

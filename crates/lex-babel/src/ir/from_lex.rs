@@ -8,7 +8,7 @@ use lex_core::lex::ast::TextContent;
 
 use super::nodes::{
     Annotation, Definition, DocNode, Document, Heading, InlineContent, List, ListForm, ListItem,
-    ListStyle, Paragraph, Table, TableCell, TableCellAlignment, TableRow, Verbatim,
+    ListStyle, Paragraph, Verbatim,
 };
 
 /// Converts a lex document to the IR.
@@ -132,6 +132,7 @@ fn extract_attached_annotations(item: &LexContentItem, level: usize) -> Vec<DocN
         LexContentItem::ListItem(list_item) => list_item.annotations(),
         LexContentItem::Definition(definition) => definition.annotations(),
         LexContentItem::VerbatimBlock(verbatim) => verbatim.annotations(),
+        LexContentItem::Table(table) => table.annotations(),
         _ => &[],
     };
 
@@ -183,6 +184,7 @@ fn from_lex_content_item_with_level(item: &LexContentItem, level: usize) -> DocN
         LexContentItem::ListItem(list_item) => from_lex_list_item(list_item, level),
         LexContentItem::Definition(definition) => from_lex_definition(definition, level),
         LexContentItem::VerbatimBlock(verbatim) => from_lex_verbatim(verbatim),
+        LexContentItem::Table(table) => from_lex_table(table),
         LexContentItem::Annotation(annotation) => from_lex_annotation(annotation, level),
         LexContentItem::TextLine(text_line) => from_lex_text_line(text_line),
         LexContentItem::VerbatimLine(verbatim_line) => from_lex_verbatim_line(verbatim_line),
@@ -365,9 +367,6 @@ fn from_lex_verbatim(verbatim: &LexVerbatim) -> DocNode {
 
 /// Converts a lex annotation to an IR annotation.
 fn from_lex_annotation(annotation: &LexAnnotation, level: usize) -> DocNode {
-    if annotation.data.label.value == "table" {
-        return from_lex_table(annotation, level);
-    }
     let label = annotation.data.label.value.clone();
     let parameters = annotation
         .data
@@ -383,76 +382,6 @@ fn from_lex_annotation(annotation: &LexAnnotation, level: usize) -> DocNode {
     })
 }
 
-fn from_lex_table(annotation: &LexAnnotation, level: usize) -> DocNode {
-    // Parse children to find thead and tbody
-    let mut header = Vec::new();
-    let mut rows = Vec::new();
-
-    for child in &annotation.children {
-        if let LexContentItem::Annotation(ann) = child {
-            if ann.data.label.value == "thead" {
-                for row_item in &ann.children {
-                    if let LexContentItem::Annotation(row_ann) = row_item {
-                        if row_ann.data.label.value == "tr" {
-                            header.push(from_lex_table_row(row_ann, level));
-                        }
-                    }
-                }
-            } else if ann.data.label.value == "tbody" {
-                for row_item in &ann.children {
-                    if let LexContentItem::Annotation(row_ann) = row_item {
-                        if row_ann.data.label.value == "tr" {
-                            rows.push(from_lex_table_row(row_ann, level));
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    DocNode::Table(Table {
-        rows,
-        header,
-        caption: None,
-    })
-}
-
-fn from_lex_table_row(annotation: &LexAnnotation, level: usize) -> TableRow {
-    let mut cells = Vec::new();
-    for child in &annotation.children {
-        if let LexContentItem::Annotation(ann) = child {
-            if ann.data.label.value == "th" || ann.data.label.value == "td" {
-                cells.push(from_lex_table_cell(ann, level));
-            }
-        }
-    }
-    TableRow { cells }
-}
-
-fn from_lex_table_cell(annotation: &LexAnnotation, level: usize) -> TableCell {
-    let header = annotation.data.label.value == "th";
-
-    let mut align = TableCellAlignment::None;
-    for param in &annotation.data.parameters {
-        if param.key == "align" {
-            align = match param.value.as_str() {
-                "left" => TableCellAlignment::Left,
-                "center" => TableCellAlignment::Center,
-                "right" => TableCellAlignment::Right,
-                _ => TableCellAlignment::None,
-            };
-        }
-    }
-
-    let content = convert_children(&annotation.children, level);
-
-    TableCell {
-        content,
-        header,
-        align,
-    }
-}
-
 /// Converts a standalone TextLine to an IR paragraph.
 /// TextLines are typically parts of paragraphs, but can appear standalone.
 fn from_lex_text_line(text_line: &LexTextLine) -> DocNode {
@@ -462,6 +391,60 @@ fn from_lex_text_line(text_line: &LexTextLine) -> DocNode {
 
 /// Converts a VerbatimLine to an IR verbatim block.
 /// VerbatimLines are typically parts of VerbatimBlocks, but can appear standalone.
+/// Converts a native lex Table AST node to an IR Table node.
+fn from_lex_table(table: &lex_core::lex::ast::Table) -> DocNode {
+    use crate::ir::nodes::{
+        Table as IrTable, TableCell as IrTableCell, TableCellAlignment as IrAlign,
+        TableRow as IrTableRow,
+    };
+
+    let convert_align = |a: lex_core::lex::ast::TableCellAlignment| -> IrAlign {
+        match a {
+            lex_core::lex::ast::TableCellAlignment::Left => IrAlign::Left,
+            lex_core::lex::ast::TableCellAlignment::Center => IrAlign::Center,
+            lex_core::lex::ast::TableCellAlignment::Right => IrAlign::Right,
+            lex_core::lex::ast::TableCellAlignment::None => IrAlign::None,
+        }
+    };
+
+    let convert_row = |row: &lex_core::lex::ast::TableRow| -> IrTableRow {
+        IrTableRow {
+            cells: row
+                .cells
+                .iter()
+                .map(|cell| {
+                    let content = if cell.has_block_content() {
+                        convert_children(&cell.children, 2)
+                    } else {
+                        vec![DocNode::Paragraph(Paragraph {
+                            content: convert_inline_content(&cell.content),
+                        })]
+                    };
+                    IrTableCell {
+                        content,
+                        header: cell.header,
+                        align: convert_align(cell.align),
+                    }
+                })
+                .collect(),
+        }
+    };
+
+    let header: Vec<IrTableRow> = table.header_rows.iter().map(convert_row).collect();
+    let rows: Vec<IrTableRow> = table.body_rows.iter().map(convert_row).collect();
+    let caption = if table.subject.as_string().is_empty() {
+        None
+    } else {
+        Some(convert_inline_content(&table.subject))
+    };
+
+    DocNode::Table(IrTable {
+        rows,
+        header,
+        caption,
+    })
+}
+
 fn from_lex_verbatim_line(verbatim_line: &LexVerbatimLine) -> DocNode {
     let content = verbatim_line.content.as_string().to_string();
     DocNode::Verbatim(Verbatim {

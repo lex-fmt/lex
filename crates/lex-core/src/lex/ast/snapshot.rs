@@ -114,6 +114,7 @@ pub fn snapshot_from_content_with_options(item: &ContentItem, include_all: bool)
         ContentItem::ListItem(li) => build_list_item_snapshot(li, include_all),
         ContentItem::Definition(def) => build_definition_snapshot(def, include_all),
         ContentItem::VerbatimBlock(fb) => build_verbatim_block_snapshot(fb, include_all),
+        ContentItem::Table(t) => build_table_snapshot(t, include_all),
         ContentItem::VerbatimLine(fl) => AstSnapshot::new(
             "VerbatimLine".to_string(),
             fl.display_label(),
@@ -358,6 +359,39 @@ fn build_annotation_snapshot(ann: &Annotation, include_all: bool) -> AstSnapshot
             .children
             .push(snapshot_from_content_with_options(child, include_all));
     }
+    snapshot
+}
+
+fn build_table_snapshot(t: &super::Table, include_all: bool) -> AstSnapshot {
+    let label = format!(
+        "{} ({} header + {} body rows)",
+        t.display_label(),
+        t.header_rows.len(),
+        t.body_rows.len()
+    );
+    let mut snapshot = AstSnapshot::new("Table".to_string(), label, t.range().clone());
+
+    // Include cell children with block content
+    if include_all {
+        for row in t.all_rows() {
+            for cell in &row.cells {
+                if cell.has_block_content() {
+                    let mut cell_snapshot = AstSnapshot::new(
+                        "TableCell".to_string(),
+                        cell.content.as_string().to_string(),
+                        cell.location.clone(),
+                    );
+                    for child in cell.children.iter() {
+                        cell_snapshot
+                            .children
+                            .push(snapshot_from_content_with_options(child, include_all));
+                    }
+                    snapshot.children.push(cell_snapshot);
+                }
+            }
+        }
+    }
+
     snapshot
 }
 

@@ -40,7 +40,7 @@
 //! tests and so forth.
 use lex_core::lex::ast::{
     Annotation, ContentItem, Definition, Document, List, ListItem, Paragraph, Position, Range,
-    Session, TextContent, Verbatim,
+    Session, Table, TextContent, Verbatim,
 };
 use lex_core::lex::inlines::{InlineNode, ReferenceType};
 
@@ -289,6 +289,7 @@ impl TokenCollector {
             ContentItem::Definition(definition) => self.process_definition(definition),
             ContentItem::Annotation(annotation) => self.process_annotation(annotation),
             ContentItem::VerbatimBlock(verbatim) => self.process_verbatim(verbatim),
+            ContentItem::Table(table) => self.process_table(table),
             ContentItem::TextLine(text_line) => self.process_text_content(&text_line.content),
             ContentItem::VerbatimLine(_) => {}
             ContentItem::BlankLineGroup(_) => {}
@@ -368,6 +369,32 @@ impl TokenCollector {
         }
 
         self.process_annotations(verbatim.annotations());
+    }
+
+    fn process_table(&mut self, table: &Table) {
+        self.process_text_content(&table.subject);
+        if let Some(location) = &table.subject.location {
+            self.push_range(location, LexSemanticTokenKind::VerbatimSubject);
+        }
+
+        // Process cell children for block content tokens
+        for row in table.all_rows() {
+            for cell in &row.cells {
+                for child in cell.children.iter() {
+                    self.process_content_item(child);
+                }
+            }
+        }
+
+        self.push_range(
+            &table.closing_data.label.location,
+            LexSemanticTokenKind::VerbatimLanguage,
+        );
+        for parameter in &table.closing_data.parameters {
+            self.push_range(&parameter.location, LexSemanticTokenKind::VerbatimAttribute);
+        }
+
+        self.process_annotations(table.annotations());
     }
 
     fn process_annotation(&mut self, annotation: &Annotation) {

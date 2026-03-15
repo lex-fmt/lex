@@ -83,6 +83,29 @@ impl InlineProcessor {
         self.process_text_content(&mut line.content);
     }
 
+    fn process_table(&self, table: &mut crate::lex::ast::elements::table::Table) {
+        self.process_text_content(&mut table.subject);
+        for row in table
+            .header_rows
+            .iter_mut()
+            .chain(table.body_rows.iter_mut())
+        {
+            for cell in &mut row.cells {
+                self.process_text_content(&mut cell.content);
+                // Process block children if present
+                for child in cell.children.iter_mut() {
+                    self.process_content_item(child);
+                }
+            }
+        }
+        if let Some(footnotes) = &mut table.footnotes {
+            self.process_list(footnotes);
+        }
+        for annotation in &mut table.annotations {
+            self.process_annotation(annotation);
+        }
+    }
+
     fn process_verbatim(&self, verbatim: &mut Verbatim) {
         self.process_text_content(&mut verbatim.subject);
         for group in verbatim.additional_groups_mut() {
@@ -110,6 +133,7 @@ impl InlineProcessor {
             ContentItem::Definition(definition) => self.process_definition(definition),
             ContentItem::Annotation(annotation) => self.process_annotation(annotation),
             ContentItem::VerbatimBlock(verbatim) => self.process_verbatim(verbatim),
+            ContentItem::Table(table) => self.process_table(table),
             ContentItem::VerbatimLine(_) => {}
             ContentItem::BlankLineGroup(_) => {}
         }

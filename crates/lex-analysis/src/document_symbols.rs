@@ -1,6 +1,6 @@
 use lex_core::lex::ast::{
     Annotation, AstNode, ContentItem, Definition, Document, List, ListItem, Paragraph, Range,
-    Session, TextContent, Verbatim,
+    Session, Table, TextContent, Verbatim,
 };
 use lsp_types::SymbolKind;
 
@@ -58,6 +58,7 @@ fn collect_symbols_from_items<'a>(
             ContentItem::List(list) => symbols.push(list_symbol(list)),
             ContentItem::Annotation(annotation) => symbols.push(annotation_symbol(annotation)),
             ContentItem::VerbatimBlock(verbatim) => symbols.push(verbatim_symbol(verbatim)),
+            ContentItem::Table(table) => symbols.push(table_symbol(table)),
             ContentItem::Paragraph(paragraph) => symbols.push(paragraph_symbol(paragraph)),
             ContentItem::ListItem(list_item) => symbols.push(list_item_symbol(list_item)),
             ContentItem::TextLine(_)
@@ -114,6 +115,32 @@ fn verbatim_symbol(verbatim: &Verbatim) -> LexDocumentSymbol {
             .location
             .clone()
             .unwrap_or_else(|| verbatim.range().clone()),
+        children,
+    }
+}
+
+fn table_symbol(table: &Table) -> LexDocumentSymbol {
+    let mut children = annotation_symbol_list(table.annotations());
+
+    // Include symbols from cell children with block content
+    for row in table.all_rows() {
+        for cell in &row.cells {
+            if cell.has_block_content() {
+                children.extend(collect_symbols_from_items(cell.children.iter()));
+            }
+        }
+    }
+
+    LexDocumentSymbol {
+        name: format!("Table: {}", summarize_text(&table.subject, "Table")),
+        detail: Some("table".to_string()),
+        kind: SymbolKind::CONSTANT,
+        range: table.range().clone(),
+        selection_range: table
+            .subject
+            .location
+            .clone()
+            .unwrap_or_else(|| table.range().clone()),
         children,
     }
 }

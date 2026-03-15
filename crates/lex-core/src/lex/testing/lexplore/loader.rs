@@ -6,7 +6,9 @@
 //! The Lexplore API now returns `DocumentLoader` which provides a fluent interface
 //! for running transforms on test files.
 
-use crate::lex::ast::elements::{Annotation, Definition, List, Paragraph, Session, Verbatim};
+use crate::lex::ast::elements::{
+    Annotation, Definition, List, Paragraph, Session, Table, Verbatim,
+};
 use crate::lex::ast::Document;
 use crate::lex::loader::DocumentLoader;
 use crate::lex::parsing::parse_document;
@@ -213,6 +215,12 @@ impl Lexplore {
         doc.root.expect_verbatim()
     }
 
+    /// Load a table element file and return the table directly
+    pub fn get_table(number: usize) -> &'static Table {
+        let doc = Box::leak(Box::new(load_isolated_element(ElementType::Table, number)));
+        doc.root.expect_table()
+    }
+
     // ===== Convenience shortcuts for element files (fluent API) =====
 
     element_shortcuts! {
@@ -222,6 +230,7 @@ impl Lexplore {
         definition => Definition, "definition";
         annotation => Annotation, "annotation";
         verbatim => Verbatim, "verbatim";
+        table => Table, "table";
         document => Document, "document";
     }
 

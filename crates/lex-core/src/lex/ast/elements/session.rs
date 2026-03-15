@@ -66,6 +66,7 @@ use super::content_item::ContentItem;
 use super::definition::Definition;
 use super::list::{List, ListItem};
 use super::paragraph::Paragraph;
+use super::table::Table;
 use super::typed_content::SessionContent;
 use super::verbatim::Verbatim;
 use std::fmt;
@@ -319,6 +320,11 @@ impl Session {
     /// Get the first verbatim block, panicking if none found
     pub fn expect_verbatim(&self) -> &Verbatim {
         self.children.expect_verbatim()
+    }
+
+    /// Get the first table, panicking if none found
+    pub fn expect_table(&self) -> &Table {
+        self.children.expect_table()
     }
 
     /// Find all paragraphs matching a predicate

@@ -86,7 +86,7 @@ mod assertions;
 pub use assertions::{
     AnnotationAssertion, ChildrenAssertion, DefinitionAssertion, DocumentAssertion,
     InlineAssertion, InlineExpectation, ListAssertion, ListItemAssertion, ParagraphAssertion,
-    ReferenceExpectation, SessionAssertion, VerbatimBlockkAssertion,
+    ReferenceExpectation, SessionAssertion, TableAssertion, VerbatimBlockkAssertion,
 };
 
 use crate::lex::ast::traits::AstNode;
@@ -180,6 +180,21 @@ impl<'a> ContentItemAssertion<'a> {
             },
             _ => panic!(
                 "{}: Expected Annotation, found {}",
+                self.context,
+                self.item.node_type()
+            ),
+        }
+    }
+
+    /// Assert this item is a Table and return table-specific assertions
+    pub fn assert_table(self) -> TableAssertion<'a> {
+        match self.item {
+            ContentItem::Table(t) => TableAssertion {
+                table: t,
+                context: self.context,
+            },
+            _ => panic!(
+                "{}: Expected Table, found {}",
                 self.context,
                 self.item.node_type()
             ),

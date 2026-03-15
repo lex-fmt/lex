@@ -1,5 +1,5 @@
 use lex_core::lex::ast::{
-    Annotation, AstNode, ContentItem, Definition, Document, List, ListItem, Range, Session,
+    Annotation, AstNode, ContentItem, Definition, Document, List, ListItem, Range, Session, Table,
     Verbatim,
 };
 use lsp_types::FoldingRangeKind;
@@ -58,6 +58,7 @@ impl FoldingCollector {
             ContentItem::Definition(definition) => self.process_definition(definition),
             ContentItem::Annotation(annotation) => self.process_annotation(annotation),
             ContentItem::VerbatimBlock(verbatim) => self.process_verbatim(verbatim),
+            ContentItem::Table(table) => self.process_table(table),
             ContentItem::TextLine(_)
             | ContentItem::VerbatimLine(_)
             | ContentItem::BlankLineGroup(_) => {}
@@ -129,6 +130,27 @@ impl FoldingCollector {
                 self.push_fold(
                     Some(subject_range),
                     verbatim.range(),
+                    Some(FoldingRangeKind::Region),
+                );
+            }
+        }
+    }
+
+    fn process_table(&mut self, table: &Table) {
+        self.process_annotations(table.annotations());
+        // Process cell children with block content
+        for row in table.all_rows() {
+            for cell in &row.cells {
+                for child in cell.children.iter() {
+                    self.process_content_item(child);
+                }
+            }
+        }
+        if let Some(subject_range) = &table.subject.location {
+            if subject_range.start.line < table.range().end.line {
+                self.push_fold(
+                    Some(subject_range),
+                    table.range(),
                     Some(FoldingRangeKind::Region),
                 );
             }

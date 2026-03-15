@@ -28,7 +28,7 @@
 
 use super::helpers::{collect_line_tokens, extract_annotation_header_tokens, extract_line_token};
 use crate::lex::parsing::ir::{NodeType, ParseNode, ParseNodePayload};
-use crate::lex::token::{LineContainer, LineType};
+use crate::lex::token::{LineContainer, LineType, Token};
 use std::ops::Range;
 
 /// Build a verbatim block node from a subject, arbitrary content lines, and a closing annotation.
@@ -53,13 +53,32 @@ pub(in crate::lex::parsing::parser::builder) fn build_verbatim_block(
     }
     let header_tokens = extract_annotation_header_tokens(closing_token)?;
 
-    let verbatim_node = ParseNode::new(NodeType::VerbatimBlock, vec![], vec![]).with_payload(
-        ParseNodePayload::VerbatimBlock {
-            subject: subject_token,
-            content_lines,
-            closing_data_tokens: header_tokens,
-        },
-    );
+    // Detect whether this is a table or a verbatim block by checking the label.
+    // The label is the first non-whitespace text token in the header.
+    let is_table = header_tokens.iter().find_map(|(token, _)| match token {
+        Token::Text(text) => Some(text.as_str()),
+        _ => None,
+    }) == Some("table");
 
-    Ok(verbatim_node)
+    let (node_type, payload) = if is_table {
+        (
+            NodeType::Table,
+            ParseNodePayload::Table {
+                subject: subject_token,
+                content_lines,
+                closing_data_tokens: header_tokens,
+            },
+        )
+    } else {
+        (
+            NodeType::VerbatimBlock,
+            ParseNodePayload::VerbatimBlock {
+                subject: subject_token,
+                content_lines,
+                closing_data_tokens: header_tokens,
+            },
+        )
+    };
+
+    Ok(ParseNode::new(node_type, vec![], vec![]).with_payload(payload))
 }
