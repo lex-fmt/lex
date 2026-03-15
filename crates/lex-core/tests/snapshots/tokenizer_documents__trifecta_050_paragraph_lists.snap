@@ -1025,7 +1025,7 @@ expression: tokens
     ),
     (
         Text(
-            "required",
+            "optional",
         ),
         532..540,
     ),
