@@ -35,11 +35,10 @@ Second paragraph
 ---
 
 (document
-  (paragraph
-    (text_line
-      (line_content
-        (text_content))))
-  (blank_line)
+  (document_title
+    title: (line_content
+      (text_content))
+    (blank_line))
   (paragraph
     (text_line
       (line_content
@@ -55,11 +54,33 @@ Second paragraph
 ---
 
 (document
+  (document_title
+    title: (line_content
+      (text_content))
+    (blank_line))
+  (blank_line)
   (paragraph
     (text_line
       (line_content
+        (text_content)))))
+
+==================
+Two multi-line paragraphs separated by blank line
+==================
+First line
+continues here.
+
+Second paragraph.
+---
+
+(document
+  (paragraph
+    (text_line
+      (line_content
+        (text_content)))
+    (text_line
+      (line_content
         (text_content))))
-  (blank_line)
   (blank_line)
   (paragraph
     (text_line

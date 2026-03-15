@@ -287,7 +287,9 @@ fn traverse_document<F>(document: &Document, f: &mut F)
 where
     F: FnMut(&TextContent),
 {
-    f(&document.root.title);
+    if let Some(title) = &document.title {
+        f(&title.content);
+    }
     visit_session(&document.root, true, f);
     for annotation in document.annotations() {
         for child in annotation.children.iter() {

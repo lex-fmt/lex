@@ -23,9 +23,8 @@
 //!     See [grammar](crate::lex::parsing::parser::grammar) for the grammar pattern definitions
 //!     used for matching.
 use super::parser;
-use crate::lex::building::ast_tree::AstTreeBuilder;
+use crate::lex::building::ast_tree::{AstTreeBuilder, BuildOutput};
 use crate::lex::parsing::ir::{NodeType, ParseNode};
-use crate::lex::parsing::Session;
 use crate::lex::token::{to_line_container, LineContainer, Token};
 use std::ops::Range as ByteRange;
 
@@ -45,7 +44,7 @@ use crate::lex::lexing::transformations::line_token_grouping::GroupedTokens;
 pub fn parse_from_grouped_stream(
     grouped_tokens: Vec<GroupedTokens>,
     source: &str,
-) -> Result<Session, String> {
+) -> Result<BuildOutput, String> {
     use crate::lex::lexing::transformations::DocumentStartMarker;
 
     // Convert grouped tokens to line tokens
@@ -78,7 +77,7 @@ pub fn parse_from_grouped_stream(
 pub fn parse_from_flat_tokens(
     tokens: Vec<(Token, ByteRange<usize>)>,
     source: &str,
-) -> Result<Session, String> {
+) -> Result<BuildOutput, String> {
     // Apply grouping transformation inline for tests/legacy code
     use crate::lex::lexing::transformations::LineTokenGroupingMapper;
 
@@ -99,7 +98,7 @@ pub fn parse_from_flat_tokens(
 ///
 /// # Returns
 /// The root session tree if successful
-pub fn parse_experimental_v2(tree: LineContainer, source: &str) -> Result<Session, String> {
+pub fn parse_experimental_v2(tree: LineContainer, source: &str) -> Result<BuildOutput, String> {
     // Extract children from root container
     let children = match tree {
         LineContainer::Container { children, .. } => children,
@@ -137,7 +136,7 @@ mod tests {
         let result = parse_from_flat_tokens(tokens, source);
         assert!(result.is_ok(), "Parser should succeed");
 
-        let root = result.unwrap();
+        let root = result.unwrap().root;
         // Should have 1 paragraph with 1 line
         assert!(!root.children.is_empty(), "Should have content");
         assert!(matches!(root.children[0], ContentItem::Paragraph(_)));
@@ -152,7 +151,7 @@ mod tests {
         let result = parse_from_flat_tokens(tokens, source);
         assert!(result.is_ok(), "Parser should succeed");
 
-        let root = result.unwrap();
+        let root = result.unwrap().root;
         // Should have Definition at root level
         let has_definition = root
             .children
@@ -170,7 +169,7 @@ mod tests {
         let result = parse_from_flat_tokens(tokens, source);
         assert!(result.is_ok(), "Parser should succeed");
 
-        let root = result.unwrap();
+        let root = result.unwrap().root;
         // Should have Session at root level (with blank line before content)
         let has_session = root
             .children
@@ -188,7 +187,7 @@ mod tests {
         let result = parse_from_flat_tokens(tokens, source);
         assert!(result.is_ok(), "Parser should succeed");
 
-        let root = result.unwrap();
+        let root = result.unwrap().root;
         let has_session = root
             .children
             .iter()
@@ -216,7 +215,7 @@ mod tests {
         let result = parse_from_flat_tokens(tokens, source);
         assert!(result.is_ok(), "Parser should succeed");
 
-        let root = result.unwrap();
+        let root = result.unwrap().root;
         let has_session = root
             .children
             .iter()
@@ -230,7 +229,9 @@ mod tests {
             "Code Example:\n\n    function hello() {\n        return \"world\";\n    }\n\n:: javascript ::\n";
         let tokens = lex_helper(source).expect("Failed to tokenize");
 
-        let root = parse_from_flat_tokens(tokens, source).expect("Parser failed");
+        let root = parse_from_flat_tokens(tokens, source)
+            .expect("Parser failed")
+            .root;
 
         let has_verbatim = root
             .children
@@ -258,7 +259,9 @@ mod tests {
         let source = "1. Session\n\n    Some content.\n\n    :: note-editor :: Maybe this could be better rephrased?\n    :: note.author :: Done keeping it simple\n\n    More content.\n";
         let tokens = lex_helper(source).expect("Failed to tokenize");
 
-        let root = parse_from_flat_tokens(tokens, source).expect("Parser failed");
+        let root = parse_from_flat_tokens(tokens, source)
+            .expect("Parser failed")
+            .root;
 
         // Should have a session
         let session = root
@@ -301,7 +304,7 @@ mod tests {
         let result = parse_from_flat_tokens(tokens, source);
         assert!(result.is_ok(), "Parser should succeed");
 
-        let root = result.unwrap();
+        let root = result.unwrap().root;
         // Should have Annotation at root level
         let has_annotation = root
             .children
@@ -338,7 +341,9 @@ Final paragraph.
 
         let tokens = lex_helper(source).expect("Failed to tokenize");
 
-        let root = parse_from_flat_tokens(tokens, source).expect("Parser failed");
+        let root = parse_from_flat_tokens(tokens, source)
+            .expect("Parser failed")
+            .root;
 
         eprintln!("\n=== ANNOTATIONS + TRIFECTA COMBINED ===");
         eprintln!("Root items count: {}", root.children.len());
@@ -389,7 +394,7 @@ Final paragraph.
         let result = parse_from_flat_tokens(tokens, source);
 
         assert!(result.is_ok(), "Empty input should parse successfully");
-        let root = result.unwrap();
+        let root = result.unwrap().root;
         assert_eq!(
             root.children.len(),
             0,

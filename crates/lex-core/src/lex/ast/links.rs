@@ -221,7 +221,31 @@ impl Document {
     /// }
     /// ```
     pub fn find_all_links(&self) -> Vec<DocumentLink> {
-        self.root.find_all_links()
+        let mut links = Vec::new();
+        if let Some(title) = &self.title {
+            if let Some(inlines) = title.content.inlines() {
+                for inline in inlines {
+                    if let crate::lex::inlines::InlineNode::Reference { data, .. } = inline {
+                        let range = title.location.clone();
+                        match &data.reference_type {
+                            crate::lex::inlines::ReferenceType::Url { target } => {
+                                links.push(DocumentLink::new(range, target.clone(), LinkType::Url));
+                            }
+                            crate::lex::inlines::ReferenceType::File { target } => {
+                                links.push(DocumentLink::new(
+                                    range,
+                                    target.clone(),
+                                    LinkType::File,
+                                ));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+        links.extend(self.root.find_all_links());
+        links
     }
 }
 

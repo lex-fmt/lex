@@ -187,6 +187,19 @@ impl GrammarMatcher {
                             content_idx: 1,
                         },
                         "blank_line_group" => PatternMatch::BlankLineGroup,
+                        "document_title" => {
+                            // Imperative negative lookahead: not followed by container
+                            // (can't use (?!...) in Rust regex crate)
+                            let next_idx = start_idx + consumed_count;
+                            if next_idx < tokens.len()
+                                && matches!(&tokens[next_idx], LineContainer::Container { .. })
+                            {
+                                // Followed by container — this is a session, not a title
+                                continue;
+                            }
+                            // Match is: DocumentStart(0) + title line(1) + blank lines
+                            PatternMatch::DocumentTitle { title_idx: 1 }
+                        }
                         "document_start" => PatternMatch::DocumentStart,
                         _ => continue,
                     };
@@ -516,9 +529,12 @@ fn parse_with_declarative_grammar_internal(
                 (
                     matches!(last_node.node_type, NodeType::BlankLineGroup),
                     // A node with children indicates we just closed a container; this counts as a boundary.
-                    // DocumentStart also counts as a boundary - it marks the start of document content.
+                    // DocumentStart and DocumentTitle also count as boundaries.
                     !last_node.children.is_empty()
-                        || matches!(last_node.node_type, NodeType::DocumentStart),
+                        || matches!(
+                            last_node.node_type,
+                            NodeType::DocumentStart | NodeType::DocumentTitle
+                        ),
                     matches!(last_node.node_type, NodeType::Session),
                 )
             } else {

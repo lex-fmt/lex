@@ -13,6 +13,9 @@ pub fn for_each_text_content<F>(document: &Document, f: &mut F)
 where
     F: FnMut(&TextContent),
 {
+    if let Some(title) = &document.title {
+        f(&title.content);
+    }
     for annotation in document.annotations() {
         visit_annotation_text(annotation, f);
     }
@@ -677,7 +680,7 @@ fn extract_session_identifier(title: &str) -> Option<String> {
 /// Returns `None` if no Notes session is found.
 pub fn find_notes_session(document: &Document) -> Option<&Session> {
     // Check root session first
-    let root_title = document.root.title.as_string();
+    let root_title = document.title();
     if is_notes_title(root_title) {
         return Some(&document.root);
     }

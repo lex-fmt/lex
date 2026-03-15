@@ -115,8 +115,9 @@ pub mod traits;
 // Re-export commonly used types at module root
 pub use diagnostics::{validate_references, validate_structure, Diagnostic, DiagnosticSeverity};
 pub use elements::{
-    Annotation, ContentItem, Data, Definition, Document, Label, List, ListItem, Paragraph,
-    Parameter, Session, Table, TableCell, TableCellAlignment, TableRow, TextLine, Verbatim,
+    Annotation, ContentItem, Data, Definition, Document, DocumentTitle, Label, List, ListItem,
+    Paragraph, Parameter, Session, Table, TableCell, TableCellAlignment, TableRow, TextLine,
+    Verbatim,
 };
 pub use error::PositionLookupError;
 pub use links::{DocumentLink, LinkType};

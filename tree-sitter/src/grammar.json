@@ -3,10 +3,64 @@
   "name": "lex",
   "rules": {
     "document": {
-      "type": "REPEAT",
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "document_title"
+            },
+            {
+              "type": "REPEAT",
+              "content": {
+                "type": "SYMBOL",
+                "name": "_block"
+              }
+            }
+          ]
+        },
+        {
+          "type": "REPEAT1",
+          "content": {
+            "type": "SYMBOL",
+            "name": "_block"
+          }
+        }
+      ]
+    },
+    "document_title": {
+      "type": "PREC_DYNAMIC",
+      "value": 2,
       "content": {
-        "type": "SYMBOL",
-        "name": "_block"
+        "type": "SEQ",
+        "members": [
+          {
+            "type": "FIELD",
+            "name": "title",
+            "content": {
+              "type": "ALIAS",
+              "content": {
+                "type": "SYMBOL",
+                "name": "_session_title"
+              },
+              "named": true,
+              "value": "line_content"
+            }
+          },
+          {
+            "type": "SYMBOL",
+            "name": "_newline"
+          },
+          {
+            "type": "REPEAT1",
+            "content": {
+              "type": "SYMBOL",
+              "name": "blank_line"
+            }
+          }
+        ]
       }
     },
     "_block": {
@@ -1461,6 +1515,9 @@
     [
       "dialog_line",
       "_session_title"
+    ],
+    [
+      "document_title"
     ],
     [
       "list_item"

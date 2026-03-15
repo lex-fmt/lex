@@ -51,12 +51,11 @@ pub fn serialize_to_html_with_options(
     doc: &Document,
     options: HtmlOptions,
 ) -> Result<String, FormatError> {
-    // Extract document title from root session (before IR conversion loses it)
-    let title = doc.root.title.as_string();
-    let title = if title.is_empty() {
+    // Extract document title (before IR conversion loses it)
+    let title = if doc.title().is_empty() {
         "Lex Document".to_string()
     } else {
-        title.to_string()
+        doc.title().to_string()
     };
 
     // Step 1: Lex AST → IR

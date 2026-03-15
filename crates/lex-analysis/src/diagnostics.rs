@@ -173,8 +173,8 @@ mod tests {
 
     #[test]
     fn ignores_valid_list_footnote() {
-        // "Notes" session with list item "1."
-        let doc = parse("Text [1].\n\nNotes\n\n1. Note.\n");
+        // "Notes" session with indented list item "1."
+        let doc = parse("Text [1].\n\nNotes\n\n    1. Note.\n    2. Another.\n");
         let diags = analyze(&doc);
         assert_eq!(diags.len(), 0);
     }

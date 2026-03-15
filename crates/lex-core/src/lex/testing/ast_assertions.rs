@@ -234,6 +234,7 @@ mod tests {
         session.location = location;
         let doc = Document {
             annotations: Vec::new(),
+            title: None,
             root: session,
         };
 
@@ -248,6 +249,7 @@ mod tests {
         session.location = location;
         let doc = Document {
             annotations: Vec::new(),
+            title: None,
             root: session,
         };
 
@@ -261,6 +263,7 @@ mod tests {
         session.location = location;
         let doc = Document {
             annotations: Vec::new(),
+            title: None,
             root: session,
         };
 
@@ -275,6 +278,7 @@ mod tests {
         session.location = location;
         let doc = Document {
             annotations: Vec::new(),
+            title: None,
             root: session,
         };
 
@@ -288,6 +292,7 @@ mod tests {
         session.location = location;
         let doc = Document {
             annotations: Vec::new(),
+            title: None,
             root: session,
         };
 
@@ -302,6 +307,7 @@ mod tests {
         session.location = location;
         let doc = Document {
             annotations: Vec::new(),
+            title: None,
             root: session,
         };
 
@@ -315,6 +321,7 @@ mod tests {
         session.location = location;
         let doc = Document {
             annotations: Vec::new(),
+            title: None,
             root: session,
         };
 
@@ -329,6 +336,7 @@ mod tests {
         session.location = location;
         let doc = Document {
             annotations: Vec::new(),
+            title: None,
             root: session,
         };
 
@@ -342,6 +350,7 @@ mod tests {
         session.location = location;
         let doc = Document {
             annotations: Vec::new(),
+            title: None,
             root: session,
         };
 

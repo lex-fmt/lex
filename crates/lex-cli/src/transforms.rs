@@ -350,7 +350,7 @@ fn ast_to_json(doc: &lex_core::lex::parsing::Document) -> serde_json::Value {
 
     let mut doc_json = json!({
         "type": "Document",
-        "title": doc.root.title.as_string(),
+        "title": doc.title(),
         "children": children,
     });
 

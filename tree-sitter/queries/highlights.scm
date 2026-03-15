@@ -13,6 +13,16 @@
 ; when multiple patterns match the same node. Specific overrides (e.g.
 ; verbatim closing markers) must appear AFTER their generic counterparts.
 
+; === Document Title ===
+; Document title is the primary heading (LSP: DocumentTitle)
+(document_title
+  title: (line_content) @markup.heading)
+
+; Document title sequence marker (e.g., numbered title)
+(document_title
+  title: (line_content
+    (list_marker) @punctuation.definition.heading))
+
 ; === Sessions ===
 ; Session titles are headings (LSP: SessionTitleText)
 (session

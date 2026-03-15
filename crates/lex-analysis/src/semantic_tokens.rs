@@ -224,7 +224,11 @@ impl TokenCollector {
 
     fn process_document(&mut self, document: &Document) {
         self.process_annotations(document.annotations());
-        self.process_session(&document.root, LexSemanticTokenKind::DocumentTitle);
+        if let Some(title) = &document.title {
+            self.push_range(&title.location, LexSemanticTokenKind::DocumentTitle);
+            self.process_text_content(&title.content);
+        }
+        self.process_session(&document.root, LexSemanticTokenKind::SessionTitleText);
     }
 
     fn process_session(&mut self, session: &Session, title_kind: LexSemanticTokenKind) {

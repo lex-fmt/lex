@@ -355,9 +355,13 @@ mod tests {
             })
             .collect();
 
-        assert_eq!(paragraphs.len(), 1);
-        assert_eq!(paragraphs[0].annotations.len(), 1);
-        assert_eq!(paragraphs[0].annotations[0].data.label.value, "foo");
+        // Multi-line first paragraph is NOT extracted as title (title must be single line)
+        // So we have 2 paragraphs: "Start\nSome paragraph ends here." and "Another paragraph here."
+        assert_eq!(paragraphs.len(), 2);
+        // Annotation "foo" is between the two paragraphs, closest to "Another paragraph"
+        assert!(paragraphs[0].annotations.is_empty());
+        assert_eq!(paragraphs[1].annotations.len(), 1);
+        assert_eq!(paragraphs[1].annotations[0].data.label.value, "foo");
     }
 
     #[test]
@@ -378,14 +382,13 @@ mod tests {
             })
             .collect();
 
-        assert_eq!(paragraphs.len(), 1);
-        // Due to title extraction, the first paragraph is removed.
-        // The annotation might now be at the start of the document, becoming a document-level annotation.
-        if paragraphs[0].annotations.is_empty() {
-            assert_eq!(result.annotations.len(), 1);
-        } else {
-            assert_eq!(paragraphs[0].annotations.len(), 1);
-        }
+        // Multi-line first paragraph is NOT extracted as title
+        assert_eq!(paragraphs.len(), 2);
+        // Annotation "foo" is between paragraphs with blank lines on both sides (tie)
+        // Tie-breaking: annotation attaches to the next element
+        assert!(paragraphs[0].annotations.is_empty());
+        assert_eq!(paragraphs[1].annotations.len(), 1);
+        assert_eq!(paragraphs[1].annotations[0].data.label.value, "foo");
     }
 
     #[test]

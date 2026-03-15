@@ -213,7 +213,7 @@
     "fields": {},
     "children": {
       "multiple": true,
-      "required": false,
+      "required": true,
       "types": [
         {
           "type": "annotation_block",
@@ -229,6 +229,10 @@
         },
         {
           "type": "definition",
+          "named": true
+        },
+        {
+          "type": "document_title",
           "named": true
         },
         {
@@ -253,6 +257,32 @@
         },
         {
           "type": "verbatim_block",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "document_title",
+    "named": true,
+    "fields": {
+      "title": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "line_content",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "blank_line",
           "named": true
         }
       ]

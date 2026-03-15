@@ -1,8 +1,8 @@
 ---
-source: lex-babel/tests/markdown/export.rs
+source: crates/lex-babel/tests/markdown/export.rs
 expression: md
 ---
-# Kitchensink Test Document {{paragraph}}
+# Kitchensink Test Document {{document-title}}
 
 This document includes **all major features** of the lex language to serve as a comprehensive "kitchensink" regression test for the parser, as noted in [@spec2025, pp. 45-46](#ref-spec2025,%20pp.%2045-46). {{paragraph}}
 

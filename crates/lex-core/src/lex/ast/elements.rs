@@ -153,7 +153,7 @@ pub use blank_line_group::BlankLineGroup;
 pub use content_item::ContentItem;
 pub use data::Data;
 pub use definition::Definition;
-pub use document::Document;
+pub use document::{Document, DocumentTitle};
 pub use label::Label;
 pub use list::{List, ListItem};
 pub use paragraph::{Paragraph, TextLine};
