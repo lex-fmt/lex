@@ -74,3 +74,23 @@ Outer:
         (text_line
           (line_content
             (text_content)))))))
+
+==================
+Definition without preceding blank line
+==================
+Paragraph text
+Term:
+    Definition body
+---
+
+(document
+  (paragraph
+    (text_line
+      (line_content
+        (text_content))))
+  (definition
+    subject: (subject_content)
+    (paragraph
+      (text_line
+        (line_content
+          (text_content))))))

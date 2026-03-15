@@ -172,6 +172,25 @@
     }
   },
   {
+    "type": "dialog_line",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "list_marker",
+          "named": true
+        },
+        {
+          "type": "text_content",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "document",
     "named": true,
     "root": true,
@@ -343,6 +362,10 @@
       "multiple": true,
       "required": true,
       "types": [
+        {
+          "type": "dialog_line",
+          "named": true
+        },
         {
           "type": "text_line",
           "named": true

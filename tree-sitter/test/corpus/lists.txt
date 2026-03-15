@@ -125,6 +125,47 @@ List item with code span
       (text_content))))
 
 ==================
+List without preceding blank line
+==================
+Paragraph text here
+- First item
+- Second item
+---
+
+(document
+  (paragraph
+    (text_line
+      (line_content
+        (text_content))))
+  (list
+    (list_item
+      (list_marker)
+      (text_content))
+    (list_item
+      (list_marker)
+      (text_content))))
+
+==================
+Single list-like line stays in paragraph
+==================
+Some text
+- Not a list since only one item
+More text
+---
+
+(document
+  (paragraph
+    (text_line
+      (line_content
+        (text_content)))
+    (dialog_line
+      (list_marker)
+      (text_content))
+    (text_line
+      (line_content
+        (text_content)))))
+
+==================
 Numbered session title with marker
 ==================
 1. Introduction

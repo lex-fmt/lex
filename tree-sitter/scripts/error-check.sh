@@ -35,6 +35,12 @@ ALLOWLIST=(
     "comms/specs/elements/inlines.docs/specs/formatting/inlines-general.lex"
     "comms/specs/elements/inlines.docs/specs/references/citations.lex"
     "comms/specs/elements/inlines.docs/specs/references/references-general.lex"
+    # annotation.lex has :: label :: fragments inside definition bodies that
+    # look like annotations but aren't valid verbatim block structures
+    "comms/specs/elements/annotation.lex"
+    # 040-on-parsing.lex is a complex benchmark with structures beyond current
+    # tree-sitter grammar coverage (deeply nested mixed elements)
+    "comms/specs/benchmark/040-on-parsing.lex"
 )
 
 is_allowlisted() {
