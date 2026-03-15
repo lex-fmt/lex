@@ -161,6 +161,73 @@ impl<'a> TableAssertion<'a> {
         self
     }
 
+    pub fn has_footnotes(self) -> Self {
+        assert!(
+            self.table.footnotes.is_some(),
+            "{}: Expected table to have footnotes",
+            self.context
+        );
+        self
+    }
+
+    pub fn no_footnotes(self) -> Self {
+        assert!(
+            self.table.footnotes.is_none(),
+            "{}: Expected table to have no footnotes",
+            self.context
+        );
+        self
+    }
+
+    pub fn footnote_count(self, expected: usize) -> Self {
+        let list = self
+            .table
+            .footnotes
+            .as_ref()
+            .unwrap_or_else(|| panic!("{}: Expected table to have footnotes", self.context));
+        let items: Vec<_> = list.items.iter().collect();
+        assert_eq!(
+            items.len(),
+            expected,
+            "{}: Expected {} footnotes, got {}",
+            self.context,
+            expected,
+            items.len()
+        );
+        self
+    }
+
+    pub fn footnote_text(self, index: usize, expected: &str) -> Self {
+        let list = self
+            .table
+            .footnotes
+            .as_ref()
+            .unwrap_or_else(|| panic!("{}: Expected table to have footnotes", self.context));
+        let items: Vec<_> = list.items.iter().collect();
+        assert!(
+            index < items.len(),
+            "{}: Footnote index {} out of bounds ({} footnotes)",
+            self.context,
+            index,
+            items.len()
+        );
+        let item = items[index]
+            .as_list_item()
+            .expect("Footnote should be a ListItem");
+        let actual: String = item
+            .text
+            .iter()
+            .map(|t| t.as_string())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert_eq!(
+            actual, expected,
+            "{}: Footnote {} text mismatch",
+            self.context, index
+        );
+        self
+    }
+
     pub fn annotation_count(self, expected: usize) -> Self {
         let actual = self.table.annotations.len();
         assert_eq!(

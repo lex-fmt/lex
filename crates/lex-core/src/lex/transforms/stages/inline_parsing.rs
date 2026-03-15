@@ -94,6 +94,9 @@ impl InlineProcessor {
                 self.process_text_content(&mut cell.content);
             }
         }
+        if let Some(footnotes) = &mut table.footnotes {
+            self.process_list(footnotes);
+        }
         for annotation in &mut table.annotations {
             self.process_annotation(annotation);
         }

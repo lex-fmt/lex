@@ -29,8 +29,8 @@
 //! conversion happens here using `byte_range_to_ast_range()`.
 
 use super::extraction::{
-    DataExtraction, DefinitionData, ListItemData, ParagraphData, SessionData, TableCellData,
-    TableData, TableRowData, VerbatimBlockData, VerbatimGroupData,
+    DataExtraction, DefinitionData, FootnoteLineData, ListItemData, ParagraphData, SessionData,
+    TableCellData, TableData, TableRowData, VerbatimBlockData, VerbatimGroupData,
 };
 use super::location::{
     aggregate_locations, byte_range_to_ast_range, compute_location_from_locations, default_location,
@@ -433,10 +433,21 @@ pub(super) fn table_node(
         })
         .collect();
 
+    // Build footnotes if present
+    let footnotes = if data.footnotes.is_empty() {
+        None
+    } else {
+        Some(build_footnote_list(data.footnotes, source_location))
+    };
+
     location_sources.push(closing_data.location.clone());
     let location = compute_location_from_locations(&location_sources);
 
-    let table = Table::new(subject, header_rows, body_rows, closing_data, data.mode).at(location);
+    let mut table =
+        Table::new(subject, header_rows, body_rows, closing_data, data.mode).at(location);
+    if let Some(list) = footnotes {
+        table = table.with_footnotes(list);
+    }
     ContentItem::Table(Box::new(table))
 }
 
@@ -478,6 +489,17 @@ fn build_table_cell(
         .with_align(align)
         .with_header(cell_data.is_header)
         .at(cell_location)
+}
+
+fn build_footnote_list(footnotes: Vec<FootnoteLineData>, source_location: &SourceLocation) -> List {
+    let items: Vec<ListItem> = footnotes
+        .into_iter()
+        .map(|f| {
+            let location = byte_range_to_ast_range(f.byte_range, source_location);
+            ListItem::new(f.marker, f.text).at(location)
+        })
+        .collect();
+    List::new(items)
 }
 
 // ============================================================================

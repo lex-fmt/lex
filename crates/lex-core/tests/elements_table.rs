@@ -67,6 +67,37 @@ fn test_table_03_flat_header_count() {
 }
 
 // ============================================================================
+// Footnotes
+// ============================================================================
+
+#[test]
+fn test_table_06_flat_with_footnotes() {
+    // table-06: Table with trailing numbered footnotes
+    let doc = Lexplore::table(6).parse().unwrap();
+
+    assert_ast(&doc).item_count(1).item(0, |item| {
+        item.assert_table()
+            .subject("Comparative Analysis of Retrieval Methods")
+            .header_row_count(1)
+            .body_row_count(3)
+            .has_footnotes()
+            .footnote_count(2)
+            .footnote_text(0, "Precision measured at k=10")
+            .footnote_text(1, "Weighted combination of BM25 and Dense");
+    });
+}
+
+#[test]
+fn test_table_no_footnotes() {
+    // table-01: Simple table should have no footnotes
+    let doc = Lexplore::table(1).parse().unwrap();
+
+    assert_ast(&doc).item(0, |item| {
+        item.assert_table().no_footnotes();
+    });
+}
+
+// ============================================================================
 // Cell Merging
 // ============================================================================
 

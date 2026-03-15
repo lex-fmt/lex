@@ -36,6 +36,14 @@ pub(in crate::lex::building) struct TableRowData {
     pub byte_range: ByteRange<usize>,
 }
 
+/// Extracted data for a footnote line (pre-AST).
+#[derive(Debug, Clone)]
+pub(in crate::lex::building) struct FootnoteLineData {
+    pub marker: String,
+    pub text: String,
+    pub byte_range: ByteRange<usize>,
+}
+
 /// Extracted data for building a Table AST node.
 #[derive(Debug, Clone)]
 pub(in crate::lex::building) struct TableData {
@@ -43,6 +51,7 @@ pub(in crate::lex::building) struct TableData {
     pub subject_byte_range: ByteRange<usize>,
     pub header_rows: Vec<TableRowData>,
     pub body_rows: Vec<TableRowData>,
+    pub footnotes: Vec<FootnoteLineData>,
     pub mode: VerbatimBlockMode,
 }
 
@@ -69,8 +78,15 @@ pub(in crate::lex::building) fn extract_table_data(
     let subject_text = group.subject_text;
     let subject_byte_range = group.subject_byte_range;
 
-    // Parse the wall-stripped content lines into rows
-    let raw_rows = parse_pipe_rows(&group.content_lines);
+    // Parse the wall-stripped content lines into rows and extract footnotes
+    let classified = classify_lines(&group.content_lines);
+    let is_multiline = detect_multiline(&classified);
+    let raw_rows = if is_multiline {
+        parse_multiline_rows(&classified)
+    } else {
+        parse_compact_rows(&classified)
+    };
+    let footnotes = extract_footnote_lines(&classified);
 
     // Resolve merge markers
     let mut rows = resolve_merges(raw_rows);
@@ -84,23 +100,13 @@ pub(in crate::lex::building) fn extract_table_data(
         subject_byte_range,
         header_rows,
         body_rows,
+        footnotes,
         mode,
     }
 }
 
-/// Parse wall-stripped content lines into raw table rows.
-///
-/// Supports two modes:
-///
-/// **Compact mode** (default): Each pipe line is an independent row.
-///
-/// **Multi-line mode**: When blank lines appear between pipe groups,
-/// consecutive pipe lines within a group form a single row with multi-line
-/// cell content. Each continuation line appends to the corresponding cell
-/// (joined with newline). Whitespace-only continuation cells add nothing.
-///
-/// Mode is auto-detected: if any blank lines separate pipe groups, the
-/// table is in multi-line mode.
+/// Parse wall-stripped content lines into raw table rows (test helper).
+#[cfg(test)]
 fn parse_pipe_rows(content_lines: &[(String, ByteRange<usize>)]) -> Vec<TableRowData> {
     // First, classify lines and check for multi-line mode
     let classified = classify_lines(content_lines);
@@ -123,8 +129,11 @@ enum LineKind<'a> {
     },
     /// A blank line (row group separator in multi-line mode)
     Blank,
-    /// A non-pipe, non-blank line (currently skipped)
-    Other,
+    /// A non-pipe, non-blank line (potential footnote)
+    Other {
+        text: &'a str,
+        line_range: &'a ByteRange<usize>,
+    },
 }
 
 /// Classify all content lines into pipe rows, blanks, or other.
@@ -153,7 +162,10 @@ fn classify_lines<'a>(content_lines: &'a [(String, ByteRange<usize>)]) -> Vec<Li
                     line_range: range,
                 }
             } else {
-                LineKind::Other
+                LineKind::Other {
+                    text: trimmed,
+                    line_range: range,
+                }
             }
         })
         .collect()
@@ -177,7 +189,7 @@ fn detect_multiline(lines: &[LineKind]) -> bool {
                     seen_blank_after_pipe = true;
                 }
             }
-            LineKind::Other => {}
+            LineKind::Other { .. } => {}
         }
     }
     false
@@ -229,7 +241,7 @@ fn parse_multiline_rows(lines: &[LineKind]) -> Vec<TableRowData> {
             LineKind::PipeRow { .. } => {
                 current_group.push(line);
             }
-            LineKind::Other => {}
+            LineKind::Other { .. } => {}
         }
     }
 
@@ -316,6 +328,57 @@ fn merge_group(group: &[&LineKind]) -> Option<TableRowData> {
 fn is_separator_line(line: &str) -> bool {
     line.chars()
         .all(|c| matches!(c, '|' | '-' | ':' | '+' | ' ' | '='))
+}
+
+/// Extract footnote lines from trailing non-pipe content.
+///
+/// Footnotes are non-pipe lines that appear after the last pipe row.
+/// They follow the pattern `N. text` (numbered list items).
+/// Blank lines between the last pipe row and footnotes are skipped.
+fn extract_footnote_lines(lines: &[LineKind]) -> Vec<FootnoteLineData> {
+    // Find the last pipe row index
+    let last_pipe_idx = lines
+        .iter()
+        .rposition(|l| matches!(l, LineKind::PipeRow { .. }));
+
+    let Some(last_pipe_idx) = last_pipe_idx else {
+        return Vec::new();
+    };
+
+    let mut footnotes = Vec::new();
+    for line in &lines[last_pipe_idx + 1..] {
+        if let LineKind::Other { text, line_range } = line {
+            if let Some(footnote) = parse_footnote_line(text, line_range) {
+                footnotes.push(footnote);
+            }
+        }
+    }
+    footnotes
+}
+
+/// Try to parse a line as a footnote item (e.g. "1. Some text").
+fn parse_footnote_line(text: &str, range: &ByteRange<usize>) -> Option<FootnoteLineData> {
+    // Match pattern: digits followed by . or ) then space and text
+    let text = text.trim();
+    let marker_end = text.find(|c: char| !c.is_ascii_digit())?;
+    if marker_end == 0 {
+        return None;
+    }
+    let rest = &text[marker_end..];
+    let separator = if rest.starts_with(". ") {
+        "."
+    } else if rest.starts_with(") ") {
+        ")"
+    } else {
+        return None;
+    };
+    let marker = format!("{}{}", &text[..marker_end], separator);
+    let body = rest[2..].to_string(); // skip separator + space
+    Some(FootnoteLineData {
+        marker,
+        text: body,
+        byte_range: range.clone(),
+    })
 }
 
 /// Resolve merge markers (`>>` for colspan, `^^` for rowspan).
@@ -658,6 +721,55 @@ mod tests {
         assert_eq!(rows[1].cells[1].text, "line1\nline2");
         assert_eq!(rows[2].cells[0].text, "b");
         assert_eq!(rows[2].cells[1].text, "single");
+    }
+
+    #[test]
+    fn test_parse_footnote_line_numbered_period() {
+        let f = parse_footnote_line("1. Some text here", &(0..17)).unwrap();
+        assert_eq!(f.marker, "1.");
+        assert_eq!(f.text, "Some text here");
+    }
+
+    #[test]
+    fn test_parse_footnote_line_numbered_paren() {
+        let f = parse_footnote_line("2) Another note", &(0..15)).unwrap();
+        assert_eq!(f.marker, "2)");
+        assert_eq!(f.text, "Another note");
+    }
+
+    #[test]
+    fn test_parse_footnote_line_not_a_footnote() {
+        assert!(parse_footnote_line("Just plain text", &(0..15)).is_none());
+        assert!(parse_footnote_line("- a dash item", &(0..13)).is_none());
+    }
+
+    #[test]
+    fn test_extract_footnote_lines_from_classified() {
+        let lines = vec![
+            ("| a | b |".to_string(), 0..9),
+            ("| c | d |".to_string(), 10..19),
+            ("".to_string(), 20..20),
+            ("1. First note".to_string(), 21..34),
+            ("2. Second note".to_string(), 35..49),
+        ];
+        let classified = classify_lines(&lines);
+        let footnotes = extract_footnote_lines(&classified);
+        assert_eq!(footnotes.len(), 2);
+        assert_eq!(footnotes[0].marker, "1.");
+        assert_eq!(footnotes[0].text, "First note");
+        assert_eq!(footnotes[1].marker, "2.");
+        assert_eq!(footnotes[1].text, "Second note");
+    }
+
+    #[test]
+    fn test_extract_footnote_lines_none_when_no_trailing() {
+        let lines = vec![
+            ("| a | b |".to_string(), 0..9),
+            ("| c | d |".to_string(), 10..19),
+        ];
+        let classified = classify_lines(&lines);
+        let footnotes = extract_footnote_lines(&classified);
+        assert!(footnotes.is_empty());
     }
 
     #[test]

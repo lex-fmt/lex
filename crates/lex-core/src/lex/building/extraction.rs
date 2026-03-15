@@ -44,7 +44,9 @@ pub(super) use definition::{extract_definition_data, DefinitionData};
 pub(super) use list_item::{extract_list_item_data, ListItemData};
 pub(super) use paragraph::{extract_paragraph_data, ParagraphData};
 pub(super) use session::{extract_session_data, SessionData};
-pub(super) use table::{extract_table_data, TableCellData, TableData, TableRowData};
+pub(super) use table::{
+    extract_table_data, FootnoteLineData, TableCellData, TableData, TableRowData,
+};
 pub(super) use verbatim::{extract_verbatim_block_data, VerbatimBlockData, VerbatimGroupData};
 
 // Re-export VerbatimGroupTokenLines as public for use in ast_tree.rs
