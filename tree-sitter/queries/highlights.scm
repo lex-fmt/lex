@@ -106,6 +106,23 @@
   (annotation_header) @keyword)
  (#match? @keyword "^\\s*table"))
 
+; === Table structure ===
+; Pipe delimiters in table rows — dim punctuation
+(table_row
+  (pipe_delimiter) @punctuation.delimiter)
+
+; Table separator rows — fully dimmed (cosmetic, parser ignores them)
+(table_separator_row) @comment
+
+; Table cell inline content inherits from the inline rules below.
+; Merge markers (>> and ^^) are highlighted via content predicates:
+((table_cell
+  (text_content) @keyword.operator)
+ (#match? @keyword.operator "^\\s*>>\\s*$"))
+((table_cell
+  (text_content) @keyword.operator)
+ (#match? @keyword.operator "^\\s*\\^\\^\\s*$"))
+
 ; === Inline formatting ===
 (strong) @markup.bold
 (emphasis) @markup.italic

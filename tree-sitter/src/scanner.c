@@ -93,6 +93,9 @@ enum TokenType {
     VERBATIM_CONTENT,
     LIST_START,
     DEFINITION_SUBJECT,
+    PIPE_ROW_START,
+    PIPE_DELIMITER,
+    TABLE_SEPARATOR,
 };
 
 // Character class for flanking rule context tracking.
@@ -111,6 +114,7 @@ typedef struct {
     uint8_t last_char_class;
     int line_indent;       // measured indent of current line (avoids re-measurement after DEDENT)
     bool indent_measured;  // true when line_indent is valid for the current line
+    bool in_pipe_row;      // true after PIPE_ROW_START, reset at NEWLINE
 } Scanner;
 
 static uint8_t classify_char(int32_t c) {
@@ -131,6 +135,7 @@ void *tree_sitter_lex_external_scanner_create(void) {
     scanner->last_char_class = CHAR_CLASS_NONE;
     scanner->line_indent = 0;
     scanner->indent_measured = false;
+    scanner->in_pipe_row = false;
     return scanner;
 }
 
@@ -149,6 +154,7 @@ unsigned tree_sitter_lex_external_scanner_serialize(void *payload,
     buffer[offset++] = (char)scanner->emitted_eof_newline;
     buffer[offset++] = (char)scanner->last_char_class;
     buffer[offset++] = (char)scanner->indent_measured;
+    buffer[offset++] = (char)scanner->in_pipe_row;
     int16_t li = (int16_t)scanner->line_indent;
     memcpy(buffer + offset, &li, 2);
     offset += 2;
@@ -176,6 +182,7 @@ void tree_sitter_lex_external_scanner_deserialize(void *payload,
         scanner->last_char_class = CHAR_CLASS_NONE;
         scanner->line_indent = 0;
         scanner->indent_measured = false;
+        scanner->in_pipe_row = false;
         return;
     }
 
@@ -186,6 +193,7 @@ void tree_sitter_lex_external_scanner_deserialize(void *payload,
     scanner->emitted_eof_newline = (bool)buffer[offset++];
     scanner->last_char_class = (uint8_t)(unsigned char)buffer[offset++];
     scanner->indent_measured = (bool)buffer[offset++];
+    scanner->in_pipe_row = (bool)buffer[offset++];
     int16_t li;
     memcpy(&li, buffer + offset, 2);
     scanner->line_indent = li;
@@ -400,6 +408,33 @@ static bool peek_next_line_has_indent(TSLexer *lexer, int current_indent) {
     return next_indent > current_indent;
 }
 
+/// Try to detect a pipe row at the current position. The lexer should be
+/// positioned at a '|' character. Peeks ahead to classify the line as:
+/// - separator: all content between pipes is only |, -, :, =, +, space
+/// - data row: at least one more | on the line with other content
+/// - not a pipe row: no second | found
+/// Returns: 0 = not a pipe row, 1 = data row, 2 = separator row
+/// On return, the lexer has advanced past the entire line (past mark_end).
+/// Caller must set mark_end appropriately before calling.
+static int classify_pipe_line(TSLexer *lexer) {
+    // We're positioned after the first |. Scan rest of line.
+    bool has_another_pipe = false;
+    bool is_separator = true;
+
+    while (lexer->lookahead != '\n' && !lexer->eof(lexer)) {
+        int32_t c = lexer->lookahead;
+        if (c == '|') has_another_pipe = true;
+        if (c != '|' && c != '-' && c != ':' && c != '=' && c != '+' && c != ' ') {
+            is_separator = false;
+        }
+        lexer->advance(lexer, false);
+    }
+
+    if (!has_another_pipe) return 0;
+    if (is_separator) return 2;
+    return 1;
+}
+
 bool tree_sitter_lex_external_scanner_scan(void *payload, TSLexer *lexer,
                                             const bool *valid_symbols) {
     Scanner *scanner = (Scanner *)payload;
@@ -414,8 +449,8 @@ bool tree_sitter_lex_external_scanner_scan(void *payload, TSLexer *lexer,
     fprintf(stderr, "] pending=%d lookahead='%c'(%d) valid=[",
             scanner->pending_dedents, lexer->lookahead > 31 ? lexer->lookahead : '?',
             lexer->lookahead);
-    const char *names[] = {"IND","DED","NL","AM","LM","SC","SO","SCl","EO","ECl","SB","VC","LS","DS"};
-    for (int i = 0; i <= 13; i++) {
+    const char *names[] = {"IND","DED","NL","AM","LM","SC","SO","SCl","EO","ECl","SB","VC","LS","DS","PRS","PD","TS"};
+    for (int i = 0; i <= 16; i++) {
         if (valid_symbols[i]) fprintf(stderr, "%s ", names[i]);
     }
     fprintf(stderr, "]\n");
@@ -475,6 +510,7 @@ bool tree_sitter_lex_external_scanner_scan(void *payload, TSLexer *lexer,
                     scanner->at_line_start = true;
                     scanner->indent_measured = false;
                     scanner->last_char_class = CHAR_CLASS_NONE;
+                    scanner->in_pipe_row = false;
                     return true;
                 }
 
@@ -500,6 +536,7 @@ bool tree_sitter_lex_external_scanner_scan(void *payload, TSLexer *lexer,
                     scanner->at_line_start = true;
                     scanner->indent_measured = false;
                     scanner->last_char_class = CHAR_CLASS_NONE;
+                    scanner->in_pipe_row = false;
                     return true;
                 }
 
@@ -517,6 +554,7 @@ bool tree_sitter_lex_external_scanner_scan(void *payload, TSLexer *lexer,
                         scanner->at_line_start = true;
                         scanner->indent_measured = false;
                         scanner->last_char_class = CHAR_CLASS_NONE;
+                        scanner->in_pipe_row = false;
                         return true;
                     }
                     // Session break confirmed! Update mark_end to include
@@ -538,6 +576,7 @@ bool tree_sitter_lex_external_scanner_scan(void *payload, TSLexer *lexer,
                 scanner->at_line_start = true;
                 scanner->indent_measured = false;
                 scanner->last_char_class = CHAR_CLASS_NONE;
+                scanner->in_pipe_row = false;
                 return true;
             }
 
@@ -548,6 +587,7 @@ bool tree_sitter_lex_external_scanner_scan(void *payload, TSLexer *lexer,
                 scanner->at_line_start = true;
                 scanner->indent_measured = false;
                 scanner->last_char_class = CHAR_CLASS_NONE;
+                scanner->in_pipe_row = false;
                 return true;
             }
             return false;
@@ -566,6 +606,7 @@ bool tree_sitter_lex_external_scanner_scan(void *payload, TSLexer *lexer,
             if (!scanner->emitted_eof_newline && valid_symbols[NEWLINE]) {
                 scanner->emitted_eof_newline = true;
                 lexer->result_symbol = NEWLINE;
+                scanner->in_pipe_row = false;
                 return true;
             }
             return false;
@@ -704,6 +745,36 @@ bool tree_sitter_lex_external_scanner_scan(void *payload, TSLexer *lexer,
             return false;
         }
 
+        // Try pipe row: | at line start with at least one more | on the line.
+        // TABLE_SEPARATOR covers the full line; PIPE_ROW_START covers just the
+        // first |. PIPE_ROW_START also sets in_pipe_row so subsequent | characters
+        // are emitted as PIPE_DELIMITER tokens.
+        if ((valid_symbols[PIPE_ROW_START] || valid_symbols[TABLE_SEPARATOR]) &&
+            lexer->lookahead == '|') {
+            lexer->advance(lexer, false);  // consume |
+            lexer->mark_end(lexer);        // mark after first | (for PIPE_ROW_START)
+
+            int kind = classify_pipe_line(lexer);
+
+            if (kind == 2 && valid_symbols[TABLE_SEPARATOR]) {
+                lexer->mark_end(lexer);  // extend to EOL for full separator
+                lexer->result_symbol = TABLE_SEPARATOR;
+                scanner->last_char_class = CHAR_CLASS_PUNCTUATION;
+                return true;
+            }
+            if (kind >= 1 && valid_symbols[PIPE_ROW_START]) {
+                // mark_end is after first |
+                scanner->in_pipe_row = true;
+                lexer->result_symbol = PIPE_ROW_START;
+                scanner->last_char_class = CHAR_CLASS_PUNCTUATION;
+                return true;
+            }
+
+            // Not a pipe row — return false, position resets
+            scanner->last_char_class = classify_char('|');
+            return false;
+        }
+
         // When the first char is an emphasis delimiter (* or _), we need to
         // decide between emphasis and full-line tokens (subject_content).
         // Strategy: scan the line once to check for trailing :. Use mark_end
@@ -827,6 +898,45 @@ bool tree_sitter_lex_external_scanner_scan(void *payload, TSLexer *lexer,
     }
 
     // === Not at line start ===
+
+    // Pipe delimiter: | inside an active pipe row. Checked first because
+    // pipe delimiters are the most common mid-line token in table content.
+    if (scanner->in_pipe_row && valid_symbols[PIPE_DELIMITER] &&
+        lexer->lookahead == '|') {
+        lexer->advance(lexer, false);
+        lexer->mark_end(lexer);
+        lexer->result_symbol = PIPE_DELIMITER;
+        scanner->last_char_class = CHAR_CLASS_PUNCTUATION;
+        return true;
+    }
+
+    // Pipe row start: | at content start (e.g., first line after INDENT).
+    // Same detection as at-line-start but in the not-at-line-start branch
+    // because INDENT sets at_line_start=false before returning.
+    if ((valid_symbols[PIPE_ROW_START] || valid_symbols[TABLE_SEPARATOR]) &&
+        lexer->lookahead == '|') {
+        lexer->mark_end(lexer);
+        lexer->advance(lexer, false);
+        lexer->mark_end(lexer);  // mark after first |
+
+        int kind = classify_pipe_line(lexer);
+
+        if (kind == 2 && valid_symbols[TABLE_SEPARATOR]) {
+            lexer->mark_end(lexer);
+            lexer->result_symbol = TABLE_SEPARATOR;
+            scanner->last_char_class = CHAR_CLASS_PUNCTUATION;
+            return true;
+        }
+        if (kind >= 1 && valid_symbols[PIPE_ROW_START]) {
+            scanner->in_pipe_row = true;
+            lexer->result_symbol = PIPE_ROW_START;
+            scanner->last_char_class = CHAR_CLASS_PUNCTUATION;
+            return true;
+        }
+
+        // Not a pipe row — fall through (position resets)
+        return false;
+    }
 
     // Try list marker (e.g., first line after INDENT in a definition body)
     if (valid_symbols[LIST_MARKER] || valid_symbols[LIST_START]) {
@@ -977,6 +1087,7 @@ bool tree_sitter_lex_external_scanner_scan(void *payload, TSLexer *lexer,
             scanner->at_line_start = true;
             scanner->indent_measured = false;
             scanner->last_char_class = CHAR_CLASS_NONE;
+            scanner->in_pipe_row = false;
             return true;
         }
         if (lexer->eof(lexer) && !scanner->emitted_eof_newline) {
@@ -984,6 +1095,7 @@ bool tree_sitter_lex_external_scanner_scan(void *payload, TSLexer *lexer,
             lexer->result_symbol = NEWLINE;
             scanner->at_line_start = true;
             scanner->indent_measured = false;
+            scanner->in_pipe_row = false;
             scanner->last_char_class = CHAR_CLASS_NONE;
             return true;
         }
