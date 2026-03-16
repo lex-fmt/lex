@@ -449,9 +449,9 @@ fn test_document_first_paragraph_as_title() {
 fn test_document_session_only_no_h1_title() {
     // Use spec file: document starts with session (no explicit document title)
     let lex_src = std::fs::read_to_string(
-        "../../comms/specs/elements/document.docs/document-07-no-title-session-first.lex",
+        "../../comms/specs/elements/document.docs/document-05-title-session-hoist.lex",
     )
-    .expect("document-07 spec file should exist");
+    .expect("document-05 spec file should exist");
     let lex_doc = STRING_TO_AST.run(lex_src).unwrap();
     let md = MarkdownFormat.serialize(&lex_doc).unwrap();
 

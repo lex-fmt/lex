@@ -108,8 +108,18 @@ impl LexSerializer {
     pub fn serialize(mut self, doc: &Document) -> Result<String, String> {
         // Output document title if present
         if let Some(title) = &doc.title {
-            self.output.push_str(title.as_str());
-            self.output.push('\n');
+            if title.subtitle.is_some() {
+                // Title with subtitle: "Title:\nSubtitle\n"
+                self.output.push_str(title.as_str());
+                self.output.push_str(":\n");
+            } else {
+                self.output.push_str(title.as_str());
+                self.output.push('\n');
+            }
+            if let Some(subtitle) = title.subtitle_str() {
+                self.output.push_str(subtitle);
+                self.output.push('\n');
+            }
             self.consecutive_newlines = 1;
         }
         doc.root.accept(&mut self);

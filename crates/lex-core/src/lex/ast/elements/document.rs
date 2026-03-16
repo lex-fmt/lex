@@ -52,28 +52,50 @@ use std::fmt;
 ///
 /// Represents the title of a Lex document — a single unindented line at the start
 /// of the document, followed by blank lines, with no indented content after.
-/// This is distinct from session titles and can be extended with subtitles and
-/// other structured metadata in the future.
+/// This is distinct from session titles.
+///
+/// An optional subtitle is supported: when the title line ends with a colon and a
+/// second non-blank, non-indented line follows before the blank separator, the
+/// second line is parsed as a subtitle. The trailing colon is structural (stripped
+/// from the title content).
 #[derive(Debug, Clone, PartialEq)]
 pub struct DocumentTitle {
     pub content: TextContent,
+    pub subtitle: Option<TextContent>,
     pub location: Range,
 }
 
 impl DocumentTitle {
     pub fn new(content: TextContent, location: Range) -> Self {
-        Self { content, location }
+        Self {
+            content,
+            subtitle: None,
+            location,
+        }
+    }
+
+    pub fn with_subtitle(content: TextContent, subtitle: TextContent, location: Range) -> Self {
+        Self {
+            content,
+            subtitle: Some(subtitle),
+            location,
+        }
     }
 
     pub fn from_string(text: String, location: Range) -> Self {
         Self {
             content: TextContent::from_string(text, Some(location.clone())),
+            subtitle: None,
             location,
         }
     }
 
     pub fn as_str(&self) -> &str {
         self.content.as_string()
+    }
+
+    pub fn subtitle_str(&self) -> Option<&str> {
+        self.subtitle.as_ref().map(|s| s.as_string())
     }
 }
 
@@ -83,7 +105,14 @@ impl AstNode for DocumentTitle {
     }
 
     fn display_label(&self) -> String {
-        format!("DocumentTitle(\"{}\")", self.as_str())
+        match &self.subtitle {
+            Some(sub) => format!(
+                "DocumentTitle(\"{}\", subtitle: \"{}\")",
+                self.as_str(),
+                sub.as_string()
+            ),
+            None => format!("DocumentTitle(\"{}\")", self.as_str()),
+        }
     }
 
     fn range(&self) -> &Range {
@@ -329,7 +358,15 @@ impl Document {
         let title_refs = self
             .title
             .iter()
-            .flat_map(|t| t.content.inline_items())
+            .flat_map(|t| {
+                let title_inlines = t.content.inline_items();
+                let subtitle_inlines = t
+                    .subtitle
+                    .iter()
+                    .flat_map(|s| s.inline_items())
+                    .collect::<Vec<_>>();
+                title_inlines.into_iter().chain(subtitle_inlines)
+            })
             .filter_map(|node| {
                 if let crate::lex::inlines::InlineNode::Reference { data, .. } = node {
                     Some(data)

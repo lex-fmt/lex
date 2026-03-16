@@ -423,9 +423,9 @@ fn test_document_title_first_paragraph() {
 fn test_document_title_session_without_title() {
     // Use spec file: document starts with session (no explicit document title)
     let lex_src = std::fs::read_to_string(
-        "../../comms/specs/elements/document.docs/document-07-no-title-session-first.lex",
+        "../../comms/specs/elements/document.docs/document-05-title-session-hoist.lex",
     )
-    .expect("document-07 spec file should exist");
+    .expect("document-05 spec file should exist");
     let html = lex_to_html(&lex_src, HtmlTheme::Modern);
 
     // Document should fallback to default title (no document title)

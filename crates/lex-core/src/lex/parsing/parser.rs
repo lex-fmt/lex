@@ -187,9 +187,22 @@ impl GrammarMatcher {
                             content_idx: 1,
                         },
                         "blank_line_group" => PatternMatch::BlankLineGroup,
+                        "document_title_with_subtitle" => {
+                            // Imperative negative lookahead: not followed by container
+                            let next_idx = start_idx + consumed_count;
+                            if next_idx < tokens.len()
+                                && matches!(&tokens[next_idx], LineContainer::Container { .. })
+                            {
+                                continue;
+                            }
+                            // Match: DocumentStart(0) + title(1) + subtitle(2) + blank lines
+                            PatternMatch::DocumentTitle {
+                                title_idx: 1,
+                                subtitle_idx: Some(2),
+                            }
+                        }
                         "document_title" => {
                             // Imperative negative lookahead: not followed by container
-                            // (can't use (?!...) in Rust regex crate)
                             let next_idx = start_idx + consumed_count;
                             if next_idx < tokens.len()
                                 && matches!(&tokens[next_idx], LineContainer::Container { .. })
@@ -198,7 +211,10 @@ impl GrammarMatcher {
                                 continue;
                             }
                             // Match is: DocumentStart(0) + title line(1) + blank lines
-                            PatternMatch::DocumentTitle { title_idx: 1 }
+                            PatternMatch::DocumentTitle {
+                                title_idx: 1,
+                                subtitle_idx: None,
+                            }
                         }
                         "document_start" => PatternMatch::DocumentStart,
                         _ => continue,

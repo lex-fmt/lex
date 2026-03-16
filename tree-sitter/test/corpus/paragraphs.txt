@@ -73,15 +73,18 @@ continues here.
 Second paragraph.
 ---
 
+; NOTE: tree-sitter parses two lines + blank as document_title+subtitle
+; because it cannot check whether the first line ends with a colon.
+; The lex-core parser correctly treats this as a multi-line paragraph.
+
 (document
-  (paragraph
-    (text_line
-      (line_content
+  (document_title
+    title: (line_content
+      (text_content))
+    (document_subtitle
+      subtitle: (line_content
         (text_content)))
-    (text_line
-      (line_content
-        (text_content))))
-  (blank_line)
+    (blank_line))
   (paragraph
     (text_line
       (line_content

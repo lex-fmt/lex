@@ -93,6 +93,13 @@ pub(super) const GRAMMAR_PATTERNS: &[(&str, &str)] = &[
     // The negative lookahead for containers is checked imperatively after matching
     // (Rust regex crate does not support lookahead)
     // Title accepts same line types as session: paragraph, subject, list, or subject-or-list-item
+    //
+    // Subtitle variant: title line ending with colon (subject-line) + second line + blank lines.
+    // Tried first so subtitle form wins over plain title.
+    (
+        "document_title_with_subtitle",
+        r"^<document-start-line>(?P<title><subject-line>|<subject-or-list-item-line>)(?P<subtitle><paragraph-line>|<subject-line>|<list-line>|<subject-or-list-item-line>)(?P<blank>(<blank-line>)+)",
+    ),
     (
         "document_title",
         r"^<document-start-line>(?P<title><paragraph-line>|<subject-line>|<list-line>|<subject-or-list-item-line>)(?P<blank>(<blank-line>)+)",

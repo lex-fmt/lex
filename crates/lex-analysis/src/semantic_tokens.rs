@@ -47,6 +47,7 @@ use lex_core::lex::inlines::{InlineNode, ReferenceType};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LexSemanticTokenKind {
     DocumentTitle,
+    DocumentSubtitle,
     SessionMarker,
     SessionTitleText,
     DefinitionSubject,
@@ -99,6 +100,7 @@ impl LexSemanticTokenKind {
     pub fn as_str(self) -> &'static str {
         match self {
             LexSemanticTokenKind::DocumentTitle => "DocumentTitle",
+            LexSemanticTokenKind::DocumentSubtitle => "DocumentSubtitle",
             LexSemanticTokenKind::SessionMarker => "SessionMarker",
             LexSemanticTokenKind::SessionTitleText => "SessionTitleText",
             LexSemanticTokenKind::DefinitionSubject => "DefinitionSubject",
@@ -135,6 +137,7 @@ impl LexSemanticTokenKind {
 
 pub const SEMANTIC_TOKEN_KINDS: &[LexSemanticTokenKind] = &[
     LexSemanticTokenKind::DocumentTitle,
+    LexSemanticTokenKind::DocumentSubtitle,
     LexSemanticTokenKind::SessionMarker,
     LexSemanticTokenKind::SessionTitleText,
     LexSemanticTokenKind::DefinitionSubject,
@@ -225,8 +228,18 @@ impl TokenCollector {
     fn process_document(&mut self, document: &Document) {
         self.process_annotations(document.annotations());
         if let Some(title) = &document.title {
-            self.push_range(&title.location, LexSemanticTokenKind::DocumentTitle);
+            if let Some(title_loc) = &title.content.location {
+                self.push_range(title_loc, LexSemanticTokenKind::DocumentTitle);
+            } else {
+                self.push_range(&title.location, LexSemanticTokenKind::DocumentTitle);
+            }
             self.process_text_content(&title.content);
+            if let Some(subtitle) = &title.subtitle {
+                if let Some(sub_loc) = &subtitle.location {
+                    self.push_range(sub_loc, LexSemanticTokenKind::DocumentSubtitle);
+                }
+                self.process_text_content(subtitle);
+            }
         }
         self.process_session(&document.root, LexSemanticTokenKind::SessionTitleText);
     }

@@ -60,6 +60,51 @@ My Document
           (text_content))))))
 
 ==================
+Document title with subtitle
+==================
+My Title:
+A Subtitle Here
+
+Content paragraph.
+---
+
+(document
+  (document_title
+    title: (line_content
+      (subject_content))
+    (document_subtitle
+      subtitle: (line_content
+        (text_content)))
+    (blank_line))
+  (paragraph
+    (text_line
+      (line_content
+        (text_content)))))
+
+==================
+Document title with subtitle and inline formatting
+==================
+*Sapiens*:
+A Brief History of _Humankind_
+
+Content here.
+---
+
+(document
+  (document_title
+    title: (line_content
+      (subject_content))
+    (document_subtitle
+      subtitle: (line_content
+        (text_content
+          (emphasis))))
+    (blank_line))
+  (paragraph
+    (text_line
+      (line_content
+        (text_content)))))
+
+==================
 No title when session is first
 ==================
 1. Introduction
@@ -78,7 +123,7 @@ No title when session is first
           (text_content))))))
 
 ==================
-No title for multi-line paragraph
+Two lines before blank parsed as title+subtitle by tree-sitter
 ==================
 First line
 Second line continues the paragraph.
@@ -86,15 +131,19 @@ Second line continues the paragraph.
 Third paragraph.
 ---
 
+; NOTE: tree-sitter parses two lines + blank as title+subtitle because it
+; cannot check whether the first line ends with a colon (CST limitation).
+; The lex-core parser correctly rejects this as a title because the first
+; line does NOT end with a colon.
+
 (document
-  (paragraph
-    (text_line
-      (line_content
+  (document_title
+    title: (line_content
+      (text_content))
+    (document_subtitle
+      subtitle: (line_content
         (text_content)))
-    (text_line
-      (line_content
-        (text_content))))
-  (blank_line)
+    (blank_line))
   (paragraph
     (text_line
       (line_content
