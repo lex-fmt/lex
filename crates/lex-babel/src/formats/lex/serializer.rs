@@ -8,30 +8,27 @@ use lex_core::lex::ast::{
     Annotation, Definition, Document, List, ListItem, Paragraph, Session, Verbatim,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum MarkerType {
-    Bullet,
-    Numeric,
-    AlphaLower,
-    AlphaUpper,
-    RomanUpper,
-}
+use lex_core::lex::ast::elements::sequence_marker::DecorationStyle;
 
 struct ListContext {
     index: usize,
-    marker_type: MarkerType,
+    style: DecorationStyle,
+    upper_case: bool,
     marker_form: Option<Form>,
 }
 
-impl MarkerType {}
-
-fn format_marker_index(marker_type: MarkerType, index: usize) -> String {
-    match marker_type {
-        MarkerType::Bullet => "-".to_string(),
-        MarkerType::Numeric => index.to_string(),
-        MarkerType::AlphaLower => to_alpha_lower(index),
-        MarkerType::AlphaUpper => to_alpha_upper(index),
-        MarkerType::RomanUpper => to_roman_upper(index),
+fn format_marker_index(style: DecorationStyle, upper_case: bool, index: usize) -> String {
+    match style {
+        DecorationStyle::Plain => "-".to_string(),
+        DecorationStyle::Numerical => index.to_string(),
+        DecorationStyle::Alphabetical => {
+            if upper_case {
+                to_alpha_upper(index)
+            } else {
+                to_alpha_lower(index)
+            }
+        }
+        DecorationStyle::Roman => to_roman_upper(index),
     }
 }
 
@@ -152,7 +149,7 @@ impl LexSerializer {
                 // Current level: not yet incremented
                 ctx.index
             };
-            parts.push(format_marker_index(ctx.marker_type, idx));
+            parts.push(format_marker_index(ctx.style, ctx.upper_case, idx));
         }
         format!("{}.", parts.join("."))
     }
@@ -208,31 +205,23 @@ impl Visitor for LexSerializer {
     }
 
     fn visit_list(&mut self, list: &List) {
-        // Use the SequenceMarker to determine marker type
-        let marker_type = if let Some(marker) = &list.marker {
-            use lex_core::lex::ast::elements::DecorationStyle;
-            match marker.style {
-                DecorationStyle::Plain => MarkerType::Bullet,
-                DecorationStyle::Numerical => MarkerType::Numeric,
-                DecorationStyle::Alphabetical => {
-                    let text = marker.as_str();
-                    if text.chars().next().is_some_and(|c| c.is_uppercase()) {
-                        MarkerType::AlphaUpper
-                    } else {
-                        MarkerType::AlphaLower
-                    }
-                }
-                DecorationStyle::Roman => MarkerType::RomanUpper,
-            }
+        let (style, upper_case) = if let Some(marker) = &list.marker {
+            let upper = marker.style == DecorationStyle::Alphabetical
+                && marker
+                    .as_str()
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_uppercase());
+            (marker.style, upper)
         } else {
-            MarkerType::Bullet
+            (DecorationStyle::Plain, false)
         };
 
-        // Determine marker form (Standard vs Extended)
         let marker_form = list.marker.as_ref().map(|marker| marker.form);
 
         self.list_stack.push(ListContext {
-            marker_type,
+            style,
+            upper_case,
             marker_form,
             index: 1,
         });
@@ -257,12 +246,13 @@ impl Visitor for LexSerializer {
                     .list_stack
                     .last()
                     .expect("List stack empty in list item");
-                match context.marker_type {
-                    MarkerType::Bullet => self.rules.unordered_seq_marker.to_string(),
-                    MarkerType::Numeric => format!("{}.", context.index),
-                    MarkerType::AlphaLower => format!("{}.", to_alpha_lower(context.index)),
-                    MarkerType::AlphaUpper => format!("{}.", to_alpha_upper(context.index)),
-                    MarkerType::RomanUpper => format!("{}.", to_roman_upper(context.index)),
+                if context.style == DecorationStyle::Plain {
+                    self.rules.unordered_seq_marker.to_string()
+                } else {
+                    format!(
+                        "{}.",
+                        format_marker_index(context.style, context.upper_case, context.index)
+                    )
                 }
             }
         } else {

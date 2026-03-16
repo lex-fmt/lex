@@ -38,6 +38,9 @@ ALLOWLIST=(
     # annotation.lex has :: label :: fragments inside definition bodies that
     # look like annotations but aren't valid verbatim block structures
     "comms/specs/elements/annotation.lex"
+    # data.lex shows data marker syntax examples (:: label params? ::) that
+    # tree-sitter interprets as annotation nodes
+    "comms/specs/elements/data.lex"
     # 040-on-parsing.lex is a complex benchmark with structures beyond current
     # tree-sitter grammar coverage (deeply nested mixed elements)
     "comms/specs/benchmark/040-on-parsing.lex"

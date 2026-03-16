@@ -20,14 +20,14 @@
 //!
 //!     Classification follows this specific order (important for correctness):
 //!         1. Blank lines
-//!         2. Annotation start lines (follows annotation grammar)
+//!         2. Data marker lines (:: label params? ::, closed form)
 //!         3. Data lines (:: label params? without closing ::)
 //!         4. List lines starting with list marker AND ending with colon -> SubjectOrListItemLine
 //!         5. List lines (starting with list marker)
 //!         6. Subject lines (ending with colon)
 //!         7. Default to paragraph
 //!
-//!     This ordering ensures that more specific patterns (like annotation lines) are matched before
+//!     This ordering ensures that more specific patterns (like data marker lines) are matched before
 //!     more general ones (like subject lines).
 
 use crate::lex::annotation::analyze_annotation_header_tokens;
@@ -56,7 +56,7 @@ pub struct ParsedListMarker {
 ///
 /// Classification follows this specific order (important for correctness):
 /// 1. Blank lines
-/// 2. Annotation start lines (follows annotation grammar)
+/// 2. Data marker lines (:: label params? ::, closed form)
 /// 3. Data lines (:: label params? without closing ::)
 /// 4. List lines starting with list marker AND ending with colon -> SubjectOrListItemLine
 /// 5. List lines (starting with list marker)
@@ -72,9 +72,9 @@ pub fn classify_line_tokens(tokens: &[Token]) -> LineType {
         return LineType::BlankLine;
     }
 
-    // ANNOTATION_START_LINE: Follows annotation grammar with :: markers
-    if is_annotation_start_line(tokens) {
-        return LineType::AnnotationStartLine;
+    // DATA_MARKER_LINE: Data marker in closed form (:: label params? ::)
+    if is_data_marker_line(tokens) {
+        return LineType::DataMarkerLine;
     }
 
     // DATA_LINE: :: label params? without closing ::
@@ -117,13 +117,13 @@ fn is_blank_line(tokens: &[Token]) -> bool {
     })
 }
 
-/// Check if line is an annotation start line: follows annotation grammar
+/// Check if line is a data marker line in closed form: :: label params? ::
 /// Grammar: <lex-marker><space><label>(<space><parameters>)? <lex-marker> <content>?
 ///
 /// Uses quote-aware marker detection so that `::` inside quoted parameter
 /// values (e.g., `:: note msg=":: value" ::`) is not misidentified as a
 /// structural delimiter.
-fn is_annotation_start_line(tokens: &[Token]) -> bool {
+fn is_data_marker_line(tokens: &[Token]) -> bool {
     if tokens.is_empty() {
         return false;
     }
@@ -447,7 +447,7 @@ mod tests {
             Token::LexMarker,
             Token::BlankLine(Some("\n".to_string())),
         ];
-        assert_eq!(classify_line_tokens(&tokens), LineType::AnnotationStartLine);
+        assert_eq!(classify_line_tokens(&tokens), LineType::DataMarkerLine);
     }
 
     #[test]
@@ -607,7 +607,7 @@ mod tests {
             Token::LexMarker, // closing ::
             Token::BlankLine(Some("\n".to_string())),
         ];
-        assert_eq!(classify_line_tokens(&tokens), LineType::AnnotationStartLine);
+        assert_eq!(classify_line_tokens(&tokens), LineType::DataMarkerLine);
     }
 
     #[test]

@@ -65,8 +65,8 @@ pub enum LexSemanticTokenKind {
     ReferenceCitation,
     ReferenceFootnote,
     VerbatimSubject,
-    VerbatimLanguage,
-    VerbatimAttribute,
+    DataLabel,
+    DataParameter,
     VerbatimContent,
     InlineMarkerStrongStart,
     InlineMarkerStrongEnd,
@@ -118,8 +118,8 @@ impl LexSemanticTokenKind {
             LexSemanticTokenKind::ReferenceCitation => "ReferenceCitation",
             LexSemanticTokenKind::ReferenceFootnote => "ReferenceFootnote",
             LexSemanticTokenKind::VerbatimSubject => "VerbatimSubject",
-            LexSemanticTokenKind::VerbatimLanguage => "VerbatimLanguage",
-            LexSemanticTokenKind::VerbatimAttribute => "VerbatimAttribute",
+            LexSemanticTokenKind::DataLabel => "DataLabel",
+            LexSemanticTokenKind::DataParameter => "DataParameter",
             LexSemanticTokenKind::VerbatimContent => "VerbatimContent",
             LexSemanticTokenKind::InlineMarkerStrongStart => "InlineMarker_strong_start",
             LexSemanticTokenKind::InlineMarkerStrongEnd => "InlineMarker_strong_end",
@@ -155,8 +155,8 @@ pub const SEMANTIC_TOKEN_KINDS: &[LexSemanticTokenKind] = &[
     LexSemanticTokenKind::ReferenceCitation,
     LexSemanticTokenKind::ReferenceFootnote,
     LexSemanticTokenKind::VerbatimSubject,
-    LexSemanticTokenKind::VerbatimLanguage,
-    LexSemanticTokenKind::VerbatimAttribute,
+    LexSemanticTokenKind::DataLabel,
+    LexSemanticTokenKind::DataParameter,
     LexSemanticTokenKind::VerbatimContent,
     LexSemanticTokenKind::InlineMarkerStrongStart,
     LexSemanticTokenKind::InlineMarkerStrongEnd,
@@ -379,10 +379,10 @@ impl TokenCollector {
 
         self.push_range(
             &verbatim.closing_data.label.location,
-            LexSemanticTokenKind::VerbatimLanguage,
+            LexSemanticTokenKind::DataLabel,
         );
         for parameter in &verbatim.closing_data.parameters {
-            self.push_range(&parameter.location, LexSemanticTokenKind::VerbatimAttribute);
+            self.push_range(&parameter.location, LexSemanticTokenKind::DataParameter);
         }
 
         self.process_annotations(verbatim.annotations());
@@ -406,10 +406,10 @@ impl TokenCollector {
 
         self.push_range(
             &table.closing_data.label.location,
-            LexSemanticTokenKind::VerbatimLanguage,
+            LexSemanticTokenKind::DataLabel,
         );
         for parameter in &table.closing_data.parameters {
-            self.push_range(&parameter.location, LexSemanticTokenKind::VerbatimAttribute);
+            self.push_range(&parameter.location, LexSemanticTokenKind::DataParameter);
         }
 
         self.process_annotations(table.annotations());
@@ -776,11 +776,9 @@ mod tests {
         assert!(verbatim_subjects
             .iter()
             .any(|snippet| snippet.contains("CLI Example")));
-        assert!(
-            snippets(&tokens, LexSemanticTokenKind::VerbatimLanguage, source)
-                .iter()
-                .any(|snippet| snippet.contains("shell"))
-        );
+        assert!(snippets(&tokens, LexSemanticTokenKind::DataLabel, source)
+            .iter()
+            .any(|snippet| snippet.contains("shell")));
     }
 
     #[test]

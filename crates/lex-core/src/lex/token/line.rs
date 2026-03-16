@@ -23,7 +23,7 @@
 //!     These are the line tokens:
 //!
 //!         - BlankLine: empty or whitespace only
-//!         - AnnotationStartLine: a data node + lex marker
+//!         - DataMarkerLine: a data marker in closed form (:: label params? ::)
 //!         - DataLine: :: label params? (no closing :: marker)
 //!         - SubjectLine: Line ending with colon (could be subject/definition/session title)
 //!         - ListLine: Line starting with list marker (-, 1., a., I., etc.)
@@ -93,8 +93,9 @@ pub enum LineType {
     /// Blank line (empty or whitespace only)
     BlankLine,
 
-    /// Annotation start line: follows annotation grammar <lex-marker><space><label>(<space><parameters>)? <lex-marker> <content>?
-    AnnotationStartLine,
+    /// Data marker line: a data marker in closed form (:: label params? ::).
+    /// Used for both annotation headers and verbatim closing lines.
+    DataMarkerLine,
 
     /// Data line: :: label params? (no closing :: marker)
     DataLine,
@@ -135,7 +136,7 @@ impl fmt::Display for LineType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = match self {
             LineType::BlankLine => "BLANK_LINE",
-            LineType::AnnotationStartLine => "ANNOTATION_START_LINE",
+            LineType::DataMarkerLine => "DATA_MARKER_LINE",
             LineType::DataLine => "DATA_LINE",
             LineType::SubjectLine => "SUBJECT_LINE",
             LineType::ListLine => "LIST_LINE",
@@ -157,12 +158,12 @@ impl LineType {
     ///
     /// Examples:
     /// - BlankLine -> `<blank-line>`
-    /// - AnnotationStartLine -> `<annotation-start-line>`
+    /// - DataMarkerLine -> `<data-marker-line>`
     /// - SubjectLine -> `<subject-line>`
     pub fn to_grammar_string(&self) -> String {
         let name = match self {
             LineType::BlankLine => "blank-line",
-            LineType::AnnotationStartLine => "annotation-start-line",
+            LineType::DataMarkerLine => "data-marker-line",
             LineType::DataLine => "data-line",
             LineType::SubjectLine => "subject-line",
             LineType::ListLine => "list-line",
@@ -228,8 +229,8 @@ mod tests {
     fn test_token_type_to_grammar_string() {
         assert_eq!(LineType::BlankLine.to_grammar_string(), "<blank-line>");
         assert_eq!(
-            LineType::AnnotationStartLine.to_grammar_string(),
-            "<annotation-start-line>"
+            LineType::DataMarkerLine.to_grammar_string(),
+            "<data-marker-line>"
         );
         assert_eq!(LineType::SubjectLine.to_grammar_string(), "<subject-line>");
         assert_eq!(LineType::ListLine.to_grammar_string(), "<list-line>");

@@ -48,7 +48,7 @@ pub(in crate::lex::parsing::parser::builder) fn build_verbatim_block(
     }
 
     let closing_token = extract_line_token(&tokens[closing_idx])?;
-    if !matches!(closing_token.line_type, LineType::AnnotationStartLine) {
+    if !matches!(closing_token.line_type, LineType::DataMarkerLine) {
         return Err("Verbatim blocks must end with a closing annotation (:: label ::)".to_string());
     }
     let header_tokens = extract_annotation_header_tokens(closing_token)?;

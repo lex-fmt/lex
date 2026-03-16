@@ -25,7 +25,7 @@
 //!
 //! | Element    | Prec. Blank | Head                | Blank | Content | Tail          |
 //! |------------|-------------|---------------------|-------|---------|---------------|
-//! | Annotation | Optional    | AnnotationStartLine | Yes   | Yes     | dedent        |
+//! | Annotation | Optional    | DataMarkerLine | Yes   | Yes     | dedent        |
 //!
 //! Special Case: Short form annotations are one-liners without content or dedent.
 //!

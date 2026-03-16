@@ -29,7 +29,7 @@ impl DocumentStartMarker {
     /// - At position 0 if there are no document-level annotations
     /// - Immediately after the last document-level annotation otherwise
     ///
-    /// Document-level annotations are identified as AnnotationStartLine at indentation
+    /// Document-level annotations are identified as DataMarkerLine at indentation
     /// level 0 (not nested within any container).
     pub fn mark(line_tokens: Vec<LineToken>) -> Vec<LineToken> {
         if line_tokens.is_empty() {
@@ -58,7 +58,7 @@ impl DocumentStartMarker {
     ///
     /// This scans for the pattern of document-level annotations at the start.
     /// Document-level annotations are:
-    /// - AnnotationStartLine at root level
+    /// - DataMarkerLine at root level
     /// - Followed by their content (possibly including Indent/Dedent for nested content)
     /// - Possibly followed by BlankLines
     fn find_content_start(tokens: &[LineToken]) -> usize {
@@ -80,7 +80,7 @@ impl DocumentStartMarker {
                 }
 
                 // Annotation at root level - skip it and its content
-                LineType::AnnotationStartLine if indent_depth == 0 => {
+                LineType::DataMarkerLine if indent_depth == 0 => {
                     pos += 1;
                     // Continue to consume the annotation's content
                 }
@@ -97,7 +97,7 @@ impl DocumentStartMarker {
 
                     // If next non-blank is an annotation, skip all blanks
                     if lookahead < tokens.len()
-                        && tokens[lookahead].line_type == LineType::AnnotationStartLine
+                        && tokens[lookahead].line_type == LineType::DataMarkerLine
                     {
                         pos = lookahead;
                     } else {
@@ -206,9 +206,9 @@ mod tests {
 
     #[test]
     fn test_single_annotation_then_content() {
-        // Document: AnnotationStartLine, Indent, ParagraphLine, Dedent, ParagraphLine
+        // Document: DataMarkerLine, Indent, ParagraphLine, Dedent, ParagraphLine
         let tokens = vec![
-            make_line(LineType::AnnotationStartLine),
+            make_line(LineType::DataMarkerLine),
             make_indent(),
             make_line(LineType::ParagraphLine),
             make_dedent(),
@@ -219,7 +219,7 @@ mod tests {
 
         // DocumentStart should be after the annotation block (position 4)
         assert_eq!(result.len(), 6);
-        assert_eq!(result[0].line_type, LineType::AnnotationStartLine);
+        assert_eq!(result[0].line_type, LineType::DataMarkerLine);
         assert_eq!(result[1].line_type, LineType::Indent);
         assert_eq!(result[2].line_type, LineType::ParagraphLine);
         assert_eq!(result[3].line_type, LineType::Dedent);
@@ -231,12 +231,12 @@ mod tests {
     fn test_multiple_annotations() {
         // Document: Annotation1, BlankLine, Annotation2, content
         let tokens = vec![
-            make_line(LineType::AnnotationStartLine),
+            make_line(LineType::DataMarkerLine),
             make_indent(),
             make_line(LineType::ParagraphLine),
             make_dedent(),
             make_blank(),
-            make_line(LineType::AnnotationStartLine),
+            make_line(LineType::DataMarkerLine),
             make_indent(),
             make_line(LineType::ParagraphLine),
             make_dedent(),
@@ -253,9 +253,9 @@ mod tests {
 
     #[test]
     fn test_blank_lines_before_content() {
-        // Document: AnnotationStartLine, content, BlankLine, ParagraphLine
+        // Document: DataMarkerLine, content, BlankLine, ParagraphLine
         let tokens = vec![
-            make_line(LineType::AnnotationStartLine),
+            make_line(LineType::DataMarkerLine),
             make_indent(),
             make_line(LineType::ParagraphLine),
             make_dedent(),
@@ -277,7 +277,7 @@ mod tests {
     fn test_only_annotations() {
         // Document: only annotations, no content
         let tokens = vec![
-            make_line(LineType::AnnotationStartLine),
+            make_line(LineType::DataMarkerLine),
             make_indent(),
             make_line(LineType::ParagraphLine),
             make_dedent(),
