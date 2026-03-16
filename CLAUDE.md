@@ -49,12 +49,15 @@ lex-core → lex-config → lex-babel → lex-analysis → lex-lsp
 
 CI also builds lex-cli and lex-lsp binaries for 6 platforms.
 
-## Editor Clients (separate repos)
+## Related repos
 
-Editor UIs download pre-built lex-lsp binaries from this repo's GitHub releases:
+- [tree-sitter-lex](https://github.com/lex-fmt/tree-sitter-lex) — Tree-sitter grammar (syntax highlighting, injection, textobjects)
 - [lexed](https://github.com/lex-fmt/lexed) — Electron desktop editor
 - [nvim](https://github.com/lex-fmt/nvim) — Neovim plugin
 - [vscode](https://github.com/lex-fmt/vscode) — VSCode extension
+
+Editor UIs download pre-built lex-lsp binaries from this repo's releases,
+and tree-sitter artifacts from lex-fmt/tree-sitter-lex releases.
 
 For local development, set `LEX_LSP_PATH` to point editors at a local build:
 ```sh
