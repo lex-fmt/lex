@@ -44,7 +44,7 @@
 //!     a few consequential marks in lines (blank, data, subject, list) having them
 //!     denormalized is required to have parsing simpler.
 //!
-//!     The definitive set is the LineType enum (blank, annotation start, data, subject,
+//!     The definitive set is the LineType enum (blank, data marker, data, subject,
 //!     list, subject-or-list-item, paragraph, dialog, indent, dedent), and containers are
 //!     a separate structural node, not a line token.
 //!
@@ -84,7 +84,7 @@ pub(super) static LIST_ITEM_REGEX: Lazy<Regex> =
 /// # Pattern Structure
 ///
 /// - Named capture groups (e.g., `(?P<start>...)`) allow extracting specific parts
-/// - Token types in angle brackets (e.g., `<annotation-start-line>`) match grammar symbols
+/// - Token types in angle brackets (e.g., `<data-marker-line>`) match grammar symbols
 /// - `<container>` represents a nested indented block
 /// - Quantifiers like `+` (one or more) and `{2,}` (two or more) enforce grammar rules
 pub(super) const GRAMMAR_PATTERNS: &[(&str, &str)] = &[
@@ -107,13 +107,13 @@ pub(super) const GRAMMAR_PATTERNS: &[(&str, &str)] = &[
     // Document start marker: synthetic boundary between metadata and content
     // Only matched when there's no document title (fallback)
     ("document_start", r"^<document-start-line>"),
-    // Annotation (multi-line): <annotation-start-line><container>
+    // Annotation (multi-line): <data-marker-line><container>
     (
         "annotation_block",
-        r"^(?P<start><annotation-start-line>)(?P<content><container>)",
+        r"^(?P<start><data-marker-line>)(?P<content><container>)",
     ),
-    // Annotation (single-line): <annotation-start-line><content>
-    ("annotation_single", r"^(?P<start><annotation-start-line>)"),
+    // Annotation (single-line): <data-marker-line><content>
+    ("annotation_single", r"^(?P<start><data-marker-line>)"),
     // List without preceding blank line (matches anywhere — paragraph lookaheads yield)
     (
         "list_no_blank",

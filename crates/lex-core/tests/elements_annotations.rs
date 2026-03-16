@@ -334,6 +334,6 @@ fn test_annotations_overview_document() {
                 });
         })
         .item(1, |item| {
-            item.assert_session().label("Syntax Forms:");
+            item.assert_session().label("Syntax Forms");
         });
 }
