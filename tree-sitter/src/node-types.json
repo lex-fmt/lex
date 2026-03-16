@@ -263,6 +263,22 @@
     }
   },
   {
+    "type": "document_subtitle",
+    "named": true,
+    "fields": {
+      "subtitle": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "line_content",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "document_title",
     "named": true,
     "fields": {
@@ -283,6 +299,10 @@
       "types": [
         {
           "type": "blank_line",
+          "named": true
+        },
+        {
+          "type": "document_subtitle",
           "named": true
         }
       ]

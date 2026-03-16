@@ -115,13 +115,32 @@ module.exports = grammar({
     // ===== Document Title =====
     // A single line followed by blank line(s), only at document start.
     // Dynamic precedence makes this win over the repeat1(_block) alternative.
+    // Optionally includes a subtitle: title line ending with colon + second line.
+    // Subtitle node used inside document_title. The lex-core parser
+    // further constrains subtitles to only appear when the title line
+    // ends with a colon. Tree-sitter emits the CST node and the LSP
+    // layer validates semantics.
+    document_subtitle: ($) =>
+      field("subtitle", alias($._session_title, $.line_content)),
+
     document_title: ($) =>
       prec.dynamic(
         2,
-        seq(
-          field("title", alias($._session_title, $.line_content)),
-          $._newline,
-          repeat1($.blank_line),
+        choice(
+          // Title with subtitle: title line + subtitle line + blank lines
+          seq(
+            field("title", alias($._session_title, $.line_content)),
+            $._newline,
+            $.document_subtitle,
+            $._newline,
+            repeat1($.blank_line),
+          ),
+          // Plain title: single line + blank lines
+          seq(
+            field("title", alias($._session_title, $.line_content)),
+            $._newline,
+            repeat1($.blank_line),
+          ),
         ),
       ),
 

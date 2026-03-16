@@ -18,6 +18,10 @@
 (document_title
   title: (line_content) @markup.heading)
 
+; Document subtitle (LSP: DocumentSubtitle)
+(document_subtitle
+  subtitle: (line_content) @markup.heading.subtitle)
+
 ; Document title sequence marker (e.g., numbered title)
 (document_title
   title: (line_content
