@@ -40,11 +40,9 @@ comms/specs/elements/paragraph.docs/paragraph-05-flat-mixed-content.lex
 # Lex-core recognizes "1. Title" followed by blank + indented content as a session.
 # Tree-sitter sees the "1." prefix as a list marker. This is a known trifecta
 # ambiguity that requires semantic lookahead (blank line + indent) to resolve.
-comms/specs/elements/session.docs/session-07-paragraphs-sessions-flat-multiple.lex
 comms/specs/elements/session.docs/session-08-paragraphs-sessions-nested-multiple.lex
 comms/specs/elements/session.docs/session-10-sandwhich.lex
 comms/specs/elements/session.docs/session-13-blankline-issue.lex
-comms/specs/elements/session.docs/session-14-numbered-variations.lex
 comms/specs/elements/definition.docs/definition-90-document-simple.lex
 comms/specs/elements/definition.docs/definition-100-document-nested-sessions.lex
 

@@ -341,6 +341,14 @@ static bool peek_next_line_has_list_marker(TSLexer *lexer, int expected_indent) 
 
     // Deep lookahead: scan through lines until we find one at expected_indent
     // or at a lesser indent (meaning we've left the list context).
+    //
+    // Key rule: blank lines are only skipped inside nested (indented) content.
+    // A blank line at the top level (between items at expected_indent)
+    // terminates the list — the lex spec says "no blank lines BETWEEN list
+    // items" and "blank line terminates previous list". This prevents the
+    // lookahead from crossing session boundaries (blank + indent + content
+    // + blank pattern) and mistaking numbered sessions for list items.
+    bool in_nested = false;
     for (int safety = 0; safety < 1000; safety++) {
         // Consume newline
         if (lexer->lookahead != '\n') return false;
@@ -357,8 +365,15 @@ static bool peek_next_line_has_list_marker(TSLexer *lexer, int expected_indent) 
             lexer->advance(lexer, false);
         }
 
-        // Blank line: skip it (could be between nested blocks or between items)
-        if (lexer->lookahead == '\n') continue;
+        // Blank line
+        if (lexer->lookahead == '\n') {
+            if (!in_nested) {
+                // Blank line at top level terminates the list
+                return false;
+            }
+            // Inside nested content, blank lines can separate nested blocks
+            continue;
+        }
         if (lexer->eof(lexer)) return false;
 
         // Line at expected indent: check for list marker
@@ -370,6 +385,7 @@ static bool peek_next_line_has_list_marker(TSLexer *lexer, int expected_indent) 
         if (next_indent < expected_indent) return false;
 
         // Line at greater indent (nested content): skip line and continue
+        in_nested = true;
         while (lexer->lookahead != '\n' && !lexer->eof(lexer)) {
             lexer->advance(lexer, false);
         }
