@@ -136,8 +136,10 @@ function detectWallCol(verbatimNode) {
 
 /**
  * Strip wall indentation from a raw text line.
- * Tree-sitter reports continuation lines from column 0 (absolute),
+ * Tree-sitter reports continuation lines from character 0 (absolute),
  * while lex-core stores content relative to the wall.
+ * scol is character-based (not column-based), so we strip exactly
+ * wallCol characters of leading whitespace.
  */
 function stripWall(text, wallCol, lineScol) {
   const col = parseInt(lineScol || "0", 10);
@@ -145,17 +147,10 @@ function stripWall(text, wallCol, lineScol) {
     // Line starts at or past the wall — text is already wall-relative
     return text;
   }
-  // Line starts before the wall — strip leading whitespace up to wallCol
-  let stripped = 0;
+  // Strip exactly wallCol characters of leading whitespace
   let i = 0;
-  while (i < text.length && stripped < wallCol) {
-    if (text[i] === "\t") {
-      stripped += 4 - (stripped % 4);
-    } else if (text[i] === " ") {
-      stripped++;
-    } else {
-      break;
-    }
+  while (i < text.length && i < wallCol) {
+    if (text[i] !== " " && text[i] !== "\t") break;
     i++;
   }
   return text.substring(i);
