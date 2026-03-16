@@ -7,23 +7,6 @@
 # Format: relative path from repo root, followed by # comment with reason.
 # Empty lines and lines starting with # are ignored.
 
-# --- Annotation parameters ---
-# Tree-sitter includes parameters in annotation label text ("warning severity=high"),
-# lex-core separates label from parameters ("warning"). Structural difference in how
-# annotations are represented in CST vs AST.
-comms/specs/elements/annotation.docs/annotation-02-flat-marker-with-params.lex
-comms/specs/elements/annotation.docs/annotation-06-flat-block-multi-paragraph.lex
-comms/specs/elements/annotation.docs/annotation-07-flat-block-with-list.lex
-comms/specs/elements/annotation.docs/annotation-08-nested-with-list-and-paragraph.lex
-comms/specs/elements/annotation.docs/annotation-10-nested-complex.lex
-comms/specs/elements/annotation.docs/annotation-11-quoted-parameter.lex
-
-# --- Annotation inline text ---
-# Lex-core includes inline text after annotation label as a paragraph child;
-# tree-sitter handles annotation_inline_text differently.
-comms/specs/elements/annotation.docs/annotation-03-flat-inline-text.lex
-comms/specs/elements/annotation.docs/annotation-04-flat-inline-with-params.lex
-
 # --- Annotation attachment ---
 # Lex-core attaches annotations to adjacent elements (post-parse assembly stage).
 # Tree-sitter emits annotations as standalone CST nodes. This is a fundamental
@@ -41,7 +24,6 @@ comms/specs/elements/annotation.docs/annotation-29-attachment-example-k-session-
 # CST doesn't have subtitle support — emits the colon as part of the title text.
 comms/specs/elements/document.docs/document-07-title-with-subtitle.lex
 comms/specs/elements/document.docs/document-08-subtitle-with-inlines.lex
-comms/specs/elements/document.docs/document-09-subtitle-with-annotations.lex
 comms/specs/elements/document.docs/document-12-subtitle-then-session.lex
 
 # --- DocumentTitle vs Paragraph for single-line documents ---
@@ -51,7 +33,6 @@ comms/specs/elements/document.docs/document-12-subtitle-then-session.lex
 # sees them as paragraphs (no blank line after) or titles (with blank).
 comms/specs/elements/document.docs/document-02-title-no-blank.lex
 comms/specs/elements/document.docs/document-03-title-multiline.lex
-comms/specs/elements/document.docs/document-04-title-with-annotations.lex
 comms/specs/elements/paragraph.docs/paragraph-01-flat-oneline.lex
 comms/specs/elements/paragraph.docs/paragraph-03-flat-special-chars.lex
 comms/specs/elements/paragraph.docs/paragraph-04-flat-numbers.lex
@@ -142,34 +123,3 @@ comms/specs/elements/paragraph.docs/paragraph-09-dialog.lex
 
 # --- Verbatim document-level (numbered session issue) ---
 comms/specs/elements/verbatim.docs/verbatim-12-document-simple.lex
-
-# --- Full spec files ---
-# Large spec documents with multiple divergence categories combined.
-# These contain examples of all the issues listed above.
-comms/specs/elements/annotation.lex
-comms/specs/elements/data.lex
-comms/specs/elements/definition.lex
-comms/specs/elements/document.lex
-comms/specs/elements/escaping.lex
-comms/specs/elements/footnotes.lex
-comms/specs/elements/inlines.lex
-comms/specs/elements/label.lex
-comms/specs/elements/list.lex
-comms/specs/elements/paragraph.lex
-comms/specs/elements/parameter.lex
-comms/specs/elements/session.lex
-comms/specs/elements/table.lex
-comms/specs/elements/verbatim.lex
-comms/specs/elements/XXX-document-simple.lex
-comms/specs/elements/XXX-document-tricky.lex
-comms/specs/elements/inlines.docs/specs/formatting/formatting.lex
-comms/specs/elements/inlines.docs/specs/formatting/inlines-general.lex
-comms/specs/elements/inlines.docs/specs/references/citations.lex
-comms/specs/elements/inlines.docs/specs/references/references-general.lex
-comms/specs/elements/data.docs/data-01-simple.lex
-comms/specs/elements/data.docs/data-02-with-params.lex
-comms/specs/elements/data.docs/data-03-with-quoted-params.lex
-comms/specs/elements/data.docs/data-04-standalone.lex
-comms/specs/elements/label.docs/label-01-simple-valid.lex
-comms/specs/elements/label.docs/label-02-complex-valid.lex
-comms/specs/elements/label.docs/label-03-invalid-start.lex
