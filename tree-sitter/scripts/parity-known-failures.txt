@@ -1,7 +1,8 @@
-# Parity check allowlist: files with known divergences between tree-sitter and lex-core.
+# Parity known failures: files where tree-sitter and lex-core diverge.
 #
-# Each entry documents WHY the divergence exists. When fixing a divergence,
-# remove the entry — the parity check will then enforce the fix.
+# Every entry here is a bug or missing feature — not an acceptable difference.
+# Each documents WHY the divergence exists so it can be fixed. When a
+# divergence is fixed, remove the entry — the parity check enforces it.
 #
 # Format: relative path from repo root, followed by # comment with reason.
 # Empty lines and lines starting with # are ignored.

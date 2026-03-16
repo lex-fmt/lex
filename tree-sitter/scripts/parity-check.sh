@@ -14,7 +14,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_DIR="$(cd "$TS_DIR/.." && pwd)"
 PRINTER="$SCRIPT_DIR/parity-print.js"
-ALLOWLIST="$SCRIPT_DIR/parity-allowlist.txt"
+ALLOWLIST="$SCRIPT_DIR/parity-known-failures.txt"
 
 VERBOSE=false
 SINGLE_FILE=""
@@ -26,26 +26,26 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Load allowlist (one path per line, # comments and blanks ignored)
-ALLOWED_LIST=""
+# Load known failures list (one path per line, # comments and blanks ignored)
+KNOWN_FAILURES=""
 if [[ -f "$ALLOWLIST" ]]; then
     while IFS= read -r line; do
         line="${line%%#*}"
         line="$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
         [[ -z "$line" ]] && continue
-        ALLOWED_LIST="${ALLOWED_LIST}|${line}"
+        KNOWN_FAILURES="${KNOWN_FAILURES}|${line}"
     done < "$ALLOWLIST"
 fi
 
-is_allowed() {
+is_known_failure() {
     local path="$1"
-    echo "$ALLOWED_LIST" | grep -qF "|${path}"
+    echo "$KNOWN_FAILURES" | grep -qF "|${path}"
 }
 
 PASS=0
 FAIL=0
 SKIP=0
-EXPECTED=0
+KNOWN=0
 ERRORS=""
 
 check_file() {
@@ -76,9 +76,9 @@ check_file() {
     if diff <(echo "$lex_output") <(echo "$ts_output") > /dev/null 2>&1; then
         printf "  %-60s \033[32mPASS\033[0m\n" "$rel_path"
         PASS=$((PASS + 1))
-    elif is_allowed "$rel_path"; then
-        printf "  %-60s \033[33mEXPECTED\033[0m\n" "$rel_path"
-        EXPECTED=$((EXPECTED + 1))
+    elif is_known_failure "$rel_path"; then
+        printf "  %-60s \033[33mKNOWN\033[0m\n" "$rel_path"
+        KNOWN=$((KNOWN + 1))
     else
         printf "  %-60s \033[31mFAIL\033[0m\n" "$rel_path"
         FAIL=$((FAIL + 1))
@@ -105,7 +105,7 @@ fi
 
 echo ""
 echo "────────────"
-printf "Results: \033[32m%d passed\033[0m, \033[31m%d failed\033[0m, \033[33m%d expected\033[0m, %d skipped\n" "$PASS" "$FAIL" "$EXPECTED" "$SKIP"
+printf "Results: \033[32m%d passed\033[0m, \033[31m%d failed\033[0m, \033[33m%d known failures\033[0m, %d skipped\n" "$PASS" "$FAIL" "$KNOWN" "$SKIP"
 
 if [[ $FAIL -gt 0 ]]; then
     printf "\nUnexpected failures:%b\n" "$ERRORS"
