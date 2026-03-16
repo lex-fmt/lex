@@ -61,6 +61,7 @@ pub const AVAILABLE_TRANSFORMS: &[&str] = &[
     "ast-nodemap",
     "semantic-tokens",
     "semantic-tokens-json",
+    "parity",
 ];
 
 /// Execute a named transform on a source file with optional extra parameters
@@ -220,7 +221,147 @@ pub fn execute_transform(
                     .map_err(|e| format!("JSON serialization failed: {e}"))?,
             )
         }
+        "parity" => {
+            let doc = loader
+                .parse()
+                .map_err(|e| format!("Transform failed: {e}"))?;
+            Ok(ast_to_parity(&doc))
+        }
         _ => Err(format!("Unknown transform: {transform_name}")),
+    }
+}
+
+/// Produce a plain-text block skeleton for parity checking against tree-sitter.
+///
+/// The format is designed so that both the reference parser (lex-core) and the
+/// tree-sitter parser can produce identical output with minimal transformation.
+/// The reference side (this function) adapts to tree-sitter's natural structure:
+/// - Individual BlankLine entries (not collapsed BlankLineGroup)
+/// - Verbatim groups emitted as separate subject/content pairs
+/// - No inline markup, locations, parameters, or closing labels
+fn ast_to_parity(doc: &lex_core::lex::parsing::Document) -> String {
+    let mut out = String::new();
+    parity_line(&mut out, 0, "Document");
+    if let Some(title) = &doc.title {
+        parity_line(
+            &mut out,
+            1,
+            &format!("DocumentTitle \"{}\"", title.as_str()),
+        );
+        if let Some(sub) = title.subtitle_str() {
+            parity_line(&mut out, 2, &format!("DocumentSubtitle \"{sub}\""));
+        }
+    }
+    for item in doc.root.children.iter() {
+        parity_content_item(&mut out, 1, item);
+    }
+    out
+}
+
+fn parity_line(out: &mut String, depth: usize, text: &str) {
+    for _ in 0..depth {
+        out.push_str("  ");
+    }
+    out.push_str(text);
+    out.push('\n');
+}
+
+fn parity_content_item(out: &mut String, depth: usize, item: &lex_core::lex::ast::ContentItem) {
+    use lex_core::lex::ast::ContentItem;
+
+    match item {
+        ContentItem::Session(s) => {
+            parity_line(out, depth, &format!("Session \"{}\"", s.title.as_string()));
+            for child in s.children.iter() {
+                parity_content_item(out, depth + 1, child);
+            }
+        }
+        ContentItem::Paragraph(p) => {
+            parity_line(out, depth, "Paragraph");
+            for line in &p.lines {
+                parity_content_item(out, depth + 1, line);
+            }
+        }
+        ContentItem::TextLine(tl) => {
+            parity_line(out, depth, &format!("\"{}\"", tl.text()));
+        }
+        ContentItem::Definition(d) => {
+            parity_line(
+                out,
+                depth,
+                &format!("Definition \"{}\"", d.subject.as_string()),
+            );
+            for child in d.children.iter() {
+                parity_content_item(out, depth + 1, child);
+            }
+        }
+        ContentItem::List(l) => {
+            parity_line(out, depth, "List");
+            for item in l.items.iter() {
+                parity_content_item(out, depth + 1, item);
+            }
+        }
+        ContentItem::ListItem(li) => {
+            parity_line(
+                out,
+                depth,
+                &format!("ListItem \"{}\"", li.marker.as_string()),
+            );
+            // First text line (inline with marker)
+            if !li.text.is_empty() {
+                let text = li.text[0].as_string().trim_end_matches('\n');
+                parity_line(out, depth + 1, &format!("\"{text}\""));
+            }
+            for child in li.children.iter() {
+                parity_content_item(out, depth + 1, child);
+            }
+        }
+        ContentItem::VerbatimBlock(fb) => {
+            // Emit each group as a separate subject/content sequence
+            for group in fb.group() {
+                parity_line(
+                    out,
+                    depth,
+                    &format!("VerbatimBlock \"{}\"", group.subject.as_string()),
+                );
+                for child in group.children.iter() {
+                    parity_content_item(out, depth + 1, child);
+                }
+            }
+        }
+        ContentItem::VerbatimLine(fl) => {
+            parity_line(out, depth, &format!("\"{}\"", fl.content.as_string()));
+        }
+        ContentItem::Table(t) => {
+            // Tree-sitter sees tables as VerbatimBlock — emit as VerbatimBlock for parity
+            parity_line(
+                out,
+                depth,
+                &format!("VerbatimBlock \"{}\"", t.subject.as_string()),
+            );
+            // Table rows become text lines from tree-sitter's perspective
+            for row in t.header_rows.iter().chain(t.body_rows.iter()) {
+                let cells: Vec<&str> = row.cells.iter().map(|c| c.text()).collect();
+                let line = format!("| {} |", cells.join(" | "));
+                parity_line(out, depth + 1, &format!("\"{line}\""));
+            }
+        }
+        ContentItem::Annotation(a) => {
+            parity_line(
+                out,
+                depth,
+                &format!("Annotation \"{}\"", a.data.label.value),
+            );
+            for child in a.children.iter() {
+                parity_content_item(out, depth + 1, child);
+            }
+        }
+        ContentItem::BlankLineGroup(blg) => {
+            // Emit individual BlankLine entries to match tree-sitter's natural output
+            for _ in 0..blg.count {
+                parity_line(out, depth, "BlankLine");
+            }
+        }
     }
 }
 

@@ -85,6 +85,7 @@ fn build_cli() -> Command {
                     - ast-treeviz:  AST as tree visualization (default)\n  \
                     - ast-nodemap:  AST as character/color map\n  \
                     - ast-json:     AST as JSON\n  \
+                    - parity:       Block skeleton for tree-sitter parity checking\n  \
                     - token-*:      Token stream representations\n  \
                     - ir-json:      Intermediate representation\n\n\
                     Examples:\n  \
