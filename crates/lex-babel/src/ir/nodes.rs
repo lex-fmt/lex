@@ -147,6 +147,10 @@ pub enum TableCellAlignment {
 }
 
 /// Represents inline content, such as text, bold, italics, etc.
+///
+/// All variants represent semantic content — structural concerns like list
+/// markers or session numbering are expressed through container types (e.g.
+/// `List.style`, `List.form`) and are never embedded in inline content.
 #[derive(Debug, Clone, PartialEq)]
 pub enum InlineContent {
     Text(String),
@@ -162,7 +166,6 @@ pub enum InlineContent {
         text: String,
         href: String,
     },
-    Marker(String),
     Image(Image),
 }
 

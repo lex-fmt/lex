@@ -564,13 +564,6 @@ fn add_inline_to_node(parent: &Handle, inline: &InlineContent) -> Result<(), For
             parent.children.borrow_mut().push(anchor);
         }
 
-        InlineContent::Marker(marker) => {
-            let span = create_element("span", vec![("class", "seq_marker")]);
-            let text = create_text(marker);
-            span.children.borrow_mut().push(text);
-            parent.children.borrow_mut().push(span);
-        }
-
         InlineContent::Image(image) => {
             let mut attrs = vec![("src", image.src.as_str()), ("alt", image.alt.as_str())];
             if let Some(title) = &image.title {
@@ -735,7 +728,6 @@ fn ir_inline_to_text(content: &[InlineContent]) -> String {
             InlineContent::Code(c) | InlineContent::Math(c) => c.clone(),
             InlineContent::Reference(r) => r.clone(),
             InlineContent::Link { text, .. } => text.clone(),
-            InlineContent::Marker(m) => m.clone(),
             InlineContent::Image(img) => img.alt.clone(),
         })
         .collect()

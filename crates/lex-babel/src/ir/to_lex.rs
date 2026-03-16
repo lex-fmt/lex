@@ -87,7 +87,8 @@ fn to_lex_session(heading: &Heading, level: usize) -> LexContentItem {
     LexContentItem::Session(LexSession::new(title, session_children))
 }
 
-/// Converts an IR Table to a Lex Annotation (nested).
+/// Converts an IR Table to a Lex VerbatimBlock via the verbatim registry,
+/// falling back to a nested Annotation structure if the registry has no handler.
 fn to_lex_table(table: &Table, level: usize) -> LexContentItem {
     let registry = crate::common::verbatim::VerbatimRegistry::default_with_standard();
     let node = DocNode::Table(table.clone());
@@ -214,9 +215,98 @@ fn to_lex_paragraph(para: &Paragraph) -> LexContentItem {
 }
 
 /// Converts an IR List to a Lex List.
+///
+/// Derives marker text for each item from the List's style and the item's position.
 fn to_lex_list(list: &List) -> LexContentItem {
-    let items = list.items.iter().map(to_lex_list_item_struct).collect();
+    let items: Vec<LexListItem> = list
+        .items
+        .iter()
+        .enumerate()
+        .map(|(i, item)| to_lex_list_item_with_style(item, &list.style, i + 1))
+        .collect();
     LexContentItem::List(LexList::new(items))
+}
+
+/// Converts an IR ListItem to a Lex ListItem with a marker derived from style and position.
+fn to_lex_list_item_with_style(
+    item: &ListItem,
+    style: &super::nodes::ListStyle,
+    index: usize,
+) -> LexListItem {
+    let marker = format_marker_for_style(style, index);
+    let text = inline_content_to_text(&item.content);
+
+    let mut child_items = Vec::new();
+    for child in &item.children {
+        child_items.extend(to_lex_content_items(child, 1));
+    }
+
+    let children = to_content_elements(child_items);
+    LexListItem::with_content(marker, text, children)
+}
+
+/// Formats a marker string from a ListStyle and 1-based index.
+fn format_marker_for_style(style: &super::nodes::ListStyle, index: usize) -> String {
+    use super::nodes::ListStyle;
+    match style {
+        ListStyle::Bullet => "-".to_string(),
+        ListStyle::Numeric => format!("{index}."),
+        ListStyle::AlphaLower => {
+            let c = if (1..=26).contains(&index) {
+                char::from_u32((index as u32) + 96).unwrap()
+            } else {
+                return format!("{index}.");
+            };
+            format!("{c}.")
+        }
+        ListStyle::AlphaUpper => {
+            let c = if (1..=26).contains(&index) {
+                char::from_u32((index as u32) + 64).unwrap()
+            } else {
+                return format!("{index}.");
+            };
+            format!("{c}.")
+        }
+        ListStyle::RomanLower => {
+            let roman = to_roman_lower(index);
+            format!("{roman}.")
+        }
+        ListStyle::RomanUpper => {
+            let roman = to_roman_upper(index);
+            format!("{roman}.")
+        }
+    }
+}
+
+fn to_roman_lower(n: usize) -> String {
+    to_roman_upper(n).to_lowercase()
+}
+
+fn to_roman_upper(n: usize) -> String {
+    match n {
+        1 => "I",
+        2 => "II",
+        3 => "III",
+        4 => "IV",
+        5 => "V",
+        6 => "VI",
+        7 => "VII",
+        8 => "VIII",
+        9 => "IX",
+        10 => "X",
+        11 => "XI",
+        12 => "XII",
+        13 => "XIII",
+        14 => "XIV",
+        15 => "XV",
+        16 => "XVI",
+        17 => "XVII",
+        18 => "XVIII",
+        19 => "XIX",
+        20 => "XX",
+        _ => return n.to_string(),
+    }
+    .to_string()
 }
 
 /// Converts an IR ListItem to a ContentItem::ListItem.
@@ -225,22 +315,13 @@ fn to_lex_list_item(item: &ListItem) -> LexContentItem {
 }
 
 /// Converts an IR ListItem to a Lex ListItem struct.
+///
+/// The marker is derived from the parent List's style/form and the item's
+/// position, not from the item's inline content.
 fn to_lex_list_item_struct(item: &ListItem) -> LexListItem {
-    // Extract marker from inline content if present
-    let marker = item
-        .content
-        .iter()
-        .find_map(|ic| {
-            if let InlineContent::Marker(m) = ic {
-                Some(m.clone())
-            } else {
-                None
-            }
-        })
-        .unwrap_or_else(|| "-".to_string());
-
-    // Build text from non-marker inline content
-    let text = inline_content_to_text_skip_marker(&item.content);
+    // Default marker — callers should use to_lex_list which provides proper markers
+    let marker = "-".to_string();
+    let text = inline_content_to_text(&item.content);
 
     let mut child_items = Vec::new();
     for child in &item.children {
@@ -312,53 +393,6 @@ fn to_lex_annotation(ann: &Annotation, level: usize) -> LexContentItem {
     LexContentItem::Annotation(LexAnnotation::new(label, parameters, children))
 }
 
-/// Converts IR inline content to plain text, skipping Marker elements and
-/// the whitespace immediately following them.
-fn inline_content_to_text_skip_marker(content: &[InlineContent]) -> String {
-    let mut skip_next_space = false;
-    let mut parts = Vec::new();
-    for inline in content {
-        if matches!(inline, InlineContent::Marker(_)) {
-            skip_next_space = true;
-            continue;
-        }
-        if skip_next_space {
-            skip_next_space = false;
-            if let InlineContent::Text(t) = inline {
-                if t == " " {
-                    continue;
-                }
-            }
-        }
-        parts.push(inline_to_text(inline));
-    }
-    parts.join("")
-}
-
-fn inline_to_text(inline: &InlineContent) -> String {
-    match inline {
-        InlineContent::Text(text) => text.clone(),
-        InlineContent::Bold(children) => {
-            format!("*{}*", inline_content_to_text(children))
-        }
-        InlineContent::Italic(children) => {
-            format!("_{}_", inline_content_to_text(children))
-        }
-        InlineContent::Code(code) => format!("`{code}`"),
-        InlineContent::Math(math) => format!("#{math}#"),
-        InlineContent::Reference(ref_text) => format!("[{ref_text}]"),
-        InlineContent::Link { text, href } => format!("{text} [{href}]"),
-        InlineContent::Marker(marker) => marker.clone(),
-        InlineContent::Image(image) => {
-            let mut text = format!("![{}]({})", image.alt, image.src);
-            if let Some(title) = &image.title {
-                text.push_str(&format!(" \"{title}\""));
-            }
-            text
-        }
-    }
-}
-
 /// Converts IR inline content to plain text string.
 ///
 /// This is a lossy conversion that flattens all inline formatting.
@@ -377,7 +411,6 @@ fn inline_content_to_text(content: &[InlineContent]) -> String {
             InlineContent::Math(math) => format!("#{math}#"),
             InlineContent::Reference(ref_text) => format!("[{ref_text}]"),
             InlineContent::Link { text, href } => format!("{text} [{href}]"),
-            InlineContent::Marker(marker) => marker.clone(),
             InlineContent::Image(image) => {
                 let mut text = format!("![{}]({})", image.alt, image.src);
                 if let Some(title) = &image.title {

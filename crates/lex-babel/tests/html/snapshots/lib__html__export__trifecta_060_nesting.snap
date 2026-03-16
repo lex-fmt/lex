@@ -16,24 +16,24 @@ expression: snapshot_without_styles(&html)
 </head>
 <body>
 <div class="lex-document">
-<p class="lex-paragraph">This document tests the combination of all three core elements (sessions, paragraphs, lists) with various levels of nesting. {{paragraph}}</p><section class="lex-session lex-session-2"><h2><span class="seq_marker">1.</span> Root Session {{session-title}}</h2><div class="lex-content"><p class="lex-paragraph">This root session contains various nested elements. {{paragraph}}</p><section class="lex-session lex-session-3"><h3><span class="seq_marker">1.1.</span> Sub-session with Paragraph {{session-title}}</h3><div class="lex-content"><p class="lex-paragraph">This sub-session starts with a paragraph. {{paragraph}}</p><ul class="lex-list"><li class="lex-list-item"><span class="seq_marker">-</span> Then has a list {{list-item}}
-</li><li class="lex-list-item"><span class="seq_marker">-</span> With multiple items {{list-item}}
-</li></ul></div></section><section class="lex-session lex-session-3"><h3><span class="seq_marker">1.2.</span> Sub-session with List {{session-title}}</h3><div class="lex-content"><ul class="lex-list"><li class="lex-list-item"><span class="seq_marker">-</span> Starts with a list {{list-item}}
-</li><li class="lex-list-item"><span class="seq_marker">-</span> Has multiple items {{list-item}}
-</li></ul><p class="lex-paragraph">Then has a paragraph. {{paragraph}}</p><section class="lex-session lex-session-4"><h4><span class="seq_marker">1.2.1.</span> Deeply Nested Session {{session-title}}</h4><div class="lex-content"><p class="lex-paragraph">This is a deeply nested session. {{paragraph}}</p><ul class="lex-list"><li class="lex-list-item"><span class="seq_marker">-</span> With its own list {{list-item}}
-</li><li class="lex-list-item"><span class="seq_marker">-</span> And multiple items {{list-item}}
-</li></ul><ul class="lex-list"><li class="lex-list-item"><span class="seq_marker">-</span> Another list follows {{list-item}}
-</li><li class="lex-list-item"><span class="seq_marker">-</span> In the same session {{list-item}}
-</li></ul></div></section></div></section><p class="lex-paragraph">Back to the root session level. {{paragraph}}</p><ul class="lex-list"><li class="lex-list-item"><span class="seq_marker">-</span> Root session can also have lists {{list-item}}
-</li><li class="lex-list-item"><span class="seq_marker">-</span> At its own level {{list-item}}
-</li></ul></div></section><section class="lex-session lex-session-2"><h2><span class="seq_marker">2.</span> Another Root Session {{session-title}}</h2><div class="lex-content"><p class="lex-paragraph">This session demonstrates different nesting patterns. {{paragraph}}</p><section class="lex-session lex-session-3"><h3><span class="seq_marker">2.1.</span> Mixed Content Sub-session {{session-title}}</h3><div class="lex-content"><ul class="lex-list"><li class="lex-list-item"><span class="seq_marker">-</span> Starts with list {{list-item}}
-</li><li class="lex-list-item"><span class="seq_marker">-</span> Multiple items {{list-item}}
-</li></ul><p class="lex-paragraph">Paragraph in the middle. {{paragraph}}</p><ul class="lex-list"><li class="lex-list-item"><span class="seq_marker">-</span> Ends with another list {{list-item}}
-</li><li class="lex-list-item"><span class="seq_marker">-</span> To complete the pattern {{list-item}}
-</li></ul><section class="lex-session lex-session-4"><h4><span class="seq_marker">2.1.1.</span> Even Deeper Nesting {{session-title}}</h4><div class="lex-content"><p class="lex-paragraph">The deepest level contains paragraphs and lists. {{paragraph}}</p><ul class="lex-list"><li class="lex-list-item"><span class="seq_marker">-</span> First deep list {{list-item}}
-</li><li class="lex-list-item"><span class="seq_marker">-</span> Second deep item {{list-item}}
-</li></ul><p class="lex-paragraph">Another paragraph at deep level. {{paragraph}}</p><ul class="lex-list"><li class="lex-list-item"><span class="seq_marker">-</span> Second deep list {{list-item}}
-</li><li class="lex-list-item"><span class="seq_marker">-</span> Completing the deep structure {{list-item}}
+<p class="lex-paragraph">This document tests the combination of all three core elements (sessions, paragraphs, lists) with various levels of nesting. {{paragraph}}</p><section class="lex-session lex-session-2"><h2>1. Root Session {{session-title}}</h2><div class="lex-content"><p class="lex-paragraph">This root session contains various nested elements. {{paragraph}}</p><section class="lex-session lex-session-3"><h3>1.1. Sub-session with Paragraph {{session-title}}</h3><div class="lex-content"><p class="lex-paragraph">This sub-session starts with a paragraph. {{paragraph}}</p><ul class="lex-list"><li class="lex-list-item">Then has a list {{list-item}}
+</li><li class="lex-list-item">With multiple items {{list-item}}
+</li></ul></div></section><section class="lex-session lex-session-3"><h3>1.2. Sub-session with List {{session-title}}</h3><div class="lex-content"><ul class="lex-list"><li class="lex-list-item">Starts with a list {{list-item}}
+</li><li class="lex-list-item">Has multiple items {{list-item}}
+</li></ul><p class="lex-paragraph">Then has a paragraph. {{paragraph}}</p><section class="lex-session lex-session-4"><h4>1.2.1. Deeply Nested Session {{session-title}}</h4><div class="lex-content"><p class="lex-paragraph">This is a deeply nested session. {{paragraph}}</p><ul class="lex-list"><li class="lex-list-item">With its own list {{list-item}}
+</li><li class="lex-list-item">And multiple items {{list-item}}
+</li></ul><ul class="lex-list"><li class="lex-list-item">Another list follows {{list-item}}
+</li><li class="lex-list-item">In the same session {{list-item}}
+</li></ul></div></section></div></section><p class="lex-paragraph">Back to the root session level. {{paragraph}}</p><ul class="lex-list"><li class="lex-list-item">Root session can also have lists {{list-item}}
+</li><li class="lex-list-item">At its own level {{list-item}}
+</li></ul></div></section><section class="lex-session lex-session-2"><h2>2. Another Root Session {{session-title}}</h2><div class="lex-content"><p class="lex-paragraph">This session demonstrates different nesting patterns. {{paragraph}}</p><section class="lex-session lex-session-3"><h3>2.1. Mixed Content Sub-session {{session-title}}</h3><div class="lex-content"><ul class="lex-list"><li class="lex-list-item">Starts with list {{list-item}}
+</li><li class="lex-list-item">Multiple items {{list-item}}
+</li></ul><p class="lex-paragraph">Paragraph in the middle. {{paragraph}}</p><ul class="lex-list"><li class="lex-list-item">Ends with another list {{list-item}}
+</li><li class="lex-list-item">To complete the pattern {{list-item}}
+</li></ul><section class="lex-session lex-session-4"><h4>2.1.1. Even Deeper Nesting {{session-title}}</h4><div class="lex-content"><p class="lex-paragraph">The deepest level contains paragraphs and lists. {{paragraph}}</p><ul class="lex-list"><li class="lex-list-item">First deep list {{list-item}}
+</li><li class="lex-list-item">Second deep item {{list-item}}
+</li></ul><p class="lex-paragraph">Another paragraph at deep level. {{paragraph}}</p><ul class="lex-list"><li class="lex-list-item">Second deep list {{list-item}}
+</li><li class="lex-list-item">Completing the deep structure {{list-item}}
 </li></ul></div></section></div></section></div></section><p class="lex-paragraph">Final root level paragraph. {{paragraph}}</p>
 </div>
 </body>

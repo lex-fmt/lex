@@ -297,7 +297,6 @@ fn cell_text(cell: &TableCell) -> String {
                 InlineContent::Math(c) => format!("${c}$"),
                 InlineContent::Reference(c) => format!("[{c}]"),
                 InlineContent::Link { text, href } => format!("{text} [{href}]"),
-                InlineContent::Marker(c) => c.clone(),
                 InlineContent::Image(image) => {
                     let mut text = format!("![{}]({})", image.alt, image.src);
                     if let Some(title) = &image.title {
@@ -327,7 +326,6 @@ fn inline_content_to_text(content: &[InlineContent]) -> String {
             InlineContent::Math(c) => format!("${c}$"),
             InlineContent::Reference(c) => format!("[{c}]"),
             InlineContent::Link { text, href } => format!("{text} [{href}]"),
-            InlineContent::Marker(c) => c.clone(),
             InlineContent::Image(image) => {
                 let mut text = format!("![{}]({})", image.alt, image.src);
                 if let Some(title) = &image.title {
