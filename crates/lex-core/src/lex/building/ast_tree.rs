@@ -66,8 +66,38 @@ impl<'a> AstTreeBuilder<'a> {
                             self.source,
                             &self.source_location,
                         );
-                        let location = title_text.location.clone().unwrap_or_default();
-                        document_title = Some(DocumentTitle::new(title_text, location));
+                        let title_location = title_text.location.clone().unwrap_or_default();
+
+                        // Check for subtitle child node
+                        let subtitle = node.children.iter().find_map(|child| {
+                            if child.node_type == NodeType::DocumentSubtitle {
+                                let sub_text = ast_api::text_content_from_tokens(
+                                    child.tokens.clone(),
+                                    self.source,
+                                    &self.source_location,
+                                );
+                                Some(sub_text)
+                            } else {
+                                None
+                            }
+                        });
+
+                        let location = if let Some(ref sub) = subtitle {
+                            // Extend location to cover both title and subtitle
+                            let sub_loc = sub.location.clone().unwrap_or_default();
+                            Range::new(
+                                title_location.span.start..sub_loc.span.end,
+                                title_location.start,
+                                sub_loc.end,
+                            )
+                        } else {
+                            title_location
+                        };
+
+                        document_title = Some(match subtitle {
+                            Some(sub) => DocumentTitle::with_subtitle(title_text, sub, location),
+                            None => DocumentTitle::new(title_text, location),
+                        });
                         false
                     }
                     _ => true,

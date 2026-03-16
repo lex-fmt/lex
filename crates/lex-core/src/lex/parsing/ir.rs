@@ -17,6 +17,7 @@ pub enum NodeType {
     Document,
     DocumentStart,
     DocumentTitle,
+    DocumentSubtitle,
     Paragraph,
     Session,
     ListItem,

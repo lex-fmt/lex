@@ -42,6 +42,33 @@ impl<'a> DocumentAssertion<'a> {
         self
     }
 
+    /// Assert the document subtitle matches exactly
+    pub fn subtitle(self, expected: &str) -> Self {
+        let actual = self
+            .doc
+            .title
+            .as_ref()
+            .and_then(|t| t.subtitle_str())
+            .unwrap_or("");
+        assert_eq!(
+            actual, expected,
+            "Expected document subtitle \"{expected}\", found \"{actual}\""
+        );
+        self
+    }
+
+    /// Assert the document has no subtitle
+    pub fn no_subtitle(self) -> Self {
+        let has = self
+            .doc
+            .title
+            .as_ref()
+            .and_then(|t| t.subtitle_str())
+            .is_some();
+        assert!(!has, "Expected no subtitle, but found one");
+        self
+    }
+
     /// Assert the document has a non-empty title
     pub fn has_title(self) -> Self {
         let actual = self.doc.title();

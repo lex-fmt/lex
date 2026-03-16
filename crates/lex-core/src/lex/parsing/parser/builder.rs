@@ -55,8 +55,13 @@ pub(super) enum PatternMatch {
     Paragraph { start_idx: usize, end_idx: usize },
     /// Blank line group: one or more consecutive blank lines
     BlankLineGroup,
-    /// Document title: single line followed by blank lines, no indented content
-    DocumentTitle { title_idx: usize },
+    /// Document title: single line followed by blank lines, no indented content.
+    /// If the title line ends with a colon and a second line follows before the
+    /// blank separator, the second line is parsed as a subtitle.
+    DocumentTitle {
+        title_idx: usize,
+        subtitle_idx: Option<usize>,
+    },
     /// Document start marker: synthetic boundary between metadata and content
     DocumentStart,
 }
@@ -125,32 +130,97 @@ pub(super) fn convert_pattern_to_node(
             build_paragraph(tokens, pattern_offset + start_idx, pattern_offset + end_idx)
         }
         PatternMatch::BlankLineGroup => build_blank_line_group(tokens, pattern_range.clone()),
-        PatternMatch::DocumentTitle { title_idx } => {
-            build_document_title(tokens, pattern_offset + title_idx)
-        }
+        PatternMatch::DocumentTitle {
+            title_idx,
+            subtitle_idx,
+        } => build_document_title(
+            tokens,
+            pattern_offset + title_idx,
+            subtitle_idx.map(|i| pattern_offset + i),
+        ),
         PatternMatch::DocumentStart => build_document_start(),
     }
 }
 
-/// Build a DocumentTitle node from the title line token
-fn build_document_title(tokens: &[LineContainer], title_idx: usize) -> Result<ParseNode, String> {
-    let title_tokens = match &tokens[title_idx] {
-        LineContainer::Token(line) => line
-            .source_tokens
-            .iter()
-            .zip(line.token_spans.iter())
-            .map(|(token, span)| (token.clone(), span.clone()))
-            .collect(),
-        LineContainer::Container { .. } => {
-            return Err("Expected title token, found container".to_string())
-        }
-    };
+/// Build a DocumentTitle node from the title line token and optional subtitle token.
+///
+/// When the title line ends with a colon and a subtitle line follows, the colon
+/// is stripped from the title tokens and the subtitle tokens are attached as a
+/// child node with `NodeType::DocumentSubtitle`.
+fn build_document_title(
+    tokens: &[LineContainer],
+    title_idx: usize,
+    subtitle_idx: Option<usize>,
+) -> Result<ParseNode, String> {
+    let mut title_tokens: Vec<(crate::lex::lexing::Token, std::ops::Range<usize>)> =
+        match &tokens[title_idx] {
+            LineContainer::Token(line) => line
+                .source_tokens
+                .iter()
+                .zip(line.token_spans.iter())
+                .map(|(token, span)| (token.clone(), span.clone()))
+                .collect(),
+            LineContainer::Container { .. } => {
+                return Err("Expected title token, found container".to_string())
+            }
+        };
+
+    let mut children = vec![];
+
+    if let Some(sub_idx) = subtitle_idx {
+        // Strip the trailing colon from the title tokens.
+        // The last meaningful token should be the colon (SubjectMarker) or
+        // text ending with a colon.
+        strip_trailing_colon(&mut title_tokens);
+
+        let subtitle_tokens = match &tokens[sub_idx] {
+            LineContainer::Token(line) => line
+                .source_tokens
+                .iter()
+                .zip(line.token_spans.iter())
+                .map(|(token, span)| (token.clone(), span.clone()))
+                .collect(),
+            LineContainer::Container { .. } => {
+                return Err("Expected subtitle token, found container".to_string())
+            }
+        };
+
+        children.push(ParseNode::new(
+            crate::lex::parsing::ir::NodeType::DocumentSubtitle,
+            subtitle_tokens,
+            vec![],
+        ));
+    }
 
     Ok(ParseNode::new(
         crate::lex::parsing::ir::NodeType::DocumentTitle,
         title_tokens,
-        vec![],
+        children,
     ))
+}
+
+/// Strip the trailing colon from the title token list.
+/// The lexer represents the colon as a separate `Colon` token. Walk from the
+/// end, skip BlankLine/Whitespace, and remove the first `Colon` found.
+fn strip_trailing_colon(tokens: &mut Vec<(crate::lex::lexing::Token, std::ops::Range<usize>)>) {
+    use crate::lex::lexing::Token;
+
+    if tokens.is_empty() {
+        return;
+    }
+
+    let mut idx = tokens.len();
+    while idx > 0 {
+        idx -= 1;
+        match &tokens[idx].0 {
+            Token::BlankLine(_) | Token::Whitespace(_) => continue,
+            Token::Colon => {
+                tokens.remove(idx);
+                return;
+            }
+            _ => return,
+        }
+    }
 }
 
 /// Build a DocumentStart node (synthetic marker with no content)
