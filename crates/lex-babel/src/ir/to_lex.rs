@@ -87,7 +87,8 @@ fn to_lex_session(heading: &Heading, level: usize) -> LexContentItem {
     LexContentItem::Session(LexSession::new(title, session_children))
 }
 
-/// Converts an IR Table to a Lex Annotation (nested).
+/// Converts an IR Table to a Lex VerbatimBlock via the verbatim registry,
+/// falling back to a nested Annotation structure if the registry has no handler.
 fn to_lex_table(table: &Table, level: usize) -> LexContentItem {
     let registry = crate::common::verbatim::VerbatimRegistry::default_with_standard();
     let node = DocNode::Table(table.clone());

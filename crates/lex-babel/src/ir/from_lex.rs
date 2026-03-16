@@ -1,3 +1,17 @@
+//! Conversion from Lex AST to the format-agnostic IR.
+//!
+//! Pipeline: Lex AST (Document) → IR (ir::nodes::Document)
+//!
+//! This is the entry point for all outbound format conversions. The IR strips
+//! source-level details (positions, blank line groups, token info) to produce
+//! a clean semantic representation that any format serializer can consume.
+//!
+//! Level mapping: root session children start at heading level 2 (the document
+//! title occupies level 1). Each nested session increments the level.
+//!
+//! Verbatim blocks with registered labels (e.g. `doc.table`, `doc.image`) are
+//! hydrated into first-class IR nodes (Table, Image) via the VerbatimRegistry.
+
 use lex_core::lex::ast::elements::{
     inlines::InlineNode, Annotation as LexAnnotation, ContentItem as LexContentItem,
     Definition as LexDefinition, Document as LexDocument, List as LexList, ListItem as LexListItem,
