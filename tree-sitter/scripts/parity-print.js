@@ -136,8 +136,10 @@ function detectWallCol(verbatimNode) {
 
 /**
  * Strip wall indentation from a raw text line.
- * Tree-sitter reports continuation lines from column 0 (absolute),
+ * Tree-sitter reports continuation lines from character 0 (absolute),
  * while lex-core stores content relative to the wall.
+ * scol is character-based (not column-based), so we strip exactly
+ * wallCol characters of leading whitespace.
  */
 function stripWall(text, wallCol, lineScol) {
   const col = parseInt(lineScol || "0", 10);
@@ -145,17 +147,10 @@ function stripWall(text, wallCol, lineScol) {
     // Line starts at or past the wall — text is already wall-relative
     return text;
   }
-  // Line starts before the wall — strip leading whitespace up to wallCol
-  let stripped = 0;
+  // Strip exactly wallCol characters of leading whitespace
   let i = 0;
-  while (i < text.length && stripped < wallCol) {
-    if (text[i] === "\t") {
-      stripped += 4 - (stripped % 4);
-    } else if (text[i] === " ") {
-      stripped++;
-    } else {
-      break;
-    }
+  while (i < text.length && i < wallCol) {
+    if (text[i] !== " " && text[i] !== "\t") break;
     i++;
   }
   return text.substring(i);
@@ -232,9 +227,16 @@ function printParity(node, depth) {
 
     case "document_title": {
       const titleNode = findField(node, "title");
-      const title = titleNode ? leafText(titleNode) : "";
+      const subtitleNode = node.children.find(
+        (c) => c.tag === "document_subtitle",
+      );
+      let title = titleNode ? leafText(titleNode) : "";
+      // When subtitle is present, the trailing colon on the title is structural
+      // (delimiter between title and subtitle) — lex-core strips it
+      if (subtitleNode) {
+        title = title.replace(/:$/, "");
+      }
       console.log(`${ind(depth)}DocumentTitle "${title}"`);
-      const subtitleNode = findField(node, "subtitle");
       if (subtitleNode) {
         const subtitle = leafText(subtitleNode);
         console.log(`${ind(depth + 1)}DocumentSubtitle "${subtitle}"`);
@@ -300,7 +302,7 @@ function printParity(node, depth) {
       break;
 
     case "text_line": {
-      const text = leafText(node).trimStart();
+      const text = leafText(node).trimStart().trimEnd();
       console.log(`${ind(depth)}"${text}"`);
       break;
     }
@@ -328,16 +330,28 @@ function printParity(node, depth) {
       const headerNode = node.children.find(
         (c) => c.tag === "annotation_header",
       );
-      const label = headerNode ? leafText(headerNode).trim() : "";
+      // annotation_header contains "label params..." — extract just the label (first word).
+      // Strip trailing colon from label (in ":: label: value ::", the colon is a separator)
+      const headerText = headerNode ? leafText(headerNode).trim() : "";
+      const label = (headerText.split(/\s+/)[0] || "").replace(/:$/, "");
       console.log(`${ind(depth)}Annotation "${label}"`);
       for (const child of node.children) {
         if (
           child.tag === "annotation_marker" ||
           child.tag === "annotation_header" ||
-          child.tag === "annotation_end_marker" ||
-          child.tag === "annotation_inline_text"
+          child.tag === "annotation_end_marker"
         )
           continue;
+        // Annotation inline text becomes a Paragraph child in lex-core.
+        // The space between closing :: and text is part of the content in lex-core.
+        if (child.tag === "annotation_inline_text") {
+          const inlineText = leafText(child);
+          if (inlineText) {
+            console.log(`${ind(depth + 1)}Paragraph`);
+            console.log(`${ind(depth + 2)}" ${inlineText}"`);
+          }
+          continue;
+        }
         printParity(child, depth + 1);
       }
       break;
@@ -347,8 +361,20 @@ function printParity(node, depth) {
       const headerNode = node.children.find(
         (c) => c.tag === "annotation_header",
       );
-      const label = headerNode ? leafText(headerNode).trim() : "";
+      const headerText = headerNode ? leafText(headerNode).trim() : "";
+      const label = (headerText.split(/\s+/)[0] || "").replace(/:$/, "");
       console.log(`${ind(depth)}Annotation "${label}"`);
+      // Inline text in single-line annotations
+      const inlineNode = node.children.find(
+        (c) => c.tag === "annotation_inline_text",
+      );
+      if (inlineNode) {
+        const inlineText = leafText(inlineNode);
+        if (inlineText) {
+          console.log(`${ind(depth + 1)}Paragraph`);
+          console.log(`${ind(depth + 2)}" ${inlineText}"`);
+        }
+      }
       break;
     }
 

@@ -291,7 +291,8 @@ fn parity_content_item(out: &mut String, depth: usize, item: &lex_core::lex::ast
             }
         }
         ContentItem::TextLine(tl) => {
-            parity_line(out, depth, &format!("\"{}\"", tl.text()));
+            let text = tl.text().trim_end();
+            parity_line(out, depth, &format!("\"{text}\""));
         }
         ContentItem::Definition(d) => {
             parity_line(
