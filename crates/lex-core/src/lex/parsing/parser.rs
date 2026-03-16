@@ -188,13 +188,11 @@ impl GrammarMatcher {
                         },
                         "blank_line_group" => PatternMatch::BlankLineGroup,
                         "document_title_with_subtitle" => {
-                            // Imperative negative lookahead: not followed by container
-                            let next_idx = start_idx + consumed_count;
-                            if next_idx < tokens.len()
-                                && matches!(&tokens[next_idx], LineContainer::Container { .. })
-                            {
-                                continue;
-                            }
+                            // No container lookahead needed: the subtitle variant
+                            // consumed two lines (title + subtitle) before blank lines.
+                            // A session only has one line before blank + container, so
+                            // the presence of a container after the blank is NOT ambiguous
+                            // here — it's the document body, not a session body.
                             // Match: DocumentStart(0) + title(1) + subtitle(2) + blank lines
                             PatternMatch::DocumentTitle {
                                 title_idx: 1,
