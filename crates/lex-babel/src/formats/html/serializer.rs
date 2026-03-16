@@ -55,7 +55,10 @@ pub fn serialize_to_html_with_options(
     let title = if doc.title().is_empty() {
         "Lex Document".to_string()
     } else {
-        doc.title().to_string()
+        match doc.title.as_ref().and_then(|t| t.subtitle_str()) {
+            Some(sub) => format!("{}: {}", doc.title(), sub),
+            None => doc.title().to_string(),
+        }
     };
 
     // Step 1: Lex AST → IR

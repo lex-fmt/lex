@@ -18,7 +18,12 @@ pub fn serialize_to_markdown(doc: &Document) -> Result<String, FormatError> {
     let document_title = if doc.title().is_empty() {
         None
     } else {
-        Some(doc.title().to_string())
+        let subtitle = doc
+            .title
+            .as_ref()
+            .and_then(|t| t.subtitle_str())
+            .map(|s| s.to_string());
+        Some((doc.title().to_string(), subtitle))
     };
 
     // Step 1: Lex AST → IR
@@ -50,13 +55,14 @@ pub fn serialize_to_markdown(doc: &Document) -> Result<String, FormatError> {
     Ok(with_title)
 }
 
-/// Prepend document title as an H1 heading
+/// Prepend document title as an H1 heading, optionally followed by subtitle as H2
 ///
 /// If the document has a title, prepend `# Title` at the beginning.
-/// This makes the document title visible in the rendered Markdown output.
-fn prepend_title_as_h1(markdown: &str, title: Option<String>) -> String {
+/// If it also has a subtitle, append `## Subtitle` below.
+fn prepend_title_as_h1(markdown: &str, title: Option<(String, Option<String>)>) -> String {
     match title {
-        Some(t) => format!("# {t}\n\n{markdown}"),
+        Some((t, Some(sub))) => format!("# {t}\n\n## {sub}\n\n{markdown}"),
+        Some((t, None)) => format!("# {t}\n\n{markdown}"),
         None => markdown.to_string(),
     }
 }
