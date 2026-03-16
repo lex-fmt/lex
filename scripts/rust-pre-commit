@@ -105,6 +105,15 @@ if [ -d "tree-sitter" ]; then
         exit 1
     fi
     echo "Tree-sitter error-check OK"
+
+    echo ""
+    echo "Running tree-sitter parity check..."
+    if ! tree-sitter/scripts/parity-check.sh; then
+        echo ""
+        echo "Tree-sitter parity check failed!"
+        exit 1
+    fi
+    echo "Tree-sitter parity check OK"
 fi
 
 echo ""

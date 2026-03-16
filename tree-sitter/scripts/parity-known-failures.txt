@@ -1,0 +1,175 @@
+# Parity known failures: files where tree-sitter and lex-core diverge.
+#
+# Every entry here is a bug or missing feature — not an acceptable difference.
+# Each documents WHY the divergence exists so it can be fixed. When a
+# divergence is fixed, remove the entry — the parity check enforces it.
+#
+# Format: relative path from repo root, followed by # comment with reason.
+# Empty lines and lines starting with # are ignored.
+
+# --- Annotation parameters ---
+# Tree-sitter includes parameters in annotation label text ("warning severity=high"),
+# lex-core separates label from parameters ("warning"). Structural difference in how
+# annotations are represented in CST vs AST.
+comms/specs/elements/annotation.docs/annotation-02-flat-marker-with-params.lex
+comms/specs/elements/annotation.docs/annotation-06-flat-block-multi-paragraph.lex
+comms/specs/elements/annotation.docs/annotation-07-flat-block-with-list.lex
+comms/specs/elements/annotation.docs/annotation-08-nested-with-list-and-paragraph.lex
+comms/specs/elements/annotation.docs/annotation-10-nested-complex.lex
+comms/specs/elements/annotation.docs/annotation-11-quoted-parameter.lex
+
+# --- Annotation inline text ---
+# Lex-core includes inline text after annotation label as a paragraph child;
+# tree-sitter handles annotation_inline_text differently.
+comms/specs/elements/annotation.docs/annotation-03-flat-inline-text.lex
+comms/specs/elements/annotation.docs/annotation-04-flat-inline-with-params.lex
+
+# --- Annotation attachment ---
+# Lex-core attaches annotations to adjacent elements (post-parse assembly stage).
+# Tree-sitter emits annotations as standalone CST nodes. This is a fundamental
+# CST vs AST difference — annotation attachment is semantic, not syntactic.
+comms/specs/elements/annotation.docs/annotation-20-attachment-example-a-closest-wins.lex
+comms/specs/elements/annotation.docs/annotation-21-attachment-example-b-tie-next-wins.lex
+comms/specs/elements/annotation.docs/annotation-22-attachment-example-d-closer-to-previous.lex
+comms/specs/elements/annotation.docs/annotation-24-attachment-example-f-document-start-no-blank.lex
+comms/specs/elements/annotation.docs/annotation-27-attachment-example-l-multiple-document-level.lex
+comms/specs/elements/annotation.docs/annotation-28-attachment-example-j-session-inner.lex
+comms/specs/elements/annotation.docs/annotation-29-attachment-example-k-session-container.lex
+
+# --- Subtitle detection ---
+# Lex-core detects subtitle (trailing colon on title + second line); tree-sitter
+# CST doesn't have subtitle support — emits the colon as part of the title text.
+comms/specs/elements/document.docs/document-07-title-with-subtitle.lex
+comms/specs/elements/document.docs/document-08-subtitle-with-inlines.lex
+comms/specs/elements/document.docs/document-09-subtitle-with-annotations.lex
+comms/specs/elements/document.docs/document-12-subtitle-then-session.lex
+
+# --- DocumentTitle vs Paragraph for single-line documents ---
+# Tree-sitter classifies any first line followed by blank as DocumentTitle.
+# Lex-core has a negative lookahead: if no indented content follows, it's a
+# document title; these test files have no content after the line, so lex-core
+# sees them as paragraphs (no blank line after) or titles (with blank).
+comms/specs/elements/document.docs/document-02-title-no-blank.lex
+comms/specs/elements/document.docs/document-03-title-multiline.lex
+comms/specs/elements/document.docs/document-04-title-with-annotations.lex
+comms/specs/elements/paragraph.docs/paragraph-01-flat-oneline.lex
+comms/specs/elements/paragraph.docs/paragraph-03-flat-special-chars.lex
+comms/specs/elements/paragraph.docs/paragraph-04-flat-numbers.lex
+comms/specs/elements/paragraph.docs/paragraph-05-flat-mixed-content.lex
+
+# --- Numbered session title vs list ---
+# Lex-core recognizes "1. Title" followed by blank + indented content as a session.
+# Tree-sitter sees the "1." prefix as a list marker. This is a known trifecta
+# ambiguity that requires semantic lookahead (blank line + indent) to resolve.
+comms/specs/elements/session.docs/session-07-paragraphs-sessions-flat-multiple.lex
+comms/specs/elements/session.docs/session-08-paragraphs-sessions-nested-multiple.lex
+comms/specs/elements/session.docs/session-10-sandwhich.lex
+comms/specs/elements/session.docs/session-13-blankline-issue.lex
+comms/specs/elements/session.docs/session-14-numbered-variations.lex
+comms/specs/elements/definition.docs/definition-90-document-simple.lex
+comms/specs/elements/definition.docs/definition-100-document-nested-sessions.lex
+
+# --- Nested list boundaries ---
+# Tree-sitter and lex-core disagree on where nested lists start/end,
+# particularly around blank lines within nested list items.
+comms/specs/elements/list.docs/list-07-nested-simple.lex
+comms/specs/elements/list.docs/list-08-nested-with-paragraph.lex
+comms/specs/elements/list.docs/list-10-nested-deep-only.lex
+comms/specs/elements/list.docs/list-11-nested.lex
+comms/specs/elements/list.docs/list-13-single-item-is-paragraph.lex
+
+# --- Extended list markers ---
+# Tree-sitter doesn't handle extended marker forms (2.1., 1.a., 1.a.i.).
+comms/specs/elements/list.docs/list-12-nested-three-full-form.lex
+
+# --- Verbatim leading blank lines ---
+# Lex-core includes the optional blank line after the subject as an empty
+# VerbatimLine (""); tree-sitter doesn't emit a blank_line node for it.
+comms/specs/elements/verbatim.docs/verbatim-01-flat-simple-code.lex
+comms/specs/elements/verbatim.docs/verbatim-02-flat-with-caption.lex
+comms/specs/elements/verbatim.docs/verbatim-03-flat-with-params.lex
+comms/specs/elements/verbatim.docs/verbatim-05-flat-special-chars.lex
+comms/specs/elements/verbatim.docs/verbatim-06-nested-in-definition.lex
+comms/specs/elements/verbatim.docs/verbatim-07-nested-in-list.lex
+comms/specs/elements/verbatim.docs/verbatim-08-nested-deep.lex
+comms/specs/elements/verbatim.docs/verbatim-09-flat-simple-beyong-wall.lex
+comms/specs/elements/verbatim.docs/verbatim-15-inflow-leading-blank.lex
+
+# --- Verbatim groups ---
+# Lex-core merges multi-subject verbatim groups; tree-sitter doesn't.
+comms/specs/elements/verbatim.docs/verbatim-11-group-shell.lex
+comms/specs/elements/verbatim.docs/verbatim-13-group-spades.lex
+
+# --- Fullwidth verbatim ---
+# Tree-sitter doesn't fully handle fullwidth mode (wall at column 2).
+comms/specs/elements/verbatim.docs/verbatim-14-fullwidth.lex
+comms/specs/elements/verbatim.docs/verbatim-16-fullwidth-nested.lex
+comms/specs/elements/verbatim.docs/verbatim-17-fullwidth-leading-blank.lex
+
+# --- Table merge markers ---
+# Lex-core resolves >> (colspan) and ^^ (rowspan) merge markers during AST
+# assembly; tree-sitter preserves raw cell content. This is expected — merge
+# resolution is semantic processing, not parsing.
+comms/specs/elements/table.docs/table-03-flat-header-count.lex
+comms/specs/elements/table.docs/table-04-flat-cell-merging.lex
+comms/specs/elements/table.docs/table-05-flat-multiline.lex
+comms/specs/elements/table.docs/table-06-flat-with-footnotes.lex
+comms/specs/elements/table.docs/table-17-flat-rowspan.lex
+comms/specs/elements/table.docs/table-18-flat-combined-spans.lex
+
+# --- Table complex cells ---
+# Tables with multi-element cells (lists, definitions, verbatim, annotations
+# inside cells) have different representations in CST vs AST.
+comms/specs/elements/table.docs/table-09-nested-in-list.lex
+comms/specs/elements/table.docs/table-10-nested-deep.lex
+comms/specs/elements/table.docs/table-11-fullwidth.lex
+comms/specs/elements/table.docs/table-12-fullwidth-nested.lex
+comms/specs/elements/table.docs/table-19-cell-with-list.lex
+comms/specs/elements/table.docs/table-20-cell-with-definition.lex
+comms/specs/elements/table.docs/table-21-cell-with-verbatim.lex
+comms/specs/elements/table.docs/table-22-cell-with-mixed-content.lex
+comms/specs/elements/table.docs/table-23-cell-with-annotation.lex
+
+# --- Definition nesting issues ---
+# Different parsing of definition/session boundaries in nested contexts.
+comms/specs/elements/definition.docs/definition-03-flat-with-list.lex
+comms/specs/elements/definition.docs/definition-05-nested-with-list.lex
+comms/specs/elements/definition.docs/definition-10-session-nesting-issue.lex
+
+# --- Paragraph nesting issues ---
+comms/specs/elements/paragraph.docs/paragraph-07-nested-in-definition.lex
+comms/specs/elements/paragraph.docs/paragraph-09-dialog.lex
+
+# --- Verbatim document-level (numbered session issue) ---
+comms/specs/elements/verbatim.docs/verbatim-12-document-simple.lex
+
+# --- Full spec files ---
+# Large spec documents with multiple divergence categories combined.
+# These contain examples of all the issues listed above.
+comms/specs/elements/annotation.lex
+comms/specs/elements/data.lex
+comms/specs/elements/definition.lex
+comms/specs/elements/document.lex
+comms/specs/elements/escaping.lex
+comms/specs/elements/footnotes.lex
+comms/specs/elements/inlines.lex
+comms/specs/elements/label.lex
+comms/specs/elements/list.lex
+comms/specs/elements/paragraph.lex
+comms/specs/elements/parameter.lex
+comms/specs/elements/session.lex
+comms/specs/elements/table.lex
+comms/specs/elements/verbatim.lex
+comms/specs/elements/XXX-document-simple.lex
+comms/specs/elements/XXX-document-tricky.lex
+comms/specs/elements/inlines.docs/specs/formatting/formatting.lex
+comms/specs/elements/inlines.docs/specs/formatting/inlines-general.lex
+comms/specs/elements/inlines.docs/specs/references/citations.lex
+comms/specs/elements/inlines.docs/specs/references/references-general.lex
+comms/specs/elements/data.docs/data-01-simple.lex
+comms/specs/elements/data.docs/data-02-with-params.lex
+comms/specs/elements/data.docs/data-03-with-quoted-params.lex
+comms/specs/elements/data.docs/data-04-standalone.lex
+comms/specs/elements/label.docs/label-01-simple-valid.lex
+comms/specs/elements/label.docs/label-02-complex-valid.lex
+comms/specs/elements/label.docs/label-03-invalid-start.lex

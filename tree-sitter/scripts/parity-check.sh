@@ -1,65 +1,55 @@
 #!/bin/bash
-# Parity check: compare tree-sitter CST (via bridge) with lex-cli AST JSON.
+# Parity check: compare tree-sitter CST with lex-core AST using plain-text
+# block skeleton format. Both sides produce the same format directly — no
+# JSON, no jq filters, no bridge conversion logic.
 #
 # Usage:
 #   ./scripts/parity-check.sh                    # all fixtures
 #   ./scripts/parity-check.sh <file.lex>         # single file
 #   ./scripts/parity-check.sh --verbose           # show diffs on failure
-#   ./scripts/parity-check.sh --level blocks      # compare block structure only
-#
-# Levels:
-#   blocks   — compare block types + nesting (ignore text, annotations, inlines)
-#   content  — compare block types + text content (ignore annotations)
-#   full     — compare everything
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_DIR="$(cd "$TS_DIR/.." && pwd)"
-BRIDGE="$SCRIPT_DIR/cst-to-json.js"
+PRINTER="$SCRIPT_DIR/parity-print.js"
+ALLOWLIST="$SCRIPT_DIR/parity-known-failures.txt"
 
 VERBOSE=false
-LEVEL="blocks"
 SINGLE_FILE=""
 
-# Parse args
 while [[ $# -gt 0 ]]; do
     case $1 in
         --verbose|-v) VERBOSE=true; shift ;;
-        --level) LEVEL="$2"; shift 2 ;;
         *) SINGLE_FILE="$1"; shift ;;
     esac
 done
 
+# Load known failures list (one path per line, # comments and blanks ignored)
+KNOWN_FAILURES=""
+if [[ -f "$ALLOWLIST" ]]; then
+    while IFS= read -r line; do
+        line="${line%%#*}"
+        line="$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+        [[ -z "$line" ]] && continue
+        KNOWN_FAILURES="${KNOWN_FAILURES}|${line}"
+    done < "$ALLOWLIST"
+fi
+
+is_known_failure() {
+    local path="$1"
+    echo "$KNOWN_FAILURES" | grep -qF "|${path}"
+}
+
 PASS=0
 FAIL=0
 SKIP=0
+KNOWN=0
 ERRORS=""
-
-# jq filter for block-level comparison: strip text content, locations, annotations
-JQ_BLOCKS='walk(
-    if type == "object" then
-        del(.content, .text, .marker, .annotations, .mode, .closing_label,
-            .closing_parameters, .groups, .lines, .parameters, ._hasSubject,
-            ._subjectText, .count, .items, .title, .subject)
-        | if .children then . else . end
-    else .
-    end
-)'
-
-# jq filter for content-level: keep text, strip annotations and markers
-JQ_CONTENT='walk(
-    if type == "object" then
-        del(.annotations, .parameters, .closing_parameters, .mode,
-            .marker, ._hasSubject, ._subjectText)
-    else .
-    end
-)'
 
 check_file() {
     local lex_file
-    # Resolve to absolute path
     if [[ "$1" = /* ]]; then
         lex_file="$1"
     else
@@ -67,61 +57,41 @@ check_file() {
     fi
     local rel_path="${lex_file#$REPO_DIR/}"
 
-    # Get lex AST JSON
-    local lex_json
-    lex_json=$(cd "$REPO_DIR" && cargo run -q -p lex-cli -- inspect "$lex_file" ast-json 2>/dev/null) || {
+    # Reference parser output
+    local lex_output
+    lex_output=$(cd "$REPO_DIR" && cargo run -q -p lex-cli -- inspect "$lex_file" parity 2>/dev/null) || {
         printf "  %-60s SKIP (lex-cli failed)\n" "$rel_path"
         SKIP=$((SKIP + 1))
         return
     }
 
-    # Get tree-sitter CST XML and convert via bridge
-    local ts_json
-    ts_json=$(cd "$TS_DIR" && npx tree-sitter parse -x "$lex_file" 2>/dev/null | node "$BRIDGE" 2>/dev/null) || {
+    # Tree-sitter output
+    local ts_output
+    ts_output=$(cd "$TS_DIR" && npx tree-sitter parse -x "$lex_file" 2>/dev/null | node "$PRINTER" 2>/dev/null) || {
         printf "  %-60s SKIP (tree-sitter failed)\n" "$rel_path"
         SKIP=$((SKIP + 1))
         return
     }
 
-    # Apply comparison level filter
-    local lex_filtered ts_filtered
-    case $LEVEL in
-        blocks)
-            lex_filtered=$(echo "$lex_json" | jq -S "$JQ_BLOCKS" 2>/dev/null || echo "JQ_ERROR")
-            ts_filtered=$(echo "$ts_json" | jq -S "$JQ_BLOCKS" 2>/dev/null || echo "JQ_ERROR")
-            ;;
-        content)
-            lex_filtered=$(echo "$lex_json" | jq -S "$JQ_CONTENT" 2>/dev/null || echo "JQ_ERROR")
-            ts_filtered=$(echo "$ts_json" | jq -S "$JQ_CONTENT" 2>/dev/null || echo "JQ_ERROR")
-            ;;
-        full)
-            lex_filtered=$(echo "$lex_json" | jq -S . 2>/dev/null || echo "JQ_ERROR")
-            ts_filtered=$(echo "$ts_json" | jq -S . 2>/dev/null || echo "JQ_ERROR")
-            ;;
-    esac
-
-    if [[ "$lex_filtered" == "JQ_ERROR" || "$ts_filtered" == "JQ_ERROR" ]]; then
-        printf "  %-60s SKIP (jq filter failed)\n" "$rel_path"
-        SKIP=$((SKIP + 1))
-        return
-    fi
-
-    if diff <(echo "$lex_filtered") <(echo "$ts_filtered") > /dev/null 2>&1; then
+    if diff <(echo "$lex_output") <(echo "$ts_output") > /dev/null 2>&1; then
         printf "  %-60s \033[32mPASS\033[0m\n" "$rel_path"
         PASS=$((PASS + 1))
+    elif is_known_failure "$rel_path"; then
+        printf "  %-60s \033[33mKNOWN\033[0m\n" "$rel_path"
+        KNOWN=$((KNOWN + 1))
     else
         printf "  %-60s \033[31mFAIL\033[0m\n" "$rel_path"
         FAIL=$((FAIL + 1))
         ERRORS="${ERRORS}\n  ${rel_path}"
         if $VERBOSE; then
-            echo "  --- lex-cli (left) vs tree-sitter (right) ---"
-            diff --color=always <(echo "$lex_filtered") <(echo "$ts_filtered") | head -30
+            echo "  --- lex-core (left) vs tree-sitter (right) ---"
+            diff --color=always <(echo "$lex_output") <(echo "$ts_output") | head -40
             echo ""
         fi
     fi
 }
 
-echo "Parity check: level=$LEVEL"
+echo "Parity check (block skeleton)"
 echo ""
 
 if [[ -n "$SINGLE_FILE" ]]; then
@@ -135,9 +105,9 @@ fi
 
 echo ""
 echo "────────────"
-printf "Results: \033[32m%d passed\033[0m, \033[31m%d failed\033[0m, %d skipped\n" "$PASS" "$FAIL" "$SKIP"
+printf "Results: \033[32m%d passed\033[0m, \033[31m%d failed\033[0m, \033[33m%d known failures\033[0m, %d skipped\n" "$PASS" "$FAIL" "$KNOWN" "$SKIP"
 
 if [[ $FAIL -gt 0 ]]; then
-    printf "\nFailed files:%b\n" "$ERRORS"
+    printf "\nUnexpected failures:%b\n" "$ERRORS"
     exit 1
 fi

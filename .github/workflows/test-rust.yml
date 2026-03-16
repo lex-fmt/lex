@@ -58,6 +58,9 @@ jobs:
       - name: Tree-sitter error-free parsing check
         run: tree-sitter/scripts/error-check.sh
 
+      - name: Tree-sitter parity check
+        run: tree-sitter/scripts/parity-check.sh
+
   docs:
     name: Documentation
     runs-on: ubuntu-latest
