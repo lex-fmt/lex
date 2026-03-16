@@ -14,20 +14,15 @@ use std::cell::RefCell;
 
 /// Serialize a Lex document to Markdown
 pub fn serialize_to_markdown(doc: &Document) -> Result<String, FormatError> {
-    // Extract document title before IR conversion (which loses it)
-    let document_title = if doc.title().is_empty() {
-        None
-    } else {
-        let subtitle = doc
-            .title
-            .as_ref()
-            .and_then(|t| t.subtitle_str())
-            .map(|s| s.to_string());
-        Some((doc.title().to_string(), subtitle))
-    };
-
-    // Step 1: Lex AST → IR
+    // Step 1: Lex AST → IR (title and subtitle are preserved in IR)
     let ir_doc = crate::to_ir(doc);
+
+    // Extract title from IR
+    let document_title = ir_doc.title.as_ref().map(|title_inlines| {
+        let title_text = inlines_to_text(title_inlines);
+        let subtitle_text = ir_doc.subtitle.as_ref().map(|sub| inlines_to_text(sub));
+        (title_text, subtitle_text)
+    });
 
     // Step 2: IR → Events
     let events = tree_to_events(&DocNode::Document(ir_doc));
@@ -65,6 +60,24 @@ fn prepend_title_as_h1(markdown: &str, title: Option<(String, Option<String>)>) 
         Some((t, None)) => format!("# {t}\n\n{markdown}"),
         None => markdown.to_string(),
     }
+}
+
+/// Convert IR inline content to plain text for title rendering
+fn inlines_to_text(content: &[InlineContent]) -> String {
+    content
+        .iter()
+        .map(|inline| match inline {
+            InlineContent::Text(t) => t.clone(),
+            InlineContent::Bold(c) => inlines_to_text(c),
+            InlineContent::Italic(c) => inlines_to_text(c),
+            InlineContent::Code(c) => c.clone(),
+            InlineContent::Math(m) => m.clone(),
+            InlineContent::Reference(r) => r.clone(),
+            InlineContent::Link { text, .. } => text.clone(),
+            InlineContent::Marker(m) => m.clone(),
+            InlineContent::Image(img) => img.alt.clone(),
+        })
+        .collect()
 }
 
 fn default_comrak_options() -> ComrakOptions<'static> {

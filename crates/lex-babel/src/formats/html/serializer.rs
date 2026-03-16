@@ -51,18 +51,20 @@ pub fn serialize_to_html_with_options(
     doc: &Document,
     options: HtmlOptions,
 ) -> Result<String, FormatError> {
-    // Extract document title (before IR conversion loses it)
-    let title = if doc.title().is_empty() {
-        "Lex Document".to_string()
-    } else {
-        match doc.title.as_ref().and_then(|t| t.subtitle_str()) {
-            Some(sub) => format!("{}: {}", doc.title(), sub),
-            None => doc.title().to_string(),
-        }
-    };
-
-    // Step 1: Lex AST → IR
+    // Step 1: Lex AST → IR (title and subtitle are preserved in IR)
     let ir_doc = crate::to_ir(doc);
+
+    // Extract title from IR
+    let title = match &ir_doc.title {
+        Some(title_inlines) => {
+            let title_text = ir_inline_to_text(title_inlines);
+            match &ir_doc.subtitle {
+                Some(sub_inlines) => format!("{}: {}", title_text, ir_inline_to_text(sub_inlines)),
+                None => title_text,
+            }
+        }
+        None => "Lex Document".to_string(),
+    };
 
     // Step 2: IR → Events
     let events = tree_to_events(&DocNode::Document(ir_doc));
@@ -721,6 +723,22 @@ fn normalize_language(lang: &str) -> &str {
         "objc" | "obj-c" => "objectivec",
         other => other,
     }
+}
+
+/// Convert IR inline content to plain text for title rendering
+fn ir_inline_to_text(content: &[InlineContent]) -> String {
+    content
+        .iter()
+        .map(|inline| match inline {
+            InlineContent::Text(t) => t.clone(),
+            InlineContent::Bold(c) | InlineContent::Italic(c) => ir_inline_to_text(c),
+            InlineContent::Code(c) | InlineContent::Math(c) => c.clone(),
+            InlineContent::Reference(r) => r.clone(),
+            InlineContent::Link { text, .. } => text.clone(),
+            InlineContent::Marker(m) => m.clone(),
+            InlineContent::Image(img) => img.alt.clone(),
+        })
+        .collect()
 }
 
 /// Escape HTML special characters in text
