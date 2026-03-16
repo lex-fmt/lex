@@ -22,9 +22,7 @@ comms/specs/elements/annotation.docs/annotation-29-attachment-example-k-session-
 # --- Subtitle detection ---
 # Lex-core detects subtitle (trailing colon on title + second line); tree-sitter
 # CST doesn't have subtitle support — emits the colon as part of the title text.
-comms/specs/elements/document.docs/document-07-title-with-subtitle.lex
 comms/specs/elements/document.docs/document-08-subtitle-with-inlines.lex
-comms/specs/elements/document.docs/document-12-subtitle-then-session.lex
 
 # --- DocumentTitle vs Paragraph for single-line documents ---
 # Tree-sitter classifies any first line followed by blank as DocumentTitle.

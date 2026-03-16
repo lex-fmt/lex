@@ -227,9 +227,16 @@ function printParity(node, depth) {
 
     case "document_title": {
       const titleNode = findField(node, "title");
-      const title = titleNode ? leafText(titleNode) : "";
+      const subtitleNode = node.children.find(
+        (c) => c.tag === "document_subtitle",
+      );
+      let title = titleNode ? leafText(titleNode) : "";
+      // When subtitle is present, the trailing colon on the title is structural
+      // (delimiter between title and subtitle) — lex-core strips it
+      if (subtitleNode) {
+        title = title.replace(/:$/, "");
+      }
       console.log(`${ind(depth)}DocumentTitle "${title}"`);
-      const subtitleNode = findField(node, "subtitle");
       if (subtitleNode) {
         const subtitle = leafText(subtitleNode);
         console.log(`${ind(depth + 1)}DocumentSubtitle "${subtitle}"`);
