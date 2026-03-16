@@ -252,6 +252,14 @@ fn ast_to_parity(doc: &lex_core::lex::parsing::Document) -> String {
             parity_line(&mut out, 2, &format!("DocumentSubtitle \"{sub}\""));
         }
     }
+    // Document-level annotations (attached to document, not to children)
+    for ann in &doc.annotations {
+        parity_content_item(
+            &mut out,
+            1,
+            &lex_core::lex::ast::ContentItem::Annotation(ann.clone()),
+        );
+    }
     for item in doc.root.children.iter() {
         parity_content_item(&mut out, 1, item);
     }
@@ -353,6 +361,13 @@ fn parity_content_item(out: &mut String, depth: usize, item: &lex_core::lex::ast
                 &format!("Annotation \"{}\"", a.data.label.value),
             );
             for child in a.children.iter() {
+                // Skip empty paragraphs (lex-core creates default empty paragraph
+                // for marker-only annotations; tree-sitter doesn't)
+                if let ContentItem::Paragraph(p) = child {
+                    if p.lines.is_empty() {
+                        continue;
+                    }
+                }
                 parity_content_item(out, depth + 1, child);
             }
         }

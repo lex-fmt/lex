@@ -7,6 +7,11 @@
  * text, with zero assembly logic. If this script needs complex logic to make
  * tree-sitter output match lex-core, that's a real divergence to investigate.
  *
+ * The only non-trivial adaptation is stripping the verbatim indentation wall
+ * from content lines, since tree-sitter reports raw source positions while
+ * lex-core stores content relative to the wall. The wall column is read
+ * directly from the CST node positions (paragraph scol inside verbatim_block).
+ *
  * Usage:
  *   npx tree-sitter parse -x file.lex | node scripts/parity-print.js
  */
@@ -111,43 +116,140 @@ function findField(node, fieldName) {
 
 // --- Parity printer ---
 
-function indent(depth) {
+function ind(depth) {
   return "  ".repeat(depth);
+}
+
+/**
+ * Detect the verbatim wall column from a verbatim_block's content children.
+ * The wall is the column where content starts (paragraph scol inside the block).
+ * Returns -1 if no content found.
+ */
+function detectWallCol(verbatimNode) {
+  for (const child of verbatimNode.children) {
+    if (child.tag === "paragraph" || child.tag === "table_row") {
+      return parseInt(child.attrs.scol || "0", 10);
+    }
+  }
+  return -1;
+}
+
+/**
+ * Strip wall indentation from a raw text line.
+ * Tree-sitter reports continuation lines from column 0 (absolute),
+ * while lex-core stores content relative to the wall.
+ */
+function stripWall(text, wallCol, lineScol) {
+  const col = parseInt(lineScol || "0", 10);
+  if (col >= wallCol) {
+    // Line starts at or past the wall — text is already wall-relative
+    return text;
+  }
+  // Line starts before the wall — strip leading whitespace up to wallCol
+  let stripped = 0;
+  let i = 0;
+  while (i < text.length && stripped < wallCol) {
+    if (text[i] === "\t") {
+      stripped += 4 - (stripped % 4);
+    } else if (text[i] === " ") {
+      stripped++;
+    } else {
+      break;
+    }
+    i++;
+  }
+  return text.substring(i);
+}
+
+/**
+ * Print nodes inside a verbatim_block. Tree-sitter wraps verbatim content
+ * in paragraph > text_line nodes; lex-core has flat VerbatimLine nodes.
+ * We flatten paragraph/text_line to raw quoted lines to match.
+ */
+function printVerbatimChild(node, depth, wallCol) {
+  switch (node.tag) {
+    case "paragraph":
+      // Flatten: don't print Paragraph, just print its text lines
+      for (const child of node.children) {
+        printVerbatimChild(child, depth, wallCol);
+      }
+      break;
+
+    case "text_line": {
+      // Get the line's source column to determine wall-stripping
+      const lineScol = node.attrs.scol || "0";
+      const rawText = leafText(node);
+      const text = stripWall(rawText, wallCol, lineScol);
+      console.log(`${ind(depth)}"${text}"`);
+      break;
+    }
+
+    case "blank_line":
+      // Inside verbatim, blank lines become empty VerbatimLines
+      console.log(`${ind(depth)}""`);
+      break;
+
+    case "table_row": {
+      // Reconstruct pipe-delimited line from cells, trimming cell padding
+      const cells = node.children
+        .filter((c) => c.tag === "table_cell")
+        .map((c) => leafText(c).trim());
+      const line = `| ${cells.join(" | ")} |`;
+      console.log(`${ind(depth)}"${line}"`);
+      break;
+    }
+
+    case "separator_line": {
+      const lineScol = node.attrs.scol || "0";
+      const rawText = leafText(node);
+      const text = stripWall(rawText, wallCol, lineScol);
+      console.log(`${ind(depth)}"${text}"`);
+      break;
+    }
+
+    default:
+      // Skip annotation markers, closing labels, etc.
+      break;
+  }
 }
 
 function printParity(node, depth) {
   if (!node || !node.tag) return;
 
   switch (node.tag) {
-    case "document":
-      console.log(`${indent(depth)}Document`);
-      for (const child of node.children) {
+    case "document": {
+      console.log(`${ind(depth)}Document`);
+      const children = node.children;
+      for (let i = 0; i < children.length; i++) {
+        const child = children[i];
+        // Suppress trailing blank line at document level — CST artifact from final newline;
+        // lex-core AST does not track trailing document blank lines
+        if (i === children.length - 1 && child.tag === "blank_line") continue;
         printParity(child, depth + 1);
       }
       break;
+    }
 
     case "document_title": {
       const titleNode = findField(node, "title");
       const title = titleNode ? leafText(titleNode) : "";
-      console.log(`${indent(depth)}DocumentTitle "${title}"`);
-      // Check for subtitle
+      console.log(`${ind(depth)}DocumentTitle "${title}"`);
       const subtitleNode = findField(node, "subtitle");
       if (subtitleNode) {
         const subtitle = leafText(subtitleNode);
-        console.log(`${indent(depth + 1)}DocumentSubtitle "${subtitle}"`);
+        console.log(`${ind(depth + 1)}DocumentSubtitle "${subtitle}"`);
       }
-      // Blank lines after title are structural separators, not semantic content —
-      // lex-core AST doesn't include them in the DocumentTitle node
-
+      // Blank lines after title are structural separators, not semantic —
+      // lex-core AST doesn't include them in DocumentTitle
       break;
     }
 
     case "session": {
       const titleNode = findField(node, "title");
       const title = titleNode ? leafText(titleNode) : "";
-      console.log(`${indent(depth)}Session "${title}"`);
+      console.log(`${ind(depth)}Session "${title}"`);
       for (const child of node.children) {
-        if (child.attrs.field === "title") continue; // already handled
+        if (child.attrs.field === "title") continue;
         printParity(child, depth + 1);
       }
       break;
@@ -155,8 +257,10 @@ function printParity(node, depth) {
 
     case "definition": {
       const subjectNode = findField(node, "subject");
-      const subject = subjectNode ? leafText(subjectNode).replace(/:$/, "") : "";
-      console.log(`${indent(depth)}Definition "${subject}"`);
+      const subject = subjectNode
+        ? leafText(subjectNode).replace(/:$/, "")
+        : "";
+      console.log(`${ind(depth)}Definition "${subject}"`);
       for (const child of node.children) {
         if (child.attrs.field === "subject") continue;
         printParity(child, depth + 1);
@@ -165,7 +269,7 @@ function printParity(node, depth) {
     }
 
     case "list":
-      console.log(`${indent(depth)}List`);
+      console.log(`${ind(depth)}List`);
       for (const child of node.children) {
         printParity(child, depth + 1);
       }
@@ -174,23 +278,22 @@ function printParity(node, depth) {
     case "list_item": {
       const markerNode = node.children.find((c) => c.tag === "list_marker");
       const marker = markerNode ? leafText(markerNode).trimEnd() : "";
-      console.log(`${indent(depth)}ListItem "${marker}"`);
-      // Text content (first text_content child)
+      console.log(`${ind(depth)}ListItem "${marker}"`);
       const textNode = node.children.find((c) => c.tag === "text_content");
       if (textNode) {
         const text = leafText(textNode).trimStart();
-        console.log(`${indent(depth + 1)}"${text}"`);
+        console.log(`${ind(depth + 1)}"${text}"`);
       }
-      // Nested blocks
       for (const child of node.children) {
-        if (child.tag === "list_marker" || child.tag === "text_content") continue;
+        if (child.tag === "list_marker" || child.tag === "text_content")
+          continue;
         printParity(child, depth + 1);
       }
       break;
     }
 
     case "paragraph":
-      console.log(`${indent(depth)}Paragraph`);
+      console.log(`${ind(depth)}Paragraph`);
       for (const child of node.children) {
         printParity(child, depth + 1);
       }
@@ -198,33 +301,25 @@ function printParity(node, depth) {
 
     case "text_line": {
       const text = leafText(node).trimStart();
-      console.log(`${indent(depth)}"${text}"`);
+      console.log(`${ind(depth)}"${text}"`);
       break;
     }
 
     case "verbatim_block": {
       const subjectNode = findField(node, "subject");
-      const subject = subjectNode ? leafText(subjectNode).replace(/:$/, "") : "";
-      console.log(`${indent(depth)}VerbatimBlock "${subject}"`);
+      const subject = subjectNode
+        ? leafText(subjectNode).replace(/:$/, "")
+        : "";
+      console.log(`${ind(depth)}VerbatimBlock "${subject}"`);
+      const wallCol = detectWallCol(node);
       for (const child of node.children) {
         if (child.attrs.field === "subject") continue;
-        // Skip closing markers and annotation nodes
         if (
           child.tag === "annotation_marker" ||
-          child.tag === "annotation_header" ||
-          child.tag === "closing_label"
+          child.tag === "annotation_header"
         )
           continue;
-        printParity(child, depth + 1);
-      }
-      break;
-    }
-
-    case "verbatim_content": {
-      // Verbatim content lines — extract raw text
-      const text = leafText(node);
-      if (text.trim()) {
-        console.log(`${indent(depth)}"${text}"`);
+        printVerbatimChild(child, depth + 1, wallCol);
       }
       break;
     }
@@ -234,7 +329,7 @@ function printParity(node, depth) {
         (c) => c.tag === "annotation_header",
       );
       const label = headerNode ? leafText(headerNode).trim() : "";
-      console.log(`${indent(depth)}Annotation "${label}"`);
+      console.log(`${ind(depth)}Annotation "${label}"`);
       for (const child of node.children) {
         if (
           child.tag === "annotation_marker" ||
@@ -253,16 +348,15 @@ function printParity(node, depth) {
         (c) => c.tag === "annotation_header",
       );
       const label = headerNode ? leafText(headerNode).trim() : "";
-      console.log(`${indent(depth)}Annotation "${label}"`);
+      console.log(`${ind(depth)}Annotation "${label}"`);
       break;
     }
 
     case "blank_line":
-      console.log(`${indent(depth)}BlankLine`);
+      console.log(`${ind(depth)}BlankLine`);
       break;
 
     default:
-      // Skip structural/anonymous nodes, recurse into children
       for (const child of node.children) {
         printParity(child, depth);
       }
