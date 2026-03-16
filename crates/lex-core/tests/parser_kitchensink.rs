@@ -15,7 +15,9 @@ fn kitchensink_doc() -> lex_core::lex::parsing::Document {
 #[test]
 fn kitchensink_document_title() {
     let doc = kitchensink_doc();
-    assert_ast(&doc).title("Kitchensink Test Document {{document-title}}");
+    assert_ast(&doc)
+        .title("Kitchensink Test Document")
+        .subtitle("A Comprehensive Regression Test {{paragraph}}");
 }
 
 #[test]

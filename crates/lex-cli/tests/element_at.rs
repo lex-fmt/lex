@@ -8,7 +8,7 @@ fn test_element_at_basic() {
     let mut cmd = cargo_bin_cmd!("lex");
     cmd.arg("element-at")
         .arg("../../comms/specs/benchmark/010-kitchensink.lex")
-        .arg("17")
+        .arg("18")
         .arg("5");
 
     cmd.assert()
@@ -21,7 +21,7 @@ fn test_element_at_with_all_flag() {
     let mut cmd = cargo_bin_cmd!("lex");
     cmd.arg("element-at")
         .arg("../../comms/specs/benchmark/010-kitchensink.lex")
-        .arg("17")
+        .arg("18")
         .arg("5")
         .arg("--all");
 
