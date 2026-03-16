@@ -14,6 +14,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_DIR="$(cd "$TS_DIR/.." && pwd)"
 PRINTER="$SCRIPT_DIR/parity-print.js"
+ALLOWLIST="$SCRIPT_DIR/parity-allowlist.txt"
 
 VERBOSE=false
 SINGLE_FILE=""
@@ -25,9 +26,26 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# Load allowlist (one path per line, # comments and blanks ignored)
+ALLOWED_LIST=""
+if [[ -f "$ALLOWLIST" ]]; then
+    while IFS= read -r line; do
+        line="${line%%#*}"
+        line="$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+        [[ -z "$line" ]] && continue
+        ALLOWED_LIST="${ALLOWED_LIST}|${line}"
+    done < "$ALLOWLIST"
+fi
+
+is_allowed() {
+    local path="$1"
+    echo "$ALLOWED_LIST" | grep -qF "|${path}"
+}
+
 PASS=0
 FAIL=0
 SKIP=0
+EXPECTED=0
 ERRORS=""
 
 check_file() {
@@ -58,6 +76,9 @@ check_file() {
     if diff <(echo "$lex_output") <(echo "$ts_output") > /dev/null 2>&1; then
         printf "  %-60s \033[32mPASS\033[0m\n" "$rel_path"
         PASS=$((PASS + 1))
+    elif is_allowed "$rel_path"; then
+        printf "  %-60s \033[33mEXPECTED\033[0m\n" "$rel_path"
+        EXPECTED=$((EXPECTED + 1))
     else
         printf "  %-60s \033[31mFAIL\033[0m\n" "$rel_path"
         FAIL=$((FAIL + 1))
@@ -84,9 +105,9 @@ fi
 
 echo ""
 echo "────────────"
-printf "Results: \033[32m%d passed\033[0m, \033[31m%d failed\033[0m, %d skipped\n" "$PASS" "$FAIL" "$SKIP"
+printf "Results: \033[32m%d passed\033[0m, \033[31m%d failed\033[0m, \033[33m%d expected\033[0m, %d skipped\n" "$PASS" "$FAIL" "$EXPECTED" "$SKIP"
 
 if [[ $FAIL -gt 0 ]]; then
-    printf "\nFailed files:%b\n" "$ERRORS"
+    printf "\nUnexpected failures:%b\n" "$ERRORS"
     exit 1
 fi
