@@ -225,25 +225,13 @@ fn from_lex_content_item_with_level(item: &LexContentItem, level: usize) -> DocN
 }
 
 /// Converts a lex session to an IR heading.
+///
+/// Session markers (e.g. "1." in "1. Introduction") are part of the author's
+/// title text and are preserved as regular `InlineContent::Text` — not as a
+/// separate structural variant. The full title text (including any numbering
+/// prefix) is kept in `Heading.content`.
 fn from_lex_session(session: &LexSession, level: usize) -> DocNode {
-    // Preserve the original session title (including any sequence marker)
-    let mut content = Vec::new();
-
-    // If there is a marker, add it as a separate inline element
-    if let Some(marker) = &session.marker {
-        content.push(InlineContent::Marker(marker.as_str().to_string()));
-        // Add a space after marker if title is not empty
-        if !session.title.as_string().is_empty() {
-            content.push(InlineContent::Text(" ".to_string()));
-        }
-
-        // Strip marker from title content to avoid duplication
-        let mut title_content = convert_inline_content(&session.title);
-        strip_marker_from_content(&mut title_content, marker.as_str());
-        content.extend(title_content);
-    } else {
-        content.extend(convert_inline_content(&session.title));
-    }
+    let content = convert_inline_content(&session.title);
 
     let children = convert_children(&session.children, level + 1);
     DocNode::Heading(Heading {
@@ -251,15 +239,6 @@ fn from_lex_session(session: &LexSession, level: usize) -> DocNode {
         content,
         children,
     })
-}
-
-fn strip_marker_from_content(content: &mut [InlineContent], marker: &str) {
-    if let Some(InlineContent::Text(text)) = content.first_mut() {
-        if let Some(pos) = text.find(marker) {
-            let after = &text[pos + marker.len()..];
-            *text = after.trim_start().to_string();
-        }
-    }
 }
 
 /// Converts a lex paragraph to an IR paragraph.
@@ -324,19 +303,11 @@ fn from_lex_list_item(list_item: &LexListItem, level: usize) -> DocNode {
 }
 
 /// Converts a lex list item to an IR list item struct.
+///
+/// List markers are structural (captured by `List.style` and `List.form` on the
+/// parent) and are not included in the item's inline content.
 fn convert_list_item(list_item: &LexListItem, level: usize) -> ListItem {
-    // List item has text (Vec<TextContent>) and children
     let mut content = Vec::new();
-
-    // Add marker
-    content.push(InlineContent::Marker(
-        list_item.marker.as_string().to_string(),
-    ));
-    // Add space after marker if there is text
-    if !list_item.text.is_empty() {
-        content.push(InlineContent::Text(" ".to_string()));
-    }
-
     for text_content in &list_item.text {
         content.extend(convert_inline_content(text_content));
     }
