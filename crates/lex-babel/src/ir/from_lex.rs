@@ -13,6 +13,17 @@ use super::nodes::{
 
 /// Converts a lex document to the IR.
 pub fn from_lex_document(doc: &LexDocument) -> Document {
+    // Extract document title and subtitle
+    let title = doc
+        .title
+        .as_ref()
+        .map(|t| convert_inline_content(&t.content));
+    let subtitle = doc
+        .title
+        .as_ref()
+        .and_then(|t| t.subtitle.as_ref())
+        .map(convert_inline_content);
+
     let mut children = convert_children(&doc.root.children, 2);
 
     let mut parameters = Vec::new();
@@ -106,7 +117,11 @@ pub fn from_lex_document(doc: &LexDocument) -> Document {
         children.insert(0, frontmatter);
     }
 
-    Document { children }
+    Document {
+        title,
+        subtitle,
+        children,
+    }
 }
 
 /// Helper: Converts a list of content items, filtering out blank lines

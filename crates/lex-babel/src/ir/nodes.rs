@@ -21,6 +21,8 @@ pub enum DocNode {
 /// Represents the root of a document.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Document {
+    pub title: Option<Vec<InlineContent>>,
+    pub subtitle: Option<Vec<InlineContent>>,
     pub children: Vec<DocNode>,
 }
 

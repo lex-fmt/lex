@@ -7,6 +7,8 @@ use lex_babel::ir::to_events::tree_to_events;
 
 fn create_test_tree() -> DocNode {
     DocNode::Document(Document {
+        title: None,
+        subtitle: None,
         children: vec![
             DocNode::Heading(Heading {
                 level: 1,

@@ -56,6 +56,8 @@ pub fn parse_to_ir(source: &str) -> Result<Document, FormatError> {
     });
 
     Ok(Document {
+        title: None,
+        subtitle: None,
         children: vec![root_heading],
     })
 }

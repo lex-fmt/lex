@@ -524,7 +524,11 @@ fn auto_close_all_headings(stack: &mut Vec<StackNode>) -> Result<(), ConversionE
 /// ```
 pub fn events_to_tree(events: &[Event]) -> Result<Document, ConversionError> {
     if events.is_empty() {
-        return Ok(Document { children: vec![] });
+        return Ok(Document {
+            title: None,
+            subtitle: None,
+            children: vec![],
+        });
     }
 
     let mut stack: Vec<StackNode> = Vec::new();
@@ -533,7 +537,11 @@ pub fn events_to_tree(events: &[Event]) -> Result<Document, ConversionError> {
     // Expect StartDocument as first event
     match event_iter.next() {
         Some(Event::StartDocument) => {
-            stack.push(StackNode::Document(Document { children: vec![] }));
+            stack.push(StackNode::Document(Document {
+                title: None,
+                subtitle: None,
+                children: vec![],
+            }));
         }
         Some(other) => {
             return Err(ConversionError::MismatchedEvents {
@@ -541,7 +549,13 @@ pub fn events_to_tree(events: &[Event]) -> Result<Document, ConversionError> {
                 found: format!("{other:?}"),
             });
         }
-        None => return Ok(Document { children: vec![] }),
+        None => {
+            return Ok(Document {
+                title: None,
+                subtitle: None,
+                children: vec![],
+            })
+        }
     }
 
     // Process events
@@ -1282,6 +1296,8 @@ mod tests {
         use crate::ir::to_events::tree_to_events;
 
         let original_doc = Document {
+            title: None,
+            subtitle: None,
             children: vec![DocNode::Heading(Heading {
                 level: 1,
                 content: vec![InlineContent::Text("Title".to_string())],
@@ -1306,6 +1322,8 @@ mod tests {
         use crate::ir::to_events::tree_to_events;
 
         let original_doc = Document {
+            title: None,
+            subtitle: None,
             children: vec![DocNode::Heading(Heading {
                 level: 1,
                 content: vec![

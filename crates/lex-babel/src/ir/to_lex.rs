@@ -25,7 +25,25 @@ pub fn to_lex_document(doc: &Document) -> LexDocument {
         children.extend(to_lex_content_items(node, 1));
     }
 
-    LexDocument::with_content(children)
+    let mut lex_doc = LexDocument::with_content(children);
+
+    // Restore document title and subtitle from IR
+    if let Some(title_inlines) = &doc.title {
+        let title_text = inline_content_to_text(title_inlines);
+        if !title_text.is_empty() {
+            use lex_core::lex::ast::elements::document::DocumentTitle;
+            let title_tc = TextContent::from_string(title_text, None);
+            let subtitle_tc = doc.subtitle.as_ref().map(|sub_inlines| {
+                TextContent::from_string(inline_content_to_text(sub_inlines), None)
+            });
+            lex_doc.title = Some(match subtitle_tc {
+                Some(sub) => DocumentTitle::with_subtitle(title_tc, sub, Range::default()),
+                None => DocumentTitle::new(title_tc, Range::default()),
+            });
+        }
+    }
+
+    lex_doc
 }
 
 /// Converts an IR DocNode to one or more Lex ContentItems.
@@ -557,6 +575,8 @@ mod tests {
     #[test]
     fn test_full_document_to_lex() {
         let ir_doc = Document {
+            title: None,
+            subtitle: None,
             children: vec![
                 DocNode::Paragraph(Paragraph {
                     content: vec![InlineContent::Text("First paragraph".to_string())],

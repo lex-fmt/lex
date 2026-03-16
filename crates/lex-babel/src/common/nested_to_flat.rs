@@ -46,7 +46,7 @@ pub fn tree_to_events(root_node: &DocNode) -> Vec<Event> {
 
 fn walk_node(node: &DocNode, events: &mut Vec<Event>) {
     match node {
-        DocNode::Document(Document { children }) => {
+        DocNode::Document(Document { children, .. }) => {
             events.push(Event::StartDocument);
             for child in children {
                 walk_node(child, events);
@@ -272,6 +272,8 @@ mod tests {
 
     fn sample_tree() -> DocNode {
         DocNode::Document(Document {
+            title: None,
+            subtitle: None,
             children: vec![
                 DocNode::Heading(Heading {
                     level: 2,
