@@ -20,7 +20,10 @@ use std::ops::Range;
 mod builder;
 mod grammar;
 
-use builder::{blank_line_node_from_range, convert_pattern_to_node, PatternMatch};
+use builder::{
+    blank_line_node_from_range, container_starts_with_pipe_row, convert_pattern_to_node,
+    PatternMatch,
+};
 use grammar::{GRAMMAR_PATTERNS, LIST_ITEM_REGEX};
 
 /// Pattern matcher for declarative grammar using regex-based matching
@@ -49,6 +52,12 @@ impl GrammarMatcher {
 
         // Try verbatim block first (requires special imperative matching logic)
         if let Some(result) = Self::match_verbatim_block(tokens, start_idx) {
+            return Some(result);
+        }
+
+        // Try table: subject + container whose first non-blank line is a pipe row.
+        // Must run before the definition pattern (which matches the same subject + container).
+        if let Some(result) = Self::match_table(tokens, start_idx) {
             return Some(result);
         }
 
@@ -362,6 +371,55 @@ impl GrammarMatcher {
                     )
             }
         }
+    }
+
+    /// Match tables using imperative logic.
+    ///
+    /// A table is a subject line followed immediately by a container whose first
+    /// non-blank line starts with a pipe character. This runs before the definition
+    /// pattern (which matches the same `subject + container` shape) to ensure
+    /// tables are detected by their content.
+    fn match_table(
+        tokens: &[LineContainer],
+        start_idx: usize,
+    ) -> Option<(PatternMatch, Range<usize>)> {
+        use LineType::{SubjectLine, SubjectOrListItemLine};
+
+        if start_idx >= tokens.len() {
+            return None;
+        }
+
+        // Must start with a subject line
+        let is_subject = matches!(
+            &tokens[start_idx],
+            LineContainer::Token(line) if matches!(line.line_type, SubjectLine | SubjectOrListItemLine)
+        );
+        if !is_subject {
+            return None;
+        }
+
+        // Must be immediately followed by a container
+        let content_idx = start_idx + 1;
+        if content_idx >= tokens.len() {
+            return None;
+        }
+        let container = &tokens[content_idx];
+        if !matches!(container, LineContainer::Container { .. }) {
+            return None;
+        }
+
+        // Container's first non-blank line must start with a pipe
+        if !container_starts_with_pipe_row(container) {
+            return None;
+        }
+
+        Some((
+            PatternMatch::Table {
+                subject_idx: 0,
+                content_idx: 1,
+            },
+            start_idx..content_idx + 1,
+        ))
     }
 
     /// Match verbatim blocks using imperative logic.

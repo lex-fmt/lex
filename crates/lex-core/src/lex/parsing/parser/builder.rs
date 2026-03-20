@@ -12,8 +12,9 @@ mod builders;
 
 use builders::{
     build_annotation_block, build_annotation_single, build_blank_line_group, build_definition,
-    build_list, build_paragraph, build_session, build_verbatim_block,
+    build_list, build_paragraph, build_session, build_table, build_verbatim_block,
 };
+pub(super) use builders::container_starts_with_pipe_row;
 
 /// Type alias for the recursive parser function callback
 type ParserFn = dyn Fn(Vec<LineContainer>, &str) -> Result<Vec<ParseNode>, String>;
@@ -42,6 +43,11 @@ pub(super) enum PatternMatch {
     },
     /// Definition: subject + immediate indent + content
     Definition {
+        subject_idx: usize,
+        content_idx: usize,
+    },
+    /// Table: subject + container whose first non-blank line is a pipe row
+    Table {
         subject_idx: usize,
         content_idx: usize,
     },
@@ -114,6 +120,14 @@ pub(super) fn convert_pattern_to_node(
             pattern_offset + content_idx,
             source,
             parse_children,
+        ),
+        PatternMatch::Table {
+            subject_idx,
+            content_idx,
+        } => build_table(
+            tokens,
+            pattern_offset + subject_idx,
+            pattern_offset + content_idx,
         ),
         PatternMatch::Session {
             subject_idx,

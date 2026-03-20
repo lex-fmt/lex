@@ -404,13 +404,8 @@ impl TokenCollector {
             }
         }
 
-        self.push_range(
-            &table.closing_data.label.location,
-            LexSemanticTokenKind::DataLabel,
-        );
-        for parameter in &table.closing_data.parameters {
-            self.push_range(&parameter.location, LexSemanticTokenKind::DataParameter);
-        }
+        // Table config annotations are in table.annotations — processed below
+        // by process_annotations()
 
         self.process_annotations(table.annotations());
     }

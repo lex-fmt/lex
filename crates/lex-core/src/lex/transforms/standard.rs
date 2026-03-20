@@ -135,6 +135,9 @@ pub static STRING_TO_AST: Lazy<AstTransform> = Lazy::new(|| {
         // Attach annotations as metadata
         doc = AttachAnnotations::new().run(doc)?;
 
+        // Apply table config from :: table :: annotations (header, align)
+        doc = crate::lex::assembling::stages::ApplyTableConfig::new().run(doc)?;
+
         Ok(doc)
     })
 });

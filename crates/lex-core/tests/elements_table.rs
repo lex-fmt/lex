@@ -21,7 +21,7 @@ fn test_table_01_flat_minimal() {
     assert_ast(&doc).item_count(1).item(0, |item| {
         item.assert_table()
             .subject("Favorite Pets")
-            .closing_label("table")
+            .annotation_count(0)
             .mode(VerbatimBlockMode::Inflow)
             .header_row_count(1)
             .body_row_count(2)
@@ -40,7 +40,7 @@ fn test_table_02_flat_with_alignment() {
     assert_ast(&doc).item_count(1).item(0, |item| {
         item.assert_table()
             .subject("Test Scores")
-            .has_closing_parameter_with_value("align", "lcr")
+            .has_annotation_parameter_with_value("align", "lcr")
             .header_row_count(1)
             .body_row_count(3)
             .column_count(3)
@@ -60,7 +60,7 @@ fn test_table_03_flat_header_count() {
     assert_ast(&doc).item_count(1).item(0, |item| {
         item.assert_table()
             .subject("Quarterly Revenue")
-            .has_closing_parameter_with_value("header", "2")
+            .has_annotation_parameter_with_value("header", "2")
             .header_row_count(2)
             .body_row_count(2);
     });
@@ -192,7 +192,7 @@ fn test_table_05_flat_multiline() {
 fn test_table_multiline_from_string() {
     use lex_core::lex::parsing::parse_document;
 
-    let source = "Notes:\n    | Key | Value |\n\n    | A   | line1 |\n    |     | line2 |\n\n    | B   | solo  |\n:: table ::\n";
+    let source = "Notes:\n    | Key | Value |\n\n    | A   | line1 |\n    |     | line2 |\n\n    | B   | solo  |\n";
     let doc = parse_document(source).unwrap();
 
     assert_ast(&doc).item(0, |item| {
@@ -260,7 +260,7 @@ fn test_table_16_flat_no_header() {
     assert_ast(&doc).item_count(1).item(0, |item| {
         item.assert_table()
             .subject("Quick Reference")
-            .has_closing_parameter_with_value("header", "0")
+            .has_annotation_parameter_with_value("header", "0")
             .header_row_count(0)
             .body_row_count(2)
             .body_cells(0, &["Alice", "95"])
@@ -295,7 +295,7 @@ fn test_table_11_fullwidth() {
 fn test_table_from_string() {
     use lex_core::lex::parsing::parse_document;
 
-    let source = "Simple Table:\n    | A | B |\n    | 1 | 2 |\n:: table ::\n";
+    let source = "Simple Table:\n    | A | B |\n    | 1 | 2 |\n";
     let doc = parse_document(source).unwrap();
 
     assert_ast(&doc).item_count(1).item(0, |item| {
@@ -312,7 +312,7 @@ fn test_table_from_string() {
 fn test_table_header_cells_marked_as_header() {
     use lex_core::lex::parsing::parse_document;
 
-    let source = "T:\n    | H1 | H2 |\n    | B1 | B2 |\n:: table ::\n";
+    let source = "T:\n    | H1 | H2 |\n    | B1 | B2 |\n";
     let doc = parse_document(source).unwrap();
 
     assert_ast(&doc).item(0, |item| {
@@ -330,7 +330,7 @@ fn test_table_header_cells_marked_as_header() {
 fn test_table_separator_only_dashes() {
     use lex_core::lex::parsing::parse_document;
 
-    let source = "T:\n    | A | B |\n    |---|---|\n    | 1 | 2 |\n:: table ::\n";
+    let source = "T:\n    | A | B |\n    |---|---|\n    | 1 | 2 |\n";
     let doc = parse_document(source).unwrap();
 
     // Separator should be ignored
@@ -440,7 +440,7 @@ fn test_table_23_cell_with_annotation() {
 fn test_table_block_content_from_string() {
     use lex_core::lex::parsing::parse_document;
 
-    let source = "T:\n    | Key | Value |\n\n    | A   | - item1 |\n    |     | - item2 |\n\n    | B   | plain   |\n:: table ::\n";
+    let source = "T:\n    | Key | Value |\n\n    | A   | - item1 |\n    |     | - item2 |\n\n    | B   | plain   |\n";
     let doc = parse_document(source).unwrap();
 
     assert_ast(&doc).item(0, |item| {
@@ -463,7 +463,7 @@ fn test_table_compact_mode_no_block_content() {
     use lex_core::lex::parsing::parse_document;
 
     // Compact mode (no blank lines) should never produce block content
-    let source = "T:\n    | A | - item |\n    | B | plain  |\n:: table ::\n";
+    let source = "T:\n    | A | - item |\n    | B | plain  |\n";
     let doc = parse_document(source).unwrap();
 
     assert_ast(&doc).item(0, |item| {
@@ -478,7 +478,7 @@ fn test_table_compact_mode_no_block_content() {
 fn test_table_inline_parsing_of_cells() {
     use lex_core::lex::parsing::parse_document;
 
-    let source = "T:\n    | *bold* | normal |\n:: table ::\n";
+    let source = "T:\n    | *bold* | normal |\n";
     let doc = parse_document(source).unwrap();
 
     // Cell content should be inline-parsed (TextContent with potential inlines)
