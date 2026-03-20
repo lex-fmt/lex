@@ -53,11 +53,13 @@ pub(in crate::lex::parsing::parser::builder) fn build_table(
         None
     };
 
-    Ok(ParseNode::new(NodeType::Table, vec![], vec![]).with_payload(ParseNodePayload::Table {
-        subject: subject_token,
-        content_lines: all_lines,
-        config_annotation_tokens,
-    }))
+    Ok(
+        ParseNode::new(NodeType::Table, vec![], vec![]).with_payload(ParseNodePayload::Table {
+            subject: subject_token,
+            content_lines: all_lines,
+            config_annotation_tokens,
+        }),
+    )
 }
 
 /// Check if the first non-blank line in a container starts with a pipe character.

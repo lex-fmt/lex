@@ -393,19 +393,23 @@ mod tests {
             .find(|s| s.name.contains("My Table"))
             .expect("Table symbol not found");
         assert_eq!(table_sym.kind, SymbolKind::CONSTANT);
-        assert!(table_sym
-            .detail
-            .as_ref()
-            .unwrap()
-            .contains("2 row(s)"));
+        assert!(table_sym.detail.as_ref().unwrap().contains("2 row(s)"));
 
         // Table should have row children
-        assert_eq!(table_sym.children.len(), 2, "Table should have 2 row children");
+        assert_eq!(
+            table_sym.children.len(),
+            2,
+            "Table should have 2 row children"
+        );
 
         let row1_sym = &table_sym.children[0];
         assert_eq!(row1_sym.name, "Row 1");
         assert_eq!(row1_sym.kind, SymbolKind::ENUM);
-        assert_eq!(row1_sym.children.len(), 2, "Row 1 should have 2 cell children");
+        assert_eq!(
+            row1_sym.children.len(),
+            2,
+            "Row 1 should have 2 cell children"
+        );
 
         // Check cell names
         assert_eq!(row1_sym.children[0].name, "Header A");

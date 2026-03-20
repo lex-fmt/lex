@@ -342,11 +342,7 @@ fn parity_content_item(out: &mut String, depth: usize, item: &lex_core::lex::ast
             parity_line(out, depth, &format!("\"{}\"", fl.content.as_string()));
         }
         ContentItem::Table(t) => {
-            parity_line(
-                out,
-                depth,
-                &format!("Table \"{}\"", t.subject.as_string()),
-            );
+            parity_line(out, depth, &format!("Table \"{}\"", t.subject.as_string()));
             for row in t.header_rows.iter().chain(t.body_rows.iter()) {
                 let cells: Vec<&str> = row.cells.iter().map(|c| c.text()).collect();
                 let line = format!("| {} |", cells.join(" | "));

@@ -623,7 +623,6 @@ fn split_header_body(
     (header_rows, body_rows)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
