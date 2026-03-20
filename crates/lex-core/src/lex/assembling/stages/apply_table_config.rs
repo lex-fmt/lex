@@ -116,7 +116,11 @@ fn resplit_header_body(table: &mut Table, header_count: usize) {
 
 /// Apply column alignments to all cells in the table.
 fn apply_alignments(table: &mut Table, alignments: &[TableCellAlignment]) {
-    for row in table.header_rows.iter_mut().chain(table.body_rows.iter_mut()) {
+    for row in table
+        .header_rows
+        .iter_mut()
+        .chain(table.body_rows.iter_mut())
+    {
         for (col_idx, cell) in row.cells.iter_mut().enumerate() {
             if let Some(align) = alignments.get(col_idx) {
                 cell.align = *align;

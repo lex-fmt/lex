@@ -139,7 +139,7 @@ fn spec_table() {
     let doc = Lexplore::from_path(workspace_path("comms/specs/elements/table.lex"))
         .parse()
         .unwrap();
-    assert_ast(&doc).item_count(14).item(0, |item| {
+    assert_ast(&doc).item_count(15).item(0, |item| {
         item.assert_session().label("Introduction");
     });
 }

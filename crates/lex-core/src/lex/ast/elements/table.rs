@@ -226,6 +226,13 @@ impl Table {
             .unwrap_or(0)
     }
 
+    /// Iterate over all block-level children across all cells in all rows
+    pub fn cell_children_iter(&self) -> impl Iterator<Item = &ContentItem> {
+        self.all_rows()
+            .flat_map(|row| row.cells.iter())
+            .flat_map(|cell| cell.children.iter())
+    }
+
     /// Annotations attached to this table.
     pub fn annotations(&self) -> &[Annotation] {
         &self.annotations
@@ -257,6 +264,22 @@ impl AstNode for Table {
 
     fn accept(&self, visitor: &mut dyn Visitor) {
         visitor.visit_table(self);
+        // Descend into cell children (block-level content inside cells)
+        for row in self.all_rows() {
+            for cell in &row.cells {
+                for child in cell.children.iter() {
+                    child.accept(visitor);
+                }
+            }
+        }
+        // Visit annotations
+        for annotation in &self.annotations {
+            annotation.accept(visitor);
+        }
+        // Visit footnotes
+        if let Some(footnotes) = &self.footnotes {
+            footnotes.accept(visitor);
+        }
         visitor.leave_table(self);
     }
 }

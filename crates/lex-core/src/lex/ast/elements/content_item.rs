@@ -390,17 +390,31 @@ impl ContentItem {
         }
     }
 
+    /// Iterate over all effective children, including table cell children.
+    /// For most items, this delegates to `children()`. For tables,
+    /// it iterates through all cells' block-level children.
+    fn effective_children_iter(&self) -> Box<dyn Iterator<Item = &ContentItem> + '_> {
+        match self {
+            ContentItem::Table(t) => Box::new(t.cell_children_iter()),
+            _ => {
+                if let Some(children) = self.children() {
+                    Box::new(children.iter())
+                } else {
+                    Box::new(std::iter::empty())
+                }
+            }
+        }
+    }
+
     /// Find the deepest element at the given position in this item and its children
     /// Returns the deepest (most nested) element that contains the position
     pub fn element_at(&self, pos: Position) -> Option<&ContentItem> {
         // Check nested items first - even if parent location doesn't contain position,
         // nested elements might. This is important because parent locations (like sessions)
         // may only cover their title, not their nested content.
-        if let Some(children) = self.children() {
-            for child in children {
-                if let Some(result) = child.element_at(pos) {
-                    return Some(result); // Return deepest element found
-                }
+        for child in self.effective_children_iter() {
+            if let Some(result) = child.element_at(pos) {
+                return Some(result); // Return deepest element found
             }
         }
 
@@ -422,11 +436,9 @@ impl ContentItem {
     /// VerbatimBlock), it returns the deepest line element, not the container itself.
     pub fn visual_line_at(&self, pos: Position) -> Option<&ContentItem> {
         // First, check children for visual line nodes (depth-first search)
-        if let Some(children) = self.children() {
-            for child in children {
-                if let Some(result) = child.visual_line_at(pos) {
-                    return Some(result);
-                }
+        for child in self.effective_children_iter() {
+            if let Some(result) = child.visual_line_at(pos) {
+                return Some(result);
             }
         }
 
@@ -470,11 +482,9 @@ impl ContentItem {
         }
 
         // If not a block element, check children
-        if let Some(children) = self.children() {
-            for child in children {
-                if let Some(result) = child.block_element_at(pos) {
-                    return Some(result);
-                }
+        for child in self.effective_children_iter() {
+            if let Some(result) = child.block_element_at(pos) {
+                return Some(result);
             }
         }
 
@@ -485,13 +495,11 @@ impl ContentItem {
     /// Returns a vector of nodes [self, child, grandchild, ...]
     pub fn node_path_at_position(&self, pos: Position) -> Vec<&ContentItem> {
         // Check nested items first
-        if let Some(children) = self.children() {
-            for child in children {
-                let mut path = child.node_path_at_position(pos);
-                if !path.is_empty() {
-                    path.insert(0, self);
-                    return path;
-                }
+        for child in self.effective_children_iter() {
+            let mut path = child.node_path_at_position(pos);
+            if !path.is_empty() {
+                path.insert(0, self);
+                return path;
             }
         }
 
@@ -506,15 +514,10 @@ impl ContentItem {
     /// Recursively iterate all descendants of this node (depth-first pre-order)
     /// Does not include the node itself, only its descendants
     pub fn descendants(&self) -> Box<dyn Iterator<Item = &ContentItem> + '_> {
-        if let Some(children) = self.children() {
-            Box::new(
-                children
-                    .iter()
-                    .flat_map(|child| std::iter::once(child).chain(child.descendants())),
-            )
-        } else {
-            Box::new(std::iter::empty())
-        }
+        Box::new(
+            self.effective_children_iter()
+                .flat_map(|child| std::iter::once(child).chain(child.descendants())),
+        )
     }
 
     /// Recursively iterate all descendants with their relative depth
@@ -523,14 +526,10 @@ impl ContentItem {
         &self,
         start_depth: usize,
     ) -> Box<dyn Iterator<Item = (&ContentItem, usize)> + '_> {
-        if let Some(children) = self.children() {
-            Box::new(children.iter().flat_map(move |child| {
-                std::iter::once((child, start_depth))
-                    .chain(child.descendants_with_depth(start_depth + 1))
-            }))
-        } else {
-            Box::new(std::iter::empty())
-        }
+        Box::new(self.effective_children_iter().flat_map(move |child| {
+            std::iter::once((child, start_depth))
+                .chain(child.descendants_with_depth(start_depth + 1))
+        }))
     }
 }
 

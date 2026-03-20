@@ -10,11 +10,11 @@ use std::ops::Range;
 
 mod builders;
 
+pub(super) use builders::container_starts_with_pipe_row;
 use builders::{
     build_annotation_block, build_annotation_single, build_blank_line_group, build_definition,
     build_list, build_paragraph, build_session, build_table, build_verbatim_block,
 };
-pub(super) use builders::container_starts_with_pipe_row;
 
 /// Type alias for the recursive parser function callback
 type ParserFn = dyn Fn(Vec<LineContainer>, &str) -> Result<Vec<ParseNode>, String>;
