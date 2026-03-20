@@ -295,15 +295,19 @@ pub fn verbatim_block_from_lines(
 pub fn table_from_lines(
     subject_token: &LineToken,
     content_tokens: &[LineToken],
-    closing_data: Data,
+    closing_data: Option<Data>,
     source: &str,
     source_location: &SourceLocation,
 ) -> ContentItem {
     // 1. Extract (reuses verbatim wall stripping + parses pipe rows)
-    let data = extraction::extract_table_data(subject_token, content_tokens, &closing_data, source);
+    let data =
+        extraction::extract_table_data(subject_token, content_tokens, closing_data.as_ref(), source);
 
-    // 2. Extract alignment hints from closing annotation
-    let alignments = extraction::table::extract_alignments(&closing_data);
+    // 2. Extract alignment hints from annotation (if present)
+    let alignments = closing_data
+        .as_ref()
+        .map(|d| extraction::table::extract_alignments(d))
+        .unwrap_or_default();
 
     // 3. Create
     ast_nodes::table_node(data, closing_data, &alignments, source_location)

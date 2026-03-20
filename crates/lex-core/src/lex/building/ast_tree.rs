@@ -242,8 +242,8 @@ impl<'a> AstTreeBuilder<'a> {
             panic!("Expected Table payload for Table node");
         };
 
-        let closing_data =
-            ast_api::data_from_tokens(closing_data_tokens, self.source, &self.source_location);
+        let closing_data = closing_data_tokens
+            .map(|tokens| ast_api::data_from_tokens(tokens, self.source, &self.source_location));
 
         ast_api::table_from_lines(
             &subject,

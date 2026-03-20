@@ -65,7 +65,7 @@ pub(in crate::lex::building) struct TableData {
 pub(in crate::lex::building) fn extract_table_data(
     subject_token: &LineToken,
     content_tokens: &[LineToken],
-    closing_data: &Data,
+    closing_data: Option<&Data>,
     source: &str,
 ) -> TableData {
     // Reuse verbatim extraction for mode detection + wall stripping
@@ -105,8 +105,10 @@ pub(in crate::lex::building) fn extract_table_data(
         }
     }
 
-    // Split into header/body based on closing annotation parameters
-    let header_count = extract_header_count(closing_data);
+    // Split into header/body based on annotation parameters (if present)
+    let header_count = closing_data
+        .map(|d| extract_header_count(d))
+        .unwrap_or(1);
     let (header_rows, body_rows) = split_header_body(&mut rows, header_count);
 
     TableData {
