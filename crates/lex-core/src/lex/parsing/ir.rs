@@ -38,11 +38,12 @@ pub enum ParseNodePayload {
         content_lines: Vec<LineToken>,
         closing_data_tokens: Vec<TokenLocation>,
     },
-    /// Raw line tokens needed to build a table (same outer structure as verbatim)
+    /// Raw line tokens needed to build a table.
+    /// closing_data_tokens is None when the table has no :: table :: annotation inside.
     Table {
         subject: LineToken,
         content_lines: Vec<LineToken>,
-        closing_data_tokens: Vec<TokenLocation>,
+        closing_data_tokens: Option<Vec<TokenLocation>>,
     },
 }
 

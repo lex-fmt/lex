@@ -174,8 +174,8 @@ pub struct Table {
     pub body_rows: Vec<TableRow>,
     /// Optional scoped footnote definitions
     pub footnotes: Option<Box<List>>,
-    /// Closing annotation (:: table params? ::)
-    pub closing_data: Data,
+    /// Optional table annotation (:: table params? ::) for configuration
+    pub closing_data: Option<Data>,
     /// Annotations attached to this table
     pub annotations: Vec<Annotation>,
     /// Location spanning the entire table element
@@ -189,7 +189,7 @@ impl Table {
         subject: TextContent,
         header_rows: Vec<TableRow>,
         body_rows: Vec<TableRow>,
-        closing_data: Data,
+        closing_data: Option<Data>,
         mode: VerbatimBlockMode,
     ) -> Self {
         Self {

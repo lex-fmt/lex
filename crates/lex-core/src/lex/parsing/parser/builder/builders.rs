@@ -10,6 +10,7 @@ mod helpers;
 mod list;
 mod paragraph;
 mod session;
+mod table;
 mod verbatim;
 
 pub(in crate::lex::parsing::parser::builder) use annotation::{
@@ -20,4 +21,6 @@ pub(in crate::lex::parsing::parser::builder) use definition::build_definition;
 pub(in crate::lex::parsing::parser::builder) use list::build_list;
 pub(in crate::lex::parsing::parser::builder) use paragraph::build_paragraph;
 pub(in crate::lex::parsing::parser::builder) use session::build_session;
+pub(in crate::lex::parsing::parser::builder) use table::build_table;
+pub(in crate::lex::parsing::parser) use table::container_starts_with_pipe_row;
 pub(in crate::lex::parsing::parser::builder) use verbatim::build_verbatim_block;
