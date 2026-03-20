@@ -29,7 +29,7 @@ fn table_with_list_strategy() -> impl Strategy<Value = String> {
         }
         lines.push(String::new()); // blank line
         lines.push("    | Solo | Plain text      |".to_string());
-        lines.push(":: table ::".to_string());
+        // No closing data line needed in new table syntax
         lines.push(String::new());
         lines.join("\n")
     })
@@ -39,7 +39,7 @@ fn table_with_list_strategy() -> impl Strategy<Value = String> {
 fn table_with_paragraphs_strategy() -> impl Strategy<Value = String> {
     (word(), word(), word()).prop_map(|(subject, w1, w2)| {
         format!(
-            "{subject}:\n    | Key | Value |\n\n    | {w1} | Line one. |\n    |     | Line two. |\n\n    | {w2} | Single.   |\n:: table ::\n"
+            "{subject}:\n    | Key | Value |\n\n    | {w1} | Line one. |\n    |     | Line two. |\n\n    | {w2} | Single.   |\n"
         )
     })
 }
