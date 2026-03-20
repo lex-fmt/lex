@@ -44,8 +44,8 @@ pub(in crate::lex::parsing::parser::builder) fn build_table(
         }
     }
 
-    // Extract closing data tokens and remove from content
-    let closing_data_tokens = if let Some(idx) = closing_data_idx {
+    // Extract config annotation tokens and remove from content
+    let config_annotation_tokens = if let Some(idx) = closing_data_idx {
         let line = all_lines.remove(idx);
         let header_tokens = extract_annotation_header_tokens(&line)?;
         Some(header_tokens)
@@ -56,7 +56,7 @@ pub(in crate::lex::parsing::parser::builder) fn build_table(
     Ok(ParseNode::new(NodeType::Table, vec![], vec![]).with_payload(ParseNodePayload::Table {
         subject: subject_token,
         content_lines: all_lines,
-        closing_data_tokens,
+        config_annotation_tokens,
     }))
 }
 

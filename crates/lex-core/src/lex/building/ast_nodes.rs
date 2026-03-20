@@ -404,7 +404,6 @@ fn build_verbatim_group(
 /// and aggregates location from all components.
 pub(super) fn table_node(
     data: TableData,
-    closing_data: Option<Data>,
     alignments: &[TableCellAlignment],
     source_location: &SourceLocation,
 ) -> ContentItem {
@@ -440,13 +439,9 @@ pub(super) fn table_node(
         Some(build_footnote_list(data.footnotes, source_location))
     };
 
-    if let Some(ref cd) = closing_data {
-        location_sources.push(cd.location.clone());
-    }
     let location = compute_location_from_locations(&location_sources);
 
-    let mut table =
-        Table::new(subject, header_rows, body_rows, closing_data, data.mode).at(location);
+    let mut table = Table::new(subject, header_rows, body_rows, data.mode).at(location);
     if let Some(list) = footnotes {
         table = table.with_footnotes(list);
     }
