@@ -404,15 +404,8 @@ impl TokenCollector {
             }
         }
 
-        if let Some(ref cd) = table.closing_data {
-            self.push_range(
-                &cd.label.location,
-                LexSemanticTokenKind::DataLabel,
-            );
-            for parameter in &cd.parameters {
-                self.push_range(&parameter.location, LexSemanticTokenKind::DataParameter);
-            }
-        }
+        // Table config annotations are in table.annotations — processed below
+        // by process_annotations()
 
         self.process_annotations(table.annotations());
     }

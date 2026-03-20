@@ -21,7 +21,7 @@ fn test_table_01_flat_minimal() {
     assert_ast(&doc).item_count(1).item(0, |item| {
         item.assert_table()
             .subject("Favorite Pets")
-            .has_no_closing_data()
+            .annotation_count(0)
             .mode(VerbatimBlockMode::Inflow)
             .header_row_count(1)
             .body_row_count(2)
@@ -40,7 +40,7 @@ fn test_table_02_flat_with_alignment() {
     assert_ast(&doc).item_count(1).item(0, |item| {
         item.assert_table()
             .subject("Test Scores")
-            .has_closing_parameter_with_value("align", "lcr")
+            .has_annotation_parameter_with_value("align", "lcr")
             .header_row_count(1)
             .body_row_count(3)
             .column_count(3)
@@ -60,7 +60,7 @@ fn test_table_03_flat_header_count() {
     assert_ast(&doc).item_count(1).item(0, |item| {
         item.assert_table()
             .subject("Quarterly Revenue")
-            .has_closing_parameter_with_value("header", "2")
+            .has_annotation_parameter_with_value("header", "2")
             .header_row_count(2)
             .body_row_count(2);
     });
@@ -260,7 +260,7 @@ fn test_table_16_flat_no_header() {
     assert_ast(&doc).item_count(1).item(0, |item| {
         item.assert_table()
             .subject("Quick Reference")
-            .has_closing_parameter_with_value("header", "0")
+            .has_annotation_parameter_with_value("header", "0")
             .header_row_count(0)
             .body_row_count(2)
             .body_cells(0, &["Alice", "95"])

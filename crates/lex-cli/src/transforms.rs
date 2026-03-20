@@ -676,9 +676,7 @@ fn content_item_to_json(item: &lex_core::lex::ast::ContentItem) -> serde_json::V
                 "header_rows": header_rows,
                 "body_rows": body_rows,
             });
-            if let Some(ref cd) = t.closing_data {
-                node["closing_label"] = json!(cd.label.value);
-            }
+            // Table config is in annotations, not closing_data
             if !t.annotations.is_empty() {
                 node["annotations"] = json!(t
                     .annotations
