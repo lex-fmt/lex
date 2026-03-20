@@ -1,6 +1,6 @@
 use lex_core::lex::ast::{
     Annotation, AstNode, ContentItem, Definition, Document, List, ListItem, Paragraph, Range,
-    Session, Table, TextContent, Verbatim,
+    Session, Table, TableRow, TextContent, Verbatim,
 };
 use lsp_types::SymbolKind;
 
@@ -122,18 +122,20 @@ fn verbatim_symbol(verbatim: &Verbatim) -> LexDocumentSymbol {
 fn table_symbol(table: &Table) -> LexDocumentSymbol {
     let mut children = annotation_symbol_list(table.annotations());
 
-    // Include symbols from cell children with block content
+    // Include rows as intermediate children so the outline reflects the table structure
+    let mut row_index = 0;
     for row in table.all_rows() {
-        for cell in &row.cells {
-            if cell.has_block_content() {
-                children.extend(collect_symbols_from_items(cell.children.iter()));
-            }
-        }
+        row_index += 1;
+        children.push(row_symbol(row, row_index));
     }
 
     LexDocumentSymbol {
         name: format!("Table: {}", summarize_text(&table.subject, "Table")),
-        detail: Some("table".to_string()),
+        detail: Some(format!(
+            "{} row(s), {} col(s)",
+            table.row_count(),
+            table.column_count()
+        )),
         kind: SymbolKind::CONSTANT,
         range: table.range().clone(),
         selection_range: table
@@ -141,6 +143,48 @@ fn table_symbol(table: &Table) -> LexDocumentSymbol {
             .location
             .clone()
             .unwrap_or_else(|| table.range().clone()),
+        children,
+    }
+}
+
+fn row_symbol(row: &TableRow, index: usize) -> LexDocumentSymbol {
+    let mut children = Vec::new();
+
+    for cell in &row.cells {
+        let cell_text = cell.content.as_string().trim().to_string();
+        let cell_name = if cell_text.is_empty() {
+            "(empty)".to_string()
+        } else {
+            cell_text
+        };
+
+        // Collect block-level content inside this cell
+        let cell_children = if cell.has_block_content() {
+            collect_symbols_from_items(cell.children.iter())
+        } else {
+            Vec::new()
+        };
+
+        children.push(LexDocumentSymbol {
+            name: cell_name,
+            detail: if cell.colspan > 1 || cell.rowspan > 1 {
+                Some(format!("{}×{}", cell.colspan, cell.rowspan))
+            } else {
+                None
+            },
+            kind: SymbolKind::FIELD,
+            range: cell.location.clone(),
+            selection_range: cell.location.clone(),
+            children: cell_children,
+        });
+    }
+
+    LexDocumentSymbol {
+        name: format!("Row {}", index),
+        detail: Some(format!("{} cell(s)", row.cells.len())),
+        kind: SymbolKind::ENUM,
+        range: row.location.clone(),
+        selection_range: row.location.clone(),
         children,
     }
 }
@@ -317,6 +361,60 @@ mod tests {
         }
         let item_symbol = item_symbol.expect("List item symbol not found");
         assert!(item_symbol.name.contains("-"));
+    }
+
+    #[test]
+    fn table_symbol_includes_rows_and_cells() {
+        use lex_core::lex::ast::elements::table::{TableCell, TableRow};
+        use lex_core::lex::ast::elements::verbatim::VerbatimBlockMode;
+        use lex_core::lex::ast::{Table, TextContent};
+
+        let row1 = TableRow::new(vec![
+            TableCell::new(TextContent::from_string("Header A".to_string(), None)),
+            TableCell::new(TextContent::from_string("Header B".to_string(), None)),
+        ]);
+        let row2 = TableRow::new(vec![
+            TableCell::new(TextContent::from_string("Value 1".to_string(), None)),
+            TableCell::new(TextContent::from_string("Value 2".to_string(), None)),
+        ]);
+        let table = Table::new(
+            TextContent::from_string("My Table".to_string(), None),
+            vec![row1],
+            vec![row2],
+            VerbatimBlockMode::Inflow,
+        );
+
+        let document = Document::with_content(vec![ContentItem::Table(Box::new(table))]);
+        let symbols = collect_document_symbols(&document);
+
+        // Find the table symbol
+        let table_sym = symbols
+            .iter()
+            .find(|s| s.name.contains("My Table"))
+            .expect("Table symbol not found");
+        assert_eq!(table_sym.kind, SymbolKind::CONSTANT);
+        assert!(table_sym
+            .detail
+            .as_ref()
+            .unwrap()
+            .contains("2 row(s)"));
+
+        // Table should have row children
+        assert_eq!(table_sym.children.len(), 2, "Table should have 2 row children");
+
+        let row1_sym = &table_sym.children[0];
+        assert_eq!(row1_sym.name, "Row 1");
+        assert_eq!(row1_sym.kind, SymbolKind::ENUM);
+        assert_eq!(row1_sym.children.len(), 2, "Row 1 should have 2 cell children");
+
+        // Check cell names
+        assert_eq!(row1_sym.children[0].name, "Header A");
+        assert_eq!(row1_sym.children[1].name, "Header B");
+        assert_eq!(row1_sym.children[0].kind, SymbolKind::FIELD);
+
+        let row2_sym = &table_sym.children[1];
+        assert_eq!(row2_sym.children[0].name, "Value 1");
+        assert_eq!(row2_sym.children[1].name, "Value 2");
     }
 
     #[test]
