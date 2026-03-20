@@ -342,13 +342,11 @@ fn parity_content_item(out: &mut String, depth: usize, item: &lex_core::lex::ast
             parity_line(out, depth, &format!("\"{}\"", fl.content.as_string()));
         }
         ContentItem::Table(t) => {
-            // Tree-sitter sees tables as VerbatimBlock — emit as VerbatimBlock for parity
             parity_line(
                 out,
                 depth,
-                &format!("VerbatimBlock \"{}\"", t.subject.as_string()),
+                &format!("Table \"{}\"", t.subject.as_string()),
             );
-            // Table rows become text lines from tree-sitter's perspective
             for row in t.header_rows.iter().chain(t.body_rows.iter()) {
                 let cells: Vec<&str> = row.cells.iter().map(|c| c.text()).collect();
                 let line = format!("| {} |", cells.join(" | "));
