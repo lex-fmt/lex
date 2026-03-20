@@ -22,6 +22,7 @@ fn subject() -> impl Strategy<Value = String> {
 }
 
 /// Generate a table with N rows (all pipe rows, no blank lines = compact mode)
+#[allow(dead_code)]
 fn table_rows(row_count: usize) -> impl Strategy<Value = Vec<String>> {
     prop::collection::vec(word(), row_count).prop_map(|words| {
         words
