@@ -29,11 +29,25 @@ impl<'a> TableAssertion<'a> {
     }
 
     pub fn closing_label(self, expected: &str) -> Self {
-        let actual = &self.table.closing_data.label.value;
+        let cd = self
+            .table
+            .closing_data
+            .as_ref()
+            .expect(&format!("{}: Expected closing_data to be present", self.context));
+        let actual = &cd.label.value;
         assert_eq!(
             actual, expected,
             "{}: Expected closing label '{}', got '{}'",
             self.context, expected, actual
+        );
+        self
+    }
+
+    pub fn has_no_closing_data(self) -> Self {
+        assert!(
+            self.table.closing_data.is_none(),
+            "{}: Expected no closing_data",
+            self.context
         );
         self
     }
@@ -147,9 +161,12 @@ impl<'a> TableAssertion<'a> {
     }
 
     pub fn has_closing_parameter_with_value(self, key: &str, value: &str) -> Self {
-        let found = self
+        let cd = self
             .table
             .closing_data
+            .as_ref()
+            .expect(&format!("{}: Expected closing_data to be present", self.context));
+        let found = cd
             .parameters
             .iter()
             .any(|p| p.key == key && p.value == value);

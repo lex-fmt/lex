@@ -673,10 +673,12 @@ fn content_item_to_json(item: &lex_core::lex::ast::ContentItem) -> serde_json::V
                 "type": "Table",
                 "subject": t.subject.as_string(),
                 "mode": format!("{:?}", t.mode),
-                "closing_label": t.closing_data.label.value,
                 "header_rows": header_rows,
                 "body_rows": body_rows,
             });
+            if let Some(ref cd) = t.closing_data {
+                node["closing_label"] = json!(cd.label.value);
+            }
             if !t.annotations.is_empty() {
                 node["annotations"] = json!(t
                     .annotations
