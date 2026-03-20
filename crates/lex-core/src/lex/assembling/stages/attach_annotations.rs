@@ -270,6 +270,7 @@ fn attach_to_item_at_index(children: &mut [ContentItem], idx: usize, annotation:
         ContentItem::ListItem(list_item) => list_item.annotations.push(annotation),
         ContentItem::Definition(definition) => definition.annotations.push(annotation),
         ContentItem::VerbatimBlock(verbatim) => verbatim.annotations.push(annotation),
+        ContentItem::Table(table) => table.annotations.push(annotation),
         _ => {}
     }
 }
