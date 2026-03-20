@@ -889,7 +889,7 @@ mod tests {
 
     #[test]
     fn table_cell_inline_formatting_gets_tokens() {
-        let source = "Stats:\n    | *Name* | `code` |\n    | _test_ | #42#   |\n:: table ::\n";
+        let source = "Stats:\n    | *Name* | `code` |\n    | _test_ | #42#   |\n";
         let document = lex_core::lex::parsing::parse_document(source).expect("failed to parse");
         let tokens = collect_semantic_tokens(&document);
 
