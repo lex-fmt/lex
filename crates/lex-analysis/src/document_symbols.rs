@@ -180,7 +180,7 @@ fn row_symbol(row: &TableRow, index: usize) -> LexDocumentSymbol {
     }
 
     LexDocumentSymbol {
-        name: format!("Row {}", index),
+        name: format!("Row {index}"),
         detail: Some(format!("{} cell(s)", row.cells.len())),
         kind: SymbolKind::ENUM,
         range: row.location.clone(),
