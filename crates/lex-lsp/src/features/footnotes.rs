@@ -248,6 +248,8 @@ mod tests {
         // Reference 10 → 1, reference 5 → 2
         // Definition "5." → "2.", definition "10." → "1."
         assert!(new_source.contains("Ref [1] then [1] then [2]."));
+        assert!(new_source.contains("    2. Content."));
+        assert!(new_source.contains("    1. Other."));
     }
 
     #[test]

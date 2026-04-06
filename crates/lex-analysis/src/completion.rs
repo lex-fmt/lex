@@ -144,7 +144,7 @@ fn macro_completions(_document: &Document) -> Vec<CompletionCandidate> {
             .with_detail("Insert image snippet")
             .with_insert_text(":: doc.image src=\"$1\" ::\n"),
         CompletionCandidate::new("@note", CompletionItemKind::SNIPPET)
-            .with_detail("Insert note reference")
+            .with_detail("Insert annotation reference")
             .with_insert_text("[::$1]"),
     ]
 }
