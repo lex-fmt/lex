@@ -342,13 +342,7 @@ fn parity_content_item(out: &mut String, depth: usize, item: &lex_core::lex::ast
             parity_line(out, depth, &format!("\"{}\"", fl.content.as_string()));
         }
         ContentItem::Table(t) => {
-            // Tree-sitter sees tables as VerbatimBlock — emit as VerbatimBlock for parity
-            parity_line(
-                out,
-                depth,
-                &format!("VerbatimBlock \"{}\"", t.subject.as_string()),
-            );
-            // Table rows become text lines from tree-sitter's perspective
+            parity_line(out, depth, &format!("Table \"{}\"", t.subject.as_string()));
             for row in t.header_rows.iter().chain(t.body_rows.iter()) {
                 let cells: Vec<&str> = row.cells.iter().map(|c| c.text()).collect();
                 let line = format!("| {} |", cells.join(" | "));
@@ -673,10 +667,10 @@ fn content_item_to_json(item: &lex_core::lex::ast::ContentItem) -> serde_json::V
                 "type": "Table",
                 "subject": t.subject.as_string(),
                 "mode": format!("{:?}", t.mode),
-                "closing_label": t.closing_data.label.value,
                 "header_rows": header_rows,
                 "body_rows": body_rows,
             });
+            // Table config is in annotations, not closing_data
             if !t.annotations.is_empty() {
                 node["annotations"] = json!(t
                     .annotations

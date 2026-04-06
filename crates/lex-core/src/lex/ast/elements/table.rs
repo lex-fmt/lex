@@ -10,7 +10,7 @@
 //!     - header_rows: Header rows (default: first row)
 //!     - body_rows: Body/data rows
 //!     - footnotes: Optional scoped footnote list
-//!     - closing_data: The closing annotation (:: table params? ::)
+//!     - annotations: Attached annotations (including :: table :: config)
 //!     - mode: Inflow or Fullwidth (inherited from verbatim wall logic)
 //!
 //! Syntax
@@ -18,7 +18,6 @@
 //!     <subject-line>
 //!         | cell | cell | cell |
 //!         | cell | cell | cell |
-//!     :: table params? ::
 //!
 //! Cell Merging
 //!
@@ -42,7 +41,6 @@ use super::super::traits::{AstNode, Container, Visitor, VisualStructure};
 use super::annotation::Annotation;
 use super::container::GeneralContainer;
 use super::content_item::ContentItem;
-use super::data::Data;
 use super::list::List;
 use super::typed_content::ContentElement;
 use super::verbatim::VerbatimBlockMode;
@@ -174,9 +172,7 @@ pub struct Table {
     pub body_rows: Vec<TableRow>,
     /// Optional scoped footnote definitions
     pub footnotes: Option<Box<List>>,
-    /// Closing annotation (:: table params? ::)
-    pub closing_data: Data,
-    /// Annotations attached to this table
+    /// Annotations attached to this table (including :: table :: config annotation)
     pub annotations: Vec<Annotation>,
     /// Location spanning the entire table element
     pub location: Range,
@@ -189,7 +185,6 @@ impl Table {
         subject: TextContent,
         header_rows: Vec<TableRow>,
         body_rows: Vec<TableRow>,
-        closing_data: Data,
         mode: VerbatimBlockMode,
     ) -> Self {
         Self {
@@ -197,7 +192,6 @@ impl Table {
             header_rows,
             body_rows,
             footnotes: None,
-            closing_data,
             annotations: Vec::new(),
             location: Range::default(),
             mode,
@@ -232,6 +226,13 @@ impl Table {
             .unwrap_or(0)
     }
 
+    /// Iterate over all block-level children across all cells in all rows
+    pub fn cell_children_iter(&self) -> impl Iterator<Item = &ContentItem> {
+        self.all_rows()
+            .flat_map(|row| row.cells.iter())
+            .flat_map(|cell| cell.children.iter())
+    }
+
     /// Annotations attached to this table.
     pub fn annotations(&self) -> &[Annotation] {
         &self.annotations
@@ -263,6 +264,22 @@ impl AstNode for Table {
 
     fn accept(&self, visitor: &mut dyn Visitor) {
         visitor.visit_table(self);
+        // Descend into cell children (block-level content inside cells)
+        for row in self.all_rows() {
+            for cell in &row.cells {
+                for child in cell.children.iter() {
+                    child.accept(visitor);
+                }
+            }
+        }
+        // Visit annotations
+        for annotation in &self.annotations {
+            annotation.accept(visitor);
+        }
+        // Visit footnotes
+        if let Some(footnotes) = &self.footnotes {
+            footnotes.accept(visitor);
+        }
         visitor.leave_table(self);
     }
 }

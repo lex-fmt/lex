@@ -38,11 +38,13 @@ pub enum ParseNodePayload {
         content_lines: Vec<LineToken>,
         closing_data_tokens: Vec<TokenLocation>,
     },
-    /// Raw line tokens needed to build a table (same outer structure as verbatim)
+    /// Raw line tokens needed to build a table.
+    /// config_annotation_tokens holds the header tokens from a :: table :: annotation
+    /// found inside the content block. These become an Annotation on the Table AST node.
     Table {
         subject: LineToken,
         content_lines: Vec<LineToken>,
-        closing_data_tokens: Vec<TokenLocation>,
+        config_annotation_tokens: Option<Vec<TokenLocation>>,
     },
 }
 

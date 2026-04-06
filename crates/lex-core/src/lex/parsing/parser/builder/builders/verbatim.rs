@@ -66,7 +66,7 @@ pub(in crate::lex::parsing::parser::builder) fn build_verbatim_block(
             ParseNodePayload::Table {
                 subject: subject_token,
                 content_lines,
-                closing_data_tokens: header_tokens,
+                config_annotation_tokens: Some(header_tokens),
             },
         )
     } else {

@@ -236,19 +236,21 @@ impl<'a> AstTreeBuilder<'a> {
         let ParseNodePayload::Table {
             subject,
             content_lines,
-            closing_data_tokens,
+            config_annotation_tokens,
         } = payload
         else {
             panic!("Expected Table payload for Table node");
         };
 
-        let closing_data =
-            ast_api::data_from_tokens(closing_data_tokens, self.source, &self.source_location);
+        // Convert config annotation tokens to an Annotation, if present
+        let config_annotation = config_annotation_tokens.map(|tokens| {
+            ast_api::annotation_from_tokens(tokens, vec![], self.source, &self.source_location)
+        });
 
         ast_api::table_from_lines(
             &subject,
             &content_lines,
-            closing_data,
+            config_annotation,
             self.source,
             &self.source_location,
         )

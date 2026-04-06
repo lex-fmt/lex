@@ -286,7 +286,7 @@ pub fn verbatim_block_from_lines(
 ///
 /// * `subject_token` - LineToken for the table subject/caption
 /// * `content_tokens` - LineTokens for each content line (pipe rows)
-/// * `closing_data` - The closing data node (:: table params? ::)
+/// * `config_annotation` - Optional :: table :: annotation for config (attached to table)
 /// * `source` - Original source string
 ///
 /// # Returns
@@ -295,18 +295,26 @@ pub fn verbatim_block_from_lines(
 pub fn table_from_lines(
     subject_token: &LineToken,
     content_tokens: &[LineToken],
-    closing_data: Data,
+    config_annotation: Option<ContentItem>,
     source: &str,
     source_location: &SourceLocation,
 ) -> ContentItem {
-    // 1. Extract (reuses verbatim wall stripping + parses pipe rows)
-    let data = extraction::extract_table_data(subject_token, content_tokens, &closing_data, source);
+    // 1. Extract table data with default config (header=1, no alignment).
+    // Actual config from :: table :: annotation is applied later in assembly.
+    let data = extraction::extract_table_data(subject_token, content_tokens, source);
 
-    // 2. Extract alignment hints from closing annotation
-    let alignments = extraction::table::extract_alignments(&closing_data);
+    // 2. Create table with defaults
+    let alignments: Vec<crate::lex::ast::TableCellAlignment> = Vec::new();
+    let mut table_item = ast_nodes::table_node(data, &alignments, source_location);
 
-    // 3. Create
-    ast_nodes::table_node(data, closing_data, &alignments, source_location)
+    // 3. Attach config annotation to the table if present
+    if let Some(ContentItem::Annotation(annotation)) = config_annotation {
+        if let ContentItem::Table(ref mut table) = table_item {
+            table.annotations.push(annotation);
+        }
+    }
+
+    table_item
 }
 
 // ============================================================================

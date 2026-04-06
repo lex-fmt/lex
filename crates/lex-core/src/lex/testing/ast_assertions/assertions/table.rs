@@ -28,12 +28,17 @@ impl<'a> TableAssertion<'a> {
         self
     }
 
-    pub fn closing_label(self, expected: &str) -> Self {
-        let actual = &self.table.closing_data.label.value;
-        assert_eq!(
-            actual, expected,
-            "{}: Expected closing label '{}', got '{}'",
-            self.context, expected, actual
+    /// Assert that the table has an annotation with the given label
+    pub fn has_annotation_with_label(self, expected: &str) -> Self {
+        let found = self
+            .table
+            .annotations
+            .iter()
+            .any(|a| a.data.label.value == expected);
+        assert!(
+            found,
+            "{}: Expected annotation with label '{}'",
+            self.context, expected
         );
         self
     }
@@ -146,16 +151,17 @@ impl<'a> TableAssertion<'a> {
         self
     }
 
-    pub fn has_closing_parameter_with_value(self, key: &str, value: &str) -> Self {
-        let found = self
-            .table
-            .closing_data
-            .parameters
-            .iter()
-            .any(|p| p.key == key && p.value == value);
+    /// Assert that one of the table's annotations has a parameter with the given key/value
+    pub fn has_annotation_parameter_with_value(self, key: &str, value: &str) -> Self {
+        let found = self.table.annotations.iter().any(|a| {
+            a.data
+                .parameters
+                .iter()
+                .any(|p| p.key == key && p.value == value)
+        });
         assert!(
             found,
-            "{}: Expected closing parameter '{}={}'",
+            "{}: Expected annotation parameter '{}={}'",
             self.context, key, value
         );
         self

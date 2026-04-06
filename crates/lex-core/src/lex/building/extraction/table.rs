@@ -15,7 +15,6 @@
 
 use super::verbatim::extract_verbatim_block_data;
 use crate::lex::ast::elements::verbatim::VerbatimBlockMode;
-use crate::lex::ast::Data;
 use crate::lex::token::LineToken;
 use std::ops::Range as ByteRange;
 
@@ -65,7 +64,6 @@ pub(in crate::lex::building) struct TableData {
 pub(in crate::lex::building) fn extract_table_data(
     subject_token: &LineToken,
     content_tokens: &[LineToken],
-    closing_data: &Data,
     source: &str,
 ) -> TableData {
     // Reuse verbatim extraction for mode detection + wall stripping
@@ -105,8 +103,9 @@ pub(in crate::lex::building) fn extract_table_data(
         }
     }
 
-    // Split into header/body based on closing annotation parameters
-    let header_count = extract_header_count(closing_data);
+    // Default split: first row is header. The assembly stage may re-split
+    // based on :: table :: annotation parameters (header=N).
+    let header_count = 1;
     let (header_rows, body_rows) = split_header_body(&mut rows, header_count);
 
     TableData {
@@ -605,20 +604,6 @@ fn resolve_merges(mut rows: Vec<TableRowData>) -> Vec<TableRowData> {
     rows
 }
 
-/// Extract the header count from closing annotation parameters.
-///
-/// Looks for `header=N` parameter. Default is 1 (first row is header).
-fn extract_header_count(closing_data: &Data) -> usize {
-    for param in &closing_data.parameters {
-        if param.key == "header" {
-            if let Ok(n) = param.value.parse::<usize>() {
-                return n;
-            }
-        }
-    }
-    1 // Default: first row is header
-}
-
 /// Split rows into header and body based on header count.
 fn split_header_body(
     rows: &mut Vec<TableRowData>,
@@ -636,33 +621,6 @@ fn split_header_body(
     }
 
     (header_rows, body_rows)
-}
-
-/// Extract column alignment hints from closing annotation parameters.
-///
-/// Looks for `align=lcr` parameter where l=left, c=center, r=right.
-/// Returns alignment per column index.
-pub(in crate::lex::building) fn extract_alignments(
-    closing_data: &Data,
-) -> Vec<crate::lex::ast::TableCellAlignment> {
-    use crate::lex::ast::TableCellAlignment;
-
-    for param in &closing_data.parameters {
-        if param.key == "align" {
-            return param
-                .value
-                .chars()
-                .map(|c| match c {
-                    'l' | 'L' => TableCellAlignment::Left,
-                    'c' | 'C' => TableCellAlignment::Center,
-                    'r' | 'R' => TableCellAlignment::Right,
-                    _ => TableCellAlignment::None,
-                })
-                .collect();
-        }
-    }
-
-    Vec::new()
 }
 
 #[cfg(test)]
@@ -965,24 +923,5 @@ mod tests {
         assert!(footnotes.is_empty());
     }
 
-    #[test]
-    fn test_extract_alignments() {
-        use crate::lex::ast::{Label, TableCellAlignment};
-
-        let label = Label::new("table".to_string());
-        let data = Data::new(
-            label,
-            vec![crate::lex::ast::Parameter {
-                key: "align".to_string(),
-                value: "lcr".to_string(),
-                location: crate::lex::ast::Range::default(),
-            }],
-        );
-
-        let aligns = extract_alignments(&data);
-        assert_eq!(aligns.len(), 3);
-        assert_eq!(aligns[0], TableCellAlignment::Left);
-        assert_eq!(aligns[1], TableCellAlignment::Center);
-        assert_eq!(aligns[2], TableCellAlignment::Right);
-    }
+    // Alignment extraction test moved to apply_table_config assembly stage
 }
