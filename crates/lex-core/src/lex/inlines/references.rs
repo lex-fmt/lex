@@ -6,7 +6,7 @@
 //! - Session references (`[#42]`)
 //! - URLs (`[https://example.com]`)
 //! - File paths (`[./file.txt]`)
-//! - Annotation references (`[^note]`)
+//! - Annotation references (`[::note]`)
 //! - Footnotes (`[42]`)
 //! - General references (`[Section Title]`)
 
@@ -44,10 +44,11 @@ fn determine_reference_type(raw: &str) -> ReferenceType {
         }
     }
 
-    if let Some(rest) = trimmed.strip_prefix('^') {
-        if !rest.is_empty() {
+    if let Some(rest) = trimmed.strip_prefix("::") {
+        let label = rest.trim();
+        if !label.is_empty() {
             return ReferenceType::AnnotationReference {
-                label: rest.to_string(),
+                label: label.to_string(),
             };
         }
     }

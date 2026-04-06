@@ -23,7 +23,8 @@
 //!
 //!     References support multiple subtypes including:
 //!         - Citations: [@key] or [@key1; @key2, pp. 42-45]
-//!         - Footnotes: [^label] or [42]
+//!         - Annotation references: [::label]
+//!         - Footnotes: [42]
 //!         - Session references: [#2.1]
 //!         - URLs: [https://example.com]
 //!         - File paths: [./path/to/file]

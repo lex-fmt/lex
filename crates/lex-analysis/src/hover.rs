@@ -91,7 +91,7 @@ fn annotation_ref_hover(document: &Document, range: Range, label: &str) -> Optio
     }
     Some(HoverResult {
         range,
-        contents: format!("**Annotation [^{}]**\n\n{}", label, lines.join("\n\n")),
+        contents: format!("**Annotation [::{}]**\n\n{}", label, lines.join("\n\n")),
     })
 }
 
@@ -337,7 +337,7 @@ mod tests {
     #[test]
     fn hover_shows_footnote_content() {
         let document = sample_document();
-        let position = position_for("^source]");
+        let position = position_for("::source]");
         let hover = hover(&document, position).expect("hover expected");
         // In the updated fixture, footnotes are list items, not annotations
         // So hover shows generic reference info

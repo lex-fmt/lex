@@ -151,7 +151,7 @@ proptest! {
 }
 
 // =============================================================================
-// 3. Footnote References [^label] and [42]
+// 3. Annotation References [::label] and Footnotes [42]
 // =============================================================================
 
 proptest! {
@@ -159,7 +159,7 @@ proptest! {
 
     #[test]
     fn reference_annotation(label in footnote_label_strategy()) {
-        let source = format!("Text [^{label}] end.\n");
+        let source = format!("Text [::{label}] end.\n");
         let content = extract_first_text_line_content(&source);
         InlineAssertion::new(&content, "annotation reference")
             .starts_with(&[

@@ -819,7 +819,7 @@ mod tests {
         assert!(
             snippets(&tokens, LexSemanticTokenKind::ReferenceAnnotation, source)
                 .iter()
-                .any(|snippet| snippet.contains("^source"))
+                .any(|snippet| snippet.contains("::source"))
         );
         assert!(
             snippets(&tokens, LexSemanticTokenKind::ReferenceFootnote, source)

@@ -145,7 +145,7 @@ fn macro_completions(_document: &Document) -> Vec<CompletionCandidate> {
             .with_insert_text(":: doc.image src=\"$1\" ::\n"),
         CompletionCandidate::new("@note", CompletionItemKind::SNIPPET)
             .with_detail("Insert note reference")
-            .with_insert_text("[^$1]"),
+            .with_insert_text("[::$1]"),
     ]
 }
 
@@ -597,7 +597,7 @@ Cache:
 
 1. Intro
 
-    See [Cache], [^note], and [./images/chart.png].
+    See [Cache], [::note], and [./images/chart.png].
 
 Image placeholder:
 

@@ -333,7 +333,7 @@ impl Document {
     /// Iterate all inline references at any depth.
     ///
     /// This method recursively walks the document tree, parses inline content,
-    /// and yields all reference inline nodes (e.g., \[42\], \[@citation\], \[^note\]).
+    /// and yields all reference inline nodes (e.g., \[42\], \[@citation\], \[::note\]).
     ///
     /// # Returns
     /// An iterator of references to ReferenceInline nodes

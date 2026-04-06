@@ -107,7 +107,7 @@ mod tests {
 
 1. Intro
 
-    Text referencing [^source], [Cache], [@spec2025], and [#1].
+    Text referencing [::source], [Cache], [@spec2025], and [#1].
 
 Cache:
     Definition body.
@@ -157,7 +157,7 @@ Cache:
     #[test]
     fn resolves_annotations() {
         let (document, source) = fixture();
-        let position = position_of(&source, "^source]");
+        let position = position_of(&source, "::source]");
         let locations = goto_definition(&document, position);
         assert_eq!(locations.len(), 1);
         assert!(document

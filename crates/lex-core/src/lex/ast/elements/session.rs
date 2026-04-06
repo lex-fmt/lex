@@ -499,7 +499,7 @@ impl Session {
     /// Iterate all inline references at any depth.
     ///
     /// This method recursively walks the session tree, parses inline content,
-    /// and yields all reference inline nodes (e.g., \[42\], \[@citation\], \[^note\]).
+    /// and yields all reference inline nodes (e.g., \[42\], \[@citation\], \[::note\]).
     ///
     /// Note: This method does not currently return source ranges for individual
     /// references. Use the paragraph's location as a starting point for finding

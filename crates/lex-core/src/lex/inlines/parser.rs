@@ -641,7 +641,7 @@ mod tests {
     #[test]
     fn reference_detects_citation_and_footnotes() {
         let citation = parse_inlines("[@doe2024]");
-        let labeled = parse_inlines("[^note1]");
+        let labeled = parse_inlines("[::note1]");
         let numbered = parse_inlines("[42]");
 
         match &citation[0] {
