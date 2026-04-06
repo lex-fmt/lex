@@ -34,7 +34,7 @@ fn check_footnotes(document: &Document, diagnostics: &mut Vec<AnalysisDiagnostic
                 ReferenceType::FootnoteNumber { number } => {
                     numbered_refs.push((*number, reference.range));
                 }
-                ReferenceType::FootnoteLabeled { label } => {
+                ReferenceType::AnnotationReference { label } => {
                     labeled_refs.push((label.clone(), reference.range));
                 }
                 _ => {}

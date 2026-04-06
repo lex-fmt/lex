@@ -656,8 +656,8 @@ mod tests {
         }
         match &labeled[0] {
             InlineNode::Reference { data, .. } => match &data.reference_type {
-                ReferenceType::FootnoteLabeled { label } => assert_eq!(label, "note1"),
-                other => panic!("Expected labeled footnote, got {other:?}"),
+                ReferenceType::AnnotationReference { label } => assert_eq!(label, "note1"),
+                other => panic!("Expected annotation reference, got {other:?}"),
             },
             _ => panic!("Expected reference"),
         }

@@ -131,9 +131,10 @@ fn reference_matches(
 ) -> bool {
     use lex_core::lex::inlines::ReferenceType;
     match (reference, target) {
-        (ReferenceType::FootnoteLabeled { label }, ReferenceTarget::AnnotationLabel(expected)) => {
-            label.eq_ignore_ascii_case(expected)
-        }
+        (
+            ReferenceType::AnnotationReference { label },
+            ReferenceTarget::AnnotationLabel(expected),
+        ) => label.eq_ignore_ascii_case(expected),
         (ReferenceType::FootnoteNumber { number }, ReferenceTarget::AnnotationLabel(expected)) => {
             expected == &number.to_string()
         }

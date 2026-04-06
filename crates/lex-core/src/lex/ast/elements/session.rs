@@ -593,7 +593,7 @@ impl Session {
         self.iter_all_references()
             .filter(|reference| match &reference.reference_type {
                 ReferenceType::FootnoteNumber { number } => target == number.to_string(),
-                ReferenceType::FootnoteLabeled { label } => target == label,
+                ReferenceType::AnnotationReference { label } => target == label,
                 ReferenceType::Session { target: ref_target } => target == ref_target,
                 ReferenceType::General { target: ref_target } => target == ref_target,
                 ReferenceType::Citation(data) => data.keys.iter().any(|key| key == target),

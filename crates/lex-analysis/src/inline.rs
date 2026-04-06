@@ -170,7 +170,7 @@ mod tests {
         assert_eq!(refs.len(), 3);
         assert!(refs
             .iter()
-            .any(|r| matches!(r.reference_type, ReferenceType::FootnoteLabeled { .. })));
+            .any(|r| matches!(r.reference_type, ReferenceType::AnnotationReference { .. })));
         assert!(refs
             .iter()
             .any(|r| matches!(r.reference_type, ReferenceType::Citation(_))));

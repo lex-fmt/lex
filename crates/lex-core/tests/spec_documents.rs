@@ -63,6 +63,18 @@ fn spec_footnotes() {
     let doc = Lexplore::from_path(workspace_path("comms/specs/elements/footnotes.lex"))
         .parse()
         .unwrap();
+    assert_ast(&doc).item_count(7).item(0, |item| {
+        item.assert_session().label("Introduction");
+    });
+}
+
+#[test]
+fn spec_annotation_reference() {
+    let doc = Lexplore::from_path(workspace_path(
+        "comms/specs/elements/annotation-reference.lex",
+    ))
+    .parse()
+    .unwrap();
     assert_ast(&doc).item_count(5).item(0, |item| {
         item.assert_session().label("Introduction");
     });
@@ -139,7 +151,7 @@ fn spec_table() {
     let doc = Lexplore::from_path(workspace_path("comms/specs/elements/table.lex"))
         .parse()
         .unwrap();
-    assert_ast(&doc).item_count(14).item(0, |item| {
+    assert_ast(&doc).item_count(15).item(0, |item| {
         item.assert_session().label("Introduction");
     });
 }
@@ -211,6 +223,7 @@ fn all_element_spec_files_covered() {
     let dir = workspace_path("comms/specs/elements");
     let tested = [
         "annotation.lex",
+        "annotation-reference.lex",
         "data.lex",
         "definition.lex",
         "document.lex",

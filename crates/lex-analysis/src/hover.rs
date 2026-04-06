@@ -35,8 +35,10 @@ fn hover_for_reference(
     reference_type: ReferenceType,
 ) -> Option<HoverResult> {
     match reference_type {
-        ReferenceType::FootnoteLabeled { label } => footnote_hover(document, range.clone(), &label)
-            .or_else(|| Some(generic_reference(range.clone(), raw))),
+        ReferenceType::AnnotationReference { label } => {
+            annotation_ref_hover(document, range.clone(), &label)
+                .or_else(|| Some(generic_reference(range.clone(), raw)))
+        }
         ReferenceType::FootnoteNumber { number } => {
             footnote_hover(document, range.clone(), &number.to_string())
                 .or_else(|| Some(generic_reference(range.clone(), raw)))
@@ -76,6 +78,21 @@ fn generic_reference(range: Range, raw: &str) -> HoverResult {
         range,
         contents: format!("**Reference**\n\n{}", raw.trim()),
     }
+}
+
+fn annotation_ref_hover(document: &Document, range: Range, label: &str) -> Option<HoverResult> {
+    let annotation = document.find_annotation_by_label(label)?;
+    let mut lines = Vec::new();
+    if let Some(preview) = preview_from_items(annotation.children.iter()) {
+        lines.push(preview);
+    }
+    if lines.is_empty() {
+        lines.push("(no content)".to_string());
+    }
+    Some(HoverResult {
+        range,
+        contents: format!("**Annotation [^{}]**\n\n{}", label, lines.join("\n\n")),
+    })
 }
 
 fn footnote_hover(document: &Document, range: Range, label: &str) -> Option<HoverResult> {
