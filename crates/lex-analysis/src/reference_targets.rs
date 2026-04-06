@@ -19,11 +19,9 @@ pub fn targets_from_reference_type(reference_type: &ReferenceType) -> Vec<Refere
                 ReferenceTarget::AnnotationLabel(label.clone()),
             );
         }
-        ReferenceType::FootnoteNumber { number } => {
-            push_unique(
-                &mut targets,
-                ReferenceTarget::AnnotationLabel(number.to_string()),
-            );
+        ReferenceType::FootnoteNumber { .. } => {
+            // Footnote numbers resolve to list items in :: notes :: lists,
+            // handled by collect_footnote_definitions in go-to-definition.
         }
         ReferenceType::Citation(data) => {
             for key in &data.keys {

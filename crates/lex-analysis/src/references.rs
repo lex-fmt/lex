@@ -135,9 +135,7 @@ fn reference_matches(
             ReferenceType::AnnotationReference { label },
             ReferenceTarget::AnnotationLabel(expected),
         ) => label.eq_ignore_ascii_case(expected),
-        (ReferenceType::FootnoteNumber { number }, ReferenceTarget::AnnotationLabel(expected)) => {
-            expected == &number.to_string()
-        }
+        // FootnoteNumber resolves via :: notes :: lists, not through reference_matches
         (ReferenceType::Citation(data), ReferenceTarget::CitationKey(key)) => data
             .keys
             .iter()

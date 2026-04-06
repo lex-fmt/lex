@@ -25,58 +25,35 @@ pub fn analyze(document: &Document) -> Vec<AnalysisDiagnostic> {
 }
 
 fn check_footnotes(document: &Document, diagnostics: &mut Vec<AnalysisDiagnostic>) {
-    // 1. Collect all footnote references (both numbered and labeled)
+    // 1. Collect all numbered footnote references
     let mut numbered_refs = Vec::new();
-    let mut labeled_refs = Vec::new();
     for_each_text_content(document, &mut |text| {
         for reference in extract_references(text) {
-            match &reference.reference_type {
-                ReferenceType::FootnoteNumber { number } => {
-                    numbered_refs.push((*number, reference.range));
-                }
-                ReferenceType::AnnotationReference { label } => {
-                    labeled_refs.push((label.clone(), reference.range));
-                }
-                _ => {}
+            if let ReferenceType::FootnoteNumber { number } = reference.reference_type {
+                numbered_refs.push((number, reference.range));
             }
         }
     });
 
-    // 2. Collect all footnote definitions (annotations and list items)
+    // 2. Collect footnote definitions from :: notes ::-annotated lists
     let definitions_list = crate::utils::collect_footnote_definitions(document);
     let mut numeric_definitions = std::collections::HashSet::new();
-    let mut label_definitions = std::collections::HashSet::new();
-
     for (label, _) in &definitions_list {
-        label_definitions.insert(label.to_lowercase());
         if let Ok(number) = label.parse::<u32>() {
             numeric_definitions.insert(number);
         }
     }
 
-    // 3. Check for missing definitions (numbered)
+    // 3. Check for missing definitions
     for (number, range) in &numbered_refs {
         if !numeric_definitions.contains(number) {
             diagnostics.push(AnalysisDiagnostic {
                 range: range.clone(),
                 kind: DiagnosticKind::MissingFootnoteDefinition,
-                message: format!("Footnote [{number}] is referenced but not defined"),
+                message: format!("Footnote [{number}] has no matching item in a :: notes :: list"),
             });
         }
     }
-
-    // 4. Check for missing definitions (labeled)
-    for (label, range) in &labeled_refs {
-        if !label_definitions.contains(&label.to_lowercase()) {
-            diagnostics.push(AnalysisDiagnostic {
-                range: range.clone(),
-                kind: DiagnosticKind::MissingFootnoteDefinition,
-                message: format!("Footnote [^{label}] is referenced but not defined"),
-            });
-        }
-    }
-
-    // Note: Unused definitions (footnotes without references) are intentionally not flagged
 }
 
 fn check_tables(document: &Document, diagnostics: &mut Vec<AnalysisDiagnostic>) {
@@ -165,41 +142,39 @@ mod tests {
     }
 
     #[test]
-    fn ignores_valid_footnote() {
-        let doc = parse("Text [1].\n\n:: 1 ::\nNote.\n::\n");
+    fn ignores_valid_footnote_with_notes_annotation() {
+        // :: notes :: annotated list provides the definitions
+        let doc = parse("Text [1].\n\n:: notes ::\n1. Note.\n2. Another.\n");
         let diags = analyze(&doc);
-        assert_eq!(diags.len(), 0);
+        let footnote_diags: Vec<_> = diags
+            .iter()
+            .filter(|d| d.kind == DiagnosticKind::MissingFootnoteDefinition)
+            .collect();
+        assert!(footnote_diags.is_empty());
     }
 
     #[test]
-    fn ignores_valid_list_footnote() {
-        // "Notes" session with indented list item "1."
+    fn ignores_valid_list_footnote_in_session() {
+        // :: notes :: inside a session
+        let doc = parse("Text [1].\n\nNotes\n\n    :: notes ::\n\n    1. Note.\n    2. Another.\n");
+        let diags = analyze(&doc);
+        let footnote_diags: Vec<_> = diags
+            .iter()
+            .filter(|d| d.kind == DiagnosticKind::MissingFootnoteDefinition)
+            .collect();
+        assert!(footnote_diags.is_empty());
+    }
+
+    #[test]
+    fn list_without_notes_annotation_is_not_footnotes() {
+        // A "Notes" session without :: notes :: does NOT define footnotes
         let doc = parse("Text [1].\n\nNotes\n\n    1. Note.\n    2. Another.\n");
         let diags = analyze(&doc);
-        assert_eq!(diags.len(), 0);
-    }
-
-    #[test]
-    fn detects_missing_labeled_footnote_definition() {
-        let doc = parse("Text with [^source] reference.");
-        let diags = analyze(&doc);
-        assert_eq!(diags.len(), 1);
-        assert_eq!(diags[0].kind, DiagnosticKind::MissingFootnoteDefinition);
-        assert!(diags[0].message.contains("[^source]"));
-    }
-
-    #[test]
-    fn ignores_valid_labeled_footnote() {
-        let doc = parse("Text [^source].\n\n:: source :: The source material.\n");
-        let diags = analyze(&doc);
-        assert_eq!(diags.len(), 0);
-    }
-
-    #[test]
-    fn labeled_footnote_match_is_case_insensitive() {
-        let doc = parse("Text [^Source].\n\n:: source :: The source material.\n");
-        let diags = analyze(&doc);
-        assert_eq!(diags.len(), 0);
+        let footnote_diags: Vec<_> = diags
+            .iter()
+            .filter(|d| d.kind == DiagnosticKind::MissingFootnoteDefinition)
+            .collect();
+        assert_eq!(footnote_diags.len(), 1);
     }
 
     #[test]

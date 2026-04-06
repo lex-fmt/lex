@@ -40,7 +40,7 @@ fn hover_for_reference(
                 .or_else(|| Some(generic_reference(range.clone(), raw)))
         }
         ReferenceType::FootnoteNumber { number } => {
-            footnote_hover(document, range.clone(), &number.to_string())
+            footnote_number_hover(document, range.clone(), number)
                 .or_else(|| Some(generic_reference(range.clone(), raw)))
         }
         ReferenceType::Citation(data) => {
@@ -95,19 +95,18 @@ fn annotation_ref_hover(document: &Document, range: Range, label: &str) -> Optio
     })
 }
 
-fn footnote_hover(document: &Document, range: Range, label: &str) -> Option<HoverResult> {
-    let annotation = document.find_annotation_by_label(label)?;
-    let mut lines = Vec::new();
-    if let Some(preview) = preview_from_items(annotation.children.iter()) {
-        lines.push(preview);
+fn footnote_number_hover(document: &Document, range: Range, number: u32) -> Option<HoverResult> {
+    let defs = crate::utils::collect_footnote_definitions(document);
+    let number_str = number.to_string();
+    for (label, _) in &defs {
+        if label == &number_str {
+            return Some(HoverResult {
+                range,
+                contents: format!("**Footnote [{number}]**"),
+            });
+        }
     }
-    if lines.is_empty() {
-        lines.push("(no content)".to_string());
-    }
-    Some(HoverResult {
-        range,
-        contents: format!("**Footnote [{}]**\n\n{}", label, lines.join("\n\n")),
-    })
+    None
 }
 
 fn definition_hover(document: &Document, range: Range, target: &str) -> Option<HoverResult> {

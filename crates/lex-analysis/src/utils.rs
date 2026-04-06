@@ -671,110 +671,105 @@ fn extract_session_identifier(title: &str) -> Option<String> {
     }
 }
 
-/// Finds the Notes/Footnotes session in a document.
-///
-/// A session is considered a Notes session if:
-/// 1. Its title is "Notes" or "Footnotes" (case-insensitive), OR
-/// 2. It's the last session and contains only list items (implicit notes section)
-///
-/// Returns `None` if no Notes session is found.
-pub fn find_notes_session(document: &Document) -> Option<&Session> {
-    // Check root session first
-    let root_title = document.title();
-    if is_notes_title(root_title) {
-        return Some(&document.root);
-    }
-
-    // Check last session - either by title or by content (list-only = implicit notes)
-    for item in document.root.children.iter().rev() {
-        if let ContentItem::Session(session) = item {
-            let title = session.title.as_string();
-            if is_notes_title(title) {
-                return Some(session);
-            }
-            // A last session with only list content is an implicit Notes session
-            if is_list_only_session(session) {
-                return Some(session);
-            }
-            // Only check the last session
-            break;
-        }
-    }
-    None
-}
-
-/// Checks if a title indicates a Notes/Footnotes session.
-fn is_notes_title(title: impl AsRef<str>) -> bool {
-    let title = title.as_ref();
-    let normalized = title.trim().trim_end_matches(':').to_lowercase();
-    normalized == "notes" || normalized == "footnotes"
-}
-
-/// Checks if a session contains only list items (no paragraphs, definitions, etc.).
-fn is_list_only_session(session: &Session) -> bool {
-    if session.children.is_empty() {
-        return false;
-    }
-    session
-        .children
+/// Checks whether a list is annotated with `:: notes ::`.
+fn is_notes_list(list: &lex_core::lex::ast::List) -> bool {
+    list.annotations()
         .iter()
-        .all(|child| matches!(child, ContentItem::List(_) | ContentItem::BlankLineGroup(_)))
+        .any(|a| a.data.label.value.trim().eq_ignore_ascii_case("notes"))
+}
+
+/// Checks whether a container has a `:: notes ::` annotation (which may
+/// attach to the container itself rather than to the list, depending on
+/// blank line distance).
+fn has_notes_annotation(annotations: &[Annotation]) -> bool {
+    annotations
+        .iter()
+        .any(|a| a.data.label.value.trim().eq_ignore_ascii_case("notes"))
 }
 
 /// Collects all footnote definitions from a document.
 ///
-/// Footnotes can be defined in two ways:
-/// 1. **Annotations**: `:: 1 ::` style definitions anywhere in the document
-/// 2. **List items**: Numbered list items within a Notes/Footnotes session
+/// Footnote definitions are list items inside lists marked by a `:: notes ::`
+/// annotation. The annotation can attach either to the list itself or to the
+/// containing session/document (depending on blank line proximity). Both cases
+/// are handled.
 ///
 /// Returns a vector of (label, range) pairs for each definition found.
 pub fn collect_footnote_definitions(
     document: &Document,
 ) -> Vec<(String, lex_core::lex::ast::Range)> {
     let mut defs = Vec::new();
-
-    // Annotations with non-empty labels
-    for annotation in collect_all_annotations(document) {
-        let label = &annotation.data.label.value;
-        if !label.trim().is_empty() {
-            defs.push((label.clone(), annotation.header_location().clone()));
-        }
+    // Check document-level :: notes :: annotations
+    if has_notes_annotation(document.annotations()) {
+        collect_first_list_items(&document.root.children, &mut defs);
     }
-
-    // List items in Notes session
-    if let Some(session) = find_notes_session(document) {
-        collect_footnote_items_in_container(&session.children, &mut defs);
-    }
+    collect_notes_items_in_session(&document.root, &mut defs);
     defs
 }
 
-fn collect_footnote_items_in_container(
-    items: &[ContentItem],
+fn collect_notes_items_in_session(
+    session: &Session,
+    out: &mut Vec<(String, lex_core::lex::ast::Range)>,
+) {
+    // Check session-level :: notes :: annotations
+    if has_notes_annotation(session.annotations()) {
+        collect_first_list_items(&session.children, out);
+    }
+    for item in session.children.iter() {
+        match item {
+            ContentItem::List(l) if is_notes_list(l) => {
+                collect_list_item_labels(l, out);
+            }
+            ContentItem::Session(s) => collect_notes_items_in_session(s, out),
+            ContentItem::Definition(d) => collect_notes_items_in_children(d.children.iter(), out),
+            _ => {}
+        }
+    }
+}
+
+fn collect_notes_items_in_children<'a>(
+    items: impl Iterator<Item = &'a ContentItem>,
     out: &mut Vec<(String, lex_core::lex::ast::Range)>,
 ) {
     for item in items {
         match item {
-            ContentItem::List(l) => {
-                // Iterate manually because ListContainer iteration yields &ContentItem
-                // If ListContainer implements IntoIterator, iterate it.
-                // l.items is the container.
-                // In previous steps we saw iterating `l.items` yields `ContentItem`.
-                for entry in &l.items {
-                    if let ContentItem::ListItem(li) = entry {
-                        let marker = li.marker();
-                        // "1." -> "1", "1)" -> "1"
-                        let label = marker
-                            .trim()
-                            .trim_end_matches(['.', ')', ':'].as_ref())
-                            .trim();
-                        if !label.is_empty() {
-                            out.push((label.to_string(), li.range().clone()));
-                        }
-                    }
-                }
+            ContentItem::List(l) if is_notes_list(l) => {
+                collect_list_item_labels(l, out);
             }
-            ContentItem::Session(s) => collect_footnote_items_in_container(&s.children, out),
+            ContentItem::Session(s) => collect_notes_items_in_session(s, out),
             _ => {}
+        }
+    }
+}
+
+/// When a `:: notes ::` annotation attaches to a container rather than
+/// a list, find the first list child and collect its items.
+fn collect_first_list_items(
+    children: &[ContentItem],
+    out: &mut Vec<(String, lex_core::lex::ast::Range)>,
+) {
+    for item in children {
+        if let ContentItem::List(l) = item {
+            collect_list_item_labels(l, out);
+            return;
+        }
+    }
+}
+
+fn collect_list_item_labels(
+    list: &lex_core::lex::ast::List,
+    out: &mut Vec<(String, lex_core::lex::ast::Range)>,
+) {
+    for entry in &list.items {
+        if let ContentItem::ListItem(li) = entry {
+            let marker = li.marker();
+            let label = marker
+                .trim()
+                .trim_end_matches(['.', ')', ':'].as_ref())
+                .trim();
+            if !label.is_empty() {
+                out.push((label.to_string(), li.range().clone()));
+            }
         }
     }
 }
@@ -789,42 +784,38 @@ mod tests {
     }
 
     #[test]
-    fn find_notes_session_by_title() {
-        let doc = parse("Content\n\nNotes\n\n    1. A note\n");
-        let notes = find_notes_session(&doc);
-        assert!(notes.is_some());
-        assert_eq!(notes.unwrap().title.as_string().trim(), "Notes");
+    fn collects_footnotes_from_notes_annotated_list() {
+        let doc = parse(
+            "Text [1].\n\nNotes\n\n    :: notes ::\n\n    1. First note.\n    2. Second note.\n",
+        );
+        let defs = collect_footnote_definitions(&doc);
+        let labels: Vec<&str> = defs.iter().map(|(l, _)| l.as_str()).collect();
+        assert_eq!(labels, vec!["1", "2"]);
     }
 
     #[test]
-    fn find_notes_session_by_footnotes_title() {
-        let doc = parse("Content\n\nFootnotes\n\n    1. A note\n");
-        let notes = find_notes_session(&doc);
-        assert!(notes.is_some());
-        assert_eq!(notes.unwrap().title.as_string().trim(), "Footnotes");
+    fn no_footnotes_without_notes_annotation() {
+        // A plain list in a "Notes" session is NOT a footnote list without :: notes ::
+        let doc = parse("Content\n\nNotes\n\n    1. A note\n    2. Another.\n");
+        let defs = collect_footnote_definitions(&doc);
+        assert!(defs.is_empty());
     }
 
     #[test]
-    fn find_notes_session_implicit_list_only() {
-        // Last session with only list content is an implicit Notes session
-        let doc = parse("Content\n\nReferences\n\n    1. First ref\n    2. Second ref\n");
-        let notes = find_notes_session(&doc);
-        assert!(notes.is_some());
-        assert_eq!(notes.unwrap().title.as_string().trim(), "References");
+    fn collects_footnotes_at_document_root() {
+        let doc = parse("Text [1].\n\n:: notes ::\n\n1. Root-level note.\n2. Second.\n");
+        let defs = collect_footnote_definitions(&doc);
+        let labels: Vec<&str> = defs.iter().map(|(l, _)| l.as_str()).collect();
+        assert_eq!(labels, vec!["1", "2"]);
     }
 
     #[test]
-    fn find_notes_session_none_when_last_has_paragraphs() {
-        // Last session with mixed content is NOT an implicit Notes session
-        let doc = parse("Content\n\nConclusion\n\n    This is a paragraph.\n");
-        let notes = find_notes_session(&doc);
-        assert!(notes.is_none());
-    }
-
-    #[test]
-    fn find_notes_session_root_is_notes() {
-        let doc = parse("Notes\n\n    1. A note\n");
-        let notes = find_notes_session(&doc);
-        assert!(notes.is_some());
+    fn multiple_notes_lists_in_different_sessions() {
+        // Each chapter has its own :: notes :: list with 2 items
+        let doc = parse(
+            "1. Chapter One\n\n    Text [1].\n\n    :: notes ::\n    1. Ch1 note A.\n    2. Ch1 note B.\n\n2. Chapter Two\n\n    Text [1].\n\n    :: notes ::\n    1. Ch2 note A.\n    2. Ch2 note B.\n",
+        );
+        let defs = collect_footnote_definitions(&doc);
+        assert_eq!(defs.len(), 4); // 2 items × 2 chapters
     }
 }
