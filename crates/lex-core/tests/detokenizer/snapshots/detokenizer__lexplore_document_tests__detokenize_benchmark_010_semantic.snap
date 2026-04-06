@@ -45,7 +45,6 @@ This is a marker annotation at the root level, attached to the definition above.
             - With its own items. {{list-item}}
         - Another list item at level 2. {{list-item}}
 
-
     A paragraph back at the first level of nesting. {{paragraph}}
 
     Code Example (Verbatim Block):
