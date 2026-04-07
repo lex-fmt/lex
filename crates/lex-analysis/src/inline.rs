@@ -165,12 +165,12 @@ mod tests {
 
     #[test]
     fn extracts_references_with_classification() {
-        let text = text_with_range("See [^note] and [@spec2024] plus [42]", 0, 0);
+        let text = text_with_range("See [::note] and [@spec2024] plus [42]", 0, 0);
         let refs = extract_references(&text);
         assert_eq!(refs.len(), 3);
         assert!(refs
             .iter()
-            .any(|r| matches!(r.reference_type, ReferenceType::FootnoteLabeled { .. })));
+            .any(|r| matches!(r.reference_type, ReferenceType::AnnotationReference { .. })));
         assert!(refs
             .iter()
             .any(|r| matches!(r.reference_type, ReferenceType::Citation(_))));

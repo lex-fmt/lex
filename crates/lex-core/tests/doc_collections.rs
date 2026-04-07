@@ -96,7 +96,7 @@ fn benchmark_040_on_parsing() {
 #[test]
 fn benchmark_050_lsp_fixture() {
     let doc = Lexplore::benchmark(50).parse().unwrap();
-    assert_ast(&doc).item_count(3);
+    assert_ast(&doc).item_count(2);
 }
 
 #[test]

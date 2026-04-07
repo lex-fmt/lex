@@ -499,7 +499,7 @@ impl Session {
     /// Iterate all inline references at any depth.
     ///
     /// This method recursively walks the session tree, parses inline content,
-    /// and yields all reference inline nodes (e.g., \[42\], \[@citation\], \[^note\]).
+    /// and yields all reference inline nodes (e.g., \[42\], \[@citation\], \[::note\]).
     ///
     /// Note: This method does not currently return source ranges for individual
     /// references. Use the paragraph's location as a starting point for finding
@@ -593,7 +593,7 @@ impl Session {
         self.iter_all_references()
             .filter(|reference| match &reference.reference_type {
                 ReferenceType::FootnoteNumber { number } => target == number.to_string(),
-                ReferenceType::FootnoteLabeled { label } => target == label,
+                ReferenceType::AnnotationReference { label } => target == label,
                 ReferenceType::Session { target: ref_target } => target == ref_target,
                 ReferenceType::General { target: ref_target } => target == ref_target,
                 ReferenceType::Citation(data) => data.keys.iter().any(|key| key == target),

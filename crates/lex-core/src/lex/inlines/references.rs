@@ -6,7 +6,8 @@
 //! - Session references (`[#42]`)
 //! - URLs (`[https://example.com]`)
 //! - File paths (`[./file.txt]`)
-//! - Footnotes (`[^note]`, `[42]`)
+//! - Annotation references (`[::note]`)
+//! - Footnotes (`[42]`)
 //! - General references (`[Section Title]`)
 
 use super::citations::parse_citation_data;
@@ -43,10 +44,11 @@ fn determine_reference_type(raw: &str) -> ReferenceType {
         }
     }
 
-    if let Some(rest) = trimmed.strip_prefix('^') {
-        if !rest.is_empty() {
-            return ReferenceType::FootnoteLabeled {
-                label: rest.to_string(),
+    if let Some(rest) = trimmed.strip_prefix("::") {
+        let label = rest.trim();
+        if !label.is_empty() {
+            return ReferenceType::AnnotationReference {
+                label: label.to_string(),
             };
         }
     }

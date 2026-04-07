@@ -35,10 +35,12 @@ fn hover_for_reference(
     reference_type: ReferenceType,
 ) -> Option<HoverResult> {
     match reference_type {
-        ReferenceType::FootnoteLabeled { label } => footnote_hover(document, range.clone(), &label)
-            .or_else(|| Some(generic_reference(range.clone(), raw))),
+        ReferenceType::AnnotationReference { label } => {
+            annotation_ref_hover(document, range.clone(), &label)
+                .or_else(|| Some(generic_reference(range.clone(), raw)))
+        }
         ReferenceType::FootnoteNumber { number } => {
-            footnote_hover(document, range.clone(), &number.to_string())
+            footnote_number_hover(document, range.clone(), number)
                 .or_else(|| Some(generic_reference(range.clone(), raw)))
         }
         ReferenceType::Citation(data) => {
@@ -78,7 +80,7 @@ fn generic_reference(range: Range, raw: &str) -> HoverResult {
     }
 }
 
-fn footnote_hover(document: &Document, range: Range, label: &str) -> Option<HoverResult> {
+fn annotation_ref_hover(document: &Document, range: Range, label: &str) -> Option<HoverResult> {
     let annotation = document.find_annotation_by_label(label)?;
     let mut lines = Vec::new();
     if let Some(preview) = preview_from_items(annotation.children.iter()) {
@@ -89,8 +91,22 @@ fn footnote_hover(document: &Document, range: Range, label: &str) -> Option<Hove
     }
     Some(HoverResult {
         range,
-        contents: format!("**Footnote [{}]**\n\n{}", label, lines.join("\n\n")),
+        contents: format!("**Annotation [::{}]**\n\n{}", label, lines.join("\n\n")),
     })
+}
+
+fn footnote_number_hover(document: &Document, range: Range, number: u32) -> Option<HoverResult> {
+    let defs = crate::utils::collect_footnote_definitions(document);
+    let number_str = number.to_string();
+    for (label, _) in &defs {
+        if label == &number_str {
+            return Some(HoverResult {
+                range,
+                contents: format!("**Footnote [{number}]**"),
+            });
+        }
+    }
+    None
 }
 
 fn definition_hover(document: &Document, range: Range, target: &str) -> Option<HoverResult> {
@@ -321,7 +337,7 @@ mod tests {
     #[test]
     fn hover_shows_footnote_content() {
         let document = sample_document();
-        let position = position_for("^source]");
+        let position = position_for("::source]");
         let hover = hover(&document, position).expect("hover expected");
         // In the updated fixture, footnotes are list items, not annotations
         // So hover shows generic reference info

@@ -641,7 +641,7 @@ mod tests {
     #[test]
     fn reference_detects_citation_and_footnotes() {
         let citation = parse_inlines("[@doe2024]");
-        let labeled = parse_inlines("[^note1]");
+        let labeled = parse_inlines("[::note1]");
         let numbered = parse_inlines("[42]");
 
         match &citation[0] {
@@ -656,8 +656,8 @@ mod tests {
         }
         match &labeled[0] {
             InlineNode::Reference { data, .. } => match &data.reference_type {
-                ReferenceType::FootnoteLabeled { label } => assert_eq!(label, "note1"),
-                other => panic!("Expected labeled footnote, got {other:?}"),
+                ReferenceType::AnnotationReference { label } => assert_eq!(label, "note1"),
+                other => panic!("Expected annotation reference, got {other:?}"),
             },
             _ => panic!("Expected reference"),
         }

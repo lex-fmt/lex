@@ -5,7 +5,7 @@ use std::ops::Range;
 #[test]
 fn test_inline_reference_markers_present() {
     // Minimal test case with inline references
-    let source = r#"Welcome to *Lex* with references [Cache] and [^source].
+    let source = r#"Welcome to *Lex* with references [Cache] and [::source].
 
 Cache:
     A definition body referencing [Cache].
@@ -52,7 +52,7 @@ Cache:
         println!("  End marker: {:?} at {:?}", snippet, token.range);
     }
 
-    // We have 3 references: [Cache], [^source], [Cache]
+    // We have 3 references: [Cache], [::source], [Cache]
     // So we should have 3 start markers and 3 end markers
     assert_eq!(
         ref_marker_start_tokens.len(),

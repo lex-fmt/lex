@@ -131,9 +131,10 @@ fn reference_matches(
 ) -> bool {
     use lex_core::lex::inlines::ReferenceType;
     match (reference, target) {
-        (ReferenceType::FootnoteLabeled { label }, ReferenceTarget::AnnotationLabel(expected)) => {
-            label.eq_ignore_ascii_case(expected)
-        }
+        (
+            ReferenceType::AnnotationReference { label },
+            ReferenceTarget::AnnotationLabel(expected),
+        ) => label.eq_ignore_ascii_case(expected),
         (ReferenceType::FootnoteNumber { number }, ReferenceTarget::AnnotationLabel(expected)) => {
             expected == &number.to_string()
         }
@@ -185,7 +186,7 @@ Cache:
 1. Intro
 
     First reference [Cache].
-    Second reference [Cache] and footnote [^note].
+    Second reference [Cache] and annotation [::note].
 "#;
         let document = parsing::parse_document(source).expect("fixture parses");
         (document, source.to_string())
@@ -248,7 +249,7 @@ Cache:
     #[test]
     fn finds_annotation_references() {
         let (document, source) = fixture();
-        let position = position_of(&source, "^note]");
+        let position = position_of(&source, "::note]");
         let ranges = find_references(&document, position, false);
         assert_eq!(ranges.len(), 1);
         assert!(ranges[0].contains(position));

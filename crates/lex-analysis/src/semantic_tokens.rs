@@ -64,6 +64,7 @@ pub enum LexSemanticTokenKind {
     Reference,
     ReferenceCitation,
     ReferenceFootnote,
+    ReferenceAnnotation,
     VerbatimSubject,
     DataLabel,
     DataParameter,
@@ -117,6 +118,7 @@ impl LexSemanticTokenKind {
             LexSemanticTokenKind::Reference => "Reference",
             LexSemanticTokenKind::ReferenceCitation => "ReferenceCitation",
             LexSemanticTokenKind::ReferenceFootnote => "ReferenceFootnote",
+            LexSemanticTokenKind::ReferenceAnnotation => "ReferenceAnnotation",
             LexSemanticTokenKind::VerbatimSubject => "VerbatimSubject",
             LexSemanticTokenKind::DataLabel => "DataLabel",
             LexSemanticTokenKind::DataParameter => "DataParameter",
@@ -168,6 +170,7 @@ pub const SEMANTIC_TOKEN_KINDS: &[LexSemanticTokenKind] = &[
     LexSemanticTokenKind::InlineMarkerMathEnd,
     LexSemanticTokenKind::InlineMarkerRefStart,
     LexSemanticTokenKind::InlineMarkerRefEnd,
+    LexSemanticTokenKind::ReferenceAnnotation,
 ];
 
 #[derive(Debug, Clone, PartialEq)]
@@ -615,9 +618,8 @@ impl<'a> InlineWalker<'a> {
     fn walk_reference(&mut self, data: &lex_core::lex::inlines::ReferenceInline) {
         let ref_kind = match &data.reference_type {
             ReferenceType::Citation(_) => LexSemanticTokenKind::ReferenceCitation,
-            ReferenceType::FootnoteNumber { .. } | ReferenceType::FootnoteLabeled { .. } => {
-                LexSemanticTokenKind::ReferenceFootnote
-            }
+            ReferenceType::FootnoteNumber { .. } => LexSemanticTokenKind::ReferenceFootnote,
+            ReferenceType::AnnotationReference { .. } => LexSemanticTokenKind::ReferenceAnnotation,
             _ => LexSemanticTokenKind::Reference,
         };
 
@@ -810,9 +812,9 @@ mod tests {
                 .any(|snippet| snippet.contains("@spec2025"))
         );
         assert!(
-            snippets(&tokens, LexSemanticTokenKind::ReferenceFootnote, source)
+            snippets(&tokens, LexSemanticTokenKind::ReferenceAnnotation, source)
                 .iter()
-                .any(|snippet| snippet.contains("^source"))
+                .any(|snippet| snippet.contains("::source"))
         );
         assert!(
             snippets(&tokens, LexSemanticTokenKind::ReferenceFootnote, source)

@@ -161,14 +161,14 @@ pub fn validate_references(document: &Document) -> Vec<Diagnostic> {
                     diagnostics.push(diag);
                 }
             }
-            ReferenceType::FootnoteLabeled { label } => {
+            ReferenceType::AnnotationReference { label } => {
                 if document.find_annotation_by_label(label).is_none() {
                     let range = document.root.range().clone();
                     let diag = Diagnostic::new(
                         range,
                         DiagnosticSeverity::Warning,
                         format!(
-                            "Broken footnote reference: no annotation found with label '{label}'"
+                            "Broken annotation reference: no annotation found with label '{label}'"
                         ),
                     )
                     .with_code("broken-reference");

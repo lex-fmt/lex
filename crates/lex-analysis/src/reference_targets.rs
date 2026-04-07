@@ -13,7 +13,7 @@ pub enum ReferenceTarget {
 pub fn targets_from_reference_type(reference_type: &ReferenceType) -> Vec<ReferenceTarget> {
     let mut targets = Vec::new();
     match reference_type {
-        ReferenceType::FootnoteLabeled { label } => {
+        ReferenceType::AnnotationReference { label } => {
             push_unique(
                 &mut targets,
                 ReferenceTarget::AnnotationLabel(label.clone()),

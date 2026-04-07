@@ -188,7 +188,7 @@ pub enum ReferenceTypeExpectation {
         locator: Option<TextMatch>,
     },
     Tk(Option<TextMatch>),
-    FootnoteLabeled(TextMatch),
+    AnnotationReference(TextMatch),
     FootnoteNumber(u32),
     Session(TextMatch),
     General(TextMatch),
@@ -230,9 +230,9 @@ impl ReferenceExpectation {
         }
     }
 
-    pub fn footnote_labeled(label: TextMatch) -> Self {
+    pub fn annotation_reference(label: TextMatch) -> Self {
         Self {
-            expected: ReferenceTypeExpectation::FootnoteLabeled(label),
+            expected: ReferenceTypeExpectation::AnnotationReference(label),
         }
     }
 
@@ -308,8 +308,8 @@ impl ReferenceExpectation {
                 }
             },
             (
-                ReferenceTypeExpectation::FootnoteLabeled(expected),
-                ReferenceType::FootnoteLabeled { label },
+                ReferenceTypeExpectation::AnnotationReference(expected),
+                ReferenceType::AnnotationReference { label },
             ) => expected.assert(label, context),
             (
                 ReferenceTypeExpectation::FootnoteNumber(expected_number),

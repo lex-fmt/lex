@@ -27,8 +27,8 @@ pub enum ReferenceType {
     ToCome { identifier: Option<String> },
     /// `[@citation]` with structured citation data.
     Citation(CitationData),
-    /// `[^note]`
-    FootnoteLabeled { label: String },
+    /// `[::note]` — pointer to an annotation by label.
+    AnnotationReference { label: String },
     /// `[12]`
     FootnoteNumber { number: u32 },
     /// `[#42]`

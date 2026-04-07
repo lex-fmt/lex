@@ -1,6 +1,6 @@
 //! Property-based tests for inline references
 //!
-//! Covers all 8 ReferenceType variants: ToCome, Citation, FootnoteLabeled,
+//! Covers all 8 ReferenceType variants: ToCome, Citation, AnnotationReference,
 //! FootnoteNumber, Session, Url, File, General — none of which had proptest
 //! coverage before.
 
@@ -151,20 +151,20 @@ proptest! {
 }
 
 // =============================================================================
-// 3. Footnote References [^label] and [42]
+// 3. Annotation References [::label] and Footnotes [42]
 // =============================================================================
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(100))]
 
     #[test]
-    fn reference_footnote_labeled(label in footnote_label_strategy()) {
-        let source = format!("Text [^{label}] end.\n");
+    fn reference_annotation(label in footnote_label_strategy()) {
+        let source = format!("Text [::{label}] end.\n");
         let content = extract_first_text_line_content(&source);
-        InlineAssertion::new(&content, "footnote labeled")
+        InlineAssertion::new(&content, "annotation reference")
             .starts_with(&[
                 InlineExpectation::plain_text("Text "),
-                InlineExpectation::reference(ReferenceExpectation::footnote_labeled(
+                InlineExpectation::reference(ReferenceExpectation::annotation_reference(
                     TextMatch::Exact(label)
                 )),
                 InlineExpectation::plain_text(" end."),
