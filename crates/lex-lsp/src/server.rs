@@ -36,16 +36,17 @@ use tower_lsp::jsonrpc::{Error, Result};
 use tower_lsp::lsp_types::{
     CodeActionParams, CodeActionProviderCapability, CodeActionResponse, CompletionItem,
     CompletionOptions, CompletionParams, CompletionResponse, DidChangeConfigurationParams,
-    DocumentFormattingParams, DocumentLink, DocumentLinkOptions, DocumentLinkParams,
-    DocumentRangeFormattingParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
-    ExecuteCommandOptions, ExecuteCommandParams, FoldingRange, FoldingRangeParams,
-    FoldingRangeProviderCapability, GotoDefinitionParams, GotoDefinitionResponse, Hover,
-    HoverContents, HoverParams, HoverProviderCapability, InitializeParams, InitializeResult,
-    InitializedParams, Location, MarkupContent, MarkupKind, OneOf, Position, Range,
-    ReferenceParams, SemanticToken, SemanticTokenType, SemanticTokens, SemanticTokensFullOptions,
-    SemanticTokensLegend, SemanticTokensOptions, SemanticTokensParams, SemanticTokensResult,
-    ServerCapabilities, ServerInfo, TextDocumentItem, TextDocumentSyncCapability,
-    TextDocumentSyncKind, TextEdit, Url, WorkDoneProgressOptions,
+    DidChangeWorkspaceFoldersParams, DocumentFormattingParams, DocumentLink, DocumentLinkOptions,
+    DocumentLinkParams, DocumentRangeFormattingParams, DocumentSymbol, DocumentSymbolParams,
+    DocumentSymbolResponse, ExecuteCommandOptions, ExecuteCommandParams, FoldingRange,
+    FoldingRangeParams, FoldingRangeProviderCapability, GotoDefinitionParams,
+    GotoDefinitionResponse, Hover, HoverContents, HoverParams, HoverProviderCapability,
+    InitializeParams, InitializeResult, InitializedParams, Location, MarkupContent, MarkupKind,
+    OneOf, Position, Range, ReferenceParams, SemanticToken, SemanticTokenType, SemanticTokens,
+    SemanticTokensFullOptions, SemanticTokensLegend, SemanticTokensOptions, SemanticTokensParams,
+    SemanticTokensResult, ServerCapabilities, ServerInfo, TextDocumentItem,
+    TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit, Url, WorkDoneProgressOptions,
+    WorkspaceFoldersServerCapabilities,
 };
 use tower_lsp::Client;
 
@@ -760,6 +761,13 @@ where
                 ],
                 work_done_progress_options: WorkDoneProgressOptions::default(),
             }),
+            workspace: Some(lsp_types::WorkspaceServerCapabilities {
+                workspace_folders: Some(WorkspaceFoldersServerCapabilities {
+                    supported: Some(true),
+                    change_notifications: Some(OneOf::Left(true)),
+                }),
+                file_operations: None,
+            }),
             ..ServerCapabilities::default()
         };
 
@@ -773,6 +781,32 @@ where
     }
 
     async fn initialized(&self, _: InitializedParams) {}
+
+    async fn did_change_workspace_folders(&self, params: DidChangeWorkspaceFoldersParams) {
+        let mut roots = self.workspace_roots.write().await;
+
+        // Remove old folders
+        for removed in &params.event.removed {
+            if let Ok(path) = removed.uri.to_file_path() {
+                roots.retain(|r| r != &path);
+            }
+        }
+
+        // Add new folders
+        for added in &params.event.added {
+            if let Ok(path) = added.uri.to_file_path() {
+                if !roots.contains(&path) {
+                    roots.push(path);
+                }
+            }
+        }
+
+        // Reload config from the first (primary) root
+        drop(roots);
+        let roots = self.workspace_roots.read().await;
+        let root = roots.first().map(|p| p.as_path());
+        *self.config.write().await = load_config(root);
+    }
 
     async fn shutdown(&self) -> Result<()> {
         Ok(())
@@ -1959,5 +1993,123 @@ mod tests {
         assert_eq!(rules.max_blank_lines, 3);
         assert!(!rules.normalize_seq_markers);
         assert_eq!(rules.unordered_seq_marker, '*');
+    }
+
+    #[tokio::test]
+    async fn did_change_workspace_folders_adds_roots() {
+        let provider = Arc::new(MockFeatureProvider::default());
+        let server = LexLanguageServer::with_features(NoopClient, provider);
+
+        // Start with one root via initialize
+        server
+            .initialize(InitializeParams {
+                root_uri: Some(Url::from_file_path("/initial").unwrap()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(server.workspace_roots.read().await.len(), 1);
+
+        // Add a workspace folder
+        server
+            .did_change_workspace_folders(DidChangeWorkspaceFoldersParams {
+                event: lsp_types::WorkspaceFoldersChangeEvent {
+                    added: vec![lsp_types::WorkspaceFolder {
+                        uri: Url::from_file_path("/added").unwrap(),
+                        name: "added".to_string(),
+                    }],
+                    removed: vec![],
+                },
+            })
+            .await;
+
+        let roots = server.workspace_roots.read().await;
+        assert_eq!(roots.len(), 2);
+        assert_eq!(roots[1], PathBuf::from("/added"));
+    }
+
+    #[tokio::test]
+    async fn did_change_workspace_folders_removes_roots() {
+        let provider = Arc::new(MockFeatureProvider::default());
+        let server = LexLanguageServer::with_features(NoopClient, provider);
+
+        server
+            .initialize(InitializeParams {
+                root_uri: Some(Url::from_file_path("/initial").unwrap()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        // Add a folder then remove the initial one
+        server
+            .did_change_workspace_folders(DidChangeWorkspaceFoldersParams {
+                event: lsp_types::WorkspaceFoldersChangeEvent {
+                    added: vec![lsp_types::WorkspaceFolder {
+                        uri: Url::from_file_path("/new-root").unwrap(),
+                        name: "new-root".to_string(),
+                    }],
+                    removed: vec![lsp_types::WorkspaceFolder {
+                        uri: Url::from_file_path("/initial").unwrap(),
+                        name: "initial".to_string(),
+                    }],
+                },
+            })
+            .await;
+
+        let roots = server.workspace_roots.read().await;
+        assert_eq!(roots.len(), 1);
+        assert_eq!(roots[0], PathBuf::from("/new-root"));
+    }
+
+    #[tokio::test]
+    async fn did_change_workspace_folders_does_not_duplicate() {
+        let provider = Arc::new(MockFeatureProvider::default());
+        let server = LexLanguageServer::with_features(NoopClient, provider);
+
+        server
+            .initialize(InitializeParams {
+                root_uri: Some(Url::from_file_path("/root").unwrap()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        // Try to add the same folder that already exists
+        server
+            .did_change_workspace_folders(DidChangeWorkspaceFoldersParams {
+                event: lsp_types::WorkspaceFoldersChangeEvent {
+                    added: vec![lsp_types::WorkspaceFolder {
+                        uri: Url::from_file_path("/root").unwrap(),
+                        name: "root".to_string(),
+                    }],
+                    removed: vec![],
+                },
+            })
+            .await;
+
+        assert_eq!(server.workspace_roots.read().await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn initialize_advertises_workspace_folder_support() {
+        let provider = Arc::new(MockFeatureProvider::default());
+        let server = LexLanguageServer::with_features(NoopClient, provider);
+
+        let result = server
+            .initialize(InitializeParams::default())
+            .await
+            .unwrap();
+
+        let workspace = result
+            .capabilities
+            .workspace
+            .expect("workspace capabilities");
+        let folders = workspace
+            .workspace_folders
+            .expect("workspace folder support");
+        assert_eq!(folders.supported, Some(true));
+        assert_eq!(folders.change_notifications, Some(OneOf::Left(true)));
     }
 }
