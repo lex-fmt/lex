@@ -1,5 +1,5 @@
 [package]
-name = "lex-cli"
+name = "lexd"
 version = "0.7.0"
 edition = "2021"
 authors = ["lex contributors"]
@@ -10,10 +10,10 @@ keywords = ["cli", "format", "lex"]
 categories = ["command-line-utilities"]
 
 [package.metadata.dist]
-display-name = "lex"
+display-name = "lexd"
 
 [[bin]]
-name = "lex"
+name = "lexd"
 path = "src/main.rs"
 doctest = false
 

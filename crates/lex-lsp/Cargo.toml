@@ -1,5 +1,5 @@
 [package]
-name = "lex-lsp"
+name = "lexd-lsp"
 version = "0.7.0"
 edition = "2021"
 authors = ["lex contributors"]
@@ -13,8 +13,8 @@ categories = ["development-tools", "text-editors"]
 doctest = false
 
 [[bin]]
-name = "lex-lsp"
-path = "src/bin/lex-lsp.rs"
+name = "lexd-lsp"
+path = "src/bin/lexd-lsp.rs"
 
 [dependencies]
 lex-core = { workspace = true }

@@ -15,9 +15,9 @@ This repo is the unified Rust workspace containing all backend crates:
 | `lex-core` | Parser and AST |
 | `lex-babel` | Format conversion (Markdown, HTML, PDF, PNG, Pandoc JSON, RFC XML) |
 | `lex-analysis` | Semantic analysis |
-| `lex-lsp` | LSP server (semantic highlighting, symbols, formatting, completion, diagnostics, hover, go-to-definition, references, folding, document links) |
+| `lexd-lsp` | LSP server (semantic highlighting, symbols, formatting, completion, diagnostics, hover, go-to-definition, references, folding, document links) |
 | `lex-config` | Configuration (clapfig) |
-| `lex-cli` | Command-line interface |
+| `lexd` | Command-line interface |
 | `lex-wasm` | WebAssembly bindings |
 
 Specs and docs live in [`lex-fmt/comms`](https://github.com/lex-fmt/comms) (submoduled as `comms/`).
@@ -28,13 +28,13 @@ Specs and docs live in [`lex-fmt/comms`](https://github.com/lex-fmt/comms) (subm
 - [Neovim](https://github.com/lex-fmt/nvim)
 - [LexEd](https://github.com/lex-fmt/lexed) — standalone desktop editor (Electron)
 
-All editors use `lex-lsp` for language features and ship a monochrome theme optimized for prose.
+All editors use `lexd-lsp` for language features and ship a monochrome theme optimized for prose.
 
 ## Install
 
 ```sh
-cargo install lex-cli
-cargo install lex-lsp
+cargo install lexd
+cargo install lexd-lsp
 ```
 
 Editor plugins have their own installation instructions.

@@ -14,7 +14,7 @@ fn fixture_path(name: &str) -> PathBuf {
 #[test]
 fn convert_markdown_to_tag_via_cli() {
     let fixture = fixture_path("markdown-reference-commonmark.md");
-    let mut cmd = cargo_bin_cmd!("lex");
+    let mut cmd = cargo_bin_cmd!("lexd");
     cmd.arg("convert").arg(&fixture).arg("--to").arg("tag");
 
     // Verify comprehensive output structure from markdown import

@@ -1,4 +1,4 @@
-use lex_lsp::LexLanguageServer;
+use lexd_lsp::LexLanguageServer;
 use std::env;
 use std::fs;
 use std::process::ExitCode;
@@ -7,7 +7,7 @@ use tower_lsp::{LspService, Server};
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    eprintln!("DEBUG: lex-lsp starting up (Commit 1)...");
+    eprintln!("DEBUG: lexd-lsp starting up...");
     let args: Vec<String> = env::args().collect();
 
     // If called with "convert" subcommand, handle it and exit

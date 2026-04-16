@@ -1,5 +1,5 @@
-use lex_lsp::server::{DefaultFeatureProvider, LspClient};
-use lex_lsp::LexLanguageServer;
+use lexd_lsp::server::{DefaultFeatureProvider, LspClient};
+use lexd_lsp::LexLanguageServer;
 use proptest::prelude::*;
 use std::sync::Arc;
 use tower_lsp::lsp_types::{

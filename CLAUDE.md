@@ -10,10 +10,10 @@ This is the unified Rust workspace containing all Lex crates and specifications.
 crates/
   lex-core/       Parser crate (crates.io)
   lex-analysis/   Stateless semantic analysis (crates.io)
-  lex-lsp/        LSP server, tower-lsp (crates.io)
+  lex-lsp/        LSP server, tower-lsp — package: lexd-lsp (crates.io)
   lex-babel/      Format conversion via IR (crates.io)
   lex-config/     Configuration loader (crates.io)
-  lex-cli/        Command-line interface (crates.io)
+  lex-cli/        Command-line interface — package: lexd (crates.io)
   lex-wasm/       WebAssembly bindings (not published)
 comms/
   specs/          Grammar specs and test fixtures
@@ -45,9 +45,9 @@ comms/
 ## Releasing
 
 Tag with `vX.Y.Z` and push. CI publishes crates in dependency order:
-lex-core → lex-config → lex-babel → lex-analysis → lex-lsp
+lex-core → lex-config → lex-babel → lex-analysis → lexd-lsp → lexd
 
-CI also builds lex-cli and lex-lsp binaries for 6 platforms.
+CI also builds lexd and lexd-lsp binaries for 6 platforms.
 
 ## Related repos
 
@@ -56,24 +56,24 @@ CI also builds lex-cli and lex-lsp binaries for 6 platforms.
 - [nvim](https://github.com/lex-fmt/nvim) — Neovim plugin
 - [vscode](https://github.com/lex-fmt/vscode) — VSCode extension
 
-Editor UIs download pre-built lex-lsp binaries from this repo's releases,
+Editor UIs download pre-built lexd-lsp binaries from this repo's releases,
 and tree-sitter artifacts from lex-fmt/tree-sitter-lex releases.
 
 For local development, set `LEX_LSP_PATH` to point editors at a local build:
 ```sh
-cargo build -p lex-lsp
-LEX_LSP_PATH=./target/debug/lex-lsp
+cargo build -p lexd-lsp
+LEX_LSP_PATH=./target/debug/lexd-lsp
 ```
 
 ## CLI Quick Reference
 
 ```sh
-lex inspect file.lex                    # AST tree visualization (default)
-lex inspect file.lex ast-tag            # XML-like AST
-lex inspect file.lex ast-json           # JSON AST
-lex inspect file.lex --ast-full         # Full AST with all properties
-lex inspect file.lex token-line-simple  # Token stream (line-classified)
-lex inspect file.lex ir-json            # Intermediate representation
-lex file.lex --to markdown              # Convert formats
-lex format file.lex                     # Auto-format
+lexd inspect file.lex                    # AST tree visualization (default)
+lexd inspect file.lex ast-tag            # XML-like AST
+lexd inspect file.lex ast-json           # JSON AST
+lexd inspect file.lex --ast-full         # Full AST with all properties
+lexd inspect file.lex token-line-simple  # Token stream (line-classified)
+lexd inspect file.lex ir-json            # Intermediate representation
+lexd file.lex --to markdown              # Convert formats
+lexd format file.lex                     # Auto-format
 ```

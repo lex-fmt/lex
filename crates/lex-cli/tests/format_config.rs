@@ -17,7 +17,7 @@ indent_string = "  "
     )
     .unwrap();
 
-    let mut cmd = cargo_bin_cmd!("lex");
+    let mut cmd = cargo_bin_cmd!("lexd");
     cmd.arg("format")
         .arg(input_path.as_os_str())
         .arg("--config")

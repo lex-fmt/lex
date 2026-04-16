@@ -774,7 +774,7 @@ where
         Ok(InitializeResult {
             capabilities,
             server_info: Some(ServerInfo {
-                name: "lex-lsp".to_string(),
+                name: "lexd-lsp".to_string(),
                 version: Some(env!("CARGO_PKG_VERSION").to_string()),
             }),
         })

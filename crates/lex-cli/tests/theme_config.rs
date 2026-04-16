@@ -18,7 +18,7 @@ theme = "dark"
     )
     .unwrap();
 
-    let mut cmd = cargo_bin_cmd!("lex");
+    let mut cmd = cargo_bin_cmd!("lexd");
     cmd.arg("convert")
         .arg(input_path.as_os_str())
         .arg("--to")
@@ -49,7 +49,7 @@ theme = "fancy-serif"
     )
     .unwrap();
 
-    let mut cmd = cargo_bin_cmd!("lex");
+    let mut cmd = cargo_bin_cmd!("lexd");
     cmd.arg("convert")
         .arg(input_path.as_os_str())
         .arg("--to")
@@ -90,7 +90,7 @@ theme = "modern"
     )
     .unwrap();
 
-    let mut cmd = cargo_bin_cmd!("lex");
+    let mut cmd = cargo_bin_cmd!("lexd");
     cmd.arg("convert")
         .arg(input_path.as_os_str())
         .arg("--to")
