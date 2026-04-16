@@ -32,7 +32,7 @@ printf '%%PDF-1.7\n%%%%EOF\n' > "$OUTPUT"
         let output_dir = tempdir().unwrap();
         let output_pdf = output_dir.path().join("out.pdf");
 
-        let mut cmd = cargo_bin_cmd!("lex");
+        let mut cmd = cargo_bin_cmd!("lexd");
         cmd.env("LEX_CHROME_BIN", &chrome_stub)
             .arg("../../comms/specs/benchmark/010-kitchensink.lex")
             .arg("--to")
@@ -51,7 +51,7 @@ printf '%%PDF-1.7\n%%%%EOF\n' > "$OUTPUT"
     #[test]
     fn cli_pdf_requires_output_path() {
         let (_dir, chrome_stub) = write_stub_chrome();
-        let mut cmd = cargo_bin_cmd!("lex");
+        let mut cmd = cargo_bin_cmd!("lexd");
         cmd.env("LEX_CHROME_BIN", &chrome_stub)
             .arg("../../comms/specs/benchmark/010-kitchensink.lex")
             .arg("--to")

@@ -1048,23 +1048,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lex-cli"
-version = "0.7.0"
-dependencies = [
- "assert_cmd",
- "clap",
- "clap_complete",
- "clapfig",
- "lex-analysis",
- "lex-babel",
- "lex-config",
- "lex-core",
- "predicates",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
 name = "lex-config"
 version = "0.7.0"
 dependencies = [
@@ -1091,24 +1074,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lex-lsp"
-version = "0.7.0"
-dependencies = [
- "clapfig",
- "lex-analysis",
- "lex-babel",
- "lex-config",
- "lex-core",
- "lsp-types",
- "proptest",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tower-lsp",
-]
-
-[[package]]
 name = "lex-wasm"
 version = "0.1.0"
 dependencies = [
@@ -1124,6 +1089,41 @@ dependencies = [
  "spellbook",
  "wasm-bindgen",
  "wasm-bindgen-test",
+]
+
+[[package]]
+name = "lexd"
+version = "0.7.0"
+dependencies = [
+ "assert_cmd",
+ "clap",
+ "clap_complete",
+ "clapfig",
+ "lex-analysis",
+ "lex-babel",
+ "lex-config",
+ "lex-core",
+ "predicates",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "lexd-lsp"
+version = "0.7.0"
+dependencies = [
+ "clapfig",
+ "lex-analysis",
+ "lex-babel",
+ "lex-config",
+ "lex-core",
+ "lsp-types",
+ "proptest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tower-lsp",
 ]
 
 [[package]]

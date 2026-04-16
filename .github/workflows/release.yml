@@ -1,5 +1,5 @@
 # Release workflow
-# Builds lex-cli and lex-lsp binaries for multiple platforms, publishes crates to crates.io
+# Builds lexd and lexd-lsp binaries for multiple platforms, publishes crates to crates.io
 
 name: Release
 permissions:
@@ -57,13 +57,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y musl-tools
 
-      - name: Build lex-cli
-        run: cargo build --release --target ${{ matrix.target }} -p lex-cli
+      - name: Build lexd
+        run: cargo build --release --target ${{ matrix.target }} -p lexd
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
 
-      - name: Build lex-lsp
-        run: cargo build --release --target ${{ matrix.target }} -p lex-lsp
+      - name: Build lexd-lsp
+        run: cargo build --release --target ${{ matrix.target }} -p lexd-lsp
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
 
@@ -71,29 +71,29 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           cd target/${{ matrix.target }}/release
-          tar -czvf ../../../lex-${{ matrix.target }}.tar.gz lex
-          tar -czvf ../../../lex-lsp-${{ matrix.target }}.tar.gz lex-lsp
+          tar -czvf ../../../lexd-${{ matrix.target }}.tar.gz lexd
+          tar -czvf ../../../lexd-lsp-${{ matrix.target }}.tar.gz lexd-lsp
           cd ../../..
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
         run: |
           cd target/${{ matrix.target }}/release
-          7z a ../../../lex-${{ matrix.target }}.zip lex.exe
-          7z a ../../../lex-lsp-${{ matrix.target }}.zip lex-lsp.exe
+          7z a ../../../lexd-${{ matrix.target }}.zip lexd.exe
+          7z a ../../../lexd-lsp-${{ matrix.target }}.zip lexd-lsp.exe
           cd ../../..
 
-      - name: Upload lex-cli artifact
+      - name: Upload lexd artifact
         uses: actions/upload-artifact@v4
         with:
-          name: lex-${{ matrix.target }}
-          path: lex-${{ matrix.target }}.*
+          name: lexd-${{ matrix.target }}
+          path: lexd-${{ matrix.target }}.*
 
-      - name: Upload lex-lsp artifact
+      - name: Upload lexd-lsp artifact
         uses: actions/upload-artifact@v4
         with:
-          name: lex-lsp-${{ matrix.target }}
-          path: lex-lsp-${{ matrix.target }}.*
+          name: lexd-lsp-${{ matrix.target }}
+          path: lexd-lsp-${{ matrix.target }}.*
 
   release:
     name: Create Release
@@ -159,7 +159,15 @@ jobs:
       - name: Wait for crates.io to index lex-analysis
         run: sleep 30
 
-      - name: Publish lex-lsp
-        run: cargo publish -p lex-lsp || echo "lex-lsp already published"
+      - name: Publish lexd-lsp
+        run: cargo publish -p lexd-lsp || echo "lexd-lsp already published"
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Wait for crates.io to index lexd-lsp
+        run: sleep 30
+
+      - name: Publish lexd
+        run: cargo publish -p lexd || echo "lexd already published"
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

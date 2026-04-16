@@ -134,7 +134,7 @@
 //!
 //!     3. Error Propagation:
 //!         - The `lex-parser` crate returns `Result` types for all parsing operations.
-//!         - The `lex-lsp` server maps these internal errors to appropriate LSP error codes
+//!         - The `lexd-lsp` server maps these internal errors to appropriate LSP error codes
 //!           (e.g., `InternalError`, `InvalidRequest`) when communicating with the client.
 //!
 //!     4. Property-Based Testing:
@@ -147,7 +147,7 @@
 //!
 //!     Library:
 //!         ```rust
-//!         use lex_lsp::LexLanguageServer;
+//!         use lexd_lsp::LexLanguageServer;
 //!         use tower_lsp::Server;
 //!
 //!         #[tokio::main]
@@ -161,7 +161,7 @@
 //!         ```
 //!
 //!     Binary:
-//!         $ lex-lsp
+//!         $ lexd-lsp
 //!         Starts the language server on stdin/stdout for editor integration.
 //!
 

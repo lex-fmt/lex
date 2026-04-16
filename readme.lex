@@ -109,7 +109,7 @@ It's flexible and permissive so that you can go from free text to more structure
     - Format conversion (lex-babel): markdown, html, pdf, png, pandoc JSON (enabling LaTeX, DOCX, EPUB, RST, and 30+ formats through Pandoc), and RFC XML
     - Inspectors for internal phases, from tokens to final AST, with several visualizations (treeviz, tag, nodemap, JSON)
     - Semantic analysis library (lex-analysis)
-    - An LSP server (lex-lsp) for editors, with semantic highlighting, document symbols, formatting, completion, diagnostics, hover, go to definition, references, folding, and document links
+    - An LSP server (lexd-lsp) for editors, with semantic highlighting, document symbols, formatting, completion, diagnostics, hover, go to definition, references, folding, and document links
     - Editor integrations:  nvim [https://github.com/lex-fmt/nvim],  the VSCode Extension [https://github.com/lex-fmt/vscode], and lexed [https://github.com/lex-fmt/lexed], a standalone desktop editor
 
 6. Installation
@@ -117,8 +117,8 @@ It's flexible and permissive so that you can go from free text to more structure
     All Rust tools can be installed via cargo.
 
     Install:
-        cargo install lex-cli
-        cargo install lex-lsp
+        cargo install lexd
+        cargo install lexd-lsp
     :: shell ::
 
     Each editor plugin has its own installation instructions in its respective repository.

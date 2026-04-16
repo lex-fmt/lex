@@ -18,7 +18,7 @@
 //!     conversions into a format agnostic layer. This is done by using the IR representation (./ir/mod.rs),
 //!     and having the common code in ./common/mod.rs. This allows for the format specific code to be focused on the data format transformations, while having a strong, focused core that can be well tested in isolation.
 //!
-//!     This is a pure lib, that is, it powers the lex-cli but is shell agnostic, that is no code
+//!     This is a pure lib, that is, it powers the lexd CLI but is shell agnostic, that is no code
 //!     should be written that supposes a shell environment, be it to std print, env vars etc.
 //!
 //!     The file structure:

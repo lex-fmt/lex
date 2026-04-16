@@ -4,25 +4,25 @@
 //
 // The inspect command is an internal tool for aid in the development of the lex ecosystem, and is bound to be be extracted to it's own crate in the future.
 //
-// The main role for the lex program is to interface with lex content. Be it converting to and fro, linting or formatting it.
+// The main role for the lexd program is to interface with lex content. Be it converting to and fro, linting or formatting it.
 // The core capabilities use the lex-babel crate. This crate being a interface for the lex-babel library, which is a collection of formats and transformers.
 //
 // Converting:
 //
 // The conversion needs a to and from pair. The to can be auto-detected from the file extension, while being overwrittable by an explicit --from flag.
 // Usage:
-//  lex <input> --to <format> [--from <format>] [--output <file>]  - Convert between formats (default)
-//  lex convert <input> --to <format> [--from <format>] [--output <file>]  - Same as above (explicit)
-//  lex inspect <path> [<transform>]      - Execute a transform (defaults to "ast-treeviz")
-//  lex --list-transforms                 - List available transforms
-//  lex config [list|gen|get|set|unset]   - Manage configuration
+//  lexd <input> --to <format> [--from <format>] [--output <file>]  - Convert between formats (default)
+//  lexd convert <input> --to <format> [--from <format>] [--output <file>]  - Same as above (explicit)
+//  lexd inspect <path> [<transform>]      - Execute a transform (defaults to "ast-treeviz")
+//  lexd --list-transforms                 - List available transforms
+//  lexd config [list|gen|get|set|unset]   - Manage configuration
 //
 // Configuration:
 //
 // Settings are loaded from .lex.toml files (CWD, project root, platform config dir),
 // environment variables (LEX__*), and CLI flags. Use `lex config` to manage settings.
 
-use lex_cli::transforms;
+use lexd::transforms;
 
 use clap::{Arg, ArgAction, ArgMatches, Command, ValueHint};
 use clapfig::{Boundary, Clapfig, ClapfigBuilder, ConfigCommand, SearchPath};
@@ -37,26 +37,26 @@ use std::collections::HashMap;
 use std::fs;
 
 fn build_cli() -> Command {
-    Command::new("lex")
+    Command::new("lexd")
         .version(env!("CARGO_PKG_VERSION"))
         .about("A tool for inspecting and converting lex files")
         .long_about(
-            "lex is a command-line tool for working with lex document files.\n\n\
+            "lexd is a command-line tool for working with lex document files.\n\n\
             Commands:\n  \
             - inspect: View internal representations (tokens, AST, etc.)\n  \
             - convert: Transform between document formats (lex, markdown, HTML, etc.)\n  \
             - config:  Manage configuration (list, get, set, gen)\n\n\
             Configuration:\n  \
             Settings are loaded from .lex.toml files, LEX__* env vars, and CLI flags.\n  \
-            Use `lex config list` to see resolved settings.\n\n\
+            Use `lexd config list` to see resolved settings.\n\n\
             Examples:\n  \
-            lex inspect file.lex                    # View AST tree visualization\n  \
-            lex inspect file.lex ast-tag            # View AST as XML tags\n  \
-            lex inspect file.lex --ast-full         # Show complete AST (all node properties)\n  \
-            lex file.lex --to markdown              # Convert to markdown (outputs to stdout)\n  \
-            lex file.lex --to html -o output.html   # Convert to HTML file\n  \
-            lex config list                         # Show all resolved settings\n  \
-            lex config set convert.html.theme fancy-serif  # Persist a setting"
+            lexd inspect file.lex                    # View AST tree visualization\n  \
+            lexd inspect file.lex ast-tag            # View AST as XML tags\n  \
+            lexd inspect file.lex --ast-full         # Show complete AST (all node properties)\n  \
+            lexd file.lex --to markdown              # Convert to markdown (outputs to stdout)\n  \
+            lexd file.lex --to html -o output.html   # Convert to HTML file\n  \
+            lexd config list                         # Show all resolved settings\n  \
+            lexd config set convert.html.theme fancy-serif  # Persist a setting"
         )
         .arg_required_else_help(true)
         .subcommand_required(false)
@@ -89,10 +89,10 @@ fn build_cli() -> Command {
                     - token-*:      Token stream representations\n  \
                     - ir-json:      Intermediate representation\n\n\
                     Examples:\n  \
-                    lex inspect file.lex                     # Tree visualization (default)\n  \
-                    lex inspect file.lex ast-tag             # XML-like output\n  \
-                    lex inspect file.lex --ast-full          # Complete AST with all properties\n  \
-                    lex inspect file.lex token-core-json     # View token stream"
+                    lexd inspect file.lex                     # Tree visualization (default)\n  \
+                    lexd inspect file.lex ast-tag             # XML-like output\n  \
+                    lexd inspect file.lex --ast-full          # Complete AST with all properties\n  \
+                    lexd inspect file.lex token-core-json     # View token stream"
                 )
                 .arg(
                     Arg::new("path")
@@ -165,10 +165,10 @@ fn build_cli() -> Command {
                     The source format is auto-detected from the file extension.\n\
                     Output goes to stdout by default, or use -o to specify a file.\n\n\
                     Examples:\n  \
-                    lex convert input.lex --to markdown          # Convert to markdown (stdout)\n  \
-                    lex convert input.md --to lex -o output.lex  # Markdown to lex file\n  \
-                    lex convert doc.lex --to html -o out.html    # Generate HTML\n  \
-                    lex input.lex --to markdown                  # 'convert' is optional"
+                    lexd convert input.lex --to markdown          # Convert to markdown (stdout)\n  \
+                    lexd convert input.md --to lex -o output.lex  # Markdown to lex file\n  \
+                    lexd convert doc.lex --to html -o out.html    # Generate HTML\n  \
+                    lexd input.lex --to markdown                  # 'convert' is optional"
                 )
                 .arg(
                     Arg::new("input")
@@ -241,8 +241,8 @@ fn build_cli() -> Command {
                     applying standard indentation and spacing rules.\n\n\
                     Output is always written to stdout.\n\n\
                     Examples:\n  \
-                    lex format input.lex                  # Format to stdout\n  \
-                    lex format input.lex > formatted.lex  # Redirect to file"
+                    lexd format input.lex                  # Format to stdout\n  \
+                    lexd format input.lex > formatted.lex  # Redirect to file"
                 )
                 .arg(
                     Arg::new("input")
@@ -317,8 +317,8 @@ fn build_cli() -> Command {
                     saved to a file and customized, then referenced via the\n\
                     convert.html.custom_css config setting.\n\n\
                     Examples:\n  \
-                    lex generate-lex-css                    # Print CSS to stdout\n  \
-                    lex generate-lex-css > custom.css       # Save to file for editing"
+                    lexd generate-lex-css                    # Print CSS to stdout\n  \
+                    lexd generate-lex-css > custom.css       # Save to file for editing"
                 ),
         )
 }

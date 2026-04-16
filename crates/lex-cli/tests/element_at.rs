@@ -5,7 +5,7 @@ use std::fs;
 #[allow(deprecated)]
 #[test]
 fn test_element_at_basic() {
-    let mut cmd = cargo_bin_cmd!("lex");
+    let mut cmd = cargo_bin_cmd!("lexd");
     cmd.arg("element-at")
         .arg("../../comms/specs/benchmark/010-kitchensink.lex")
         .arg("18")
@@ -18,7 +18,7 @@ fn test_element_at_basic() {
 
 #[test]
 fn test_element_at_with_all_flag() {
-    let mut cmd = cargo_bin_cmd!("lex");
+    let mut cmd = cargo_bin_cmd!("lexd");
     cmd.arg("element-at")
         .arg("../../comms/specs/benchmark/010-kitchensink.lex")
         .arg("18")
@@ -33,7 +33,7 @@ fn test_element_at_with_all_flag() {
 
 #[test]
 fn test_element_at_no_element_found() {
-    let mut cmd = cargo_bin_cmd!("lex");
+    let mut cmd = cargo_bin_cmd!("lexd");
     cmd.arg("element-at")
         .arg("../../comms/specs/benchmark/010-kitchensink.lex")
         .arg("10000")
@@ -47,7 +47,7 @@ fn test_element_at_no_element_found() {
 
 #[test]
 fn test_element_at_missing_arguments() {
-    let mut cmd = cargo_bin_cmd!("lex");
+    let mut cmd = cargo_bin_cmd!("lexd");
     cmd.arg("element-at")
         .arg("comms/specs/benchmark/010-kitchensink.lex");
 
@@ -56,7 +56,7 @@ fn test_element_at_missing_arguments() {
 
 #[test]
 fn test_element_at_file_not_found() {
-    let mut cmd = cargo_bin_cmd!("lex");
+    let mut cmd = cargo_bin_cmd!("lexd");
     cmd.arg("element-at")
         .arg("nonexistent.lex")
         .arg("1")
@@ -74,7 +74,7 @@ fn test_element_at_on_paragraph() {
     let test_file = "test_element_at_paragraph.lex";
     fs::write(test_file, test_content).unwrap();
 
-    let mut cmd = cargo_bin_cmd!("lex");
+    let mut cmd = cargo_bin_cmd!("lexd");
     cmd.arg("element-at").arg(test_file).arg("1").arg("5");
 
     cmd.assert()
@@ -92,7 +92,7 @@ fn test_element_at_shows_deepest_element() {
     let test_file = "test_element_at_nested.lex";
     fs::write(test_file, test_content).unwrap();
 
-    let mut cmd = cargo_bin_cmd!("lex");
+    let mut cmd = cargo_bin_cmd!("lexd");
     cmd.arg("element-at").arg(test_file).arg("3").arg("5");
 
     // Without --all, should show only the deepest element
@@ -111,7 +111,7 @@ fn test_element_at_all_shows_ancestors() {
     let test_file = "test_element_at_all.lex";
     fs::write(test_file, test_content).unwrap();
 
-    let mut cmd = cargo_bin_cmd!("lex");
+    let mut cmd = cargo_bin_cmd!("lexd");
     cmd.arg("element-at")
         .arg(test_file)
         .arg("3")

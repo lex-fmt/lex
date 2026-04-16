@@ -26,7 +26,7 @@ fn main() -> Result<(), Error> {
         Some(outdir) => outdir,
     };
 
-    let mut cmd = Command::new("lex")
+    let mut cmd = Command::new("lexd")
         .version(env!("CARGO_PKG_VERSION"))
         .about("A tool for inspecting and processing lex files")
         .arg_required_else_help(true)
@@ -55,13 +55,13 @@ fn main() -> Result<(), Error> {
         );
 
     // Generate completions for bash
-    generate_to(Bash, &mut cmd, "lex", &outdir)?;
+    generate_to(Bash, &mut cmd, "lexd", &outdir)?;
 
     // Generate completions for zsh
-    generate_to(Zsh, &mut cmd, "lex", &outdir)?;
+    generate_to(Zsh, &mut cmd, "lexd", &outdir)?;
 
     // Generate completions for fish
-    generate_to(Fish, &mut cmd, "lex", &outdir)?;
+    generate_to(Fish, &mut cmd, "lexd", &outdir)?;
 
     println!("cargo:warning=Shell completions generated in {outdir:?}");
 

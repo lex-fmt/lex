@@ -34,19 +34,19 @@ jobs:
           bundler-cache: true
           working-directory: comms/docs
 
-      - name: Build lex-cli from source
+      - name: Build lexd from source
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
 
-      - name: Build lex binary
-        run: cargo build --release -p lex-cli
+      - name: Build lexd binary
+        run: cargo build --release -p lexd
 
       - name: Generate Lex HTML
         working-directory: comms/docs
         env:
-          LEX_BIN: ${{ github.workspace }}/target/release/lex
+          LEX_BIN: ${{ github.workspace }}/target/release/lexd
         run: ./build
 
       - name: Setup Pages

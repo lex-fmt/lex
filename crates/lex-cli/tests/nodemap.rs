@@ -8,7 +8,7 @@ fn test_inspect_nodemap_basic() {
     let file = "test_nodemap.lex";
     fs::write(file, content).unwrap();
 
-    let mut cmd = cargo_bin_cmd!("lex");
+    let mut cmd = cargo_bin_cmd!("lexd");
     cmd.arg("inspect").arg(file).arg("ast-nodemap");
 
     cmd.assert()
@@ -35,7 +35,7 @@ fn test_inspect_nodemap_color() {
     let file = "test_nodemap_color.lex";
     fs::write(file, content).unwrap();
 
-    let mut cmd = cargo_bin_cmd!("lex");
+    let mut cmd = cargo_bin_cmd!("lexd");
     cmd.arg("inspect")
         .arg(file)
         .arg("ast-nodemap")
@@ -54,7 +54,7 @@ fn test_inspect_nodemap_summary() {
     let file = "test_nodemap_summary.lex";
     fs::write(file, content).unwrap();
 
-    let mut cmd = cargo_bin_cmd!("lex");
+    let mut cmd = cargo_bin_cmd!("lexd");
     cmd.arg("inspect")
         .arg(file)
         .arg("ast-nodemap")
