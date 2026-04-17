@@ -2,8 +2,14 @@
 //!
 //! Handles parsing of academic citations with the format `[@key1; @key2, pp. 45-46]`.
 //! Supports multiple citation keys and page locators.
+//!
+//! Separator handling honors the Lex structural escape convention: `\,` and `\;`
+//! inside a citation segment are literal characters, not key/locator boundaries.
+//! This lets citation keys or page labels contain literal commas and semicolons
+//! when needed.
 
 use crate::lex::ast::elements::inlines::{CitationData, CitationLocator, PageFormat, PageRange};
+use crate::lex::escape::{find_respecting_escape, split_respecting_escape};
 
 /// Parse citation data from the content inside `[@...]` brackets.
 pub(super) fn parse_citation_data(content: &str) -> Option<CitationData> {
@@ -21,11 +27,12 @@ pub(super) fn parse_citation_data(content: &str) -> Option<CitationData> {
 
 /// Split citation content into keys segment and optional locator segment.
 ///
-/// Finds the last comma that starts a page locator (e.g., ", pp. 45").
+/// Finds the last structural (unescaped) comma that starts a page locator
+/// (e.g., ", pp. 45"). `\,` is treated as a literal character, not a boundary.
 fn split_locator_segment(content: &str) -> (&str, Option<&str>) {
     let mut locator_index = None;
     let mut search_start = 0;
-    while let Some(pos) = content[search_start..].find(',') {
+    while let Some(pos) = find_respecting_escape(&content[search_start..], ',') {
         let idx = search_start + pos;
         let tail = content[idx + 1..].trim_start();
         if looks_like_locator_start(tail) {
@@ -67,17 +74,24 @@ fn looks_like_locator_start(text: &str) -> bool {
 
 /// Parse citation keys from the keys segment.
 ///
-/// Supports both comma and semicolon separators. Strips leading `@` from keys.
+/// Supports both comma and semicolon separators (escape-aware). Strips leading
+/// `@` from keys.
 fn parse_citation_keys(segment: &str) -> Option<Vec<String>> {
     let trimmed = segment.trim();
     if trimmed.is_empty() {
         return None;
     }
 
-    let delimiter = if trimmed.contains(';') { ';' } else { ',' };
+    // Choose delimiter by presence of a structural (unescaped) `;`.
+    let delimiter = if find_respecting_escape(trimmed, ';').is_some() {
+        ';'
+    } else {
+        ','
+    };
     let mut keys = Vec::new();
-    for chunk in trimmed.split(delimiter) {
-        let mut key = chunk.trim();
+    for chunk in split_respecting_escape(trimmed, delimiter) {
+        let chunk_str = chunk.as_ref();
+        let mut key = chunk_str.trim();
         if key.is_empty() {
             continue;
         }
@@ -135,10 +149,11 @@ fn parse_citation_locator(text: &str) -> Option<CitationLocator> {
 
 /// Parse page ranges from comma-separated page specifications.
 ///
-/// Supports single pages (45) and ranges (45-46).
+/// Supports single pages (45) and ranges (45-46). Separators are escape-aware;
+/// `\,` is a literal character.
 fn parse_page_ranges(text: &str) -> Vec<PageRange> {
     let mut ranges = Vec::new();
-    for part in text.split(',') {
+    for part in split_respecting_escape(text, ',') {
         let segment = part.trim();
         if segment.is_empty() {
             continue;
@@ -168,4 +183,62 @@ fn parse_page_ranges(text: &str) -> Vec<PageRange> {
         }
     }
     ranges
+}
+
+#[cfg(test)]
+mod escape_tests {
+    use super::*;
+
+    #[test]
+    fn escaped_semicolon_does_not_split_when_delimiter_is_semicolon() {
+        // `\;` inside a semicolon-delimited key list keeps the surrounding key unified,
+        // and the structural splitter strips the backslash (since `;` is its delimiter).
+        let data = parse_citation_data(r"@a; @b\; still-b; @c").expect("should parse");
+        assert_eq!(data.keys, vec!["a", "b; still-b", "c"]);
+    }
+
+    #[test]
+    fn escaped_comma_does_not_split_when_delimiter_is_comma() {
+        // Comma is the fallback delimiter when no structural `;` is present.
+        // `\,` inside a key stays unified; the backslash is stripped.
+        let data = parse_citation_data(r"@a, @b\,still-b, @c").expect("should parse");
+        assert_eq!(data.keys, vec!["a", "b,still-b", "c"]);
+    }
+
+    #[test]
+    fn unescaped_semicolon_still_splits_keys() {
+        let data = parse_citation_data("@a; @b; @c").expect("should parse");
+        assert_eq!(data.keys, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn escaped_comma_does_not_start_locator_detection() {
+        // `\,` should not be considered as a locator boundary even if followed by "pp."
+        let data = parse_citation_data(r"@doe\, pp. 42").expect("should parse");
+        // The whole thing is one key (no unescaped locator boundary, no `;`).
+        assert!(
+            data.locator.is_none(),
+            "escaped comma must not start a locator"
+        );
+    }
+
+    #[test]
+    fn unescaped_comma_still_starts_locator() {
+        // Sanity: plain comma before `pp.` still starts a locator.
+        let data = parse_citation_data("@doe, pp. 42").expect("should parse");
+        assert_eq!(data.keys, vec!["doe"]);
+        let loc = data.locator.expect("locator expected");
+        assert_eq!(loc.ranges.len(), 1);
+        assert_eq!(loc.ranges[0].start, 42);
+    }
+
+    #[test]
+    fn escaped_comma_in_page_range_skips_unparseable_segment() {
+        // Page-range segments split on `,`. `\,` is not a split point.
+        let ranges = parse_page_ranges(r"45\,abc, 50");
+        // First segment is "45,abc" (backslash stripped) which doesn't parse as number → skipped.
+        // Second segment is "50" which parses.
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].start, 50);
+    }
 }
