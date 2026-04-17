@@ -240,6 +240,18 @@ pub fn split_respecting_escape_and_literals(
     split_inner(s, sep, Some(literal_delim))
 }
 
+/// Like [`split_respecting_escape_and_literals`] but also returns the byte range
+/// of each segment within the input (pre-strip, pre-trim positions).
+///
+/// Useful for parsers that need source-position tracking (e.g. diagnostic spans).
+pub fn split_respecting_escape_with_ranges<'a>(
+    s: &'a str,
+    sep: char,
+    literal_delim: Option<char>,
+) -> Vec<(Cow<'a, str>, std::ops::Range<usize>)> {
+    split_with_ranges_inner(s, sep, literal_delim)
+}
+
 /// Find the first position of `needle` in `s` that is structural — i.e.,
 /// not preceded by an odd number of backslashes and (if `literal_delim` is
 /// provided) not inside a balanced literal region.
@@ -473,6 +485,76 @@ fn strip_escapes_char(slice: &str, sep: char, literal_delim: Option<char>) -> St
         i += 1;
     }
     out
+}
+
+fn split_with_ranges_inner<'a>(
+    s: &'a str,
+    sep: char,
+    literal_delim: Option<char>,
+) -> Vec<(Cow<'a, str>, std::ops::Range<usize>)> {
+    if s.is_empty() {
+        return vec![(Cow::Borrowed(""), 0..0)];
+    }
+    let bytes = s.as_bytes();
+    let sep_is_ascii = sep.is_ascii();
+    let literal_is_ascii = literal_delim.is_none_or(|c| c.is_ascii());
+    if sep_is_ascii && literal_is_ascii {
+        let mut segments = Vec::new();
+        let mut seg_start = 0usize;
+        let mut in_literal = false;
+        let mut i = 0usize;
+        let sep_byte = sep as u8;
+        let literal_byte = literal_delim.map(|c| c as u8);
+        while i < bytes.len() {
+            let b = bytes[i];
+            if let Some(delim) = literal_byte {
+                if b == delim && trailing_backslashes_before(bytes, i) % 2 == 0 {
+                    in_literal = !in_literal;
+                    i += 1;
+                    continue;
+                }
+            }
+            if !in_literal && b == sep_byte && trailing_backslashes_before(bytes, i) % 2 == 0 {
+                let seg = extract_segment(s, seg_start, i, sep_byte, literal_byte);
+                segments.push((seg, seg_start..i));
+                seg_start = i + 1;
+            }
+            i += 1;
+        }
+        let seg = extract_segment(s, seg_start, bytes.len(), sep_byte, literal_byte);
+        segments.push((seg, seg_start..bytes.len()));
+        segments
+    } else {
+        let mut segments = Vec::new();
+        let mut seg_start = 0usize;
+        let mut in_literal = false;
+        let mut prev_backslashes = 0usize;
+        for (i, ch) in s.char_indices() {
+            let is_escaped = prev_backslashes % 2 == 1;
+            if let Some(delim) = literal_delim {
+                if ch == delim && !is_escaped {
+                    in_literal = !in_literal;
+                    prev_backslashes = 0;
+                    continue;
+                }
+            }
+            if !in_literal && ch == sep && !is_escaped {
+                let seg = extract_segment_char(s, seg_start, i, sep, literal_delim);
+                segments.push((seg, seg_start..i));
+                seg_start = i + ch.len_utf8();
+                prev_backslashes = 0;
+                continue;
+            }
+            if ch == '\\' {
+                prev_backslashes += 1;
+            } else {
+                prev_backslashes = 0;
+            }
+        }
+        let seg = extract_segment_char(s, seg_start, s.len(), sep, literal_delim);
+        segments.push((seg, seg_start..s.len()));
+        segments
+    }
 }
 
 fn find_inner(s: &str, needle: char, literal_delim: Option<char>) -> Option<usize> {
