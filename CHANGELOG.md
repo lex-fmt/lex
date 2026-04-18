@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `lexd` now accepts piped input on stdin for `inspect`, `convert`, and `format` when the file path is omitted. Examples:
+  - `cat foo.lex | lexd inspect ast-tag`
+  - `cat foo.lex | lexd --from lex --to markdown`
+  - `cat foo.lex | lexd format`
+
+  `convert` requires `--from` when reading from stdin (there is no filename to auto-detect the source format from).
+
 ## 0.8.0
 
 ### Breaking

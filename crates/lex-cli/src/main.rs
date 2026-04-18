@@ -35,6 +35,7 @@ use lex_config::{LexConfig, PdfPageSize, CONFIG_FILE_NAME};
 use lex_core::lex::ast::{find_node_path_at_position, Position};
 use std::collections::HashMap;
 use std::fs;
+use std::io::{self, IsTerminal, Read};
 
 fn build_cli() -> Command {
     Command::new("lexd")
@@ -96,8 +97,8 @@ fn build_cli() -> Command {
                 )
                 .arg(
                     Arg::new("path")
-                        .help("Path to the lex file")
-                        .required(true)
+                        .help("Path to the lex file (reads from stdin if omitted)")
+                        .required(false)
                         .index(1)
                         .value_hint(ValueHint::FilePath),
                 )
@@ -172,8 +173,8 @@ fn build_cli() -> Command {
                 )
                 .arg(
                     Arg::new("input")
-                        .help("Input file path")
-                        .required(true)
+                        .help("Input file path (reads from stdin if omitted)")
+                        .required(false)
                         .index(1)
                         .value_hint(ValueHint::FilePath),
                 )
@@ -246,8 +247,8 @@ fn build_cli() -> Command {
                 )
                 .arg(
                     Arg::new("input")
-                        .help("Input file path")
-                        .required(true)
+                        .help("Input file path (reads from stdin if omitted)")
+                        .required(false)
                         .index(1)
                         .value_hint(ValueHint::FilePath),
                 ),
@@ -333,32 +334,35 @@ fn main() {
     let matches = match cli.clone().try_get_matches_from(&args) {
         Ok(m) => m,
         Err(e) => {
-            // Check if this is a "missing subcommand" error by seeing if the first arg looks like a file
-            if args.len() > 1
-                && !args[1].starts_with('-')
-                && ![
-                    "inspect",
-                    "convert",
-                    "config",
-                    "format",
-                    "element-at",
-                    "token-at",
-                    "generate-lex-css",
-                    "help",
-                ]
-                .contains(&args[1].as_str())
-            {
-                // Inject "convert" as the subcommand
+            const KNOWN_SUBCOMMANDS: &[&str] = &[
+                "inspect",
+                "convert",
+                "config",
+                "format",
+                "element-at",
+                "token-at",
+                "generate-lex-css",
+                "help",
+            ];
+            let has_subcommand = args
+                .iter()
+                .skip(1)
+                .any(|a| KNOWN_SUBCOMMANDS.contains(&a.as_str()));
+            let has_to_flag = args.iter().any(|a| a == "--to" || a.starts_with("--to="));
+            let first_is_file = args.len() > 1 && !args[1].starts_with('-');
+
+            // Inject "convert" when the invocation looks like a conversion but
+            // the subcommand was omitted (e.g. `lexd file.lex --to md` or
+            // `cat file.lex | lexd --to md`).
+            if !has_subcommand && (first_is_file || has_to_flag) {
                 let mut new_args = vec![args[0].clone(), "convert".to_string()];
                 new_args.extend_from_slice(&args[1..]);
 
-                // Try parsing again with "convert" injected
                 match cli.try_get_matches_from(&new_args) {
                     Ok(m) => m,
                     Err(e2) => e2.exit(),
                 }
             } else {
-                // Not a case where we should inject convert, show original error
                 e.exit();
             }
         }
@@ -390,44 +394,48 @@ fn main() {
 
             match matches.subcommand() {
                 Some(("inspect", sub_matches)) => {
-                    let path = sub_matches
-                        .get_one::<String>("path")
-                        .expect("path is required");
-                    let transform = sub_matches
+                    let pos1 = sub_matches.get_one::<String>("path").map(|s| s.as_str());
+                    let pos2 = sub_matches
                         .get_one::<String>("transform")
-                        .map(|s| s.as_str())
-                        .unwrap_or("ast-treeviz");
+                        .map(|s| s.as_str());
+                    // When only one positional is given and it matches a known
+                    // transform name, treat it as the transform (stdin mode).
+                    let (path, transform) = match (pos1, pos2) {
+                        (Some(p), None) if transforms::AVAILABLE_TRANSFORMS.contains(&p) => {
+                            (None, p)
+                        }
+                        (p, t) => (p, t.unwrap_or("ast-treeviz")),
+                    };
                     handle_inspect_command(path, transform, &config);
                 }
                 Some(("convert", sub_matches)) => {
-                    let input = sub_matches
-                        .get_one::<String>("input")
-                        .expect("input is required");
+                    let input = sub_matches.get_one::<String>("input").map(|s| s.as_str());
                     let from_arg = sub_matches.get_one::<String>("from");
                     let to = sub_matches.get_one::<String>("to").expect("to is required");
 
-                    // Auto-detect --from if not provided
+                    // Auto-detect --from if not provided and we have a file path
                     let from = if let Some(f) = from_arg {
                         f.to_string()
-                    } else {
+                    } else if let Some(path) = input {
                         let registry = FormatRegistry::default();
-                        match registry.detect_format_from_filename(input) {
+                        match registry.detect_format_from_filename(path) {
                             Some(detected) => detected,
                             None => {
-                                eprintln!("Error: Could not detect format from filename '{input}'");
+                                eprintln!("Error: Could not detect format from filename '{path}'");
                                 eprintln!("Please specify --from explicitly");
                                 std::process::exit(1);
                             }
                         }
+                    } else {
+                        eprintln!("Error: --from is required when reading from stdin");
+                        std::process::exit(1);
                     };
 
                     let output = sub_matches.get_one::<String>("output").map(|s| s.as_str());
                     handle_convert_command(input, &from, to, output, &config);
                 }
                 Some(("format", sub_matches)) => {
-                    let input = sub_matches
-                        .get_one::<String>("input")
-                        .expect("input is required");
+                    let input = sub_matches.get_one::<String>("input").map(|s| s.as_str());
                     // Format command always outputs to stdout (no -o flag)
                     handle_convert_command(input, "lex", "lex", None, &config);
                 }
@@ -527,12 +535,36 @@ fn make_builder(matches: &ArgMatches) -> ClapfigBuilder<LexConfig> {
     builder
 }
 
+/// Read source content from a file path, or from stdin when the path is
+/// omitted. Exits with an error if no path is given and stdin is a terminal
+/// (i.e. the user forgot to pipe input).
+fn read_source(path: Option<&str>) -> String {
+    match path {
+        Some(p) => fs::read_to_string(p).unwrap_or_else(|e| {
+            eprintln!("Error reading file '{p}': {e}");
+            std::process::exit(1);
+        }),
+        None => {
+            if io::stdin().is_terminal() {
+                eprintln!(
+                    "Error: no input file provided and stdin is a terminal. \
+                     Pass a file path or pipe content via stdin."
+                );
+                std::process::exit(1);
+            }
+            let mut buf = String::new();
+            io::stdin().read_to_string(&mut buf).unwrap_or_else(|e| {
+                eprintln!("Error reading from stdin: {e}");
+                std::process::exit(1);
+            });
+            buf
+        }
+    }
+}
+
 /// Handle the inspect command
-fn handle_inspect_command(path: &str, transform: &str, config: &LexConfig) {
-    let source = fs::read_to_string(path).unwrap_or_else(|e| {
-        eprintln!("Error reading file '{path}': {e}");
-        std::process::exit(1);
-    });
+fn handle_inspect_command(path: Option<&str>, transform: &str, config: &LexConfig) {
+    let source = read_source(path);
 
     let params = build_inspect_params(config);
 
@@ -546,7 +578,7 @@ fn handle_inspect_command(path: &str, transform: &str, config: &LexConfig) {
 
 /// Handle the convert command
 fn handle_convert_command(
-    input: &str,
+    input: Option<&str>,
     from: &str,
     to: &str,
     output: Option<&str>,
@@ -564,11 +596,7 @@ fn handle_convert_command(
         std::process::exit(1);
     }
 
-    // Read input file
-    let source = fs::read_to_string(input).unwrap_or_else(|e| {
-        eprintln!("Error reading file '{input}': {e}");
-        std::process::exit(1);
-    });
+    let source = read_source(input);
 
     // Parse
     let doc = registry.parse(&source, from).unwrap_or_else(|e| {
