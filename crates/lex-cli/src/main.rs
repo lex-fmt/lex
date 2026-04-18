@@ -344,12 +344,12 @@ fn main() {
                 "generate-lex-css",
                 "help",
             ];
-            let has_subcommand = args
-                .iter()
-                .skip(1)
-                .any(|a| KNOWN_SUBCOMMANDS.contains(&a.as_str()));
+            let first_arg = args.get(1).map(String::as_str);
+            let has_subcommand = first_arg
+                .filter(|arg| !arg.starts_with('-'))
+                .is_some_and(|arg| KNOWN_SUBCOMMANDS.contains(&arg));
             let has_to_flag = args.iter().any(|a| a == "--to" || a.starts_with("--to="));
-            let first_is_file = args.len() > 1 && !args[1].starts_with('-');
+            let first_is_file = first_arg.is_some_and(|arg| !arg.starts_with('-'));
 
             // Inject "convert" when the invocation looks like a conversion but
             // the subcommand was omitted (e.g. `lexd file.lex --to md` or
