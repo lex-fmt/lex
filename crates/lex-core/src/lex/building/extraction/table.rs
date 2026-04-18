@@ -15,7 +15,9 @@
 
 use super::verbatim::extract_verbatim_block_data;
 use crate::lex::ast::elements::verbatim::VerbatimBlockMode;
+use crate::lex::escape::split_respecting_escape_with_ranges;
 use crate::lex::token::LineToken;
+use std::borrow::Cow;
 use std::ops::Range as ByteRange;
 
 /// Extracted data for a single table cell (pre-AST).
@@ -137,10 +139,11 @@ fn parse_pipe_rows(content_lines: &[(String, ByteRange<usize>)]) -> Vec<TableRow
 enum LineKind<'a> {
     /// A pipe row with parsed cell texts
     PipeRow {
-        /// Trimmed cell texts (for merge markers, compact mode)
-        cells: Vec<&'a str>,
+        /// Trimmed cell texts (for merge markers, compact mode).
+        /// `Cow::Owned` when backslash escapes were stripped (e.g. `\|`), otherwise borrowed.
+        cells: Vec<Cow<'a, str>>,
         /// Raw cell texts preserving leading whitespace (for block content in multi-line mode)
-        raw_cells: Vec<&'a str>,
+        raw_cells: Vec<Cow<'a, str>>,
         /// Per-cell byte ranges (of trimmed text) in the source
         cell_ranges: Vec<ByteRange<usize>>,
         line_range: &'a ByteRange<usize>,
@@ -155,6 +158,16 @@ enum LineKind<'a> {
 }
 
 /// Classify all content lines into pipe rows, blanks, or other.
+///
+/// Pipe-row parsing honors the Lex structural escape convention:
+/// - `\|` inside a cell is a literal pipe (not a cell boundary); the backslash
+///   is stripped in the returned cell text.
+/// - Content inside balanced backticks (`` `...` ``) is a literal region:
+///   pipes inside it do not split, and backslashes are passed through verbatim
+///   (so that code spans like `` `a|b` `` survive as a single cell).
+///
+/// Byte ranges point to source positions of the trimmed segment text,
+/// regardless of whether the cell text had backslashes stripped.
 fn classify_lines<'a>(content_lines: &'a [(String, ByteRange<usize>)]) -> Vec<LineKind<'a>> {
     content_lines
         .iter()
@@ -166,39 +179,50 @@ fn classify_lines<'a>(content_lines: &'a [(String, ByteRange<usize>)]) -> Vec<Li
                 // Offset of trimmed text within the full line text
                 let trim_offset = text.len() - text.trim_start().len();
 
-                let segments: Vec<&str> = trimmed.split('|').collect();
-                let start = if segments.first().is_some_and(|s| s.trim().is_empty()) {
+                // Escape-aware split: respects `\|` and backtick literal regions.
+                let segments = split_respecting_escape_with_ranges(trimmed, '|', Some('`'));
+
+                // Leading/trailing fully-empty segments come from the `|` at row start/end.
+                let start = if segments
+                    .first()
+                    .is_some_and(|(cow, _)| cow.trim().is_empty())
+                {
                     1
                 } else {
                     0
                 };
-                let end = if segments.last().is_some_and(|s| s.trim().is_empty()) {
+                let end = if segments
+                    .last()
+                    .is_some_and(|(cow, _)| cow.trim().is_empty())
+                {
                     segments.len() - 1
                 } else {
                     segments.len()
                 };
 
-                // Compute per-cell byte ranges by walking through the trimmed line
-                let mut cell_ranges = Vec::with_capacity(end - start);
-                let mut pos = 0; // position within trimmed
-                for (seg_idx, segment) in segments.iter().enumerate() {
-                    if seg_idx > 0 {
-                        pos += 1; // skip the `|` delimiter
+                let mut cell_ranges = Vec::with_capacity(end.saturating_sub(start));
+                let mut cells: Vec<Cow<'a, str>> = Vec::with_capacity(end.saturating_sub(start));
+                let mut raw_cells: Vec<Cow<'a, str>> =
+                    Vec::with_capacity(end.saturating_sub(start));
+
+                for (i, (cow, seg_range)) in segments.into_iter().enumerate() {
+                    if i < start || i >= end {
+                        continue;
                     }
-                    if seg_idx >= start && seg_idx < end {
-                        // Find the trimmed content within this segment
-                        let seg_trim_start = segment.len() - segment.trim_start().len();
-                        let seg_trim_end = segment.trim_end().len();
-                        let cell_start = range.start + trim_offset + pos + seg_trim_start;
-                        let cell_end = range.start + trim_offset + pos + seg_trim_end;
-                        cell_ranges.push(cell_start..cell_end);
-                    }
-                    pos += segment.len();
+                    // Byte range computation uses the ORIGINAL source segment (pre-strip),
+                    // so diagnostic spans always point to real source positions.
+                    let src_seg = &trimmed[seg_range.clone()];
+                    let lead_ws = src_seg.len() - src_seg.trim_start().len();
+                    let trail_ws = src_seg.len() - src_seg.trim_end().len();
+                    let cell_start = range.start + trim_offset + seg_range.start + lead_ws;
+                    let cell_end = range.start + trim_offset + seg_range.end - trail_ws;
+                    cell_ranges.push(cell_start..cell_end);
+
+                    let (cell, raw) = trim_cell_pair(cow);
+                    cells.push(cell);
+                    raw_cells.push(raw);
                 }
 
-                let cells: Vec<&str> = segments[start..end].iter().map(|s| s.trim()).collect();
-                let raw_cells: Vec<&str> =
-                    segments[start..end].iter().map(|s| s.trim_end()).collect();
                 LineKind::PipeRow {
                     cells,
                     raw_cells,
@@ -213,6 +237,41 @@ fn classify_lines<'a>(content_lines: &'a [(String, ByteRange<usize>)]) -> Vec<Li
             }
         })
         .collect()
+}
+
+/// Consume a segment `Cow` and produce both `(trimmed, trim_end_only)` variants.
+///
+/// Borrowed inputs produce two sub-slices — zero allocations. Owned inputs reuse
+/// the existing `String` whenever a trim would be a no-op, allocating only for
+/// the variants that actually differ.
+fn trim_cell_pair<'a>(cow: Cow<'a, str>) -> (Cow<'a, str>, Cow<'a, str>) {
+    match cow {
+        Cow::Borrowed(s) => (Cow::Borrowed(s.trim()), Cow::Borrowed(s.trim_end())),
+        Cow::Owned(s) => {
+            let full_noop = s.trim().len() == s.len();
+            let end_noop = s.trim_end().len() == s.len();
+            match (full_noop, end_noop) {
+                (true, true) => {
+                    // Neither trim modifies the string; share via one clone.
+                    let clone = s.clone();
+                    (Cow::Owned(s), Cow::Owned(clone))
+                }
+                (true, false) => {
+                    let te = s.trim_end().to_string();
+                    (Cow::Owned(s), Cow::Owned(te))
+                }
+                (false, true) => {
+                    let t = s.trim().to_string();
+                    (Cow::Owned(t), Cow::Owned(s))
+                }
+                (false, false) => {
+                    let t = s.trim().to_string();
+                    let te = s.trim_end().to_string();
+                    (Cow::Owned(t), Cow::Owned(te))
+                }
+            }
+        }
+    }
 }
 
 /// Detect multi-line mode: true if any blank line appears between two pipe rows.
@@ -371,7 +430,7 @@ fn merge_group(group: &[&LineKind]) -> Option<TableRowData> {
 
             // Build raw text for all columns
             if col < merged_raw.len() {
-                let raw = cont_raw.get(col).copied().unwrap_or("");
+                let raw: &str = cont_raw.get(col).map(|c| c.as_ref()).unwrap_or("");
                 if !raw.trim().is_empty() {
                     merged_raw[col].push('\n');
                     merged_raw[col].push_str(raw);
@@ -643,6 +702,84 @@ mod tests {
         let classified = classify_lines(&lines);
         if let LineKind::PipeRow { cells, .. } = &classified[0] {
             assert_eq!(cells, &["a", "b", "c"]);
+        } else {
+            panic!("Expected PipeRow");
+        }
+    }
+
+    #[test]
+    fn test_classify_lines_escaped_pipe_in_cell() {
+        // `\|` should not split the cell; the backslash is stripped in the cell text.
+        let lines = vec![(r"| a\|b | c |".to_string(), 0..12)];
+        let classified = classify_lines(&lines);
+        if let LineKind::PipeRow {
+            cells, cell_ranges, ..
+        } = &classified[0]
+        {
+            assert_eq!(cells.len(), 2, "expected 2 cells, got {cells:?}");
+            assert_eq!(cells[0], "a|b");
+            assert_eq!(cells[1], "c");
+            // Byte range of cell 0 spans "a\|b" in source (4 bytes), pointing at the
+            // trimmed content inside the segment, not the stripped cell text.
+            assert_eq!(cell_ranges[0].end - cell_ranges[0].start, 4);
+        } else {
+            panic!("Expected PipeRow");
+        }
+    }
+
+    #[test]
+    fn test_classify_lines_backtick_protects_pipe() {
+        // Pipes inside balanced backticks must not split cells.
+        let lines = vec![("| a | `x|y|z` | c |".to_string(), 0..19)];
+        let classified = classify_lines(&lines);
+        if let LineKind::PipeRow { cells, .. } = &classified[0] {
+            assert_eq!(cells.len(), 3, "expected 3 cells, got {cells:?}");
+            assert_eq!(cells[0], "a");
+            assert_eq!(cells[1], "`x|y|z`");
+            assert_eq!(cells[2], "c");
+        } else {
+            panic!("Expected PipeRow");
+        }
+    }
+
+    #[test]
+    fn test_classify_lines_multiple_escaped_pipes() {
+        let lines = vec![(r"| a\|b\|c | d |".to_string(), 0..15)];
+        let classified = classify_lines(&lines);
+        if let LineKind::PipeRow { cells, .. } = &classified[0] {
+            assert_eq!(cells.len(), 2);
+            assert_eq!(cells[0], "a|b|c");
+            assert_eq!(cells[1], "d");
+        } else {
+            panic!("Expected PipeRow");
+        }
+    }
+
+    #[test]
+    fn test_classify_lines_double_backslash_then_pipe_splits() {
+        // `\\|` = literal backslash + structural pipe (even backslashes → not escaped).
+        let lines = vec![(r"| a\\|b |".to_string(), 0..9)];
+        let classified = classify_lines(&lines);
+        if let LineKind::PipeRow { cells, .. } = &classified[0] {
+            assert_eq!(cells.len(), 2, "expected 2 cells, got {cells:?}");
+            assert_eq!(cells[0], r"a\\");
+            assert_eq!(cells[1], "b");
+        } else {
+            panic!("Expected PipeRow");
+        }
+    }
+
+    #[test]
+    fn test_classify_lines_escape_inside_backticks_preserved() {
+        // Inside backtick literal region, backslashes pass through verbatim —
+        // no split AND no stripping.
+        let lines = vec![(r"| a | `code\|here` | b |".to_string(), 0..24)];
+        let classified = classify_lines(&lines);
+        if let LineKind::PipeRow { cells, .. } = &classified[0] {
+            assert_eq!(cells.len(), 3);
+            assert_eq!(cells[0], "a");
+            assert_eq!(cells[1], r"`code\|here`");
+            assert_eq!(cells[2], "b");
         } else {
             panic!("Expected PipeRow");
         }
