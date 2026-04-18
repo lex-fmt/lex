@@ -167,9 +167,10 @@ proptest! {
 /// segment back. Matches the no-literal split variant: every `sep` in the segment
 /// was originally escaped, so we re-escape all of them.
 ///
-/// Trailing backslash handling: if the segment ends with an odd number of `\`,
-/// the joining `\<sep>` we'd write next would get absorbed as escaping backslashes
-/// for the added `\`. To preserve round-trip, pad with an extra `\`.
+/// This helper only re-escapes separator characters; it does not apply any special
+/// handling for trailing backslashes. Segments that end with a backslash followed
+/// by a structural separator in the rejoined stream are a known round-trip edge
+/// case not covered by this helper.
 fn reescape_sep(seg: &str, sep: char) -> String {
     let mut out = String::with_capacity(seg.len());
     for ch in seg.chars() {

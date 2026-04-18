@@ -205,7 +205,10 @@ fn classify_lines<'a>(content_lines: &'a [(String, ByteRange<usize>)]) -> Vec<Li
                 let mut raw_cells: Vec<Cow<'a, str>> =
                     Vec::with_capacity(end.saturating_sub(start));
 
-                for (cow, seg_range) in &segments[start..end] {
+                for (i, (cow, seg_range)) in segments.into_iter().enumerate() {
+                    if i < start || i >= end {
+                        continue;
+                    }
                     // Byte range computation uses the ORIGINAL source segment (pre-strip),
                     // so diagnostic spans always point to real source positions.
                     let src_seg = &trimmed[seg_range.clone()];
@@ -215,8 +218,9 @@ fn classify_lines<'a>(content_lines: &'a [(String, ByteRange<usize>)]) -> Vec<Li
                     let cell_end = range.start + trim_offset + seg_range.end - trail_ws;
                     cell_ranges.push(cell_start..cell_end);
 
-                    cells.push(trim_cow(cow));
-                    raw_cells.push(trim_end_cow(cow));
+                    let (cell, raw) = trim_cell_pair(cow);
+                    cells.push(cell);
+                    raw_cells.push(raw);
                 }
 
                 LineKind::PipeRow {
@@ -235,31 +239,36 @@ fn classify_lines<'a>(content_lines: &'a [(String, ByteRange<usize>)]) -> Vec<Li
         .collect()
 }
 
-/// Trim whitespace from both ends of a `Cow<str>`, preserving Borrowed status when possible.
-fn trim_cow<'a>(cow: &Cow<'a, str>) -> Cow<'a, str> {
+/// Consume a segment `Cow` and produce both `(trimmed, trim_end_only)` variants.
+///
+/// Borrowed inputs produce two sub-slices — zero allocations. Owned inputs reuse
+/// the existing `String` whenever a trim would be a no-op, allocating only for
+/// the variants that actually differ.
+fn trim_cell_pair<'a>(cow: Cow<'a, str>) -> (Cow<'a, str>, Cow<'a, str>) {
     match cow {
-        Cow::Borrowed(s) => Cow::Borrowed(s.trim()),
+        Cow::Borrowed(s) => (Cow::Borrowed(s.trim()), Cow::Borrowed(s.trim_end())),
         Cow::Owned(s) => {
-            let t = s.trim();
-            if t.len() == s.len() {
-                Cow::Owned(s.clone())
-            } else {
-                Cow::Owned(t.to_string())
-            }
-        }
-    }
-}
-
-/// Trim only trailing whitespace from a `Cow<str>`.
-fn trim_end_cow<'a>(cow: &Cow<'a, str>) -> Cow<'a, str> {
-    match cow {
-        Cow::Borrowed(s) => Cow::Borrowed(s.trim_end()),
-        Cow::Owned(s) => {
-            let t = s.trim_end();
-            if t.len() == s.len() {
-                Cow::Owned(s.clone())
-            } else {
-                Cow::Owned(t.to_string())
+            let full_noop = s.trim().len() == s.len();
+            let end_noop = s.trim_end().len() == s.len();
+            match (full_noop, end_noop) {
+                (true, true) => {
+                    // Neither trim modifies the string; share via one clone.
+                    let clone = s.clone();
+                    (Cow::Owned(s), Cow::Owned(clone))
+                }
+                (true, false) => {
+                    let te = s.trim_end().to_string();
+                    (Cow::Owned(s), Cow::Owned(te))
+                }
+                (false, true) => {
+                    let t = s.trim().to_string();
+                    (Cow::Owned(t), Cow::Owned(s))
+                }
+                (false, false) => {
+                    let t = s.trim().to_string();
+                    let te = s.trim_end().to_string();
+                    (Cow::Owned(t), Cow::Owned(te))
+                }
             }
         }
     }

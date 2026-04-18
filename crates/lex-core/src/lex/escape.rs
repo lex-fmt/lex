@@ -465,23 +465,32 @@ fn strip_escapes_char(slice: &str, sep: char, literal_delim: Option<char>) -> St
     let chars: Vec<char> = slice.chars().collect();
     let mut out = String::with_capacity(slice.len());
     let mut in_literal = false;
+    let mut prev_backslashes = 0usize;
     let mut i = 0;
     while i < chars.len() {
         let ch = chars[i];
+        let is_escaped = prev_backslashes % 2 == 1;
         if let Some(delim) = literal_delim {
-            if ch == delim {
+            if ch == delim && !is_escaped {
                 in_literal = !in_literal;
                 out.push(ch);
+                prev_backslashes = 0;
                 i += 1;
                 continue;
             }
         }
         if !in_literal && ch == '\\' && chars.get(i + 1).copied() == Some(sep) {
             out.push(sep);
+            prev_backslashes = 0;
             i += 2;
             continue;
         }
         out.push(ch);
+        if ch == '\\' {
+            prev_backslashes += 1;
+        } else {
+            prev_backslashes = 0;
+        }
         i += 1;
     }
     out
@@ -1222,6 +1231,26 @@ mod tests {
         assert_eq!(
             collect(split_respecting_escape_and_literals("a|\\`b|c", '|', '`')),
             vec!["a", "\\`b", "c"]
+        );
+    }
+
+    #[test]
+    fn split_escaped_literal_delim_before_escaped_sep_non_ascii() {
+        // Regression: char-path `strip_escapes_char` used to toggle `in_literal`
+        // on every literal_delim occurrence, including escaped ones. With a
+        // non-ASCII literal_delim that forces the char path, an escaped `\α`
+        // inside a segment falsely "opened" a literal region, which then
+        // swallowed the following `\|` and blocked escape stripping.
+        let segments = split_respecting_escape_and_literals("a\\α\\|b", '|', 'α');
+        assert_eq!(
+            segments.len(),
+            1,
+            "escaped pipe must not split; got segments={segments:?}"
+        );
+        assert_eq!(
+            segments[0].as_ref(),
+            "a\\α|b",
+            "escaped pipe must be stripped; escaped alpha must not open a literal region"
         );
     }
 
