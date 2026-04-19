@@ -1018,7 +1018,7 @@ checksum = "09edd9e8b54e49e587e4f6295a7d29c3ea94d469cb40ab8ca70b288248a81db2"
 
 [[package]]
 name = "lex-analysis"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "ignore",
  "lex-core",
@@ -1029,7 +1029,7 @@ dependencies = [
 
 [[package]]
 name = "lex-babel"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "comrak",
  "html5ever",
@@ -1049,7 +1049,7 @@ dependencies = [
 
 [[package]]
 name = "lex-config"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "clapfig",
  "confique",
@@ -1059,7 +1059,7 @@ dependencies = [
 
 [[package]]
 name = "lex-core"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "insta",
  "logos",
@@ -1075,7 +1075,7 @@ dependencies = [
 
 [[package]]
 name = "lex-wasm"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "console_error_panic_hook",
  "js-sys",
@@ -1093,7 +1093,7 @@ dependencies = [
 
 [[package]]
 name = "lexd"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "assert_cmd",
  "clap",
@@ -1110,7 +1110,7 @@ dependencies = [
 
 [[package]]
 name = "lexd-lsp"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "clapfig",
  "lex-analysis",
