@@ -131,43 +131,31 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Publish lex-core
-        run: cargo publish -p lex-core || echo "lex-core already published"
+        run: scripts/ci-publish-crate.sh lex-core
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-
-      - name: Wait for crates.io to index lex-core
-        run: sleep 30
 
       - name: Publish lex-babel
-        run: cargo publish -p lex-babel || echo "lex-babel already published"
+        run: scripts/ci-publish-crate.sh lex-babel
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
-      - name: Wait for crates.io to index lex-babel
-        run: sleep 30
-
       - name: Publish lex-config
-        run: cargo publish -p lex-config || echo "lex-config already published"
+        run: scripts/ci-publish-crate.sh lex-config
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
       - name: Publish lex-analysis
-        run: cargo publish -p lex-analysis || echo "lex-analysis already published"
+        run: scripts/ci-publish-crate.sh lex-analysis
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-
-      - name: Wait for crates.io to index lex-analysis
-        run: sleep 30
 
       - name: Publish lexd-lsp
-        run: cargo publish -p lexd-lsp || echo "lexd-lsp already published"
+        run: scripts/ci-publish-crate.sh lexd-lsp
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
-      - name: Wait for crates.io to index lexd-lsp
-        run: sleep 30
-
       - name: Publish lexd
-        run: cargo publish -p lexd || echo "lexd already published"
+        run: scripts/ci-publish-crate.sh lexd
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

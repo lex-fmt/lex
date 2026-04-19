@@ -1,0 +1,15 @@
+# cargo-release configuration
+#
+# Local `cargo release` only bumps versions, commits, tags, and pushes.
+# Publishing to crates.io is handled by .github/workflows/release.yml when
+# the tag lands on GitHub. This keeps stable Rust in use (multi-`-p`
+# publish is nightly-only) and keeps the release process reproducible.
+
+publish = false
+push = true
+tag = true
+shared-version = true
+consolidate-commits = true
+pre-release-commit-message = "chore: release {{version}}"
+tag-message = "Release {{version}}"
+tag-name = "v{{version}}"
