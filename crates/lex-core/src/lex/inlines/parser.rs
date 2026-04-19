@@ -265,7 +265,7 @@ fn parse_with(parser: &InlineParser, text: &str) -> InlineContent {
         if !consumed && !stack.last().unwrap().is_literal(parser) {
             if let Some(spec_index) = parser.spec_index_for_start(ch) {
                 let spec = parser.spec(spec_index);
-                if is_valid_start(prev, next, spec) {
+                if is_valid_start(prev, next, spec, parser) {
                     if stack
                         .iter()
                         .any(|frame| frame.spec_index == Some(spec_index))
@@ -450,14 +450,22 @@ impl BlockedClosings {
     }
 }
 
-fn is_valid_start(prev: Option<char>, next: Option<char>, spec: &InlineSpec) -> bool {
+fn is_valid_start(
+    prev: Option<char>,
+    next: Option<char>,
+    spec: &InlineSpec,
+    parser: &InlineParser,
+) -> bool {
     if spec.literal {
         // Literal elements (code, math, reference) accept any non-whitespace content.
         // This allows code/math to start with \, {, (, *, etc.
         !is_word(prev) && next.is_some_and(|c| !c.is_whitespace())
     } else {
-        // Non-literal elements (strong, emphasis) require word char after marker.
-        !is_word(prev) && is_word(next)
+        // Non-literal elements (strong, emphasis) require a word char OR another
+        // inline start marker after the opening token. Allowing an adjacent marker
+        // enables directly-nested formatting such as _*foo*_ and *_foo_*.
+        !is_word(prev)
+            && next.is_some_and(|c| is_word(Some(c)) || parser.spec_index_for_start(c).is_some())
     }
 }
 
@@ -547,6 +555,79 @@ mod tests {
             }
             _ => panic!("Expected strong node"),
         }
+    }
+
+    #[test]
+    fn directly_nested_emphasis_wraps_strong() {
+        // _*foo*_ — emphasis directly wrapping strong, no intervening content
+        let nodes = parse_inlines("_*both*_");
+        assert_eq!(nodes.len(), 1);
+        match &nodes[0] {
+            InlineNode::Emphasis { content, .. } => {
+                assert_eq!(content.len(), 1);
+                match &content[0] {
+                    InlineNode::Strong { content: inner, .. } => {
+                        assert_eq!(inner, &vec![InlineNode::plain("both".into())]);
+                    }
+                    other => panic!("Expected Strong inside Emphasis, got: {other:?}"),
+                }
+            }
+            other => panic!("Expected Emphasis, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn directly_nested_strong_wraps_emphasis() {
+        // *_foo_* — strong directly wrapping emphasis
+        let nodes = parse_inlines("*_inverted_*");
+        assert_eq!(nodes.len(), 1);
+        match &nodes[0] {
+            InlineNode::Strong { content, .. } => {
+                assert_eq!(content.len(), 1);
+                match &content[0] {
+                    InlineNode::Emphasis { content: inner, .. } => {
+                        assert_eq!(inner, &vec![InlineNode::plain("inverted".into())]);
+                    }
+                    other => panic!("Expected Emphasis inside Strong, got: {other:?}"),
+                }
+            }
+            other => panic!("Expected Strong, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn directly_nested_multi_word() {
+        let nodes = parse_inlines("_*bold multiple words*_");
+        assert_eq!(nodes.len(), 1);
+        match &nodes[0] {
+            InlineNode::Emphasis { content, .. } => match &content[0] {
+                InlineNode::Strong { content: inner, .. } => {
+                    assert_eq!(
+                        inner,
+                        &vec![InlineNode::plain("bold multiple words".into())]
+                    );
+                }
+                other => panic!("Expected Strong, got: {other:?}"),
+            },
+            other => panic!("Expected Emphasis, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn arithmetic_still_not_parsed_as_inline() {
+        // 7 * 8 — * surrounded by spaces should NOT start a strong.
+        // This guards against the adjacent-marker rule accidentally matching.
+        let nodes = parse_inlines("7 * 8");
+        assert_eq!(nodes, vec![InlineNode::plain("7 * 8".into())]);
+    }
+
+    #[test]
+    fn empty_markers_stay_literal() {
+        // Same-delimiter adjacency (**, __, ``) should stay literal, not
+        // produce empty inline elements — the adjacent-marker rule must not
+        // swallow the closing delimiter as "content".
+        let nodes = parse_inlines("a ** b __ c");
+        assert_eq!(nodes, vec![InlineNode::plain("a ** b __ c".into())]);
     }
 
     #[test]
