@@ -13,8 +13,11 @@
 //! - `inTable: true, position: Some` — client should set the cursor to the
 //!   returned position.
 //! - `inTable: true, position: None` — cursor is on a pipe row but no valid
-//!   navigation target exists (e.g. a single-column row, or trailing Tab on
-//!   the last row); client should do nothing.
+//!   navigation target exists (e.g. on a single-column row at the relevant
+//!   table edge, or when tabbing past the last / first wrappable row);
+//!   client should do nothing. Single-column rows in the middle of a table
+//!   still wrap to the adjacent row — they only become `no_move` at the
+//!   edges of the table.
 
 use serde::Serialize;
 
