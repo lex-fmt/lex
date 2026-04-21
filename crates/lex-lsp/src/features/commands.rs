@@ -162,9 +162,9 @@ pub fn execute_command(command: &str, arguments: &[Value]) -> Result<Option<Valu
         }
         COMMAND_FORMATS_LIST => {
             let registry = FormatRegistry::with_defaults();
+            let descriptors = list_formats(&registry)?;
             Ok(Some(
-                serde_json::to_value(list_formats(&registry))
-                    .map_err(|_| Error::internal_error())?,
+                serde_json::to_value(descriptors).map_err(|_| Error::internal_error())?,
             ))
         }
         _ => Err(Error::invalid_request()),
@@ -208,20 +208,20 @@ struct FormatDescriptor {
     file_extensions: Vec<String>,
 }
 
-fn list_formats(registry: &FormatRegistry) -> Vec<FormatDescriptor> {
+fn list_formats(registry: &FormatRegistry) -> Result<Vec<FormatDescriptor>> {
     registry
         .list_formats()
         .into_iter()
         .map(|name| {
-            // `list_formats()` is defined to return only names that are
-            // registered, so `get()` must succeed. Treat a failure as a
-            // broken invariant rather than silently dropping an entry:
-            // clients would otherwise see a partial registry with no
-            // indication anything was wrong.
-            let format = registry
-                .get(&name)
-                .expect("list_formats() returned a name not present in the registry");
-            FormatDescriptor {
+            // `list_formats()` returns only names that are registered, so
+            // `get()` should always succeed. If the invariant breaks we
+            // surface it as a JSON-RPC `internal_error` rather than either
+            // panicking (which would crash the LSP process over a
+            // client-triggerable command) or silently dropping entries
+            // (which would hand clients a partial registry with no
+            // indication anything was wrong).
+            let format = registry.get(&name).map_err(|_| Error::internal_error())?;
+            Ok(FormatDescriptor {
                 name: format.name().to_string(),
                 description: format.description().to_string(),
                 supports_parsing: format.supports_parsing(),
@@ -231,7 +231,7 @@ fn list_formats(registry: &FormatRegistry) -> Vec<FormatDescriptor> {
                     .iter()
                     .map(|s| s.to_string())
                     .collect(),
-            }
+            })
         })
         .collect()
 }

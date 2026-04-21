@@ -208,7 +208,9 @@ mod tests {
     #[test]
     fn moves_to_next_cell_mid_row() {
         let source = "    | Name | Score |\n";
-        // Cursor after "Name " at column 11 (inside first cell).
+        // Cursor inside the first cell at column 7 (on the "a" of "Name");
+        // next pipe is at column 11, so target is pipe+2 = 13 (the "S" of
+        // "Score" in the second cell).
         let outcome = next(source, 0, 7);
         assert_eq!(outcome, TableNavOutcome::moved(0, 13));
     }
