@@ -752,6 +752,7 @@ where
                     commands::COMMAND_IMPORT.to_string(),
                     commands::COMMAND_EXPORT.to_string(),
                     commands::COMMAND_NEXT_ANNOTATION.to_string(),
+                    commands::COMMAND_PREVIOUS_ANNOTATION.to_string(),
                     commands::COMMAND_RESOLVE_ANNOTATION.to_string(),
                     commands::COMMAND_TOGGLE_ANNOTATIONS.to_string(),
                     commands::COMMAND_INSERT_ASSET.to_string(),
