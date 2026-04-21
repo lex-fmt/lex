@@ -17,6 +17,9 @@ pub const COMMAND_INSERT_ASSET: &str = "lex.insert_asset";
 pub const COMMAND_INSERT_VERBATIM: &str = "lex.insert_verbatim";
 pub const COMMAND_FOOTNOTES_REORDER: &str = "lex.footnotes.reorder";
 pub const COMMAND_TABLE_FORMAT: &str = "lex.table.format";
+pub const COMMAND_TABLE_NEXT_CELL: &str = "lex.table.next_cell";
+pub const COMMAND_TABLE_PREVIOUS_CELL: &str = "lex.table.previous_cell";
+pub const COMMAND_FORMATS_LIST: &str = "lex.formats.list";
 
 pub fn execute_command(command: &str, arguments: &[Value]) -> Result<Option<Value>> {
     match command {
@@ -139,8 +142,87 @@ pub fn execute_command(command: &str, arguments: &[Value]) -> Result<Option<Valu
                 None => Ok(None),
             }
         }
+        COMMAND_TABLE_NEXT_CELL => {
+            let outcome = navigate_table_cell_command(
+                arguments,
+                crate::features::table_navigation::Direction::Next,
+            )?;
+            Ok(Some(
+                serde_json::to_value(outcome).map_err(|_| Error::internal_error())?,
+            ))
+        }
+        COMMAND_TABLE_PREVIOUS_CELL => {
+            let outcome = navigate_table_cell_command(
+                arguments,
+                crate::features::table_navigation::Direction::Previous,
+            )?;
+            Ok(Some(
+                serde_json::to_value(outcome).map_err(|_| Error::internal_error())?,
+            ))
+        }
+        COMMAND_FORMATS_LIST => {
+            let registry = FormatRegistry::with_defaults();
+            Ok(Some(
+                serde_json::to_value(list_formats(&registry))
+                    .map_err(|_| Error::internal_error())?,
+            ))
+        }
         _ => Err(Error::invalid_request()),
     }
+}
+
+fn navigate_table_cell_command(
+    arguments: &[Value],
+    direction: crate::features::table_navigation::Direction,
+) -> Result<crate::features::table_navigation::TableNavOutcome> {
+    let content = arguments
+        .first()
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| Error::invalid_params("Missing 'content' argument"))?;
+    let line = arguments
+        .get(1)
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| Error::invalid_params("Missing 'line' argument"))? as usize;
+    let column = arguments
+        .get(2)
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| Error::invalid_params("Missing 'column' argument"))?
+        as usize;
+
+    Ok(crate::features::table_navigation::navigate_table_cell(
+        content, line, column, direction,
+    ))
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FormatDescriptor {
+    name: String,
+    description: String,
+    supports_parsing: bool,
+    supports_serialization: bool,
+    file_extensions: Vec<String>,
+}
+
+fn list_formats(registry: &FormatRegistry) -> Vec<FormatDescriptor> {
+    registry
+        .list_formats()
+        .into_iter()
+        .filter_map(|name| {
+            let format = registry.get(&name).ok()?;
+            Some(FormatDescriptor {
+                name: format.name().to_string(),
+                description: format.description().to_string(),
+                supports_parsing: format.supports_parsing(),
+                supports_serialization: format.supports_serialization(),
+                file_extensions: format
+                    .file_extensions()
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -183,6 +265,67 @@ mod tests {
 
         let md_string = result.unwrap().as_str().unwrap().to_string();
         assert!(md_string.contains("Hello World"));
+    }
+
+    #[test]
+    fn test_table_next_cell_fallthrough() {
+        let args = vec![json!("Paragraph.\n"), json!(0), json!(3)];
+        let result = execute_command(COMMAND_TABLE_NEXT_CELL, &args)
+            .unwrap()
+            .unwrap();
+        assert_eq!(result, json!({ "inTable": false, "position": null }));
+    }
+
+    #[test]
+    fn test_table_next_cell_moves() {
+        let args = vec![json!("    | Name | Score |\n"), json!(0), json!(7)];
+        let result = execute_command(COMMAND_TABLE_NEXT_CELL, &args)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            result,
+            json!({ "inTable": true, "position": { "line": 0, "column": 13 } })
+        );
+    }
+
+    #[test]
+    fn test_table_previous_cell_moves() {
+        let args = vec![json!("    | Name | Score |\n"), json!(0), json!(14)];
+        let result = execute_command(COMMAND_TABLE_PREVIOUS_CELL, &args)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            result,
+            json!({ "inTable": true, "position": { "line": 0, "column": 6 } })
+        );
+    }
+
+    #[test]
+    fn test_table_navigation_missing_args() {
+        let result = execute_command(COMMAND_TABLE_NEXT_CELL, &[]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_formats_list_includes_core_formats() {
+        let result = execute_command(COMMAND_FORMATS_LIST, &[]).unwrap().unwrap();
+        let array = result.as_array().expect("formats list should be an array");
+        let names: Vec<&str> = array
+            .iter()
+            .map(|entry| entry.get("name").and_then(|n| n.as_str()).unwrap())
+            .collect();
+        assert!(names.contains(&"lex"));
+        assert!(names.contains(&"markdown"));
+        assert!(names.contains(&"html"));
+
+        let markdown = array
+            .iter()
+            .find(|entry| entry.get("name").and_then(|n| n.as_str()) == Some("markdown"))
+            .unwrap();
+        assert_eq!(markdown.get("supportsParsing").unwrap(), &json!(true));
+        assert_eq!(markdown.get("supportsSerialization").unwrap(), &json!(true));
+        let extensions = markdown.get("fileExtensions").unwrap().as_array().unwrap();
+        assert!(!extensions.is_empty());
     }
 
     #[test]
