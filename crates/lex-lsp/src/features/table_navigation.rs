@@ -64,14 +64,20 @@ impl TableNavOutcome {
 ///
 /// `line` and `column` are 0-indexed (LSP conventions); `column` counts
 /// UTF-8 bytes within the line.
+///
+/// Behaviour matches the heuristic the vscode and nvim clients carry
+/// locally today, including the cursor-on-pipe convention: pipe positions
+/// are tested with strict `<` / `>` against `column`, so a cursor sitting
+/// *on* a pipe character is treated as belonging to the cell before it for
+/// Previous and the cell after it for Next. This is preserved deliberately
+/// so moving the logic server-side does not silently change behaviour.
 pub fn navigate_table_cell(
     source: &str,
     line: usize,
     column: usize,
     direction: Direction,
 ) -> TableNavOutcome {
-    let lines: Vec<&str> = source.split('\n').collect();
-    let Some(current) = lines.get(line) else {
+    let Some(current) = nth_line(source, line) else {
         return TableNavOutcome::fallthrough();
     };
 
@@ -85,20 +91,19 @@ pub fn navigate_table_cell(
     }
 
     match direction {
-        Direction::Next => navigate_next(&lines, line, column, current, &pipes),
-        Direction::Previous => navigate_previous(&lines, line, column, current, &pipes),
+        Direction::Next => navigate_next(source, line, column, current, &pipes),
+        Direction::Previous => navigate_previous(source, line, column, current, &pipes),
     }
 }
 
 fn navigate_next(
-    lines: &[&str],
+    source: &str,
     line: usize,
     column: usize,
     current: &str,
     pipes: &[usize],
 ) -> TableNavOutcome {
-    if let Some(&next_pipe) = pipes.iter().find(|&&p| p > column) {
-        let idx = pipes.iter().position(|&p| p == next_pipe).unwrap();
+    if let Some((idx, &next_pipe)) = pipes.iter().enumerate().find(|&(_, &p)| p > column) {
         if idx < pipes.len() - 1 {
             let target = (next_pipe + 2).min(current.len());
             return TableNavOutcome::moved(line, target);
@@ -107,7 +112,7 @@ fn navigate_next(
 
     // Last cell on this row → jump to first cell of next pipe row.
     let next_line_nr = line + 1;
-    if let Some(next_text) = lines.get(next_line_nr) {
+    if let Some(next_text) = nth_line(source, next_line_nr) {
         if is_pipe_row(next_text) {
             if let Some(first_pipe) = next_text.find('|') {
                 let target = (first_pipe + 2).min(next_text.len());
@@ -120,15 +125,18 @@ fn navigate_next(
 }
 
 fn navigate_previous(
-    lines: &[&str],
+    source: &str,
     line: usize,
     column: usize,
     current: &str,
     pipes: &[usize],
 ) -> TableNavOutcome {
-    let prev_pipes: Vec<usize> = pipes.iter().copied().filter(|&p| p < column).collect();
-    if prev_pipes.len() >= 2 {
-        let target_pipe = prev_pipes[prev_pipes.len() - 2];
+    // Count pipes strictly before the cursor; we need the one *two back*
+    // so we land on the content side of the pipe that precedes the current
+    // cell (i.e. the start of the previous cell's content).
+    let before_cursor = pipes.iter().copied().take_while(|&p| p < column).count();
+    if before_cursor >= 2 {
+        let target_pipe = pipes[before_cursor - 2];
         let target = (target_pipe + 2).min(current.len());
         return TableNavOutcome::moved(line, target);
     }
@@ -138,7 +146,7 @@ fn navigate_previous(
         return TableNavOutcome::no_move();
     }
     let prev_line_nr = line - 1;
-    if let Some(prev_text) = lines.get(prev_line_nr) {
+    if let Some(prev_text) = nth_line(source, prev_line_nr) {
         if is_pipe_row(prev_text) {
             let prev_pipes = pipe_positions(prev_text);
             if prev_pipes.len() >= 2 {
@@ -150,6 +158,14 @@ fn navigate_previous(
     }
 
     TableNavOutcome::no_move()
+}
+
+/// Extract the `n`-th 0-indexed line of `source` without materialising a
+/// `Vec<&str>` of every line. Callers touch at most three lines per
+/// invocation (current, previous, next), so the O(n) scan beats the full
+/// split for any non-trivial document size.
+fn nth_line(source: &str, n: usize) -> Option<&str> {
+    source.split('\n').nth(n)
 }
 
 fn is_pipe_row(line: &str) -> bool {
@@ -258,12 +274,37 @@ mod tests {
     }
 
     #[test]
-    fn column_clamped_when_line_shorter_than_target() {
-        // Trailing content shorter than `last_pipe + 2`: target clamps to line length.
-        let source = "|\n";
-        let outcome = next(source, 0, 0);
-        // Only one pipe on the line → no_move.
-        assert_eq!(outcome, TableNavOutcome::no_move());
+    fn target_clamped_when_next_row_is_shorter_than_pipe_plus_two() {
+        // From the last cell on line 0 we wrap to line 1. Line 1 is a
+        // pathological single-pipe row where the target `first_pipe + 2`
+        // (= 2) exceeds the line length (= 1), so the target must be
+        // clamped to the line length.
+        let source = "    | A | B |\n|\n";
+        let outcome = next(source, 0, 11);
+        assert_eq!(outcome, TableNavOutcome::moved(1, 1));
+    }
+
+    #[test]
+    fn cursor_exactly_on_leading_pipe_skips_adjacent_cell_for_next() {
+        // Cursor sits on the leading `|` at column 4. With strict `p > column`
+        // the pipe at column 4 is skipped, so the next pipe is the one at
+        // column 8 and Next lands on the *second* cell's content (the "B")
+        // rather than the first cell's content (the "A"). This matches the
+        // heuristic vscode and nvim use today and is asserted here so any
+        // future change is deliberate.
+        let source = "    | A | B | C |\n";
+        let outcome = next(source, 0, 4);
+        assert_eq!(outcome, TableNavOutcome::moved(0, 10));
+    }
+
+    #[test]
+    fn cursor_exactly_on_leading_pipe_wraps_to_previous_row_for_previous() {
+        // Cursor on the leading `|` at column 4 on line 1. Strict `p < column`
+        // yields zero pipes before the cursor, so Previous wraps to the last
+        // cell of the previous row instead of staying on the same line.
+        let source = "    | A | B | C |\n    | D | E | F |\n";
+        let outcome = prev(source, 1, 4);
+        assert_eq!(outcome, TableNavOutcome::moved(0, 14));
     }
 
     #[test]

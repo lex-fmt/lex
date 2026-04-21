@@ -179,19 +179,23 @@ fn navigate_table_cell_command(
         .first()
         .and_then(|v| v.as_str())
         .ok_or_else(|| Error::invalid_params("Missing 'content' argument"))?;
-    let line = arguments
-        .get(1)
-        .and_then(|v| v.as_u64())
-        .ok_or_else(|| Error::invalid_params("Missing 'line' argument"))? as usize;
-    let column = arguments
-        .get(2)
-        .and_then(|v| v.as_u64())
-        .ok_or_else(|| Error::invalid_params("Missing 'column' argument"))?
-        as usize;
+    let line = arg_as_usize(arguments.get(1), "line")?;
+    let column = arg_as_usize(arguments.get(2), "column")?;
 
     Ok(crate::features::table_navigation::navigate_table_cell(
         content, line, column, direction,
     ))
+}
+
+/// Read a `u64` argument and convert it to `usize`, returning an
+/// `invalid_params` error if the argument is missing or overflows `usize`
+/// on the host target.
+fn arg_as_usize(value: Option<&Value>, name: &str) -> Result<usize> {
+    let raw = value
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| Error::invalid_params(format!("Missing '{name}' argument")))?;
+    usize::try_from(raw)
+        .map_err(|_| Error::invalid_params(format!("'{name}' argument does not fit in usize")))
 }
 
 #[derive(serde::Serialize)]
