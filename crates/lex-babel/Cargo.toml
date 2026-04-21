@@ -1,6 +1,6 @@
 [package]
 name = "lex-babel"
-version = "0.8.2"
+version = "0.8.3"
 edition = "2021"
 authors = ["lex contributors"]
 description = "Format conversion library for the lex format"
