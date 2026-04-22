@@ -169,15 +169,18 @@ fn compute_row_widths(rows: &[&TableRow]) -> Vec<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lex_core::lex::parsing;
+    use lex_core::lex::testing::lexplore::Lexplore;
 
-    fn parse(source: &str) -> Document {
-        parsing::parse_document(source).expect("parse failed")
+    fn footnote_diags(doc: &Document) -> Vec<AnalysisDiagnostic> {
+        analyze(doc)
+            .into_iter()
+            .filter(|d| d.kind == DiagnosticKind::MissingFootnoteDefinition)
+            .collect()
     }
 
     #[test]
     fn detects_missing_footnote_definition() {
-        let doc = parse("Text with [1] reference.");
+        let doc = Lexplore::footnotes(1).parse().unwrap();
         let diags = analyze(&doc);
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].kind, DiagnosticKind::MissingFootnoteDefinition);
@@ -185,129 +188,84 @@ mod tests {
 
     #[test]
     fn ignores_valid_footnote_with_notes_annotation() {
-        // :: notes :: annotated list provides the definitions
-        let doc = parse("Text [1].\n\n:: notes ::\n1. Note.\n2. Another.\n");
-        let diags = analyze(&doc);
-        let footnote_diags: Vec<_> = diags
-            .iter()
-            .filter(|d| d.kind == DiagnosticKind::MissingFootnoteDefinition)
-            .collect();
-        assert!(footnote_diags.is_empty());
+        // :: notes :: annotated list at the document root provides the definitions
+        let doc = Lexplore::footnotes(2).parse().unwrap();
+        assert!(footnote_diags(&doc).is_empty());
     }
 
     #[test]
     fn ignores_valid_list_footnote_in_session() {
         // :: notes :: inside a session
-        let doc = parse("Text [1].\n\nNotes\n\n    :: notes ::\n\n    1. Note.\n    2. Another.\n");
-        let diags = analyze(&doc);
-        let footnote_diags: Vec<_> = diags
-            .iter()
-            .filter(|d| d.kind == DiagnosticKind::MissingFootnoteDefinition)
-            .collect();
-        assert!(footnote_diags.is_empty());
+        let doc = Lexplore::footnotes(3).parse().unwrap();
+        assert!(footnote_diags(&doc).is_empty());
     }
 
     #[test]
     fn list_without_notes_annotation_is_not_footnotes() {
         // A "Notes" session without :: notes :: does NOT define footnotes
-        let doc = parse("Text [1].\n\nNotes\n\n    1. Note.\n    2. Another.\n");
-        let diags = analyze(&doc);
-        let footnote_diags: Vec<_> = diags
-            .iter()
-            .filter(|d| d.kind == DiagnosticKind::MissingFootnoteDefinition)
-            .collect();
-        assert_eq!(footnote_diags.len(), 1);
+        let doc = Lexplore::footnotes(4).parse().unwrap();
+        assert_eq!(footnote_diags(&doc).len(), 1);
+    }
+
+    fn table_diags(doc: &Document) -> Vec<AnalysisDiagnostic> {
+        analyze(doc)
+            .into_iter()
+            .filter(|d| d.kind == DiagnosticKind::TableInconsistentColumns)
+            .collect()
     }
 
     #[test]
     fn detects_inconsistent_table_columns() {
-        let doc = parse("Data:\n    | A | B | C |\n    | 1 | 2 |\n:: table ::\n");
-        let diags = analyze(&doc);
-        let table_diags: Vec<_> = diags
-            .iter()
-            .filter(|d| d.kind == DiagnosticKind::TableInconsistentColumns)
-            .collect();
-        assert_eq!(table_diags.len(), 1);
-        assert!(table_diags[0].message.contains("2 columns"));
-        assert!(table_diags[0].message.contains("expected 3"));
+        // table-13: 3-col header, 2-col row, 3-col row — middle row is short.
+        let doc = Lexplore::table(13).parse().unwrap();
+        let diags = table_diags(&doc);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("2 columns"));
+        assert!(diags[0].message.contains("expected 3"));
     }
 
     #[test]
     fn consistent_table_no_diagnostic() {
-        let doc = parse("Data:\n    | A | B |\n    | 1 | 2 |\n:: table ::\n");
-        let diags = analyze(&doc);
-        let table_diags: Vec<_> = diags
-            .iter()
-            .filter(|d| d.kind == DiagnosticKind::TableInconsistentColumns)
-            .collect();
-        assert!(table_diags.is_empty());
+        // table-01: minimal 2-column table, all rows consistent.
+        let doc = Lexplore::table(1).parse().unwrap();
+        assert!(table_diags(&doc).is_empty());
     }
 
     #[test]
     fn table_with_rowspan_counts_carry_over() {
-        // Row 0: A | B | C           → 3 cells, widths all 1 → effective width 3
-        // Row 1: D | ^^ | E          → ^^ is absorbed into B (B gets rowspan=2),
-        //                              leaving row 1 with 2 cells [D, E]. But the
-        //                              column occupied by B's rowspan means row 1's
-        //                              effective width is still 3.
-        let doc = parse("Data:\n    | A | B  | C |\n    | D | ^^ | E |\n:: table ::\n");
-        let diags = analyze(&doc);
-        let table_diags: Vec<_> = diags
-            .iter()
-            .filter(|d| d.kind == DiagnosticKind::TableInconsistentColumns)
-            .collect();
+        // table-17: rowspan via ^^ — effective widths remain consistent across rows.
+        let doc = Lexplore::table(17).parse().unwrap();
+        let diags = table_diags(&doc);
         assert!(
-            table_diags.is_empty(),
-            "rowspan carry-over should not trigger inconsistent-columns, got: {table_diags:?}"
+            diags.is_empty(),
+            "rowspan carry-over should not trigger inconsistent-columns, got: {diags:?}"
         );
     }
 
     #[test]
     fn table_with_colspan_and_rowspan_mixed() {
-        // Mirrors the "Conference Schedule" pattern from benchmark/080-gentle-introduction.lex:
-        //   | Time  | Room A          | Room B     |
-        //   | 9:00  | Opening Keynote | >>         |   (Opening Keynote colspan=2)
-        //   | 10:00 | Workshop        | Panel      |   (Workshop rowspan=2, via ^^ below)
-        //   | 11:00 | ^^              | Discussion |
-        let doc = parse(
-            "Data:\n    | Time  | Room A          | Room B     |\n    | 9:00  | Opening Keynote | >>         |\n    | 10:00 | Workshop        | Panel      |\n    | 11:00 | ^^              | Discussion |\n:: table ::\n",
-        );
-        let diags = analyze(&doc);
-        let table_diags: Vec<_> = diags
-            .iter()
-            .filter(|d| d.kind == DiagnosticKind::TableInconsistentColumns)
-            .collect();
+        // table-18: combined >> colspan and ^^ rowspan; effective widths stay consistent.
+        let doc = Lexplore::table(18).parse().unwrap();
+        let diags = table_diags(&doc);
         assert!(
-            table_diags.is_empty(),
-            "mixed colspan/rowspan should not trigger inconsistent-columns, got: {table_diags:?}"
+            diags.is_empty(),
+            "mixed colspan/rowspan should not trigger inconsistent-columns, got: {diags:?}"
         );
     }
 
     #[test]
     fn table_with_colspan_counts_effective_width() {
-        // Row 1: A + >> = 2 effective columns (colspan=2)
-        // Row 2: B + C = 2 columns
-        // After merge resolution: row 1 has 1 cell (colspan=2), row 2 has 2 cells (colspan=1 each)
-        // Effective widths: 2 and 2 — consistent
-        let doc = parse("Data:\n    | A  | >> |\n    | B  | C  |\n:: table ::\n");
-        let diags = analyze(&doc);
-        let table_diags: Vec<_> = diags
-            .iter()
-            .filter(|d| d.kind == DiagnosticKind::TableInconsistentColumns)
-            .collect();
-        assert!(table_diags.is_empty());
+        // table-04: colspan via >> contributes to effective width; all rows consistent.
+        let doc = Lexplore::table(4).parse().unwrap();
+        assert!(table_diags(&doc).is_empty());
     }
 
     #[test]
     fn footnote_ref_in_table_cell_is_checked() {
         // Table cell contains [1] but no footnote definition exists
-        let doc = parse("Data:\n    | Item  | Note |\n    | Alpha | [1]  |\n:: table ::\n");
-        let diags = analyze(&doc);
-        let footnote_diags: Vec<_> = diags
-            .iter()
-            .filter(|d| d.kind == DiagnosticKind::MissingFootnoteDefinition)
-            .collect();
-        assert_eq!(footnote_diags.len(), 1);
-        assert!(footnote_diags[0].message.contains("[1]"));
+        let doc = Lexplore::footnotes(9).parse().unwrap();
+        let diags = footnote_diags(&doc);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("[1]"));
     }
 }

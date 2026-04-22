@@ -224,42 +224,46 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lex_core::lex::parsing;
+    use lex_core::lex::testing::lexplore::Lexplore;
 
     #[test]
     fn reorders_references_and_definitions() {
-        // [2] → [1], [1] → [2]; list items renumbered accordingly
-        let source = "Ref [2] and [1].\n\n:: notes ::\n1. Note A\n2. Note B\n";
-        let doc = parsing::parse_document(source).unwrap();
-        let new_source = reorder_footnotes(&doc, source);
+        // footnotes-06: [2] then [1] at root; renumbering swaps both refs and list markers.
+        let loader = Lexplore::footnotes(6);
+        let source = loader.source();
+        let doc = loader.parse().unwrap();
+        let new_source = reorder_footnotes(&doc, &source);
 
-        let expected = "Ref [1] and [2].\n\n:: notes ::\n2. Note A\n1. Note B\n";
-        assert_eq!(new_source, expected);
+        // Refs swap: first [2]→[1], then [1]→[2].
+        assert!(new_source.contains("swapped: [1] before [2]"));
+        // List markers swap: the item originally at "1." now prints as "2." and vice versa.
+        assert!(new_source.contains("2. Note A"));
+        assert!(new_source.contains("1. Note B"));
     }
 
     #[test]
     fn keeps_correct_order_for_repeated_refs() {
-        // [10] first → 1, [5] second → 2
-        let source =
-            "Ref [10] then [10] then [5].\n\nNotes\n\n    :: notes ::\n\n    5. Content.\n    10. Other.\n";
-        let doc = parsing::parse_document(source).unwrap();
-        let new_source = reorder_footnotes(&doc, source);
+        // footnotes-07: refs [10] [10] [5]; definitions 5 and 10 inside a Notes session.
+        let loader = Lexplore::footnotes(7);
+        let source = loader.source();
+        let doc = loader.parse().unwrap();
+        let new_source = reorder_footnotes(&doc, &source);
 
-        // Reference 10 → 1, reference 5 → 2
-        // Definition "5." → "2.", definition "10." → "1."
-        assert!(new_source.contains("Ref [1] then [1] then [2]."));
+        // Reference 10 → 1 (seen first, twice), reference 5 → 2.
+        assert!(new_source.contains("References [1] then [1] then [2]"));
+        // Definition "5." → "2.", definition "10." → "1.".
         assert!(new_source.contains("    2. Content."));
         assert!(new_source.contains("    1. Other."));
     }
 
     #[test]
     fn reorders_list_items_in_notes_session() {
-        // [2] → [1], [1] → [2]; list items in :: notes :: list renumbered
-        let source =
-            "Ref [2] and [1].\n\nNotes\n\n    :: notes ::\n\n    1. Note A\n    2. Note B\n";
-        let doc = parsing::parse_document(source).unwrap();
-        let new_source = reorder_footnotes(&doc, source);
+        // footnotes-10: [2] before [1] inside a session-wrapped :: notes :: list.
+        let loader = Lexplore::footnotes(10);
+        let source = loader.source();
+        let doc = loader.parse().unwrap();
+        let new_source = reorder_footnotes(&doc, &source);
 
-        assert!(new_source.contains("Ref [1] and [2]."));
+        assert!(new_source.contains("References [1] and [2] appear"));
     }
 }

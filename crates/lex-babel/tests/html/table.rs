@@ -2,6 +2,7 @@ use lex_babel::format::Format;
 use lex_babel::formats::html::HtmlFormat;
 use lex_babel::formats::markdown::MarkdownFormat;
 use lex_babel::ir::nodes::*;
+use lex_core::lex::testing::lexplore::Lexplore;
 use lex_core::lex::transforms::standard::STRING_TO_AST;
 
 #[test]
@@ -76,9 +77,8 @@ fn test_table_html_rowspan() {
 
 #[test]
 fn test_table_html_footnotes() {
-    let lex_src =
-        "Notes:\n    | Item  | Cost [1] |\n    | Alpha | 100      |\n\n    1. All prices in USD.\n:: table ::\n";
-    let doc = STRING_TO_AST.run(lex_src.to_string()).unwrap();
+    // table-06: table with two footnotes; see comms/specs/elements/table.docs/
+    let doc = Lexplore::table(6).parse().unwrap();
 
     let html = HtmlFormat::default()
         .serialize(&doc)
@@ -88,7 +88,10 @@ fn test_table_html_footnotes() {
         html.contains("lex-table-footnotes"),
         "Should have footnotes section"
     );
-    assert!(html.contains("USD"), "Footnote content should be in output");
+    assert!(
+        html.contains("Precision measured at k=10"),
+        "First footnote content should be in output"
+    );
 }
 
 #[test]
@@ -153,9 +156,8 @@ fn test_table_ir_preserves_caption() {
 
 #[test]
 fn test_table_ir_preserves_footnotes() {
-    let lex_src =
-        "Notes:\n    | Item | Cost [1] |\n    | X    | 50       |\n\n    1. In EUR.\n:: table ::\n";
-    let doc = STRING_TO_AST.run(lex_src.to_string()).unwrap();
+    // table-06: table with two footnotes; see comms/specs/elements/table.docs/
+    let doc = Lexplore::table(6).parse().unwrap();
 
     let ir = lex_babel::to_ir(&doc);
 

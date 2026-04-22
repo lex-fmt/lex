@@ -232,6 +232,7 @@ impl Lexplore {
         verbatim => Verbatim, "verbatim";
         table => Table, "table";
         document => Document, "document";
+        footnotes => Footnotes, "footnotes";
     }
 
     // ===== Convenience shortcuts for document collections =====
