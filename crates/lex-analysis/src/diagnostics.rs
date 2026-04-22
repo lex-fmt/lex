@@ -152,11 +152,15 @@ fn compute_row_widths(rows: &[&TableRow]) -> Vec<usize> {
             .unwrap_or(0);
         widths.push(width);
 
-        for c in carry.iter_mut() {
+        // Columns at or beyond `width` are guaranteed 0 (that's how width is
+        // defined), so limit the decrement to the active range and drop the
+        // trailing zeros to keep `carry` proportional to the live grid.
+        for c in carry.iter_mut().take(width) {
             if *c > 0 {
                 *c -= 1;
             }
         }
+        carry.truncate(width);
     }
 
     widths
