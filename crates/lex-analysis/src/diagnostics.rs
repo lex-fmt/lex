@@ -134,17 +134,27 @@ fn check_table(
     // Extend the in-scope definitions with the table's positional footnote
     // list. The table's own numbered items shadow nothing — they just add
     // table-local numbers that references inside this table may resolve to.
+    // Fast path: most tables have no footnotes, so reuse `outer_defs` rather
+    // than cloning it into a new `HashSet` for every such table.
     let table_defs = table_footnote_numbers(table);
-    let scope: HashSet<u32> = outer_defs.union(&table_defs).copied().collect();
+    if table_defs.is_empty() {
+        check_table_text(table, outer_defs, diagnostics);
+        return;
+    }
+    let mut scope = outer_defs.clone();
+    scope.extend(table_defs);
+    check_table_text(table, &scope, diagnostics);
+}
 
-    check_text(&table.subject, &scope, diagnostics);
+fn check_table_text(table: &Table, defs: &HashSet<u32>, diagnostics: &mut Vec<AnalysisDiagnostic>) {
+    check_text(&table.subject, defs, diagnostics);
     for row in table.all_rows() {
         for cell in &row.cells {
-            check_text(&cell.content, &scope, diagnostics);
+            check_text(&cell.content, defs, diagnostics);
         }
     }
     for annotation in table.annotations() {
-        check_annotation(annotation, &scope, diagnostics);
+        check_annotation(annotation, defs, diagnostics);
     }
 }
 
@@ -176,7 +186,7 @@ fn check_text(text: &TextContent, defs: &HashSet<u32>, diagnostics: &mut Vec<Ana
                     range: reference.range,
                     kind: DiagnosticKind::MissingFootnoteDefinition,
                     message: format!(
-                        "Footnote [{number}] has no matching item in a :: notes :: list"
+                        "Footnote [{number}] has no matching footnote definition in scope"
                     ),
                 });
             }
