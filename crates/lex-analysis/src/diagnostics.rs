@@ -1,6 +1,6 @@
 use crate::inline::extract_references;
 use crate::utils::for_each_text_content;
-use lex_core::lex::ast::{ContentItem, Document, Range, Session, Table};
+use lex_core::lex::ast::{ContentItem, Document, Range, Session, Table, TableRow};
 use lex_core::lex::inlines::ReferenceType;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -95,7 +95,8 @@ fn visit_tables_in_content(item: &ContentItem, diagnostics: &mut Vec<AnalysisDia
 
 /// Check that all rows in a table have the same effective column count.
 ///
-/// The effective width of a row is the sum of colspans across its cells.
+/// The effective width of a row accounts for both colspans of its own cells
+/// and rowspan carry-over from cells in prior rows that extend into it.
 /// Rows with different effective widths indicate a structural error (missing
 /// or extra cells).
 fn check_table_columns(table: &Table, diagnostics: &mut Vec<AnalysisDiagnostic>) {
@@ -104,12 +105,7 @@ fn check_table_columns(table: &Table, diagnostics: &mut Vec<AnalysisDiagnostic>)
         return;
     }
 
-    // Compute effective width per row (sum of colspans)
-    let widths: Vec<usize> = rows
-        .iter()
-        .map(|row| row.cells.iter().map(|c| c.colspan).sum())
-        .collect();
-
+    let widths = compute_row_widths(&rows);
     let expected = widths[0];
     for (i, &width) in widths.iter().enumerate().skip(1) {
         if width != expected {
@@ -122,6 +118,52 @@ fn check_table_columns(table: &Table, diagnostics: &mut Vec<AnalysisDiagnostic>)
             });
         }
     }
+}
+
+/// Simulate the virtual table grid to compute each row's effective width.
+///
+/// `carry[col]` tracks how many more rows (including the current one) a cell
+/// placed in a prior row still occupies column `col`. Own cells skip columns
+/// where `carry[col] > 0` (those are held by a cell from above via rowspan).
+fn compute_row_widths(rows: &[&TableRow]) -> Vec<usize> {
+    let mut carry: Vec<usize> = Vec::new();
+    let mut widths = Vec::with_capacity(rows.len());
+
+    for row in rows {
+        let mut col = 0;
+        for cell in &row.cells {
+            while col < carry.len() && carry[col] > 0 {
+                col += 1;
+            }
+            let end = col + cell.colspan;
+            if end > carry.len() {
+                carry.resize(end, 0);
+            }
+            for slot in carry.iter_mut().take(end).skip(col) {
+                *slot = cell.rowspan;
+            }
+            col = end;
+        }
+
+        let width = carry
+            .iter()
+            .rposition(|&r| r > 0)
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        widths.push(width);
+
+        // Columns at or beyond `width` are guaranteed 0 (that's how width is
+        // defined), so limit the decrement to the active range and drop the
+        // trailing zeros to keep `carry` proportional to the live grid.
+        for c in carry.iter_mut().take(width) {
+            if *c > 0 {
+                *c -= 1;
+            }
+        }
+        carry.truncate(width);
+    }
+
+    widths
 }
 
 #[cfg(test)]
@@ -199,6 +241,46 @@ mod tests {
             .filter(|d| d.kind == DiagnosticKind::TableInconsistentColumns)
             .collect();
         assert!(table_diags.is_empty());
+    }
+
+    #[test]
+    fn table_with_rowspan_counts_carry_over() {
+        // Row 0: A | B | C           → 3 cells, widths all 1 → effective width 3
+        // Row 1: D | ^^ | E          → ^^ is absorbed into B (B gets rowspan=2),
+        //                              leaving row 1 with 2 cells [D, E]. But the
+        //                              column occupied by B's rowspan means row 1's
+        //                              effective width is still 3.
+        let doc = parse("Data:\n    | A | B  | C |\n    | D | ^^ | E |\n:: table ::\n");
+        let diags = analyze(&doc);
+        let table_diags: Vec<_> = diags
+            .iter()
+            .filter(|d| d.kind == DiagnosticKind::TableInconsistentColumns)
+            .collect();
+        assert!(
+            table_diags.is_empty(),
+            "rowspan carry-over should not trigger inconsistent-columns, got: {table_diags:?}"
+        );
+    }
+
+    #[test]
+    fn table_with_colspan_and_rowspan_mixed() {
+        // Mirrors the "Conference Schedule" pattern from benchmark/080-gentle-introduction.lex:
+        //   | Time  | Room A          | Room B     |
+        //   | 9:00  | Opening Keynote | >>         |   (Opening Keynote colspan=2)
+        //   | 10:00 | Workshop        | Panel      |   (Workshop rowspan=2, via ^^ below)
+        //   | 11:00 | ^^              | Discussion |
+        let doc = parse(
+            "Data:\n    | Time  | Room A          | Room B     |\n    | 9:00  | Opening Keynote | >>         |\n    | 10:00 | Workshop        | Panel      |\n    | 11:00 | ^^              | Discussion |\n:: table ::\n",
+        );
+        let diags = analyze(&doc);
+        let table_diags: Vec<_> = diags
+            .iter()
+            .filter(|d| d.kind == DiagnosticKind::TableInconsistentColumns)
+            .collect();
+        assert!(
+            table_diags.is_empty(),
+            "mixed colspan/rowspan should not trigger inconsistent-columns, got: {table_diags:?}"
+        );
     }
 
     #[test]
