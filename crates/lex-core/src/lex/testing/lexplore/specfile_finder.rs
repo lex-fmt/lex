@@ -43,6 +43,7 @@ pub enum ElementType {
     Verbatim,
     Table,
     Document,
+    Footnotes,
 }
 
 /// Document collection types for comprehensive testing
@@ -64,6 +65,7 @@ impl ElementType {
             ElementType::Verbatim => "verbatim",
             ElementType::Table => "table",
             ElementType::Document => "document",
+            ElementType::Footnotes => "footnotes",
         }
     }
 }

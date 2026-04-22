@@ -777,17 +777,11 @@ fn collect_list_item_labels(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lex_core::lex::parsing;
-
-    fn parse(source: &str) -> Document {
-        parsing::parse_document(source).expect("parse failed")
-    }
+    use lex_core::lex::testing::lexplore::Lexplore;
 
     #[test]
     fn collects_footnotes_from_notes_annotated_list() {
-        let doc = parse(
-            "Text [1].\n\nNotes\n\n    :: notes ::\n\n    1. First note.\n    2. Second note.\n",
-        );
+        let doc = Lexplore::footnotes(3).parse().unwrap();
         let defs = collect_footnote_definitions(&doc);
         let labels: Vec<&str> = defs.iter().map(|(l, _)| l.as_str()).collect();
         assert_eq!(labels, vec!["1", "2"]);
@@ -796,14 +790,14 @@ mod tests {
     #[test]
     fn no_footnotes_without_notes_annotation() {
         // A plain list in a "Notes" session is NOT a footnote list without :: notes ::
-        let doc = parse("Content\n\nNotes\n\n    1. A note\n    2. Another.\n");
+        let doc = Lexplore::footnotes(4).parse().unwrap();
         let defs = collect_footnote_definitions(&doc);
         assert!(defs.is_empty());
     }
 
     #[test]
     fn collects_footnotes_at_document_root() {
-        let doc = parse("Text [1].\n\n:: notes ::\n\n1. Root-level note.\n2. Second.\n");
+        let doc = Lexplore::footnotes(2).parse().unwrap();
         let defs = collect_footnote_definitions(&doc);
         let labels: Vec<&str> = defs.iter().map(|(l, _)| l.as_str()).collect();
         assert_eq!(labels, vec!["1", "2"]);
@@ -812,9 +806,7 @@ mod tests {
     #[test]
     fn multiple_notes_lists_in_different_sessions() {
         // Each chapter has its own :: notes :: list with 2 items
-        let doc = parse(
-            "1. Chapter One\n\n    Text [1].\n\n    :: notes ::\n    1. Ch1 note A.\n    2. Ch1 note B.\n\n2. Chapter Two\n\n    Text [1].\n\n    :: notes ::\n    1. Ch2 note A.\n    2. Ch2 note B.\n",
-        );
+        let doc = Lexplore::footnotes(5).parse().unwrap();
         let defs = collect_footnote_definitions(&doc);
         assert_eq!(defs.len(), 4); // 2 items × 2 chapters
     }
