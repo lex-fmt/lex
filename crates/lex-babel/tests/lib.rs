@@ -1,4 +1,6 @@
-// This file is required to make `cargo test` discover tests in subdirectories.
+// Single consolidated test binary for lex-babel. Each submodule used to be (or
+// co-existed as) its own `tests/*.rs` binary; consolidating avoids redundant
+// linking.
 
 #[cfg(test)]
 mod common;
@@ -14,3 +16,6 @@ mod pdf;
 
 #[cfg(test)]
 mod rfc_xml;
+
+#[cfg(test)]
+mod round_trip_proptest;

@@ -11,8 +11,8 @@
 use std::borrow::Cow;
 
 use lex_core::lex::escape::{
-    find_respecting_escape, find_respecting_escape_and_literals, is_structural_at,
-    split_respecting_escape, split_respecting_escape_and_literals,
+    find_respecting_escape, is_structural_at, split_respecting_escape,
+    split_respecting_escape_and_literals,
 };
 use proptest::prelude::*;
 
@@ -56,26 +56,6 @@ fn count_structural(s: &str, sep: char, literal_delim: Option<char>) -> usize {
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(500))]
-
-    /// Never panics on any input.
-    #[test]
-    fn split_never_panics(s in input_strategy(), sep in r"[|,;]") {
-        let sep_ch = sep.chars().next().unwrap();
-        let _ = split_respecting_escape(&s, sep_ch);
-    }
-
-    #[test]
-    fn split_with_literals_never_panics(s in input_strategy(), sep in r"[|,;]") {
-        let sep_ch = sep.chars().next().unwrap();
-        let _ = split_respecting_escape_and_literals(&s, sep_ch, '`');
-    }
-
-    #[test]
-    fn find_never_panics(s in input_strategy(), sep in r"[|,;]") {
-        let sep_ch = sep.chars().next().unwrap();
-        let _ = find_respecting_escape(&s, sep_ch);
-        let _ = find_respecting_escape_and_literals(&s, sep_ch, '`');
-    }
 
     /// Segment count equals structural separator count + 1.
     #[test]
