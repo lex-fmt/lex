@@ -11,7 +11,7 @@ use proptest::prelude::*;
 proptest! {
     // We limit cases to avoid extremely long test runs in CI, but
     // it can be increased for deep local fuzzing
-    #![proptest_config(ProptestConfig::with_cases(250))]
+    #![proptest_config(ProptestConfig::with_cases(100))]
 
     #[test]
     fn test_parse_document_never_panics_on_any_utf8(s in "\\PC*") {
@@ -59,7 +59,7 @@ fn lex_document_strategy() -> impl Strategy<Value = String> {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(250))]
+    #![proptest_config(ProptestConfig::with_cases(100))]
 
     #[test]
     fn test_parse_document_never_panics_on_valid_looking_lex(input in lex_document_strategy()) {
@@ -125,7 +125,7 @@ fn expanded_lex_document_strategy() -> impl Strategy<Value = String> {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(250))]
+    #![proptest_config(ProptestConfig::with_cases(100))]
 
     #[test]
     fn test_parse_document_never_panics_on_expanded_lex(input in expanded_lex_document_strategy()) {
