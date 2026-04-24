@@ -1,6 +1,6 @@
 use lex_analysis::utils::collect_footnote_definitions;
 use lex_core::lex::ast::Document;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use tower_lsp::lsp_types::{
     CodeAction, CodeActionKind, CodeActionParams, Position, Range, TextEdit, WorkspaceEdit,
 };
@@ -12,8 +12,15 @@ pub fn compute_actions(
 ) -> Vec<CodeAction> {
     let mut actions = Vec::new();
 
-    // 1. Diagnostic-based actions
-    let mut seen_labels: HashSet<String> = HashSet::new();
+    // 1. Diagnostic-based actions.
+    //
+    // Group missing-footnote diagnostics by label: applying the quickfix
+    // resolves *all* references to that label, so the resulting CodeAction
+    // attaches every matching diagnostic. Preserve first-encountered order
+    // so the quickfix list is stable across runs.
+    let mut label_order: Vec<String> = Vec::new();
+    let mut diagnostics_by_label: HashMap<String, Vec<tower_lsp::lsp_types::Diagnostic>> =
+        HashMap::new();
     for diagnostic in &params.context.diagnostics {
         let Some(tower_lsp::lsp_types::NumberOrString::String(code)) = &diagnostic.code else {
             continue;
@@ -22,19 +29,28 @@ pub fn compute_actions(
             continue;
         }
         // The diagnostic range points at the reference (e.g. `[1]`). Read the
-        // source text at that range and strip brackets to get the label.
+        // source at that range and strip brackets to get the label.
         let Some(label) = label_from_diagnostic_range(source, &diagnostic.range) else {
             continue;
         };
-        if !seen_labels.insert(label.clone()) {
-            continue;
+        if !diagnostics_by_label.contains_key(&label) {
+            label_order.push(label.clone());
         }
+        diagnostics_by_label
+            .entry(label)
+            .or_default()
+            .push(diagnostic.clone());
+    }
 
-        let edit = build_missing_footnote_edit(document, source, &label);
+    for label in &label_order {
+        let matching = diagnostics_by_label
+            .remove(label)
+            .expect("label registered in diagnostics_by_label");
+        let edit = build_missing_footnote_edit(document, source, label);
         actions.push(CodeAction {
             title: format!("Add definition for footnote [{label}]"),
             kind: Some(CodeActionKind::QUICKFIX),
-            diagnostics: Some(vec![diagnostic.clone()]),
+            diagnostics: Some(matching),
             edit: Some(WorkspaceEdit {
                 changes: Some(HashMap::from([(
                     params.text_document.uri.clone(),
@@ -105,22 +121,21 @@ pub fn compute_actions(
 
 /// Reads the source text spanned by the diagnostic range and extracts the
 /// footnote label. The range typically points at `[1]`; we strip the brackets
-/// and return the inside. Returns None if the range is degenerate or crosses
-/// lines (a footnote reference never does).
+/// and return the inside. Returns None if the range is degenerate, crosses
+/// lines (a footnote reference never does), or the byte offsets land on
+/// non-UTF-8 boundaries.
+///
+/// `Position.character` is a byte offset in this codebase (see
+/// `SourceLocation::byte_to_position` in lex-core), not a UTF-16 code unit
+/// count, so we slice the line by bytes.
 fn label_from_diagnostic_range(source: &str, range: &Range) -> Option<String> {
     if range.start.line != range.end.line {
         return None;
     }
     let line = source.lines().nth(range.start.line as usize)?;
-    let start_col = range.start.character as usize;
-    let end_col = range.end.character as usize;
-    // Work in chars (LSP character units are UTF-16 code units; footnote
-    // references are always ASCII `[N]`, so char indexing is safe here).
-    let slice: String = line
-        .chars()
-        .skip(start_col)
-        .take(end_col.saturating_sub(start_col))
-        .collect();
+    let start_byte = range.start.character as usize;
+    let end_byte = range.end.character as usize;
+    let slice = line.get(start_byte..end_byte)?;
     let trimmed = slice.trim();
     if trimmed.is_empty() {
         return None;
@@ -148,18 +163,38 @@ fn label_from_diagnostic_range(source: &str, range: &Range) -> Option<String> {
 fn build_missing_footnote_edit(document: &Document, source: &str, label: &str) -> TextEdit {
     let defs = collect_footnote_definitions(document);
 
-    if let Some(last_def_line) = defs.iter().map(|(_, range)| range.start.line as u32).max() {
-        let (indent, line_text_len) = last_def_line_info(source, last_def_line);
-        let pos = Position {
-            line: last_def_line,
-            character: line_text_len,
+    // Pick the textually-last definition by *end* position. List-item ranges
+    // span the full item (marker line + any nested content), so `end` is the
+    // right anchor: selecting by start.line can place the new item in the
+    // middle of a multi-line definition.
+    let last_def_range = defs
+        .iter()
+        .max_by_key(|(_, r)| (r.end.line, r.end.column))
+        .map(|(_, r)| r);
+
+    if let Some(r) = last_def_range {
+        // Indent comes from the marker line (start). Preserve it verbatim so
+        // session-scoped notes (e.g. 4-space-indented items) keep their shape.
+        let marker_line = source.lines().nth(r.start.line).unwrap_or("");
+        let indent: String = marker_line
+            .chars()
+            .take_while(|c| c.is_whitespace())
+            .collect();
+
+        // Insert at the end of the item. If end.column == 0 the anchor is at
+        // the start of the next line; the new item slots in verbatim without a
+        // leading newline. Otherwise prepend one.
+        let insert_pos = Position {
+            line: r.end.line as u32,
+            character: r.end.column as u32,
         };
+        let prefix = if r.end.column == 0 { "" } else { "\n" };
         return TextEdit {
             range: Range {
-                start: pos,
-                end: pos,
+                start: insert_pos,
+                end: insert_pos,
             },
-            new_text: format!("\n{indent}{label}. "),
+            new_text: format!("{prefix}{indent}{label}. "),
         };
     }
 
@@ -175,19 +210,12 @@ fn build_missing_footnote_edit(document: &Document, source: &str, label: &str) -
     }
 }
 
-/// Returns `(indent, line_character_count)` for the given line. Indent is the
-/// leading whitespace (spaces/tabs) preserved verbatim. Character count is
-/// used to place the TextEdit position at end-of-line.
-fn last_def_line_info(source: &str, line_idx: u32) -> (String, u32) {
-    let line = source.lines().nth(line_idx as usize).unwrap_or("");
-    let indent: String = line.chars().take_while(|c| c.is_whitespace()).collect();
-    let len = line.chars().count() as u32;
-    (indent, len)
-}
-
 /// End-of-document position as an LSP Position. If the document ends with a
 /// newline, points to `(line_count, 0)` — i.e. the (empty) line after the
 /// last content. Otherwise points at the end of the final line.
+///
+/// `Position.character` is a byte offset in this codebase, so use `line.len()`
+/// (bytes) rather than `chars().count()` for multi-byte safety.
 fn end_of_document_position(source: &str) -> Position {
     if source.is_empty() {
         return Position {
@@ -204,11 +232,7 @@ fn end_of_document_position(source: &str) -> Position {
     }
     // No trailing newline — sit at the end of the last line.
     let line_count = source.lines().count() as u32;
-    let last_line_len = source
-        .lines()
-        .last()
-        .map(|l| l.chars().count())
-        .unwrap_or(0) as u32;
+    let last_line_len = source.lines().last().map(|l| l.len()).unwrap_or(0) as u32;
     Position {
         line: line_count.saturating_sub(1),
         character: last_line_len,
@@ -391,6 +415,50 @@ mod tests {
     }
 
     #[test]
+    fn label_extraction_handles_multibyte_prefix() {
+        // `Position.character` is a byte offset in this codebase (not UTF-16
+        // code units, not chars). If the label extractor slices by chars, a
+        // multi-byte char before the reference will make it read the wrong
+        // bytes. Exercise a line with a 2-byte UTF-8 character before `[1]`.
+        let src = "Café [1] here.\n";
+        // "Café " is 6 bytes (C=1, a=1, f=1, é=2, space=1), so `[` is at
+        // byte 6. Exercising with byte offsets simulates what the analyzer
+        // produces downstream of `SourceLocation::byte_to_position`.
+        let bracket_start = src.find("[1]").unwrap() as u32;
+        let range = Range {
+            start: Position {
+                line: 0,
+                character: bracket_start,
+            },
+            end: Position {
+                line: 0,
+                character: bracket_start + 3,
+            },
+        };
+        assert_eq!(label_from_diagnostic_range(src, &range).unwrap(), "1");
+    }
+
+    #[test]
+    fn label_extraction_rejects_range_on_non_utf8_boundary() {
+        // "Café" byte layout: C=0, a=1, f=2, é=[3,4] (2 bytes), .=5. Byte 4 is
+        // the trailing byte of the `é` char — not a valid UTF-8 boundary.
+        // `line.get(4..5)` returns None; the extractor should surface that
+        // rather than panicking.
+        let src = "Café.\n";
+        let range = Range {
+            start: Position {
+                line: 0,
+                character: 4,
+            },
+            end: Position {
+                line: 0,
+                character: 5,
+            },
+        };
+        assert_eq!(label_from_diagnostic_range(src, &range), None);
+    }
+
+    #[test]
     fn label_extraction_rejects_empty_brackets() {
         let src = "[]";
         let range = Range {
@@ -556,7 +624,7 @@ mod tests {
         let doc = parse(src);
         let d1 = missing_footnote_diag(0, 4, 7, "Footnote [1] has no matching definition");
         let d2 = missing_footnote_diag(0, 18, 21, "Footnote [1] has no matching definition");
-        let params = make_params(src, vec![d1, d2]);
+        let params = make_params(src, vec![d1.clone(), d2.clone()]);
         let actions = compute_actions(&doc, src, &params);
         // Expect exactly one missing-footnote quickfix, not two.
         let missing_footnote_actions: Vec<_> = actions
@@ -564,6 +632,18 @@ mod tests {
             .filter(|a| a.title.starts_with("Add definition"))
             .collect();
         assert_eq!(missing_footnote_actions.len(), 1);
+        // Applying the fix resolves *both* occurrences, so the CodeAction
+        // should attach both diagnostics. A client that filters actions by
+        // diagnostic identity wouldn't find the fix for the second occurrence
+        // if we only attached the first.
+        let attached = missing_footnote_actions[0]
+            .diagnostics
+            .as_ref()
+            .expect("action should have diagnostics attached");
+        assert_eq!(attached.len(), 2, "both diagnostics should be attached");
+        let attached_ranges: Vec<_> = attached.iter().map(|d| d.range).collect();
+        assert!(attached_ranges.contains(&d1.range));
+        assert!(attached_ranges.contains(&d2.range));
     }
 
     #[test]
