@@ -34,3 +34,32 @@ clap_complete = "4.4"
 assert_cmd = "2.0"
 predicates = "3.1"
 tempfile = { workspace = true }
+
+# cargo-deb configuration. Driven by `cargo deb -p lexd` in CI.
+# Only the user-facing CLI ships as a .deb; lexd-lsp is consumed by
+# editor extensions (vscode/lexed/nvim) that bundle it themselves
+# from the GitHub Release tarballs, not via system package managers.
+[package.metadata.deb]
+maintainer = "Arthur Debert <debert@gmail.com>"
+copyright = "2026, lex contributors"
+license-file = ["../../LICENSE", "0"]
+extended-description = """
+lexd is the command-line interface for the Lex format — a plain-text
+format for structured documents that's more expressive than Markdown
+yet remains human-readable in raw form. lexd inspects, converts, and
+formats .lex files; pipe-friendly with stdin support for inspect,
+convert, and format subcommands.
+"""
+section = "text"
+priority = "optional"
+depends = "$auto"
+assets = [
+    # cargo-deb rewrites `target/release/` to `target/<triple>/release/`
+    # automatically when `--target` is passed (as CI does).
+    ["target/release/lexd", "usr/bin/", "755"],
+    ["../../README.md", "usr/share/doc/lexd/README.md", "644"],
+    ["../../CHANGELOG.md", "usr/share/doc/lexd/CHANGELOG.md", "644"],
+]
+
+[package.metadata.deb.variants.amd64]
+[package.metadata.deb.variants.arm64]

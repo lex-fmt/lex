@@ -1,55 +1,263 @@
-# Release workflow
-# Builds lexd and lexd-lsp binaries for multiple platforms, publishes crates to crates.io
-
 name: Release
+
+# CI-driven release workflow for lex-fmt/lex.
+#
+# Triggered via `scripts/release <version|major|minor|patch>` (which calls
+# `gh workflow run release.yml -f version=...`). CI does the version bump,
+# CHANGELOG roll, commit, tag, GitHub Release, multi-platform build for
+# both lexd + lexd-lsp (signed+notarized on macOS), .deb attach for lexd
+# on linux, crates.io publish (6 crates in dep order), and Homebrew
+# formula push.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g. 0.9.0 or 0.9.0-rc.1)'
+        required: true
+        type: string
+
 permissions:
   contents: write
 
-on:
-  push:
-    tags:
-      - 'v*'
+env:
+  CARGO_TERM_COLOR: always
+  # ─── Project-specific values ──────────────────────────────────────────
+  # The user-facing brew formula installs `lexd` only. lexd-lsp ships
+  # as tarball-only artifacts for editor extensions to consume.
+  BIN_NAME: lexd
+  CRATE_NAME: lexd
+  HOMEBREW_TAP: arthur-debert/homebrew-tools
+  HOMEBREW_FORMULA: lexd
+  ENABLE_DEB: "true"
 
 jobs:
-  build:
-    name: Build ${{ matrix.target }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: x86_64-apple-darwin
-            os: macos-latest
-          - target: aarch64-apple-darwin
-            os: macos-latest
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
-          - target: x86_64-unknown-linux-musl
-            os: ubuntu-latest
-          - target: x86_64-pc-windows-msvc
-            os: windows-latest
-
+  prepare-release:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
+      release-sha: ${{ steps.bump.outputs.sha }}
+      prerelease: ${{ steps.bump.outputs.prerelease }}
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: main
+          fetch-depth: 0
           submodules: true
+          token: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Add target
-        run: rustup target add ${{ matrix.target }}
+      - name: Install cargo-edit (for `cargo set-version`)
+        run: cargo install cargo-edit --locked
 
-      - name: Cache Rust dependencies
+      - name: Validate and prepare
+        id: bump
+        env:
+          NEW_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+
+          if ! [[ "$NEW_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
+            echo "::error::version must be MAJOR.MINOR.PATCH[-PRERELEASE] (got: $NEW_VERSION)"
+            exit 1
+          fi
+
+          IS_PRERELEASE=false
+          if [[ "$NEW_VERSION" == *-* ]]; then
+            IS_PRERELEASE=true
+          fi
+          echo "prerelease=$IS_PRERELEASE" >> "$GITHUB_OUTPUT"
+
+          TAG="v$NEW_VERSION"
+          # lex-fmt/lex doesn't use [workspace.package]; each crate has
+          # its own version line, kept in sync. Read from lex-core (the
+          # foundation lib at the top of dep order).
+          CURRENT_VERSION=$(grep -E '^version = ' crates/lex-core/Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+
+          git fetch --tags origin >/dev/null 2>&1 || true
+
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            TAG_SHA=$(git rev-list -n 1 "$TAG")
+            TAG_VERSION=$(git show "$TAG_SHA:crates/lex-core/Cargo.toml" | grep -E '^version = ' | head -1 | sed 's/version = "\(.*\)"/\1/')
+            if [ "$TAG_VERSION" = "$NEW_VERSION" ]; then
+              echo "tag $TAG already exists at $TAG_SHA (lex-core/Cargo.toml=$TAG_VERSION) — resuming release"
+              echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+              echo "sha=$TAG_SHA" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "::error::tag $TAG exists but lex-core/Cargo.toml at that commit is $TAG_VERSION, not $NEW_VERSION"
+            exit 1
+          fi
+
+          OLD_VERSION="$CURRENT_VERSION"
+          if [ "$OLD_VERSION" = "$NEW_VERSION" ]; then
+            echo "::error::Cargo.toml is already at $NEW_VERSION (but no tag)"
+            exit 1
+          fi
+
+          # Read content under ## Unreleased (note: lex-fmt/lex uses
+          # bare `## Unreleased` without brackets, unlike other projects).
+          BODY=$(awk '/^## Unreleased/{found=1; next} /^## /{if(found) exit} found{print}' CHANGELOG.md)
+          if [ -z "$(echo "$BODY" | tr -d '[:space:]')" ]; then
+            echo "::error::CHANGELOG.md has no entries under ## Unreleased"
+            exit 1
+          fi
+
+          echo "Releasing $OLD_VERSION → $NEW_VERSION"
+
+          # cargo-edit's set-version handles all 7 crate versions + the
+          # 4 lex-* pins in [workspace.dependencies] + Cargo.lock in one
+          # call. Much simpler than sed across 8 places. lex-wasm has
+          # publish=false but its version still gets bumped.
+          cargo set-version --workspace "$NEW_VERSION"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if [ "$IS_PRERELEASE" = "true" ]; then
+            git add -u
+            git commit -m "chore: Release $TAG"
+          else
+            TODAY=$(date -u +%Y-%m-%d)
+            # Replace `## Unreleased` with `## Unreleased\n\n## VERSION - DATE`.
+            awk -v ver="$NEW_VERSION" -v today="$TODAY" '
+              !done && /^## Unreleased/ {
+                print
+                print ""
+                print "## " ver " - " today
+                done=1
+                next
+              }
+              { print }
+            ' CHANGELOG.md > CHANGELOG.md.tmp
+            mv CHANGELOG.md.tmp CHANGELOG.md
+            git add -u
+            git commit -m "chore: Release $TAG"
+          fi
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin main
+          git push origin "$TAG"
+
+          echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  create-release:
+    needs: prepare-release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare-release.outputs.release-sha }}
+          submodules: true
+
+      - name: Extract release notes from CHANGELOG
+        env:
+          VERSION: ${{ needs.prepare-release.outputs.version }}
+          PRERELEASE: ${{ needs.prepare-release.outputs.prerelease }}
+        run: |
+          if [ "$PRERELEASE" = "true" ]; then
+            awk '/^## Unreleased/{found=1; next} /^## /{if(found) exit} found{print}' CHANGELOG.md > release-notes.md
+          else
+            # Match `## VERSION` (with optional ` - DATE` suffix) up to next `## ` heading.
+            awk '/^## '"$VERSION"'( |$)/{found=1; next} /^## /{if(found) exit} found{print}' CHANGELOG.md > release-notes.md
+          fi
+          if [ ! -s release-notes.md ]; then
+            echo "Release v$VERSION" > release-notes.md
+          fi
+          cat release-notes.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.prepare-release.outputs.version }}
+          name: v${{ needs.prepare-release.outputs.version }}
+          body_path: release-notes.md
+          draft: false
+          prerelease: ${{ needs.prepare-release.outputs.prerelease == 'true' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-binaries:
+    needs: [prepare-release, create-release]
+    if: always() && !failure() && !cancelled()
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            artifact_suffix: aarch64-apple-darwin
+            cross: false
+            sign: true
+            deb_arch: ""
+            ext_archive: tar.gz
+            ext_bin: ""
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            artifact_suffix: x86_64-apple-darwin
+            cross: false
+            sign: true
+            deb_arch: ""
+            ext_archive: tar.gz
+            ext_bin: ""
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            artifact_suffix: x86_64-unknown-linux-gnu
+            cross: false
+            sign: false
+            deb_arch: amd64
+            ext_archive: tar.gz
+            ext_bin: ""
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            artifact_suffix: aarch64-unknown-linux-gnu
+            cross: true
+            sign: false
+            deb_arch: arm64
+            ext_archive: tar.gz
+            ext_bin: ""
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            artifact_suffix: x86_64-unknown-linux-musl
+            cross: false
+            sign: false
+            deb_arch: ""
+            ext_archive: tar.gz
+            ext_bin: ""
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            artifact_suffix: x86_64-pc-windows-msvc
+            cross: false
+            sign: false
+            deb_arch: ""
+            ext_archive: zip
+            ext_bin: .exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare-release.outputs.release-sha }}
+          submodules: true
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
       - name: Install cross-compilation tools (Linux ARM)
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        if: matrix.target == 'aarch64-unknown-linux-gnu' && !matrix.cross
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Install cross
+        if: matrix.cross
+        run: cargo install cross --git https://github.com/cross-rs/cross --locked
 
       - name: Install musl tools
         if: matrix.target == 'x86_64-unknown-linux-musl'
@@ -58,90 +266,266 @@ jobs:
           sudo apt-get install -y musl-tools
 
       - name: Build lexd
-        run: cargo build --release --target ${{ matrix.target }} -p lexd
+        id: build_lexd
+        shell: bash
+        run: |
+          if [ "${{ matrix.cross }}" = "true" ]; then
+            cross build --release --target ${{ matrix.target }} -p lexd
+          else
+            cargo build --release --target ${{ matrix.target }} -p lexd
+          fi
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
 
       - name: Build lexd-lsp
-        run: cargo build --release --target ${{ matrix.target }} -p lexd-lsp
+        id: build_lsp
+        shell: bash
+        run: |
+          if [ "${{ matrix.cross }}" = "true" ]; then
+            cross build --release --target ${{ matrix.target }} -p lexd-lsp
+          else
+            cargo build --release --target ${{ matrix.target }} -p lexd-lsp
+          fi
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
 
-      - name: Package (Unix)
-        if: runner.os != 'Windows'
-        run: |
-          cd target/${{ matrix.target }}/release
-          tar -czvf ../../../lexd-${{ matrix.target }}.tar.gz lexd
-          tar -czvf ../../../lexd-lsp-${{ matrix.target }}.tar.gz lexd-lsp
-          cd ../../..
-
-      - name: Package (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          cd target/${{ matrix.target }}/release
-          7z a ../../../lexd-${{ matrix.target }}.zip lexd.exe
-          7z a ../../../lexd-lsp-${{ matrix.target }}.zip lexd-lsp.exe
-          cd ../../..
-
-      - name: Upload lexd artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: lexd-${{ matrix.target }}
-          path: lexd-${{ matrix.target }}.*
-
-      - name: Upload lexd-lsp artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: lexd-lsp-${{ matrix.target }}
-          path: lexd-lsp-${{ matrix.target }}.*
-
-  release:
-    name: Create Release
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: true
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-          merge-multiple: true
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v1
-        with:
-          files: artifacts/*
-          generate_release_notes: true
+      # ─── macOS code signing + notarization (matrix.sign == true) ──────
+      # Signs BOTH lexd and lexd-lsp. Editor extensions (lexed, vscode,
+      # nvim) bundle lexd-lsp into their own .app/extension; signing it
+      # here means those bundles can be re-signed cleanly without
+      # Gatekeeper rejecting an inner unsigned binary.
+      - name: Import signing certificate
+        id: import-cert
+        if: matrix.sign
+        continue-on-error: true
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          if [ -z "$APPLE_CERTIFICATE_P12_BASE64" ] || [ -z "$APPLE_CERTIFICATE_PASSWORD" ]; then
+            echo "::warning::No signing certificate configured, skipping code signing"
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          KEYCHAIN_PASS="$(openssl rand -hex 16)"
+          echo "$APPLE_CERTIFICATE_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN"
+          security set-keychain-settings -lut 3600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASS" "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN" | head -1 | sed 's/.*"\(.*\)"/\1/')
+          echo "CODESIGN_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+          rm "$RUNNER_TEMP/cert.p12"
+
+      - name: Sign lexd + lexd-lsp
+        if: matrix.sign && steps.import-cert.outputs.signed == 'true'
+        run: |
+          for bin in lexd lexd-lsp; do
+            codesign --sign "$CODESIGN_IDENTITY" --options runtime \
+              target/${{ matrix.target }}/release/$bin
+            codesign --verify --deep --strict target/${{ matrix.target }}/release/$bin
+          done
+
+      - name: Write App Store Connect API key
+        if: matrix.sign && steps.import-cert.outputs.signed == 'true'
+        env:
+          ASC_API_KEY_BASE64: ${{ secrets.ASC_API_KEY_BASE64 }}
+        run: |
+          if [ -z "$ASC_API_KEY_BASE64" ]; then
+            echo "::warning::No ASC API key configured, skipping notarization"
+            exit 0
+          fi
+          echo "$ASC_API_KEY_BASE64" | base64 --decode > "$RUNNER_TEMP/AuthKey.p8"
+
+      - name: Submit lexd for notarization
+        id: notarize-lexd
+        if: matrix.sign && steps.import-cert.outputs.signed == 'true'
+        env:
+          ASC_API_KEY_BASE64: ${{ secrets.ASC_API_KEY_BASE64 }}
+        run: |
+          if [ -z "$ASC_API_KEY_BASE64" ]; then exit 0; fi
+          cd target/${{ matrix.target }}/release
+          zip lexd-notarize.zip lexd
+          RESULT=$(xcrun notarytool submit lexd-notarize.zip \
+            --key "$RUNNER_TEMP/AuthKey.p8" \
+            --key-id "${{ secrets.ASC_API_KEY_ID }}" \
+            --issuer "${{ secrets.ASC_API_ISSUER_ID }}" \
+            --output-format json --no-wait)
+          ID=$(echo "$RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+          echo "submission-id=$ID" >> "$GITHUB_OUTPUT"
+          rm lexd-notarize.zip
+
+      - name: Submit lexd-lsp for notarization
+        id: notarize-lsp
+        if: matrix.sign && steps.import-cert.outputs.signed == 'true'
+        env:
+          ASC_API_KEY_BASE64: ${{ secrets.ASC_API_KEY_BASE64 }}
+        run: |
+          if [ -z "$ASC_API_KEY_BASE64" ]; then exit 0; fi
+          cd target/${{ matrix.target }}/release
+          zip lexd-lsp-notarize.zip lexd-lsp
+          RESULT=$(xcrun notarytool submit lexd-lsp-notarize.zip \
+            --key "$RUNNER_TEMP/AuthKey.p8" \
+            --key-id "${{ secrets.ASC_API_KEY_ID }}" \
+            --issuer "${{ secrets.ASC_API_ISSUER_ID }}" \
+            --output-format json --no-wait)
+          ID=$(echo "$RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+          echo "submission-id=$ID" >> "$GITHUB_OUTPUT"
+          rm lexd-lsp-notarize.zip
+
+      - name: Wait for notarization (lexd + lexd-lsp)
+        if: matrix.sign && (steps.notarize-lexd.outputs.submission-id || steps.notarize-lsp.outputs.submission-id)
+        run: |
+          wait_for() {
+            local label="$1" id="$2"
+            [ -z "$id" ] && return 0
+            for i in $(seq 1 60); do
+              RESULT=$(xcrun notarytool info "$id" \
+                --key "$RUNNER_TEMP/AuthKey.p8" \
+                --key-id "${{ secrets.ASC_API_KEY_ID }}" \
+                --issuer "${{ secrets.ASC_API_ISSUER_ID }}" \
+                --output-format json 2>&1) || true
+              STATUS=$(echo "$RESULT" | python3 -c \
+                "import sys,json; print(json.load(sys.stdin).get('status','Unknown'))" \
+                2>/dev/null || echo "Unknown")
+              echo "  [$label][$i/60] status=$STATUS ($(date -u +%H:%M:%S))"
+              if [ "$STATUS" = "Accepted" ]; then return 0; fi
+              if [ "$STATUS" = "Invalid" ] || [ "$STATUS" = "Rejected" ]; then
+                xcrun notarytool log "$id" \
+                  --key "$RUNNER_TEMP/AuthKey.p8" \
+                  --key-id "${{ secrets.ASC_API_KEY_ID }}" \
+                  --issuer "${{ secrets.ASC_API_ISSUER_ID }}" 2>&1 || true
+                return 1
+              fi
+              sleep 30
+            done
+            echo "::warning::[$label] notarization timed out after 30 min."
+            return 0
+          }
+          wait_for lexd     "${{ steps.notarize-lexd.outputs.submission-id }}"
+          wait_for lexd-lsp "${{ steps.notarize-lsp.outputs.submission-id }}"
+
+      # Existing lex-fmt/lex tarball layout: flat binary at root, named
+      # `lexd` / `lexd-lsp` (target encoded only in the filename, not the
+      # tarball contents). Preserve this so editor extensions that
+      # currently download lexd-lsp keep working.
+      - name: Package binaries (Unix)
+        if: matrix.os != 'windows-latest'
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar -czvf "../../../lexd-${{ matrix.artifact_suffix }}.tar.gz" lexd
+          tar -czvf "../../../lexd-lsp-${{ matrix.artifact_suffix }}.tar.gz" lexd-lsp
+
+      - name: Package binaries (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        run: |
+          cd target/${{ matrix.target }}/release
+          7z a "../../../lexd-${{ matrix.artifact_suffix }}.zip"     lexd.exe
+          7z a "../../../lexd-lsp-${{ matrix.artifact_suffix }}.zip" lexd-lsp.exe
+
+      - name: Upload lexd archive to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          TAG="v${{ needs.prepare-release.outputs.version }}"
+          gh release upload "$TAG" "lexd-${{ matrix.artifact_suffix }}.${{ matrix.ext_archive }}" --clobber
+
+      - name: Upload lexd-lsp archive to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          TAG="v${{ needs.prepare-release.outputs.version }}"
+          gh release upload "$TAG" "lexd-lsp-${{ matrix.artifact_suffix }}.${{ matrix.ext_archive }}" --clobber
+
+      - name: Upload lexd archive as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lexd-${{ matrix.artifact_suffix }}
+          path: lexd-${{ matrix.artifact_suffix }}.${{ matrix.ext_archive }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload lexd-lsp archive as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lexd-lsp-${{ matrix.artifact_suffix }}
+          path: lexd-lsp-${{ matrix.artifact_suffix }}.${{ matrix.ext_archive }}
+          if-no-files-found: error
+          retention-days: 7
+
+      # ─── Debian package (lexd only, on linux-gnu targets) ────────────
+      - name: Install cargo-deb
+        if: matrix.deb_arch != '' && env.ENABLE_DEB == 'true' && steps.build_lexd.outcome == 'success'
+        run: cargo install cargo-deb --locked
+
+      - name: Build .deb package (lexd)
+        id: deb
+        if: matrix.deb_arch != '' && env.ENABLE_DEB == 'true' && steps.build_lexd.outcome == 'success'
+        run: |
+          cargo deb -p lexd \
+            --target ${{ matrix.target }} \
+            --no-build \
+            --no-strip
+
+      - name: Upload .deb to GitHub Release
+        if: always() && !cancelled() && steps.deb.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v${{ needs.prepare-release.outputs.version }}"
+          DEB=$(ls target/${{ matrix.target }}/debian/*.deb | head -1)
+          if [ -z "$DEB" ]; then
+            echo "::error::No .deb found at target/${{ matrix.target }}/debian/"
+            exit 1
+          fi
+          gh release upload "$TAG" "$DEB" --clobber
+
+      - name: Upload .deb as workflow artifact
+        if: always() && !cancelled() && steps.deb.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: lexd-${{ matrix.deb_arch }}-deb
+          path: target/${{ matrix.target }}/debian/*.deb
+          if-no-files-found: error
+          retention-days: 7
 
   publish-crates:
-    name: Publish to crates.io
-    needs: release
+    needs: [prepare-release, create-release]
+    if: always() && !failure() && !cancelled()
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ needs.prepare-release.outputs.release-sha }}
           submodules: true
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      # Preserve the existing scripts/ci-publish-crate.sh approach:
+      # pre-checks crates.io's JSON API to skip when this version is
+      # already up, then `cargo publish` (which itself waits for the
+      # sparse index to update before returning, since 1.66+).
+      # Order matches the workspace dep graph.
       - name: Publish lex-core
         run: scripts/ci-publish-crate.sh lex-core
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
-      - name: Publish lex-babel
-        run: scripts/ci-publish-crate.sh lex-babel
+      - name: Publish lex-config
+        run: scripts/ci-publish-crate.sh lex-config
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
-      - name: Publish lex-config
-        run: scripts/ci-publish-crate.sh lex-config
+      - name: Publish lex-babel
+        run: scripts/ci-publish-crate.sh lex-babel
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
@@ -159,3 +543,151 @@ jobs:
         run: scripts/ci-publish-crate.sh lexd
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  homebrew-formula:
+    needs: [prepare-release, build-binaries]
+    if: always() && !failure() && !cancelled()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check tap token
+        id: guard
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [ -z "$TAP_TOKEN" ]; then
+            echo "HOMEBREW_TAP_TOKEN not configured — skipping formula update."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout source (for template + Cargo.toml)
+        if: steps.guard.outputs.skip != 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare-release.outputs.release-sha }}
+          submodules: true
+
+      - name: Install Rust (for cargo metadata)
+        if: steps.guard.outputs.skip != 'true'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Download release tarballs
+        if: steps.guard.outputs.skip != 'true'
+        uses: actions/download-artifact@v4
+        with:
+          # Match only lexd-<target> archives (not lexd-lsp-* or *-deb).
+          # The exclude-pattern path goes via name filtering: download all
+          # then filter at sha_for time. Simpler to just download lexd-*
+          # and accept that lexd-lsp-* also matches via prefix — we just
+          # don't reference lexd-lsp tarballs in the formula.
+          pattern: lexd-*
+          merge-multiple: true
+
+      - name: Gather values for formula
+        id: values
+        if: steps.guard.outputs.skip != 'true'
+        env:
+          VERSION: ${{ needs.prepare-release.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          CLASS_NAME=$(echo "$HOMEBREW_FORMULA" | awk -F'[-_]' '{
+            for(i=1;i<=NF;i++) printf "%s", toupper(substr($i,1,1)) tolower(substr($i,2))
+          }')
+
+          # `lexd` is the package name in the workspace (in crates/lex-cli/).
+          PKG_META=$(cargo metadata --no-deps --format-version=1 \
+            | jq -cer --arg c "$CRATE_NAME" '.packages[] | select(.name==$c)')
+          DESC=$(echo     "$PKG_META" | jq -r '.description // ""')
+          LICENSE=$(echo  "$PKG_META" | jq -r '.license // ""')
+          HOMEPAGE=$(echo "$PKG_META" | jq -r '.homepage // .repository // ""')
+
+          die_if_empty() {
+            local name="$1" value="$2" fix="$3"
+            if [ -z "$value" ]; then
+              echo "::error::Missing $name for crate '$CRATE_NAME'. $fix"
+              exit 1
+            fi
+          }
+          die_if_empty description "$DESC"     "Set package.description in Cargo.toml."
+          die_if_empty license     "$LICENSE"  "Set package.license in Cargo.toml."
+          die_if_empty homepage    "$HOMEPAGE" "Set package.homepage or package.repository in Cargo.toml."
+
+          URL_BASE="https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}/lexd"
+
+          sha_for() { sha256sum "lexd-$1.tar.gz" | cut -d' ' -f1; }
+
+          # Both mac archs + linux gnu archs. Skip musl + windows from
+          # the brew formula.
+          {
+            echo "class_name=$CLASS_NAME"
+            echo "desc=$DESC"
+            echo "license=$LICENSE"
+            echo "homepage=$HOMEPAGE"
+            echo "url_aarch64_apple_darwin=${URL_BASE}-aarch64-apple-darwin.tar.gz"
+            echo "url_x86_64_apple_darwin=${URL_BASE}-x86_64-apple-darwin.tar.gz"
+            echo "url_x86_64_linux_gnu=${URL_BASE}-x86_64-unknown-linux-gnu.tar.gz"
+            echo "url_aarch64_linux_gnu=${URL_BASE}-aarch64-unknown-linux-gnu.tar.gz"
+            echo "sha_aarch64_apple_darwin=$(sha_for aarch64-apple-darwin)"
+            echo "sha_x86_64_apple_darwin=$(sha_for  x86_64-apple-darwin)"
+            echo "sha_x86_64_linux_gnu=$(sha_for     x86_64-unknown-linux-gnu)"
+            echo "sha_aarch64_linux_gnu=$(sha_for    aarch64-unknown-linux-gnu)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Render Homebrew formula
+        if: steps.guard.outputs.skip != 'true'
+        env:
+          VERSION:                   ${{ needs.prepare-release.outputs.version }}
+          CLASS_NAME:                ${{ steps.values.outputs.class_name }}
+          DESC:                      ${{ steps.values.outputs.desc }}
+          LICENSE:                   ${{ steps.values.outputs.license }}
+          HOMEPAGE:                  ${{ steps.values.outputs.homepage }}
+          URL_AARCH64_APPLE_DARWIN:  ${{ steps.values.outputs.url_aarch64_apple_darwin }}
+          URL_X86_64_APPLE_DARWIN:   ${{ steps.values.outputs.url_x86_64_apple_darwin }}
+          URL_X86_64_LINUX_GNU:      ${{ steps.values.outputs.url_x86_64_linux_gnu }}
+          URL_AARCH64_LINUX_GNU:     ${{ steps.values.outputs.url_aarch64_linux_gnu }}
+          SHA_AARCH64_APPLE_DARWIN:  ${{ steps.values.outputs.sha_aarch64_apple_darwin }}
+          SHA_X86_64_APPLE_DARWIN:   ${{ steps.values.outputs.sha_x86_64_apple_darwin }}
+          SHA_X86_64_LINUX_GNU:      ${{ steps.values.outputs.sha_x86_64_linux_gnu }}
+          SHA_AARCH64_LINUX_GNU:     ${{ steps.values.outputs.sha_aarch64_linux_gnu }}
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          python3 .github/render-homebrew-formula.py \
+            .github/homebrew-formula.rb.tmpl \
+            "out/${HOMEBREW_FORMULA}.rb"
+
+          echo "=== Generated formula ==="
+          cat "out/${HOMEBREW_FORMULA}.rb"
+
+      - name: Ruby syntax check
+        if: steps.guard.outputs.skip != 'true'
+        run: ruby -c "out/${HOMEBREW_FORMULA}.rb"
+
+      - name: Checkout tap repo
+        if: steps.guard.outputs.skip != 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.HOMEBREW_TAP }}
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      - name: Commit and push formula
+        if: steps.guard.outputs.skip != 'true'
+        env:
+          VERSION: ${{ needs.prepare-release.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p tap/Formula
+          cp "out/${HOMEBREW_FORMULA}.rb" "tap/Formula/${HOMEBREW_FORMULA}.rb"
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "Formula/${HOMEBREW_FORMULA}.rb"
+          if git diff --cached --quiet; then
+            echo "Formula unchanged — nothing to push."
+            exit 0
+          fi
+          git commit -m "${HOMEBREW_FORMULA} ${VERSION}"
+          git push
