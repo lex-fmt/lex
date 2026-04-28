@@ -37,7 +37,12 @@ echo "→ publishing $crate $version"
 log=$(mktemp)
 if cargo publish -p "$crate" 2>&1 | tee "$log"; then
     echo "✓ $crate $version published"
-elif grep -qE "already uploaded|is already uploaded" "$log"; then
+# Handle "already on crates.io" errors. The exact string varies:
+# - "already uploaded" / "is already uploaded": older cargo / direct upload race
+# - "already exists on crates.io index": newer cargo (1.78+ish), and the
+#   common case after a partial publish run + index-cache-warm retry
+#   when the JSON API pre-check still 404s.
+elif grep -qE "already uploaded|is already uploaded|already exists on crates\.io index" "$log"; then
     echo "✓ $crate $version already uploaded (race) — continuing"
 else
     echo "✗ $crate $version publish failed" >&2
