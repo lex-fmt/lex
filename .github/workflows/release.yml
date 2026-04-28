@@ -255,6 +255,15 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      # `dtolnay/rust-toolchain@stable with: targets:` adds the target to
+      # the `stable` toolchain, but rust-toolchain.toml pins 1.88.0 as the
+      # active toolchain — which doesn't have those targets installed yet
+      # for `cargo build`. `rustup target add` operates on the active
+      # toolchain, so this lands the target where cargo will actually use it.
+      - name: Add target to project toolchain
+        shell: bash
+        run: rustup target add ${{ matrix.target }}
+
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
@@ -523,18 +532,21 @@ jobs:
       # already up, then `cargo publish` (which itself waits for the
       # sparse index to update before returning, since 1.66+).
       # Order matches the workspace dep graph.
+      # Order matters: lex-config depends on lex-babel, so babel must
+      # publish first. CLAUDE.md previously documented this incorrectly
+      # (had config before babel) — actual workspace deps put babel first.
       - name: Publish lex-core
         run: scripts/ci-publish-crate.sh lex-core
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
-      - name: Publish lex-config
-        run: scripts/ci-publish-crate.sh lex-config
+      - name: Publish lex-babel
+        run: scripts/ci-publish-crate.sh lex-babel
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
-      - name: Publish lex-babel
-        run: scripts/ci-publish-crate.sh lex-babel
+      - name: Publish lex-config
+        run: scripts/ci-publish-crate.sh lex-config
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
