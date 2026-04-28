@@ -34,6 +34,15 @@ env:
 jobs:
   prepare-release:
     runs-on: ubuntu-latest
+    # The project's rust-toolchain.toml pins 1.88.0, but cargo-edit's
+    # transitive dep `smol_str@0.3.6` requires 1.89+. Override with
+    # stable for the whole prepare-release job — cargo-edit's
+    # set-version doesn't compile project code (just rewrites
+    # Cargo.toml + Cargo.lock), so toolchain version doesn't affect
+    # output artifacts. Build/publish jobs still use 1.88 via the
+    # toolchain.toml.
+    env:
+      RUSTUP_TOOLCHAIN: stable
     outputs:
       version: ${{ steps.bump.outputs.version }}
       release-sha: ${{ steps.bump.outputs.sha }}
