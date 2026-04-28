@@ -222,7 +222,14 @@ jobs:
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
             artifact_suffix: aarch64-unknown-linux-gnu
-            cross: true
+            # cross's default docker image fails on `serde v1.0.228`'s
+            # build script (likely glibc/toolchain mismatch in the old
+            # base image). The pre-port lex workflow used apt-installed
+            # `gcc-aarch64-linux-gnu` + a CARGO_TARGET_*_LINKER env var,
+            # which works fine. Stick with that approach for this one
+            # entry — `cross: false` means the standard `cargo build`
+            # path runs with the cross-linker installed below.
+            cross: false
             sign: false
             deb_arch: arm64
             ext_archive: tar.gz
