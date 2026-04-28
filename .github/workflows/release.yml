@@ -260,7 +260,11 @@ jobs:
       # active toolchain — which doesn't have those targets installed yet
       # for `cargo build`. `rustup target add` operates on the active
       # toolchain, so this lands the target where cargo will actually use it.
+      # Skipped for cross matrix entries: cross uses its own docker image
+      # with the target preinstalled; running `rustup target add` on the
+      # host side just confuses things.
       - name: Add target to project toolchain
+        if: ${{ !matrix.cross }}
         shell: bash
         run: rustup target add ${{ matrix.target }}
 
