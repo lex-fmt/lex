@@ -19,7 +19,7 @@ native-export = ["tempfile", "which"]
 [dependencies]
 lex-core = { workspace = true }
 comrak = "0.29"
-html5ever = "0.35"
+html5ever = "0.39"
 markup5ever_rcdom = "0.35"
 serde = { workspace = true }
 tempfile = { workspace = true, optional = true }
