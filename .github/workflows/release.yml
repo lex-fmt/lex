@@ -477,7 +477,7 @@ jobs:
           gh release upload "$TAG" "lexd-lsp-${{ matrix.artifact_suffix }}.${{ matrix.ext_archive }}" --clobber
 
       - name: Upload lexd archive as workflow artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: lexd-${{ matrix.artifact_suffix }}
           path: lexd-${{ matrix.artifact_suffix }}.${{ matrix.ext_archive }}
@@ -485,7 +485,7 @@ jobs:
           retention-days: 7
 
       - name: Upload lexd-lsp archive as workflow artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: lexd-lsp-${{ matrix.artifact_suffix }}
           path: lexd-lsp-${{ matrix.artifact_suffix }}.${{ matrix.ext_archive }}
@@ -521,7 +521,7 @@ jobs:
 
       - name: Upload .deb as workflow artifact
         if: always() && !cancelled() && steps.deb.outcome == 'success'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: lexd-${{ matrix.deb_arch }}-deb
           path: target/${{ matrix.target }}/debian/*.deb
