@@ -4,9 +4,23 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 10
+    groups:
+      cargo:
+        patterns: ["*"]
+        exclude-patterns: ["comrak", "html5ever"]
+    ignore:
+      # Major API rewrite needed in lex-babel/serializer.rs. Re-enable after migration.
+      - dependency-name: comrak
+        versions: [">= 0.30"]
+      # markup5ever/html5ever Attribute types diverged + Serialize trait removed.
+      - dependency-name: html5ever
+        versions: [">= 0.36"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    groups:
+      gh-actions:
+        patterns: ["*"]
