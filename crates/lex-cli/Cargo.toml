@@ -28,10 +28,10 @@ serde_json = { workspace = true }
 
 [build-dependencies]
 clap = { workspace = true }
-clap_complete = "4.4"
+clap_complete = "4.6"
 
 [dev-dependencies]
-assert_cmd = "2.0"
+assert_cmd = "2.2"
 predicates = "3.1"
 tempfile = { workspace = true }
 

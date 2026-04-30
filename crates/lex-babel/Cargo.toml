@@ -20,13 +20,13 @@ native-export = ["tempfile", "which"]
 lex-core = { workspace = true }
 comrak = "0.29"
 html5ever = "0.35"
-markup5ever_rcdom = "0.35"
+markup5ever_rcdom = "0.38"
 serde = { workspace = true }
 tempfile = { workspace = true, optional = true }
 which = { version = "8", optional = true }
 url = "2.4"
 pathdiff = { workspace = true }
-roxmltree = "0.19"
+roxmltree = "0.21"
 
 [dev-dependencies]
 insta = { workspace = true }
