@@ -48,7 +48,7 @@ jobs:
       release-sha: ${{ steps.bump.outputs.sha }}
       prerelease: ${{ steps.bump.outputs.prerelease }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: main
           fetch-depth: 0
@@ -156,7 +156,7 @@ jobs:
     needs: prepare-release
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: ${{ needs.prepare-release.outputs.release-sha }}
           submodules: true
@@ -252,7 +252,7 @@ jobs:
             ext_bin: .exe
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: ${{ needs.prepare-release.outputs.release-sha }}
           submodules: true
@@ -533,7 +533,7 @@ jobs:
     if: always() && !failure() && !cancelled()
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: ${{ needs.prepare-release.outputs.release-sha }}
           submodules: true
@@ -598,7 +598,7 @@ jobs:
 
       - name: Checkout source (for template + Cargo.toml)
         if: steps.guard.outputs.skip != 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ needs.prepare-release.outputs.release-sha }}
           submodules: true
@@ -702,7 +702,7 @@ jobs:
 
       - name: Checkout tap repo
         if: steps.guard.outputs.skip != 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: ${{ env.HOMEBREW_TAP }}
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
