@@ -1,8 +1,29 @@
 # Changelog
 
-## Unreleased
+## [Unreleased]
 
-## 0.9.0 - 2026-04-28
+### Changed
+
+- **Release pipeline migrated to canonical reusable workflow at
+  `arthur-debert/release/.github/workflows/rust-cli.yml@v1`.** lex's
+  `.github/workflows/release.yml` is now a thin caller. Sixth and final
+  consumer of the new pipeline (after dodot v2.0.0, padz v1.8.2,
+  simple-gal v0.20.4, rustloc v0.14.2, burgertocow v0.3.1 — all verified
+  end-to-end). Bug fixes propagate via a single bump of the action's
+  `@v1` ref instead of hand-edits across 6 rust-CLIs.
+- **Tarball naming + layout changed to canonical** (full target triples +
+  subdir layout). Brew formula handles both layouts.
+- **Intel-mac dropped from release artifacts** (`x86_64-apple-darwin`)
+  for both `lexd` and `lexd-lsp`. arm64-only macOS by canonical convention.
+  v0.9.0 and earlier remain available for Intel users via direct GH
+  release download.
+- **CHANGELOG section headers migrated to Keep-a-Changelog canonical
+  bracketed form** (`## [Unreleased]`, `## [0.9.0] - DATE` instead of
+  `## Unreleased`, `## 0.9.0 - DATE`). The action's prepare-release
+  expects the bracketed form. Existing version section bodies are
+  untouched.
+
+## [0.9.0] - 2026-04-28
 
 ### Changed
 
@@ -35,7 +56,7 @@
 - Migrated all footnote-related tests off ad-hoc inline `.lex` strings: `lex-analysis` diagnostics and `collect_footnote_definitions`, `lexd-lsp` footnote reordering, and `lex-babel` HTML/IR table-footnote round-trips now load canonical samples from `footnotes.docs/` and `table.docs/` via `Lexplore`.
 - Migrated `lex-analysis` table diagnostic tests (inconsistent columns, colspan/rowspan interactions) to the existing `table.docs/` samples — no new fixtures needed.
 
-## 0.8.0
+## [0.8.0]
 
 ### Breaking
 
