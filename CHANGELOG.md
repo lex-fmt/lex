@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-05-01
+
+
 ### Changed
 
 - **Release pipeline migrated to canonical reusable workflow at
@@ -22,7 +25,6 @@
   `## Unreleased`, `## 0.9.0 - DATE`). The action's prepare-release
   expects the bracketed form. Existing version section bodies are
   untouched.
-
 ## [0.9.0] - 2026-04-28
 
 ### Changed
