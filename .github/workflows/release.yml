@@ -21,9 +21,11 @@ jobs:
     uses: arthur-debert/release/.github/workflows/rust-cli.yml@v1
     with:
       version: ${{ inputs.version }}
-      # 6 publishable crates in topological dep order. lex-wasm has
-      # publish = false and isn't in the list.
-      crates: lex-core,lex-config,lex-babel,lex-analysis,lexd-lsp,lexd
+      # Topological dep order. lex-config depends on lex-babel (not
+      # the other way around — CLAUDE.md was stale on this), so lex-babel
+      # must publish first. lex-wasm has publish = false and isn't in
+      # the list.
+      crates: lex-core,lex-babel,lex-config,lex-analysis,lexd-lsp,lexd
       # Brew formula subject. The other binary (lexd-lsp) is built and
       # signed alongside but ships as a tarball-only artifact (editor
       # extensions bundle it themselves).
