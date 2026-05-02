@@ -5,6 +5,7 @@
 ### Changed
 
 - Bumped `comms` submodule to v0.15.0, which adds the canonical Lex monochrome theme at `comms/shared/theming/lex-theme.json` (the cross-editor source of truth consumed by editor packages via `gen-theme.py`).
+- Dependabot config aligned with the canonical `arthur-debert/release` portfolio policy: cargo freshness updates dropped (security coverage continues via Dependabot security updates); github-actions group retained. (#485)
 
 ### Fixed
 
