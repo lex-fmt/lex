@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Bumped `comms` submodule to v0.15.0, which adds the canonical Lex monochrome theme at `comms/shared/theming/lex-theme.json` (the cross-editor source of truth consumed by editor packages via `gen-theme.py`).
+
+### Fixed
+
+- Release pipeline: corrected crate publish order so `lex-babel` is published before `lex-config` (matches the actual dependency graph). (#484)
+
 ## [0.9.1] - 2026-05-01
 
 
