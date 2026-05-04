@@ -149,18 +149,24 @@ impl Annotation {
         self.data.label.value == Self::INCLUDE_LABEL
     }
 
-    /// The `src=` parameter value, if present.
+    /// The `src=` parameter value with surrounding quotes stripped and
+    /// escape sequences resolved, if present.
     ///
     /// Useful on its own for any annotation that uses a `src` parameter
     /// (verbatim-via-annotation, future `lex.*` directives, etc.). For
     /// the include-specific case, callers typically pair this with
     /// [`Annotation::is_include`].
-    pub fn include_src(&self) -> Option<&str> {
+    ///
+    /// Returns an owned `String` rather than `&str` because escape
+    /// resolution may need to allocate. For quote-free values (the common
+    /// case) the returned string is the same as `parameter.value` minus
+    /// the leading/trailing `"`.
+    pub fn include_src(&self) -> Option<String> {
         self.data
             .parameters
             .iter()
             .find(|p| p.key == "src")
-            .map(|p| p.value.as_str())
+            .map(|p| p.unquoted_value())
     }
 }
 
@@ -280,18 +286,29 @@ mod tests {
     #[test]
     fn test_include_src() {
         let with_src = ann("lex.include", vec![("src", "chapters/01.lex")]);
-        assert_eq!(with_src.include_src(), Some("chapters/01.lex"));
+        assert_eq!(with_src.include_src().as_deref(), Some("chapters/01.lex"));
 
         // The accessor is independent of the label — works for any annotation
         // that happens to carry a `src` parameter (verbatim-via-annotation, etc.)
         let other_with_src = ann("image", vec![("src", "diagram.png")]);
-        assert_eq!(other_with_src.include_src(), Some("diagram.png"));
+        assert_eq!(other_with_src.include_src().as_deref(), Some("diagram.png"));
 
         // No src parameter → None.
         assert_eq!(ann("lex.include", vec![]).include_src(), None);
         assert_eq!(
             ann("lex.include", vec![("title", "Chapter 1")]).include_src(),
             None
+        );
+    }
+
+    #[test]
+    fn test_include_src_strips_quotes_from_parsed_value() {
+        // When the parser stores a quoted string, include_src should return
+        // the unquoted form so callers (the resolver) can use it as a path.
+        let with_quoted = ann("lex.include", vec![("src", "\"chapters/01.lex\"")]);
+        assert_eq!(
+            with_quoted.include_src().as_deref(),
+            Some("chapters/01.lex")
         );
     }
 
