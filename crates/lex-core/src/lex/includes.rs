@@ -20,11 +20,15 @@
 //! # Layering
 //!
 //! lex-core's own code does *not* reference `std::fs` for include resolution.
-//! Implementations of [`Loader`] live in the calling layer:
-//! - [`MemoryLoader`] for tests (gated behind the `test-support` feature).
-//! - `FsLoader` will land in PR 7 (CLI integration).
+//! Production [`Loader`] implementations live in the calling layer:
+//!
+//! - `FsLoader` will land in PR 7 (CLI integration), in lex-core but feature-gated
+//!   to keep the no-FS-by-default property of this crate's library code.
 //! - The LSP wraps an FS loader with file-watch invalidation (PR 8).
 //! - WASM builds provide a JS-backed loader.
+//!
+//! For tests, lex-core itself ships [`MemoryLoader`] gated behind the
+//! `test-support` cargo feature. It is not intended for production use.
 //!
 //! # Example (post-stub)
 //!
@@ -131,13 +135,19 @@ pub enum IncludeError {
     /// The loader returned text that the parser rejected.
     ParseFailed { path: PathBuf, message: String },
     /// The included file's content is not legal in the include site's
-    /// parent container — e.g. an included file with top-level Sessions
-    /// being spliced inside a Definition / ListItem / Annotation body
-    /// (which are `GeneralContainer` and reject Sessions).
+    /// parent container.
+    ///
+    /// Today this only occurs when an included file has top-level Sessions
+    /// and the include site is inside a `GeneralContainer` (Definition,
+    /// ListItem, or another Annotation's body). The `violation` field
+    /// names the offending content kind (e.g. `"Sessions"`) so future
+    /// container/policy combinations can reuse this variant without a
+    /// breaking change.
     ContainerPolicy {
         include_site: Range,
         container: &'static str,
         file: PathBuf,
+        violation: &'static str,
     },
     /// Loader propagated a non-`NotFound` I/O error.
     LoaderIo { path: PathBuf, message: String },
@@ -170,13 +180,18 @@ impl std::fmt::Display for IncludeError {
                 write!(f, "failed to parse {}: {message}", path.display())
             }
             IncludeError::ContainerPolicy {
-                container, file, ..
+                container,
+                file,
+                violation,
+                ..
             } => write!(
                 f,
-                "included file {} contains Sessions but include site is inside {} \
-                 (which does not allow Sessions)",
+                "included file {} contains {} but include site is inside {} \
+                 (which does not allow {})",
                 file.display(),
-                container
+                violation,
+                container,
+                violation
             ),
             IncludeError::LoaderIo { path, message } => {
                 write!(f, "loader error reading {}: {message}", path.display())
@@ -369,9 +384,15 @@ mod tests {
             include_site: Range::default(),
             container: "Definition",
             file: PathBuf::from("/chapter.lex"),
+            violation: "Sessions",
         };
         let s = policy.to_string();
         assert!(s.contains("Definition"));
         assert!(s.contains("/chapter.lex"));
+        assert!(s.contains("Sessions"));
+        // Generic phrasing — the violation kind appears in both
+        // "contains" and "does not allow" clauses, so a future
+        // policy with violation="ListItems" reads correctly too.
+        assert!(s.contains("does not allow Sessions"));
     }
 }
