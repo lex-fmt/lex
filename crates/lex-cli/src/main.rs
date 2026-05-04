@@ -53,10 +53,10 @@ fn build_cli() -> Command {
             Settings are loaded from .lex.toml files, LEX__* env vars, and CLI flags.\n  \
             Use `lexd config list` to see resolved settings.\n\n\
             Includes:\n  \
-            `lex convert` and `lex inspect` resolve `:: lex.include src=\"...\" ::` annotations\n  \
-            by default, splicing the included file's content into the host tree. Use\n  \
-            --no-includes to disable. `lex format` never expands includes.\n  \
-            See comms/specs/proposals/includes.lex for the design.\n\n\
+            `lexd convert` and `lexd inspect` resolve `:: lex.include src=\"...\" ::`\n  \
+            annotations by default, splicing the included file's content into the\n  \
+            host tree. Use --no-includes to disable. `lexd format` never expands\n  \
+            includes. See comms/specs/proposals/includes.lex for the design.\n\n\
             Examples:\n  \
             lexd inspect file.lex                    # View AST tree visualization\n  \
             lexd inspect file.lex ast-tag            # View AST as XML tags\n  \
@@ -95,7 +95,7 @@ fn build_cli() -> Command {
             Arg::new("includes-root")
                 .long("includes-root")
                 .value_name("PATH")
-                .help("Resolution root for lex.include (default: nearest lex.toml or entry-file directory)")
+                .help("Resolution root for lex.include (default: nearest .lex.toml or entry-file directory)")
                 .value_hint(ValueHint::DirPath)
                 .global(true),
         )
@@ -571,8 +571,8 @@ struct IncludeOptions {
     /// `--no-includes` is passed.
     enabled: bool,
     /// Explicit root override (`--includes-root` flag or `[includes].root`
-    /// in `lex.toml`). When `None`, the resolver picks the nearest
-    /// `lex.toml` walking up from the entry file, falling back to the
+    /// in `.lex.toml`). When `None`, the resolver picks the nearest
+    /// `.lex.toml` walking up from the entry file, falling back to the
     /// entry file's own directory.
     root_override: Option<PathBuf>,
     /// Maximum include depth, taken from `[includes].max_depth`
@@ -604,17 +604,24 @@ impl IncludeOptions {
 
     /// Resolution root for an entry file at `entry_path`, applying:
     /// 1. `root_override` if present.
-    /// 2. Directory of the nearest `lex.toml` walking up from the entry file.
+    /// 2. Directory of the nearest `.lex.toml` walking up from the entry file.
     /// 3. The entry file's own directory.
+    ///
+    /// In all three cases the returned path is run through
+    /// [`absolutize_path`] so it is absolute and lexically normalized —
+    /// `ResolveConfig::root` requires an absolute path or the
+    /// root-escape prefix check is weakened.
     fn resolved_root(&self, entry_path: &Path) -> PathBuf {
-        if let Some(r) = &self.root_override {
-            return r.clone();
-        }
-        let start_dir = entry_path
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."));
-        find_nearest_lex_toml_dir(&start_dir).unwrap_or(start_dir)
+        let raw = if let Some(r) = &self.root_override {
+            r.clone()
+        } else {
+            let start_dir = entry_path
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| PathBuf::from("."));
+            find_nearest_lex_toml_dir(&start_dir).unwrap_or(start_dir)
+        };
+        absolutize_path(&raw)
     }
 }
 
@@ -631,6 +638,24 @@ fn find_nearest_lex_toml_dir(start: &Path) -> Option<PathBuf> {
             return None;
         }
     }
+}
+
+/// Best-effort absolutize: try `Path::canonicalize` (handles symlinks
+/// and resolves `..` against the real filesystem), and fall back to
+/// `current_dir().join(path)` if the path doesn't exist on disk yet
+/// (rare but possible — e.g., a CLI flag pointing at a not-yet-created
+/// directory). Always returns an absolute path; the resolver requires
+/// one for the root-escape prefix check to be sound.
+fn absolutize_path(p: &Path) -> PathBuf {
+    if let Ok(canon) = p.canonicalize() {
+        return canon;
+    }
+    if p.is_absolute() {
+        return p.to_path_buf();
+    }
+    std::env::current_dir()
+        .map(|cwd| cwd.join(p))
+        .unwrap_or_else(|_| p.to_path_buf())
 }
 
 /// Read source content from a file path, or from stdin when the path is
@@ -710,7 +735,10 @@ fn expand_includes_to_source(source: &str, entry_path: &str, inc: &IncludeOption
     if !source.contains("lex.include") {
         return source.to_string();
     }
-    let entry = PathBuf::from(entry_path);
+    // Canonicalize entry_path so the resolver sees an absolute path
+    // for cycle-detection identity and so relative includes are
+    // resolved from the real on-disk parent (not a CLI-relative one).
+    let entry = absolutize_path(&PathBuf::from(entry_path));
     let root = inc.resolved_root(&entry);
     let resolve_config = ResolveConfig {
         root,
@@ -761,7 +789,9 @@ fn handle_convert_command(
     // what we serialize. Other input formats (markdown, html) have no
     // include concept; stdin can't anchor relative include paths.
     let doc = if from == "lex" && inc.enabled && input.is_some() {
-        let entry = PathBuf::from(input.expect("input is Some by guard"));
+        // Canonicalize so resolver-side path comparisons (cycle stack,
+        // root-escape prefix check) work in absolute-path space.
+        let entry = absolutize_path(&PathBuf::from(input.expect("input is Some by guard")));
         let root = inc.resolved_root(&entry);
         let resolve_config = ResolveConfig {
             root,

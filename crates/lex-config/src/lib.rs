@@ -178,18 +178,20 @@ pub struct DiagnosticsConfig {
     pub spellcheck: bool,
 }
 
-/// Include-resolution options consumed by `lex convert`, `lex inspect`,
-/// and the LSP. `lex format` never expands includes regardless.
+/// Include-resolution options consumed by `lexd convert`, `lexd inspect`,
+/// and the LSP. `lexd format` never expands includes regardless.
 #[derive(Debug, Clone, Config, Serialize, Deserialize)]
 pub struct IncludesConfig {
     /// Resolution root for include path resolution.
     ///
     /// All include paths — relative or root-absolute (`/...`) — must
-    /// canonicalize inside this directory. Outside-the-root paths fail
-    /// with a `RootEscape` error.
+    /// lexically normalize inside this directory. Outside-the-root paths
+    /// fail with a `RootEscape` error. (The resolver does not call
+    /// `std::fs::canonicalize`; symlink-aware canonicalization is the
+    /// loader's responsibility, not the resolver's.)
     ///
     /// When `None` (default), the CLI discovers the root by walking up
-    /// from the entry-point document to find the nearest `lex.toml`,
+    /// from the entry-point document to find the nearest `.lex.toml`,
     /// falling back to the entry-point's own directory.
     pub root: Option<String>,
     /// Maximum include depth. Default 8. Hitting the limit is an error,
