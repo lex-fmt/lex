@@ -28,6 +28,7 @@ use lex_config::{LexConfig, CONFIG_FILE_NAME};
 use lex_core::lex::ast::links::{DocumentLink as AstDocumentLink, LinkType};
 use lex_core::lex::ast::range::SourceLocation;
 use lex_core::lex::ast::{Document, Position as AstPosition, Range as AstRange};
+use lex_core::lex::includes::{resolve_from_source, FsLoader, IncludeError, ResolveConfig};
 use lex_core::lex::parsing;
 use serde_json::{json, Value};
 use tokio::sync::RwLock;
@@ -211,6 +212,17 @@ impl DocumentStore {
         parsed
     }
 
+    /// Store an already-resolved Document. Used by the include resolution
+    /// path, which produces a fully-attached merged tree directly via
+    /// `resolve_from_source` (bypassing the standard parse → attach pipeline).
+    async fn insert_resolved(&self, uri: Url, document: Document, text: String) {
+        let entry = DocumentEntry {
+            document: Arc::new(document),
+            text: Arc::new(text),
+        };
+        self.entries.write().await.insert(uri, Some(entry));
+    }
+
     async fn get(&self, uri: &Url) -> Option<DocumentEntry> {
         self.entries.read().await.get(uri).cloned().flatten()
     }
@@ -288,14 +300,80 @@ where
     }
 
     async fn parse_and_store(&self, uri: Url, text: String) {
-        if let Some(entry) = self.documents.upsert(uri.clone(), text).await {
-            // Run analysis diagnostics
-            let analysis_diags = analyze_diagnostics(&entry.document);
-            let diagnostics: Vec<_> = analysis_diags.into_iter().map(to_lsp_diagnostic).collect();
+        // Try include resolution first when the document has an on-disk
+        // path. If resolution succeeds, the resolved (merged) tree is what
+        // we store and analyze; downstream features (semantic tokens,
+        // hover, goto) see the post-include AST. If resolution fails, we
+        // fall back to a plain parse so the rest of the LSP keeps working,
+        // and surface the include error as a diagnostic at the include
+        // site.
+        let include_diags = self.resolve_and_upsert(&uri, &text).await;
 
-            self._client
-                .publish_diagnostics(uri, diagnostics, None)
-                .await;
+        let mut diagnostics: Vec<Diagnostic> = include_diags;
+        if let Some(entry) = self.documents.get(&uri).await {
+            let analysis_diags = analyze_diagnostics(&entry.document);
+            diagnostics.extend(analysis_diags.into_iter().map(to_lsp_diagnostic));
+        }
+
+        self._client
+            .publish_diagnostics(uri, diagnostics, None)
+            .await;
+    }
+
+    /// Drives include resolution (when the URI is a file path), stores the
+    /// resulting Document under `uri`, and returns any include-related
+    /// diagnostics to attach. On success this is empty; on failure we
+    /// store a fall-back unresolved parse and return one diagnostic
+    /// pointing at the include site (or the document head when the
+    /// resolver couldn't pin it down).
+    async fn resolve_and_upsert(&self, uri: &Url, text: &str) -> Vec<Diagnostic> {
+        let path = match uri.to_file_path() {
+            Ok(p) => p,
+            // Untitled / non-file URIs (e.g. `untitled:Untitled-1`)
+            // can't anchor relative include paths; just do the plain
+            // parse path.
+            Err(_) => {
+                self.documents.upsert(uri.clone(), text.to_string()).await;
+                return Vec::new();
+            }
+        };
+
+        // Canonicalize the entry path so it lives in the same absolute-
+        // path space as `inc_root` (`absolutize_path` calls
+        // `Path::canonicalize` which follows symlinks — important on
+        // macOS where /var → /private/var). Without this, host_dir
+        // (path.parent()) and inc_root differ by symlink resolution and
+        // every lookup fails the root-escape prefix check.
+        let path = absolutize_path(&path);
+
+        let cfg = self.config.read().await;
+        let inc_root = inc_root_for(&path, &cfg);
+        let max_depth = cfg.includes.max_depth;
+        drop(cfg);
+
+        let resolve_config = ResolveConfig {
+            root: inc_root,
+            max_depth,
+        };
+        let loader = FsLoader::new();
+
+        match resolve_from_source(text, Some(path.clone()), &resolve_config, &loader) {
+            Ok(doc) => {
+                // Store the resolved document directly. We bypass the
+                // standard parse path because resolve_from_source already
+                // returns a fully-attached Document.
+                self.documents
+                    .insert_resolved(uri.clone(), doc, text.to_string())
+                    .await;
+                Vec::new()
+            }
+            Err(err) => {
+                // Fall back to the standard parse so the rest of the
+                // server keeps working on this document, and emit a
+                // diagnostic that points at the include site.
+                self.documents.upsert(uri.clone(), text.to_string()).await;
+                vec![include_error_to_diagnostic(&err)]
+            }
         }
     }
 
@@ -1245,6 +1323,115 @@ where
     }
 }
 
+/// Compute the include-resolution root for an entry document.
+///
+/// Order:
+/// 1. `[includes].root` from `LexConfig` if set.
+/// 2. Directory of the nearest `.lex.toml` walking upward from the
+///    entry document's directory.
+/// 3. The entry document's own directory.
+///
+/// Always returns an absolute, lexically-normalized path so the
+/// resolver's root-escape prefix check is sound.
+fn inc_root_for(entry_path: &Path, cfg: &LexConfig) -> PathBuf {
+    let raw = if let Some(root) = cfg.includes.root.as_ref() {
+        PathBuf::from(root)
+    } else {
+        let start = entry_path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        find_nearest_config_dir(&start).unwrap_or(start)
+    };
+    absolutize_path(&raw)
+}
+
+/// Walk upward from `start` looking for a directory that contains
+/// `.lex.toml`. Returns that directory, or `None` if we hit the
+/// filesystem root without finding one.
+fn find_nearest_config_dir(start: &Path) -> Option<PathBuf> {
+    let mut cur: PathBuf = start.canonicalize().unwrap_or_else(|_| start.to_path_buf());
+    loop {
+        if cur.join(CONFIG_FILE_NAME).is_file() {
+            return Some(cur);
+        }
+        if !cur.pop() {
+            return None;
+        }
+    }
+}
+
+/// Best-effort absolutize: try `Path::canonicalize` first (handles
+/// symlinks + resolves `..` against the real filesystem), falling back
+/// to `current_dir().join(path)` if the path doesn't exist on disk.
+/// Always returns an absolute path; `ResolveConfig::root` requires one
+/// for the root-escape prefix check to be sound.
+fn absolutize_path(p: &Path) -> PathBuf {
+    if let Ok(canon) = p.canonicalize() {
+        return canon;
+    }
+    if p.is_absolute() {
+        return p.to_path_buf();
+    }
+    std::env::current_dir()
+        .map(|cwd| cwd.join(p))
+        .unwrap_or_else(|_| p.to_path_buf())
+}
+
+/// Map an [`IncludeError`] to an LSP [`Diagnostic`].
+///
+/// The diagnostic's range points at the offending `lex.include`
+/// annotation when the error carries one (Cycle, DepthExceeded,
+/// ContainerPolicy, MissingSrc); otherwise it falls back to the
+/// document head (line 0, column 0) so the user at least sees something
+/// in the editor's diagnostics panel.
+fn include_error_to_diagnostic(err: &IncludeError) -> Diagnostic {
+    let (range, code, message) = match err {
+        IncludeError::Cycle { include_site, .. } => {
+            (to_lsp_range(include_site), "include-cycle", err.to_string())
+        }
+        IncludeError::DepthExceeded { include_site, .. } => (
+            to_lsp_range(include_site),
+            "include-depth-exceeded",
+            err.to_string(),
+        ),
+        IncludeError::RootEscape { .. } => (head_range(), "include-root-escape", err.to_string()),
+        IncludeError::NotFound { .. } => (head_range(), "include-not-found", err.to_string()),
+        IncludeError::ParseFailed { .. } => (head_range(), "include-parse-failed", err.to_string()),
+        IncludeError::ContainerPolicy { include_site, .. } => (
+            to_lsp_range(include_site),
+            "include-container-policy",
+            err.to_string(),
+        ),
+        IncludeError::LoaderIo { .. } => (head_range(), "include-loader-io", err.to_string()),
+        IncludeError::MissingSrc { include_site } => (
+            to_lsp_range(include_site),
+            "include-missing-src",
+            err.to_string(),
+        ),
+    };
+    Diagnostic {
+        range,
+        severity: Some(tower_lsp::lsp_types::DiagnosticSeverity::ERROR),
+        code: Some(tower_lsp::lsp_types::NumberOrString::String(
+            code.to_string(),
+        )),
+        code_description: None,
+        source: Some("lex".to_string()),
+        message,
+        related_information: None,
+        tags: None,
+        data: None,
+    }
+}
+
+fn head_range() -> Range {
+    Range {
+        start: Position::new(0, 0),
+        end: Position::new(0, 0),
+    }
+}
+
 fn to_lsp_diagnostic(diag: AnalysisDiagnostic) -> Diagnostic {
     let severity = match diag.kind {
         DiagnosticKind::MissingFootnoteDefinition => {
@@ -2115,5 +2302,262 @@ mod tests {
             .expect("workspace folder support");
         assert_eq!(folders.supported, Some(true));
         assert_eq!(folders.change_notifications, Some(OneOf::Left(true)));
+    }
+
+    // ========================================================================
+    // Include resolution integration (PR 8)
+    // ========================================================================
+    //
+    // These tests use a CapturingClient that records every
+    // publish_diagnostics call so assertions can inspect the diagnostic
+    // payload directly. Test sources are written to a TempDir so the
+    // FsLoader is exercised end-to-end (no MemoryLoader bypass).
+
+    type DiagnosticLog = Arc<Mutex<Vec<(Url, Vec<Diagnostic>)>>>;
+
+    #[derive(Clone, Default)]
+    struct CapturingClient {
+        last_diagnostics: DiagnosticLog,
+    }
+
+    #[async_trait]
+    impl LspClient for CapturingClient {
+        async fn publish_diagnostics(&self, uri: Url, diags: Vec<Diagnostic>, _: Option<i32>) {
+            self.last_diagnostics.lock().unwrap().push((uri, diags));
+        }
+        async fn show_message(&self, _: MessageType, _: String) {}
+    }
+
+    impl CapturingClient {
+        fn diagnostics_for(&self, uri: &Url) -> Vec<Diagnostic> {
+            self.last_diagnostics
+                .lock()
+                .unwrap()
+                .iter()
+                .rev()
+                .find(|(u, _)| u == uri)
+                .map(|(_, d)| d.clone())
+                .unwrap_or_default()
+        }
+    }
+
+    /// Build a temp directory with the given `(relpath, contents)` files,
+    /// open the entry file via the LSP, and return (server, capturing client,
+    /// entry uri, temp dir). The TempDir is returned so the caller keeps it
+    /// alive for the duration of the test (drop = cleanup).
+    async fn open_in_tempdir(
+        files: &[(&str, &str)],
+        entry: &str,
+    ) -> (
+        LexLanguageServer<CapturingClient, DefaultFeatureProvider>,
+        CapturingClient,
+        Url,
+        tempfile::TempDir,
+    ) {
+        let dir = tempdir().expect("tempdir");
+        for (rel, contents) in files {
+            let path = dir.path().join(rel);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).expect("mkdir -p");
+            }
+            std::fs::write(&path, contents).expect("write fixture");
+        }
+        let entry_path = dir.path().join(entry);
+        let entry_text = std::fs::read_to_string(&entry_path).expect("read entry");
+        let uri = Url::from_file_path(&entry_path).expect("file uri");
+
+        let client = CapturingClient::default();
+        let server = LexLanguageServer::with_features(
+            client.clone(),
+            Arc::new(DefaultFeatureProvider::new()),
+        );
+
+        server
+            .did_open(DidOpenTextDocumentParams {
+                text_document: TextDocumentItem {
+                    uri: uri.clone(),
+                    language_id: "lex".into(),
+                    version: 1,
+                    text: entry_text,
+                },
+            })
+            .await;
+
+        (server, client, uri, dir)
+    }
+
+    fn has_diag_with_code(diags: &[Diagnostic], code: &str) -> bool {
+        diags.iter().any(|d| {
+            matches!(
+                &d.code,
+                Some(tower_lsp::lsp_types::NumberOrString::String(c)) if c == code
+            )
+        })
+    }
+
+    #[tokio::test]
+    async fn includes_did_open_resolves_and_publishes_no_include_diagnostic() {
+        let (_server, client, uri, _dir) = open_in_tempdir(
+            &[
+                (
+                    "main.lex",
+                    "1. Host\n\n    :: lex.include src=\"chapter.lex\" ::\n",
+                ),
+                ("chapter.lex", "1.1 Chapter\n\n    Body of chapter.\n"),
+            ],
+            "main.lex",
+        )
+        .await;
+
+        let diags = client.diagnostics_for(&uri);
+        assert!(
+            !diags.iter().any(|d| matches!(
+                &d.code,
+                Some(tower_lsp::lsp_types::NumberOrString::String(c)) if c.starts_with("include-")
+            )),
+            "successful include resolution should produce no include-* diagnostics, got {diags:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn includes_missing_target_emits_diagnostic_with_path() {
+        let (_server, client, uri, _dir) = open_in_tempdir(
+            &[(
+                "main.lex",
+                "1. Host\n\n    :: lex.include src=\"missing.lex\" ::\n",
+            )],
+            "main.lex",
+        )
+        .await;
+
+        let diags = client.diagnostics_for(&uri);
+        assert!(
+            has_diag_with_code(&diags, "include-not-found"),
+            "missing include should surface include-not-found, got {diags:?}"
+        );
+        assert!(
+            diags.iter().any(|d| d.message.contains("missing.lex")),
+            "diagnostic should name the missing file, got {diags:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn includes_cycle_emits_diagnostic_pointing_at_include_site() {
+        let (_server, client, uri, _dir) = open_in_tempdir(
+            &[
+                ("main.lex", ":: lex.include src=\"a.lex\" ::\n"),
+                ("a.lex", ":: lex.include src=\"b.lex\" ::\n"),
+                ("b.lex", ":: lex.include src=\"a.lex\" ::\n"),
+            ],
+            "main.lex",
+        )
+        .await;
+
+        let diags = client.diagnostics_for(&uri);
+        assert!(
+            has_diag_with_code(&diags, "include-cycle"),
+            "cycle should surface include-cycle, got {diags:?}"
+        );
+        // The Cycle variant carries an include_site Range — the
+        // diagnostic should point at it (not at the document head).
+        let cycle = diags
+            .iter()
+            .find(|d| {
+                matches!(
+                    &d.code,
+                    Some(tower_lsp::lsp_types::NumberOrString::String(c)) if c == "include-cycle"
+                )
+            })
+            .expect("cycle diag");
+        // The site is in main.lex line 0 (the only include there).
+        assert_eq!(cycle.range.start.line, 0);
+    }
+
+    #[tokio::test]
+    async fn includes_root_escape_emits_diagnostic() {
+        let (_server, client, uri, _dir) = open_in_tempdir(
+            &[(
+                "main.lex",
+                "1. Host\n\n    :: lex.include src=\"../../etc/passwd\" ::\n",
+            )],
+            "main.lex",
+        )
+        .await;
+
+        let diags = client.diagnostics_for(&uri);
+        assert!(
+            has_diag_with_code(&diags, "include-root-escape"),
+            "root escape should surface include-root-escape, got {diags:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn includes_resolved_tree_replaces_unresolved_for_other_features() {
+        // After resolution, the stored Document is the merged tree —
+        // semantic tokens, hover, goto-def all see post-include
+        // content. We probe via document_symbols (a FeatureProvider
+        // entry point), which receives the stored Document.
+        let (server, _client, uri, _dir) = open_in_tempdir(
+            &[
+                ("main.lex", ":: lex.include src=\"chapter.lex\" ::\n"),
+                (
+                    "chapter.lex",
+                    "1. Spliced Chapter\n\n    Body content here.\n",
+                ),
+            ],
+            "main.lex",
+        )
+        .await;
+
+        // The stored Document should contain the spliced chapter.
+        let entry = server.document_entry(&uri).await.expect("entry stored");
+        // Walk to find the session title.
+        use lex_core::lex::ast::elements::content_item::ContentItem;
+        let titles: Vec<String> = entry
+            .document
+            .root
+            .children
+            .iter()
+            .filter_map(|i| match i {
+                ContentItem::Session(s) => Some(s.title.as_string().to_string()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            titles.iter().any(|t| t == "1. Spliced Chapter"),
+            "spliced chapter should appear in stored document, got titles {titles:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn includes_untitled_uri_skips_resolution_without_error() {
+        // Untitled URIs (no on-disk anchor) can't drive include
+        // resolution. The server must handle these gracefully — no
+        // panics, no spurious include diagnostics.
+        let client = CapturingClient::default();
+        let server = LexLanguageServer::with_features(
+            client.clone(),
+            Arc::new(DefaultFeatureProvider::new()),
+        );
+        let uri: Url = "untitled:Untitled-1".parse().unwrap();
+        server
+            .did_open(DidOpenTextDocumentParams {
+                text_document: TextDocumentItem {
+                    uri: uri.clone(),
+                    language_id: "lex".into(),
+                    version: 1,
+                    text: "1. Host\n\n    Some content.\n".to_string(),
+                },
+            })
+            .await;
+
+        let diags = client.diagnostics_for(&uri);
+        assert!(
+            !diags.iter().any(|d| matches!(
+                &d.code,
+                Some(tower_lsp::lsp_types::NumberOrString::String(c)) if c.starts_with("include-")
+            )),
+            "untitled URIs should produce no include-* diagnostics, got {diags:?}"
+        );
     }
 }
