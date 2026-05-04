@@ -116,11 +116,11 @@ pub(super) fn aggregate_locations(primary: Range, children: &[ContentItem]) -> R
 ///
 /// Used when source span information is not available.
 pub fn default_location() -> Range {
-    Range {
-        span: 0..0,
-        start: crate::lex::ast::range::Position { line: 0, column: 0 },
-        end: crate::lex::ast::range::Position { line: 0, column: 0 },
-    }
+    Range::new(
+        0..0,
+        crate::lex::ast::range::Position { line: 0, column: 0 },
+        crate::lex::ast::range::Position { line: 0, column: 0 },
+    )
 }
 
 #[cfg(test)]

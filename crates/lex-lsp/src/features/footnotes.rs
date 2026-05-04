@@ -138,11 +138,7 @@ fn find_number_in_range(
         let abs_end = abs_start + number_str.len();
         let start_pos = byte_to_pos(abs_start, offsets);
         let end_pos = byte_to_pos(abs_end, offsets);
-        return Some(Range {
-            start: start_pos,
-            end: end_pos,
-            span: abs_start..abs_end,
-        });
+        return Some(Range::new(abs_start..abs_end, start_pos, end_pos));
     }
     None
 }
