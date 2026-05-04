@@ -1141,11 +1141,7 @@ fn find_annotation_by_label_in_origin_finds_attached_on_list_table_verbatim() {
     .unwrap();
 
     let origin = std::path::Path::new("/repo/main.lex");
-    for label in [
-        "my_list_note",
-        "my_table_note",
-        "my_verbatim_note",
-    ] {
+    for label in ["my_list_note", "my_table_note", "my_verbatim_note"] {
         assert!(
             tree.doc
                 .find_annotation_by_label_in_origin(label, origin)
