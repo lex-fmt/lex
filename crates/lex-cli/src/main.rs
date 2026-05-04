@@ -33,9 +33,11 @@ use lex_babel::{
 };
 use lex_config::{LexConfig, PdfPageSize, CONFIG_FILE_NAME};
 use lex_core::lex::ast::{find_node_path_at_position, Position};
+use lex_core::lex::includes::{resolve_from_source, FsLoader, ResolveConfig};
 use std::collections::HashMap;
 use std::fs;
 use std::io::{self, IsTerminal, Read};
+use std::path::{Path, PathBuf};
 
 fn build_cli() -> Command {
     Command::new("lexd")
@@ -50,12 +52,18 @@ fn build_cli() -> Command {
             Configuration:\n  \
             Settings are loaded from .lex.toml files, LEX__* env vars, and CLI flags.\n  \
             Use `lexd config list` to see resolved settings.\n\n\
+            Includes:\n  \
+            `lexd convert` and `lexd inspect` resolve `:: lex.include src=\"...\" ::`\n  \
+            annotations by default, splicing the included file's content into the\n  \
+            host tree. Use --no-includes to disable. `lexd format` never expands\n  \
+            includes. See comms/specs/proposals/includes.lex for the design.\n\n\
             Examples:\n  \
             lexd inspect file.lex                    # View AST tree visualization\n  \
             lexd inspect file.lex ast-tag            # View AST as XML tags\n  \
             lexd inspect file.lex --ast-full         # Show complete AST (all node properties)\n  \
             lexd file.lex --to markdown              # Convert to markdown (outputs to stdout)\n  \
             lexd file.lex --to html -o output.html   # Convert to HTML file\n  \
+            lexd file.lex --to lex --no-includes     # Convert without expanding includes\n  \
             lexd config list                         # Show all resolved settings\n  \
             lexd config set convert.html.theme fancy-serif  # Persist a setting"
         )
@@ -74,6 +82,21 @@ fn build_cli() -> Command {
                 .value_name("PATH")
                 .help("Path to a .lex.toml configuration file")
                 .value_hint(ValueHint::FilePath)
+                .global(true),
+        )
+        .arg(
+            Arg::new("no-includes")
+                .long("no-includes")
+                .help("Disable lex.include resolution (operate on the unresolved tree)")
+                .action(ArgAction::SetTrue)
+                .global(true),
+        )
+        .arg(
+            Arg::new("includes-root")
+                .long("includes-root")
+                .value_name("PATH")
+                .help("Resolution root for lex.include (default: nearest .lex.toml or entry-file directory)")
+                .value_hint(ValueHint::DirPath)
                 .global(true),
         )
         .subcommand(
@@ -406,7 +429,8 @@ fn main() {
                         }
                         (p, t) => (p, t.unwrap_or("ast-treeviz")),
                     };
-                    handle_inspect_command(path, transform, &config);
+                    let inc = IncludeOptions::for_expanding_command(&matches, &config);
+                    handle_inspect_command(path, transform, &config, &inc);
                 }
                 Some(("convert", sub_matches)) => {
                     let input = sub_matches.get_one::<String>("input").map(|s| s.as_str());
@@ -432,12 +456,15 @@ fn main() {
                     };
 
                     let output = sub_matches.get_one::<String>("output").map(|s| s.as_str());
-                    handle_convert_command(input, &from, to, output, &config);
+                    let inc = IncludeOptions::for_expanding_command(&matches, &config);
+                    handle_convert_command(input, &from, to, output, &config, &inc);
                 }
                 Some(("format", sub_matches)) => {
                     let input = sub_matches.get_one::<String>("input").map(|s| s.as_str());
-                    // Format command always outputs to stdout (no -o flag)
-                    handle_convert_command(input, "lex", "lex", None, &config);
+                    // Format command always outputs to stdout (no -o flag) and
+                    // never expands includes (per proposal §11.4).
+                    let inc = IncludeOptions::for_format_command();
+                    handle_convert_command(input, "lex", "lex", None, &config, &inc);
                 }
                 Some(("element-at", sub_matches)) => {
                     let path = sub_matches
@@ -535,6 +562,102 @@ fn make_builder(matches: &ArgMatches) -> ClapfigBuilder<LexConfig> {
     builder
 }
 
+/// Per-invocation include resolution settings derived from CLI flags +
+/// `[includes]` config + the entry-file's location.
+#[derive(Debug, Clone)]
+struct IncludeOptions {
+    /// `true` to expand `lex.include` annotations during conversion/inspect.
+    /// Always `false` for `lex format` (per spec §11.4) and when
+    /// `--no-includes` is passed.
+    enabled: bool,
+    /// Explicit root override (`--includes-root` flag or `[includes].root`
+    /// in `.lex.toml`). When `None`, the resolver picks the nearest
+    /// `.lex.toml` walking up from the entry file, falling back to the
+    /// entry file's own directory.
+    root_override: Option<PathBuf>,
+    /// Maximum include depth, taken from `[includes].max_depth`
+    /// (default 8).
+    max_depth: usize,
+}
+
+impl IncludeOptions {
+    /// Build options for an "expand by default" command (convert / inspect).
+    fn for_expanding_command(matches: &ArgMatches, config: &LexConfig) -> Self {
+        Self {
+            enabled: !matches.get_flag("no-includes"),
+            root_override: matches
+                .get_one::<String>("includes-root")
+                .map(PathBuf::from)
+                .or_else(|| config.includes.root.as_ref().map(PathBuf::from)),
+            max_depth: config.includes.max_depth,
+        }
+    }
+
+    /// Disabled options for `lex format` (formatter never expands per spec §11.4).
+    fn for_format_command() -> Self {
+        Self {
+            enabled: false,
+            root_override: None,
+            max_depth: 8,
+        }
+    }
+
+    /// Resolution root for an entry file at `entry_path`, applying:
+    /// 1. `root_override` if present.
+    /// 2. Directory of the nearest `.lex.toml` walking up from the entry file.
+    /// 3. The entry file's own directory.
+    ///
+    /// In all three cases the returned path is run through
+    /// [`absolutize_path`] so it is absolute and lexically normalized —
+    /// `ResolveConfig::root` requires an absolute path or the
+    /// root-escape prefix check is weakened.
+    fn resolved_root(&self, entry_path: &Path) -> PathBuf {
+        let raw = if let Some(r) = &self.root_override {
+            r.clone()
+        } else {
+            let start_dir = entry_path
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| PathBuf::from("."));
+            find_nearest_lex_toml_dir(&start_dir).unwrap_or(start_dir)
+        };
+        absolutize_path(&raw)
+    }
+}
+
+/// Walk upward from `start` looking for a directory that contains
+/// `.lex.toml` (the canonical config name in this repo). Returns that
+/// directory, or `None` if we hit the filesystem root without finding one.
+fn find_nearest_lex_toml_dir(start: &Path) -> Option<PathBuf> {
+    let mut cur: PathBuf = start.canonicalize().unwrap_or_else(|_| start.to_path_buf());
+    loop {
+        if cur.join(CONFIG_FILE_NAME).is_file() {
+            return Some(cur);
+        }
+        if !cur.pop() {
+            return None;
+        }
+    }
+}
+
+/// Best-effort absolutize: try `Path::canonicalize` (handles symlinks
+/// and resolves `..` against the real filesystem), and fall back to
+/// `current_dir().join(path)` if the path doesn't exist on disk yet
+/// (rare but possible — e.g., a CLI flag pointing at a not-yet-created
+/// directory). Always returns an absolute path; the resolver requires
+/// one for the root-escape prefix check to be sound.
+fn absolutize_path(p: &Path) -> PathBuf {
+    if let Ok(canon) = p.canonicalize() {
+        return canon;
+    }
+    if p.is_absolute() {
+        return p.to_path_buf();
+    }
+    std::env::current_dir()
+        .map(|cwd| cwd.join(p))
+        .unwrap_or_else(|_| p.to_path_buf())
+}
+
 /// Read source content from a file path, or from stdin when the path is
 /// omitted. Exits with an error if no path is given and stdin is a terminal
 /// (i.e. the user forgot to pipe input).
@@ -563,8 +686,23 @@ fn read_source(path: Option<&str>) -> String {
 }
 
 /// Handle the inspect command
-fn handle_inspect_command(path: Option<&str>, transform: &str, config: &LexConfig) {
-    let source = read_source(path);
+fn handle_inspect_command(
+    path: Option<&str>,
+    transform: &str,
+    config: &LexConfig,
+    inc: &IncludeOptions,
+) {
+    let mut source = read_source(path);
+
+    // When includes are enabled and we have a real file path, resolve
+    // them and re-serialize the merged tree as lex source. Inspect
+    // transforms then see the post-include AST. For stdin input or
+    // when --no-includes is set, we leave the source unchanged.
+    if inc.enabled {
+        if let Some(p) = path {
+            source = expand_includes_to_source(&source, p, inc);
+        }
+    }
 
     let params = build_inspect_params(config);
 
@@ -576,6 +714,53 @@ fn handle_inspect_command(path: Option<&str>, transform: &str, config: &LexConfi
     print!("{output}");
 }
 
+/// Resolve `lex.include` annotations and re-serialize the result as lex
+/// source so downstream transforms (which take a string) see the merged
+/// content. The two-step "resolve to AST → serialize back to lex" is
+/// the simplest way to wire the resolver into a string-in/string-out
+/// pipeline without restructuring the transform layer.
+///
+/// Fast path: if the source contains no `lex.include` literal, return
+/// it unchanged. The resolver's round trip would be a parse + serialize
+/// no-op semantically, but the lex serializer normalizes whitespace and
+/// indentation in ways that surprise downstream tools that assert on
+/// exact source layout (notably `inspect ast-nodemap`). Skipping the
+/// round trip when there's nothing to resolve preserves byte-identical
+/// behavior for documents that don't use the feature.
+///
+/// Errors are printed to stderr and the process exits non-zero; they
+/// surface include problems early instead of letting them propagate as
+/// confusing parser/serializer errors downstream.
+fn expand_includes_to_source(source: &str, entry_path: &str, inc: &IncludeOptions) -> String {
+    if !source.contains("lex.include") {
+        return source.to_string();
+    }
+    // Canonicalize entry_path so the resolver sees an absolute path
+    // for cycle-detection identity and so relative includes are
+    // resolved from the real on-disk parent (not a CLI-relative one).
+    let entry = absolutize_path(&PathBuf::from(entry_path));
+    let root = inc.resolved_root(&entry);
+    let resolve_config = ResolveConfig {
+        root,
+        max_depth: inc.max_depth,
+    };
+    let loader = FsLoader::new();
+    let doc =
+        resolve_from_source(source, Some(entry), &resolve_config, &loader).unwrap_or_else(|e| {
+            eprintln!("Include resolution error: {e}");
+            std::process::exit(1);
+        });
+
+    // Re-serialize with default formatting rules; the goal is just
+    // to feed downstream transforms the merged source, not to
+    // produce author-grade output.
+    let rules = FormattingRules::default();
+    serialize_to_lex_with_rules(&doc, rules).unwrap_or_else(|e| {
+        eprintln!("Failed to re-serialize merged document: {e}");
+        std::process::exit(1);
+    })
+}
+
 /// Handle the convert command
 fn handle_convert_command(
     input: Option<&str>,
@@ -583,6 +768,7 @@ fn handle_convert_command(
     to: &str,
     output: Option<&str>,
     config: &LexConfig,
+    inc: &IncludeOptions,
 ) {
     let registry = FormatRegistry::default();
 
@@ -598,11 +784,30 @@ fn handle_convert_command(
 
     let source = read_source(input);
 
-    // Parse
-    let doc = registry.parse(&source, from).unwrap_or_else(|e| {
-        eprintln!("Parse error: {e}");
-        std::process::exit(1);
-    });
+    // Parse — for lex input with includes enabled and a real input
+    // path, route through the include resolver so the merged tree is
+    // what we serialize. Other input formats (markdown, html) have no
+    // include concept; stdin can't anchor relative include paths.
+    let doc = if from == "lex" && inc.enabled && input.is_some() {
+        // Canonicalize so resolver-side path comparisons (cycle stack,
+        // root-escape prefix check) work in absolute-path space.
+        let entry = absolutize_path(&PathBuf::from(input.expect("input is Some by guard")));
+        let root = inc.resolved_root(&entry);
+        let resolve_config = ResolveConfig {
+            root,
+            max_depth: inc.max_depth,
+        };
+        let loader = FsLoader::new();
+        resolve_from_source(&source, Some(entry), &resolve_config, &loader).unwrap_or_else(|e| {
+            eprintln!("Include resolution error: {e}");
+            std::process::exit(1);
+        })
+    } else {
+        registry.parse(&source, from).unwrap_or_else(|e| {
+            eprintln!("Parse error: {e}");
+            std::process::exit(1);
+        })
+    };
 
     let mut format_options = HashMap::new();
 
