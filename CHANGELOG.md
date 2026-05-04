@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-05-04
+
+
 ### Added
 
 - `lex-core`: `Range.origin_path: Option<Arc<PathBuf>>` field with `with_origin` builder and `origin()` accessor. Currently always `None` — pure additive scaffolding for the upcoming includes feature (PR 1 of 10). The field is `#[serde(skip)]` so existing AST JSON output is byte-identical. `Range` is now `#[non_exhaustive]`; equality and hashing ignore `origin_path` (positional only). See `comms/specs/proposals/includes.lex` for the full design.
@@ -22,7 +25,6 @@
 ### Changed
 
 - Bumped `comms` submodule to v0.16.0, which adds the canonical `specs/elements/lex.include.lex` element doc, the `specs/elements/lex.include.docs/` fixture set, and formally reserves the `lex.*` annotation label namespace in `specs/general.lex` §3.1. Also archives the includes proposal to `specs/proposals/done/includes.lex` per the new "frozen-when-implemented" convention.
-
 ## [0.9.2] - 2026-05-02
 
 
