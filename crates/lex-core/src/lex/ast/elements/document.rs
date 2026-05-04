@@ -326,11 +326,10 @@ impl Document {
     pub fn find_annotation_by_label_in_origin(
         &self,
         label: &str,
-        origin: &std::path::Path,
+        origin: Option<&std::path::Path>,
     ) -> Option<&Annotation> {
-        fn matches(ann: &Annotation, label: &str, origin: &std::path::Path) -> bool {
-            ann.data.label.value == label
-                && ann.location.origin().map(|p| p == origin).unwrap_or(false)
+        fn matches(ann: &Annotation, label: &str, origin: Option<&std::path::Path>) -> bool {
+            ann.data.label.value == label && ann.location.origin() == origin
         }
 
         // Document-level annotations first.
@@ -481,10 +480,10 @@ impl Default for Document {
 fn find_annotation_in_session_with_origin<'a>(
     s: &'a Session,
     label: &str,
-    origin: &std::path::Path,
+    origin: Option<&std::path::Path>,
 ) -> Option<&'a Annotation> {
-    fn matches(ann: &Annotation, label: &str, origin: &std::path::Path) -> bool {
-        ann.data.label.value == label && ann.location.origin().map(|p| p == origin).unwrap_or(false)
+    fn matches(ann: &Annotation, label: &str, origin: Option<&std::path::Path>) -> bool {
+        ann.data.label.value == label && ann.location.origin() == origin
     }
     for ann in &s.annotations {
         if matches(ann, label, origin) {
@@ -497,10 +496,10 @@ fn find_annotation_in_session_with_origin<'a>(
 fn find_annotation_in_items_with_origin<'a>(
     items: &'a [ContentItem],
     label: &str,
-    origin: &std::path::Path,
+    origin: Option<&std::path::Path>,
 ) -> Option<&'a Annotation> {
-    fn matches(ann: &Annotation, label: &str, origin: &std::path::Path) -> bool {
-        ann.data.label.value == label && ann.location.origin().map(|p| p == origin).unwrap_or(false)
+    fn matches(ann: &Annotation, label: &str, origin: Option<&std::path::Path>) -> bool {
+        ann.data.label.value == label && ann.location.origin() == origin
     }
     for item in items {
         // Attached annotations live on every node that has a public

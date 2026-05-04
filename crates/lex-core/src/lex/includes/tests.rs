@@ -628,6 +628,27 @@ fn root_escape_via_dotdot_is_rejected() {
 }
 
 #[test]
+fn root_escape_via_chained_dotdot_from_relative_root_is_rejected() {
+    // Regression for the lexical_normalize bug where the second `..`
+    // in `../../foo` was silently absorbed by `PathBuf::pop` (which
+    // returned true even when the buffer's last component was `..`,
+    // since `Path::new("..").parent()` is `Some("")`). The bug let a
+    // crafted include like `../../etc/passwd` collapse to a path that
+    // falsely satisfied the root-escape prefix check.
+    //
+    // After the fix, `..` is only collapsed when the last buffer
+    // component is `Normal`. We exercise the case via an include from
+    // a deep file with multiple `..`s — the result must escape and
+    // be rejected.
+    let result = fixture_at(
+        "/repo/a/b/c/host.lex",
+        ":: lex.include src=\"../../../../etc/passwd\" ::\n",
+        &[],
+    );
+    assert_err_kind!(result, IncludeError::RootEscape { .. });
+}
+
+#[test]
 fn include_inside_definition_with_sessions_is_policy_error() {
     // The Definition pattern is "subject:" + immediate indent + content.
     let result = fixture(
@@ -1098,11 +1119,11 @@ fn find_annotation_by_label_in_origin_filters_to_origin() {
 
     let main_one = tree
         .doc
-        .find_annotation_by_label_in_origin("1", main_origin)
+        .find_annotation_by_label_in_origin("1", Some(main_origin))
         .expect("main's :: 1 :: missing");
     let chapter_one = tree
         .doc
-        .find_annotation_by_label_in_origin("1", chapter_origin)
+        .find_annotation_by_label_in_origin("1", Some(chapter_origin))
         .expect("chapter's :: 1 :: missing");
 
     // The two annotations are physically different — confirms we're
@@ -1144,7 +1165,7 @@ fn find_annotation_by_label_in_origin_finds_attached_on_list_table_verbatim() {
     for label in ["my_list_note", "my_table_note", "my_verbatim_note"] {
         assert!(
             tree.doc
-                .find_annotation_by_label_in_origin(label, origin)
+                .find_annotation_by_label_in_origin(label, Some(origin))
                 .is_some(),
             "origin-aware lookup missed {label:?} attached to its container — \
              walker must check .annotations on List/Table/VerbatimBlock too"
@@ -1160,8 +1181,27 @@ fn find_annotation_by_label_in_origin_returns_none_when_no_match() {
     let chapter_origin = std::path::Path::new("/repo/chapter.lex");
     assert!(tree
         .doc
-        .find_annotation_by_label_in_origin("1", chapter_origin)
+        .find_annotation_by_label_in_origin("1", Some(chapter_origin))
         .is_none());
+}
+
+#[test]
+fn find_annotation_by_label_in_origin_handles_none_origin() {
+    // Querying with None matches annotations whose origin is also None
+    // — the case that was unreachable with the old `&Path`-only signature.
+    // We resolve a fixture WITHOUT a source_path so the entry document's
+    // annotations stay un-stamped, then assert we can still find them.
+    let mut loader = MemoryLoader::new();
+    loader.insert("/repo/main.lex", ":: 1 :: Top-level note.\n\nA para.\n");
+    let config = ResolveConfig::with_root(PathBuf::from(TEST_ROOT));
+    let doc = resolve_from_source(
+        ":: 1 :: Top-level note.\n\nA para.\n",
+        None, // no source_path → entry annotations have origin = None
+        &config,
+        &loader,
+    )
+    .unwrap();
+    assert!(doc.find_annotation_by_label_in_origin("1", None).is_some());
 }
 
 #[test]

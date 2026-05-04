@@ -570,7 +570,9 @@ fn prepare_splice_list(mut included: Document) -> Vec<ContentItem> {
 
     // Document title → Paragraph, prepended.
     // Equivalent to what a textual paste would parse (an unindented line
-    // becomes a paragraph in the host's context).
+    // becomes a paragraph in the host's context). Per the revised
+    // spec §5.2 this is "do nothing" semantics — converting matches what
+    // the parser would do if the included source were inlined and reparsed.
     if let Some(title) = included.title {
         let location = title.location.clone();
         let para = Paragraph::from_line(title.as_str().to_string()).at(location);
@@ -670,19 +672,30 @@ fn resolve_path(src: &str, host_dir: &Path, root: &Path) -> Result<PathBuf, Incl
 /// resolver only needs a stable identity for cycle detection and a uniform
 /// shape for the root-escape prefix check.
 ///
-/// Unresolvable `..` components (those that would pop past the start of the
-/// buffer) are *preserved* in the output. This matters when the buffer
-/// happens to be empty or holds only a relative prefix — silently dropping
-/// the `..` would let a path masquerade as inside the root and defeat the
-/// escape check. With absolute roots (the documented contract) `..`
-/// components only matter near the root itself, where preserving them
-/// makes the prefix check fail correctly.
+/// `..` is collapsed only when the *last* component in the buffer is a
+/// real directory name (`Component::Normal`). When the buffer is empty
+/// or its last component is itself `..` (or a root marker), the new `..`
+/// is *preserved* in the buffer.
+///
+/// This is what defeats `../../etc/passwd` from collapsing to
+/// `etc/passwd` and bypassing the root-escape check — `PathBuf::pop`
+/// would happily strip a `..` (since `Path::new("..").parent()` returns
+/// `Some("")`), silently losing the second `..` and producing a path
+/// that falsely starts with the root prefix. Each unmatched `..` in the
+/// preserved form keeps the normalized path outside any sane root, so
+/// the escape check fires correctly.
 fn lexical_normalize(p: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for c in p.components() {
         match c {
             std::path::Component::ParentDir => {
-                if !out.pop() {
+                let can_pop = matches!(
+                    out.components().next_back(),
+                    Some(std::path::Component::Normal(_))
+                );
+                if can_pop {
+                    out.pop();
+                } else {
                     out.push("..");
                 }
             }
