@@ -1114,6 +1114,49 @@ fn find_annotation_by_label_in_origin_filters_to_origin() {
 }
 
 #[test]
+fn find_annotation_by_label_in_origin_finds_attached_on_list_table_verbatim() {
+    // Regression: the walker must also check `.annotations` on List,
+    // Table, and Verbatim — not just Session/Definition/ListItem/Paragraph.
+    // We resolve a real source so the parser + AttachAnnotations does
+    // the work, then probe origin-aware lookup for an annotation that
+    // would land on each of the three node types.
+    let tree = fixture(
+        // The :: my_list_note :: precedes a list (attaches to List).
+        // The :: my_table_note :: precedes a table (attaches to Table).
+        // The :: my_verbatim_note :: precedes a verbatim block (attaches to Verbatim).
+        ":: my_list_note ::\n\n\
+         - item one\n\
+         - item two\n\n\
+         :: my_table_note ::\n\n\
+         A table:\n\
+             | a | b |\n\
+             | c | d |\n\
+         :: table ::\n\n\
+         :: my_verbatim_note ::\n\n\
+         Some code:\n\
+             let x = 1;\n\
+         :: rust ::\n",
+        &[],
+    )
+    .unwrap();
+
+    let origin = std::path::Path::new("/repo/main.lex");
+    for label in [
+        "my_list_note",
+        "my_table_note",
+        "my_verbatim_note",
+    ] {
+        assert!(
+            tree.doc
+                .find_annotation_by_label_in_origin(label, origin)
+                .is_some(),
+            "origin-aware lookup missed {label:?} attached to its container — \
+             walker must check .annotations on List/Table/VerbatimBlock too"
+        );
+    }
+}
+
+#[test]
 fn find_annotation_by_label_in_origin_returns_none_when_no_match() {
     // Tree only has annotations with origin = main.lex; a query for
     // chapter.lex's origin returns None, even though a label exists.

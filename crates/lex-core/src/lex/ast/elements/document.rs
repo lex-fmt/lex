@@ -503,12 +503,19 @@ fn find_annotation_in_items_with_origin<'a>(
         ann.data.label.value == label && ann.location.origin().map(|p| p == origin).unwrap_or(false)
     }
     for item in items {
-        // Attached annotations on container-style nodes:
+        // Attached annotations live on every node that has a public
+        // `.annotations: Vec<Annotation>` field. Today that's:
+        // Session, Definition, ListItem, Paragraph, List, Table, and
+        // Verbatim (as VerbatimBlock). Missing any of these would let
+        // origin-aware lookups silently skip a valid match.
         let attached: &[Annotation] = match item {
             ContentItem::Session(s) => &s.annotations,
             ContentItem::Definition(d) => &d.annotations,
             ContentItem::ListItem(li) => &li.annotations,
             ContentItem::Paragraph(p) => &p.annotations,
+            ContentItem::List(l) => &l.annotations,
+            ContentItem::Table(t) => &t.annotations,
+            ContentItem::VerbatimBlock(v) => &v.annotations,
             _ => &[],
         };
         for ann in attached {
