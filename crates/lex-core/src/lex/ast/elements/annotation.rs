@@ -60,6 +60,17 @@ use super::typed_content::ContentElement;
 use std::fmt;
 
 /// An annotation represents some metadata about an AST element.
+///
+/// # Reserved label namespace
+///
+/// Labels starting with `lex.` (the `lex.*` namespace, [`Annotation::RESERVED_NAMESPACE_PREFIX`])
+/// are reserved for core-defined semantics. Third-party tooling must not author labels in
+/// this namespace; the core may add new `lex.*` labels without a coordinating versioning
+/// concern. Non-reserved labels remain freely available for extensions
+/// (`mycompany.include`, `docs.embed`, etc.).
+///
+/// The current set of reserved labels:
+/// - [`Annotation::INCLUDE_LABEL`] (`"lex.include"`) — see `comms/specs/proposals/includes.lex`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Annotation {
     pub data: Data,
@@ -68,6 +79,21 @@ pub struct Annotation {
 }
 
 impl Annotation {
+    /// Reserved label prefix for core-defined annotation semantics.
+    ///
+    /// Any annotation whose label starts with this prefix is owned by the Lex
+    /// core and may carry behavior in the resolver / analysis layers. External
+    /// authors should pick a different namespace.
+    pub const RESERVED_NAMESPACE_PREFIX: &'static str = "lex.";
+
+    /// Reserved label for the include directive.
+    ///
+    /// An annotation with this label and a `src=` parameter is interpreted by
+    /// `lex_core::includes` as a request to splice another Lex file's content
+    /// into the parent container at the annotation's position. See
+    /// `comms/specs/proposals/includes.lex` for the full design.
+    pub const INCLUDE_LABEL: &'static str = "lex.include";
+
     fn default_location() -> Range {
         Range::new(0..0, Position::new(0, 0), Position::new(0, 0))
     }
@@ -103,6 +129,38 @@ impl Annotation {
     /// Bounding range covering only the annotation's children.
     pub fn body_location(&self) -> Option<Range> {
         Range::bounding_box(self.children.iter().map(|item| item.range()))
+    }
+
+    /// Whether this annotation's label is in the reserved `lex.*` namespace.
+    pub fn is_reserved(&self) -> bool {
+        self.data
+            .label
+            .value
+            .starts_with(Self::RESERVED_NAMESPACE_PREFIX)
+    }
+
+    /// Whether this annotation is the include directive (label `lex.include`).
+    ///
+    /// Hides the string-match on the reserved label so callers don't sprinkle
+    /// `annotation.label == "lex.include"` throughout the codebase. Also serves
+    /// as the migration boundary if a future version models includes as a
+    /// distinct AST node type.
+    pub fn is_include(&self) -> bool {
+        self.data.label.value == Self::INCLUDE_LABEL
+    }
+
+    /// The `src=` parameter value, if present.
+    ///
+    /// Useful on its own for any annotation that uses a `src` parameter
+    /// (verbatim-via-annotation, future `lex.*` directives, etc.). For
+    /// the include-specific case, callers typically pair this with
+    /// [`Annotation::is_include`].
+    pub fn include_src(&self) -> Option<&str> {
+        self.data
+            .parameters
+            .iter()
+            .find(|p| p.key == "src")
+            .map(|p| p.value.as_str())
     }
 }
 
@@ -190,5 +248,58 @@ mod tests {
 
         assert_eq!(annotation.header_location().span, header_range.span);
         assert_eq!(annotation.body_location().unwrap().span, child_range.span);
+    }
+
+    fn ann(label: &str, params: Vec<(&str, &str)>) -> Annotation {
+        let parameters = params
+            .into_iter()
+            .map(|(k, v)| Parameter::new(k.to_string(), v.to_string()))
+            .collect();
+        Annotation::with_parameters(Label::new(label.to_string()), parameters)
+    }
+
+    #[test]
+    fn test_is_reserved() {
+        assert!(ann("lex.include", vec![]).is_reserved());
+        assert!(ann("lex.foo.bar", vec![]).is_reserved());
+        // Boundary: a label that starts with "lex" but not "lex." is NOT reserved.
+        assert!(!ann("lexicon", vec![]).is_reserved());
+        assert!(!ann("review", vec![]).is_reserved());
+        assert!(!ann("mycompany.include", vec![]).is_reserved());
+    }
+
+    #[test]
+    fn test_is_include() {
+        assert!(ann("lex.include", vec![("src", "x.lex")]).is_include());
+        // Other lex.* labels are reserved but not includes.
+        assert!(!ann("lex.something_else", vec![]).is_include());
+        // Same trailing label without the lex. prefix is not an include.
+        assert!(!ann("include", vec![("src", "x.lex")]).is_include());
+    }
+
+    #[test]
+    fn test_include_src() {
+        let with_src = ann("lex.include", vec![("src", "chapters/01.lex")]);
+        assert_eq!(with_src.include_src(), Some("chapters/01.lex"));
+
+        // The accessor is independent of the label — works for any annotation
+        // that happens to carry a `src` parameter (verbatim-via-annotation, etc.)
+        let other_with_src = ann("image", vec![("src", "diagram.png")]);
+        assert_eq!(other_with_src.include_src(), Some("diagram.png"));
+
+        // No src parameter → None.
+        assert_eq!(ann("lex.include", vec![]).include_src(), None);
+        assert_eq!(
+            ann("lex.include", vec![("title", "Chapter 1")]).include_src(),
+            None
+        );
+    }
+
+    #[test]
+    fn test_constants_match_documented_values() {
+        assert_eq!(Annotation::RESERVED_NAMESPACE_PREFIX, "lex.");
+        assert_eq!(Annotation::INCLUDE_LABEL, "lex.include");
+        // Sanity: the include label is itself reserved.
+        assert!(Annotation::INCLUDE_LABEL.starts_with(Annotation::RESERVED_NAMESPACE_PREFIX));
     }
 }
