@@ -19,6 +19,10 @@
   - New `lex_core::lex::includes::FsLoader` is the production loader (filesystem-backed). Only `FsLoader` references `std::fs` — the rest of `lex-core` stays sandbox-clean.
   - Editor packages (`vscode`, `nvim`, `lexed`) pick up nothing yet — LSP integration lands in PR 8.
 
+### Changed
+
+- Bumped `comms` submodule to v0.16.0, which adds the canonical `specs/elements/lex.include.lex` element doc, the `specs/elements/lex.include.docs/` fixture set, and formally reserves the `lex.*` annotation label namespace in `specs/general.lex` §3.1. Also archives the includes proposal to `specs/proposals/done/includes.lex` per the new "frozen-when-implemented" convention.
+
 ## [0.9.2] - 2026-05-02
 
 

@@ -91,6 +91,16 @@ fn spec_inlines() {
 }
 
 #[test]
+fn spec_lex_include() {
+    let doc = Lexplore::from_path(workspace_path("comms/specs/elements/lex.include.lex"))
+        .parse()
+        .unwrap();
+    assert_ast(&doc).item_count(11).item(0, |item| {
+        item.assert_session().label("Introduction");
+    });
+}
+
+#[test]
 fn spec_label() {
     let doc = Lexplore::from_path(workspace_path("comms/specs/elements/label.lex"))
         .parse()
@@ -231,6 +241,7 @@ fn all_element_spec_files_covered() {
         "footnotes.lex",
         "inlines.lex",
         "label.lex",
+        "lex.include.lex",
         "list.lex",
         "paragraph.lex",
         "parameter.lex",
