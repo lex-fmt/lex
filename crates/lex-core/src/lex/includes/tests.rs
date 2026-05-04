@@ -805,15 +805,9 @@ fn invariant_unrelated_annotations_in_included_file_keep_their_attachment_target
 }
 
 #[test]
-fn invariant_includes_inside_included_files_are_left_unresolved_in_pr4() {
-    // PR 4 is single-pass. An include inside an *included* file must NOT be
-    // recursively resolved here — that would silently apply the entry's
-    // host_dir to a path authored against the included file's directory,
-    // producing wrong paths. PR 5 will add proper recursive resolution
-    // with per-file host_dir tracking.
-    //
-    // We assert the include annotation from the inner file survives in the
-    // merged tree (attached to its target) rather than being expanded.
+fn recursion_resolves_includes_inside_included_files() {
+    // outer.lex includes inner.lex; inner.lex content must appear nested
+    // inside the outer session in the merged tree.
     let tree = fixture(
         ":: lex.include src=\"outer.lex\" ::\n",
         &[
@@ -826,22 +820,242 @@ fn invariant_includes_inside_included_files_are_left_unresolved_in_pr4() {
     )
     .unwrap();
 
-    // The outer session is in the tree.
-    assert!(tree.find_session("1. Outer").is_some());
-    // The inner include annotation survived (attached to outer session or
-    // its content, not silently dropped). We check via the labels helper.
-    let labels = tree.all_attached_annotation_labels();
+    let outer = tree.find_session("1. Outer").expect("outer missing");
+    let inner_paragraph_present = outer
+        .children
+        .iter()
+        .any(|item| matches!(item, ContentItem::Paragraph(p) if p.text() == "Inner body."));
     assert!(
-        labels.iter().any(|l| l == "lex.include"),
-        "inner lex.include should survive in PR 4 (recursion arrives in PR 5), got {labels:?}"
+        inner_paragraph_present,
+        "inner.lex body should be spliced inside outer session, got children: {:?}",
+        outer
+            .children
+            .iter()
+            .map(|i| i.node_type())
+            .collect::<Vec<_>>()
     );
-    // And the inner file's body must NOT have been spliced — that's the
-    // whole point of "no recursion in PR 4".
+    assert_no_unresolved_includes(&tree);
+    assert_origins(
+        &tree,
+        &["/repo/main.lex", "/repo/outer.lex", "/repo/inner.lex"],
+    );
+}
+
+#[test]
+fn recursion_uses_each_files_own_host_dir() {
+    // The chain entry → /repo/aggregator.lex → ./parts/intro.lex must
+    // resolve "parts/intro.lex" from /repo/, not from /repo/parts/ or
+    // wherever the entry happens to live. Conversely, an include inside
+    // /repo/sections/chapter.lex with src="./fragment.lex" must resolve
+    // to /repo/sections/fragment.lex.
+    let tree = fixture(
+        ":: lex.include src=\"sections/chapter.lex\" ::\n",
+        &[
+            (
+                "/repo/sections/chapter.lex",
+                "1. Chapter\n\n    :: lex.include src=\"./fragment.lex\" ::\n",
+            ),
+            ("/repo/sections/fragment.lex", "Fragment body.\n"),
+        ],
+    )
+    .unwrap();
+
+    let chapter = tree.find_session("1. Chapter").expect("chapter missing");
+    assert!(chapter
+        .children
+        .iter()
+        .any(|item| { matches!(item, ContentItem::Paragraph(p) if p.text() == "Fragment body.") }));
+    assert_origins(
+        &tree,
+        &[
+            "/repo/main.lex",
+            "/repo/sections/chapter.lex",
+            "/repo/sections/fragment.lex",
+        ],
+    );
+}
+
+#[test]
+fn cycle_direct_self_reference_errors() {
+    // a.lex includes itself.
+    let result = fixture(
+        ":: lex.include src=\"a.lex\" ::\n",
+        &[("/repo/a.lex", ":: lex.include src=\"a.lex\" ::\n")],
+    );
+    let err = assert_err_kind!(result, IncludeError::Cycle { .. });
+    if let IncludeError::Cycle { path, chain, .. } = err {
+        assert_eq!(path, PathBuf::from("/repo/a.lex"));
+        // chain at the moment of detection: entry → a.lex (about to push a.lex again)
+        assert!(chain.iter().any(|p| *p == PathBuf::from("/repo/a.lex")));
+    }
+}
+
+#[test]
+fn cycle_indirect_through_intermediate_errors() {
+    // a.lex → b.lex → a.lex
+    let result = fixture(
+        ":: lex.include src=\"a.lex\" ::\n",
+        &[
+            ("/repo/a.lex", ":: lex.include src=\"b.lex\" ::\n"),
+            ("/repo/b.lex", ":: lex.include src=\"a.lex\" ::\n"),
+        ],
+    );
+    let err = assert_err_kind!(result, IncludeError::Cycle { .. });
+    if let IncludeError::Cycle { chain, .. } = err {
+        assert!(chain.iter().any(|p| *p == PathBuf::from("/repo/a.lex")));
+        assert!(chain.iter().any(|p| *p == PathBuf::from("/repo/b.lex")));
+    }
+}
+
+#[test]
+fn cycle_back_to_entry_errors() {
+    // entry → a.lex → main.lex (back to the entry path).
+    let result = fixture(
+        ":: lex.include src=\"a.lex\" ::\n",
+        &[("/repo/a.lex", ":: lex.include src=\"main.lex\" ::\n")],
+    );
+    let err = assert_err_kind!(result, IncludeError::Cycle { .. });
+    if let IncludeError::Cycle { path, .. } = err {
+        assert_eq!(path, PathBuf::from("/repo/main.lex"));
+    }
+}
+
+#[test]
+fn depth_limit_triggers_at_configured_threshold() {
+    // Build a chain of 5 nested includes (each file just includes the next).
+    // With max_depth = 3, resolving past the 3rd hop fails.
+    let mut loader = MemoryLoader::new();
+    loader.insert("/repo/main.lex", ":: lex.include src=\"a.lex\" ::\n");
+    loader.insert("/repo/a.lex", ":: lex.include src=\"b.lex\" ::\n");
+    loader.insert("/repo/b.lex", ":: lex.include src=\"c.lex\" ::\n");
+    loader.insert("/repo/c.lex", ":: lex.include src=\"d.lex\" ::\n");
+    loader.insert("/repo/d.lex", "Leaf body.\n");
+    let config = ResolveConfig {
+        root: PathBuf::from(TEST_ROOT),
+        max_depth: 3,
+    };
+    let result = resolve_from_source(
+        ":: lex.include src=\"a.lex\" ::\n",
+        Some(PathBuf::from(DEFAULT_MAIN_PATH)),
+        &config,
+        &loader,
+    );
+    let err = assert_err_kind!(result, IncludeError::DepthExceeded { .. });
+    if let IncludeError::DepthExceeded { limit, chain, .. } = err {
+        assert_eq!(limit, 3);
+        // The chain at failure shows the path TO the offending include site:
+        // entry → a → b → c (depth=3, about to push d which would exceed).
+        assert_eq!(chain.len(), 4);
+    }
+}
+
+#[test]
+fn depth_limit_at_exact_max_is_allowed() {
+    // With max_depth = 2 and exactly 2 hops (entry → a → b), resolution
+    // succeeds (b has no further includes).
+    let mut loader = MemoryLoader::new();
+    loader.insert("/repo/main.lex", ":: lex.include src=\"a.lex\" ::\n");
+    loader.insert("/repo/a.lex", ":: lex.include src=\"b.lex\" ::\n");
+    loader.insert("/repo/b.lex", "Leaf.\n");
+    let config = ResolveConfig {
+        root: PathBuf::from(TEST_ROOT),
+        max_depth: 2,
+    };
+    let doc = resolve_from_source(
+        ":: lex.include src=\"a.lex\" ::\n",
+        Some(PathBuf::from(DEFAULT_MAIN_PATH)),
+        &config,
+        &loader,
+    )
+    .expect("exact-max chain should succeed");
+    let tree = Tree { doc };
+    assert!(tree.root_paragraph_texts().iter().any(|t| t == "Leaf."));
+}
+
+#[test]
+fn invariant_recursion_preserves_origin_per_file() {
+    // Each spliced node must carry its *own* origin path, not the host's.
+    // We chain 3 files and check that all three origin paths appear in
+    // the merged tree exactly once (per dedup of the origin set).
+    let tree = fixture(
+        ":: lex.include src=\"a.lex\" ::\n",
+        &[
+            (
+                "/repo/a.lex",
+                "1. From A\n\n    :: lex.include src=\"b.lex\" ::\n",
+            ),
+            ("/repo/b.lex", "B body.\n"),
+        ],
+    )
+    .unwrap();
+    assert_origins(&tree, &["/repo/main.lex", "/repo/a.lex", "/repo/b.lex"]);
+}
+
+#[test]
+fn invariant_sibling_includes_in_loaded_file_share_chain_state() {
+    // A loaded file with two sibling includes: each is resolved with the
+    // same chain state (loaded file pushed once); after each finishes
+    // its own subtree resolution, the chain returns to the right shape.
+    // If chain push/pop weren't balanced, the second sibling would
+    // either spurious-cycle (chain still has the first's target) or
+    // miss a real cycle.
+    let tree = fixture(
+        ":: lex.include src=\"agg.lex\" ::\n",
+        &[
+            (
+                "/repo/agg.lex",
+                ":: lex.include src=\"a.lex\" ::\n\n:: lex.include src=\"b.lex\" ::\n",
+            ),
+            ("/repo/a.lex", "Body A.\n"),
+            ("/repo/b.lex", "Body B.\n"),
+        ],
+    )
+    .unwrap();
+
     let texts = tree.root_paragraph_texts();
-    assert!(
-        !texts.iter().any(|t| t == "Inner body."),
-        "inner.lex body should not be spliced in PR 4 (recursion arrives in PR 5), got {texts:?}"
+    assert!(texts.iter().any(|t| t == "Body A."), "{texts:?}");
+    assert!(texts.iter().any(|t| t == "Body B."), "{texts:?}");
+}
+
+#[test]
+fn cycle_back_to_unnormalized_entry_path_still_detected() {
+    // Regression: if the entry's source_path has `.` or `..` components,
+    // it must be lexically normalized before being seeded into the chain
+    // — otherwise a cycle that loops back to it (using the normalized
+    // form, as `resolve_path` produces) compares unequal and is missed.
+    let mut loader = MemoryLoader::new();
+    loader.insert("/repo/main.lex", ":: lex.include src=\"a.lex\" ::\n");
+    loader.insert("/repo/a.lex", ":: lex.include src=\"main.lex\" ::\n");
+    let config = ResolveConfig::with_root(PathBuf::from(TEST_ROOT));
+    // Entry path written with a non-normalized form (`./main.lex`) — the
+    // resolver must normalize it to `/repo/main.lex` before chain
+    // comparisons, so the loop-back from a.lex catches the cycle.
+    let result = resolve_from_source(
+        ":: lex.include src=\"a.lex\" ::\n",
+        Some(PathBuf::from("/repo/./main.lex")),
+        &config,
+        &loader,
     );
+    assert_err_kind!(result, IncludeError::Cycle { .. });
+}
+
+#[test]
+fn invariant_nested_resolution_leaves_no_unresolved_includes() {
+    // Recursion contract: every `lex.include` annotation in every file
+    // (entry + each loaded file) is resolved by the time the merged tree
+    // is returned. Two-level nesting is the simplest non-trivial probe.
+    let tree = fixture(
+        ":: lex.include src=\"outer.lex\" ::\n",
+        &[
+            (
+                "/repo/outer.lex",
+                "1. Outer\n\n    :: lex.include src=\"inner.lex\" ::\n",
+            ),
+            ("/repo/inner.lex", "Inner body.\n"),
+        ],
+    )
+    .unwrap();
+    assert_no_unresolved_includes(&tree);
 }
 
 #[test]
@@ -912,6 +1126,7 @@ fn load_error_converts_to_include_error_preserving_kind() {
 #[test]
 fn errors_format_with_relevant_paths() {
     let cycle = IncludeError::Cycle {
+        include_site: Range::default(),
         path: PathBuf::from("/a.lex"),
         chain: vec![PathBuf::from("/main.lex"), PathBuf::from("/a.lex")],
     };
@@ -919,8 +1134,14 @@ fn errors_format_with_relevant_paths() {
     assert!(s.contains("/a.lex"));
     assert!(s.contains("/main.lex"));
 
-    let depth = IncludeError::DepthExceeded { limit: 8 };
-    assert!(depth.to_string().contains("8"));
+    let depth = IncludeError::DepthExceeded {
+        include_site: Range::default(),
+        limit: 8,
+        chain: vec![PathBuf::from("/main.lex"), PathBuf::from("/a.lex")],
+    };
+    let s = depth.to_string();
+    assert!(s.contains("8"));
+    assert!(s.contains("/main.lex"));
 
     let escape = IncludeError::RootEscape {
         path: PathBuf::from("/etc/passwd"),

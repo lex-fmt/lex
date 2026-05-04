@@ -14,12 +14,13 @@
 //! This module is being built up across PRs 3–6:
 //!
 //! - PR 3: skeleton — trait, config, errors, stub.
-//! - PR 4 (this PR): single-pass splice + container-policy validation +
+//! - PR 4: single-pass splice + container-policy validation +
 //!   doc-title/doc-annotation conversion + origin stamping + root-escape
-//!   check. **No recursion into included files yet** — `lex.include`
-//!   annotations inside *included* files survive into the merged tree
-//!   as unresolved annotations.
-//! - PR 5: recursive resolution + cycle detection + depth limit.
+//!   check.
+//! - PR 5 (this PR): recursive resolution into included files + cycle
+//!   detection (chain stack) + depth limit. Each loaded file gets walked
+//!   in its OWN directory, so relative paths inside an included file
+//!   resolve from that file's directory, not the entry's.
 //! - PR 6: per-file footnote resolution + file-ref `Range.origin_path`
 //!   consultation.
 //!
@@ -117,10 +118,25 @@ impl std::error::Error for LoadError {}
 /// Errors the include resolver can produce.
 #[derive(Debug, Clone)]
 pub enum IncludeError {
-    /// An include chain looped back on itself. (PR 5.)
-    Cycle { path: PathBuf, chain: Vec<PathBuf> },
-    /// The include depth exceeded [`ResolveConfig::max_depth`]. (PR 5.)
-    DepthExceeded { limit: usize },
+    /// An include chain looped back on itself. `chain` is the resolution
+    /// stack at the moment the duplicate `path` was about to be pushed,
+    /// in source-order (entry first, deepest last). `include_site` is the
+    /// range of the offending `lex.include` annotation in its host file —
+    /// useful for diagnostics that highlight the exact line.
+    Cycle {
+        include_site: Range,
+        path: PathBuf,
+        chain: Vec<PathBuf>,
+    },
+    /// The include depth exceeded [`ResolveConfig::max_depth`]. `chain`
+    /// shows the resolution stack at the moment of failure, in source
+    /// order. `include_site` is the range of the offending
+    /// `lex.include` annotation in its host file.
+    DepthExceeded {
+        include_site: Range,
+        limit: usize,
+        chain: Vec<PathBuf>,
+    },
     /// A path resolved outside the configured [`ResolveConfig::root`].
     RootEscape { path: PathBuf, root: PathBuf },
     /// The loader could not find or read the included file.
@@ -151,7 +167,7 @@ pub enum IncludeError {
 impl std::fmt::Display for IncludeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            IncludeError::Cycle { path, chain } => {
+            IncludeError::Cycle { path, chain, .. } => {
                 let chain_display: Vec<String> =
                     chain.iter().map(|p| p.display().to_string()).collect();
                 write!(
@@ -161,8 +177,14 @@ impl std::fmt::Display for IncludeError {
                     chain_display.join(" -> ")
                 )
             }
-            IncludeError::DepthExceeded { limit } => {
-                write!(f, "include depth exceeded limit of {limit}")
+            IncludeError::DepthExceeded { limit, chain, .. } => {
+                let chain_display: Vec<String> =
+                    chain.iter().map(|p| p.display().to_string()).collect();
+                write!(
+                    f,
+                    "include depth exceeded limit of {limit} (chain: {})",
+                    chain_display.join(" -> ")
+                )
             }
             IncludeError::RootEscape { path, root } => write!(
                 f,
@@ -238,29 +260,34 @@ impl ContainerKind {
     }
 }
 
-/// Resolve `:: lex.include ::` annotations starting from `source`.
+/// Resolve `:: lex.include ::` annotations starting from `source`, recursively.
 ///
 /// `source_path` identifies the entry-point file. It is used to (a) resolve
-/// relative include paths against the entry file's directory, and (b) stamp
+/// relative include paths against the entry file's directory, (b) stamp
 /// `Range.origin_path` on every node so downstream code (file-ref resolution,
-/// diagnostics, LSP goto) can report locations against the authoring file.
-/// When `None`, relative paths resolve against `config.root` and origin
-/// stamping is skipped on the entry document.
+/// diagnostics, LSP goto) can report locations against the authoring file,
+/// and (c) seed the cycle-detection chain so an include cycle that loops
+/// back to the entry is caught. When `None`, relative paths resolve against
+/// `config.root`, origin stamping is skipped on the entry, and the chain
+/// starts empty.
 ///
 /// # Pre/post-attachment
 ///
-/// Internally this re-parses the source *without* annotation attachment so
-/// `lex.include` annotations are visible as standalone children where the
-/// splice can replace them in-place. After splicing, [`AttachAnnotations`]
-/// runs once on the merged tree, which lands the include annotation on the
-/// first spliced node by the standard "attach to next sibling" rule. This
-/// matches the textual paste mental model from the proposal.
+/// Internally this re-parses each source (entry + every loaded file) *without*
+/// annotation attachment so `lex.include` annotations are visible as standalone
+/// children where the splice can replace them in-place. After all splices,
+/// [`AttachAnnotations`] runs once on the merged tree, which lands the include
+/// annotation on the first spliced node by the standard "attach to next
+/// sibling" rule. This matches the textual paste mental model from the proposal.
 ///
-/// # Scope (PR 4)
+/// # Recursion
 ///
-/// Single-pass splice only — no recursion into included files. PR 5 adds
-/// recursion + cycle/depth/root-escape safety; PR 6 hooks per-file footnote
-/// resolution.
+/// Each loaded file is fully resolved (its own includes replaced) *before*
+/// being spliced into the host. The recursion uses each file's own directory
+/// as `host_dir`, so a relative path inside an included file resolves from
+/// that file's location — not the entry's. An active-chain stack of
+/// canonicalized paths gates against cycles; the depth counter gates against
+/// pathological nesting (default 8, configurable via [`ResolveConfig::max_depth`]).
 pub fn resolve_from_source(
     source: &str,
     source_path: Option<PathBuf>,
@@ -282,7 +309,23 @@ pub fn resolve_from_source(
         stamp_doc(&mut doc, origin);
     }
 
-    splice_in_session_container(doc.root.children.as_mut_vec(), &host_dir, config, loader)?;
+    // Seed the chain with the lexically-normalized entry path (when known)
+    // so an include that loops back to the entry is detected as a cycle.
+    // Normalization here is essential — `target_path` values produced by
+    // `resolve_path` are also lexically normalized, so an unnormalized
+    // entry would never compare equal to its normalized self.
+    let mut chain: Vec<PathBuf> = source_path
+        .as_ref()
+        .map(|p| vec![lexical_normalize(p)])
+        .unwrap_or_default();
+    let mut state = ResolverState {
+        config,
+        loader,
+        chain: &mut chain,
+        depth: 0,
+    };
+
+    splice_in_session_container(doc.root.children.as_mut_vec(), &host_dir, &mut state)?;
 
     let doc = AttachAnnotations::new()
         .run(doc)
@@ -298,32 +341,53 @@ pub fn resolve_from_source(
 // Splicing
 // ============================================================================
 
+/// Per-resolution state threaded through the recursive walker. Keeps the
+/// signatures of the splice/process functions short and ensures
+/// `chain`/`depth` are updated in lock-step (push/pop, +1/back-out) at
+/// each include site.
+struct ResolverState<'a> {
+    config: &'a ResolveConfig,
+    loader: &'a dyn Loader,
+    /// Active resolution stack: lexically-normalized absolute paths
+    /// currently being resolved. Pushed when we begin loading a file and
+    /// popped when its tree is fully resolved. A push that finds the
+    /// path already on the stack is a cycle.
+    ///
+    /// Normalization (not filesystem canonicalization) is what's used
+    /// here: the resolver never touches `std::fs`, so symlink resolution
+    /// is out. Two paths that lexically refer to the same file (after
+    /// `.`/`..` collapse) compare equal; two paths reaching the same
+    /// inode via different routes do not. For real-FS use cases this is
+    /// fine because `FsLoader` will canonicalize on load before the
+    /// chain comparison sees the path.
+    chain: &'a mut Vec<PathBuf>,
+    /// Number of include hops from the entry point. Each recursion into a
+    /// loaded file increments by 1. Hitting `config.max_depth` is an error.
+    depth: usize,
+}
+
 fn splice_in_session_container(
     children: &mut Vec<ContentItem>,
     host_dir: &Path,
-    config: &ResolveConfig,
-    loader: &dyn Loader,
+    state: &mut ResolverState<'_>,
 ) -> Result<(), IncludeError> {
-    // Post-order: recurse into the *original* nested containers first,
-    // splice this container's includes second. Any newly-spliced content
-    // (which itself may contain `lex.include` annotations) is therefore
-    // never re-walked, so this PR stays single-pass: includes inside
-    // included files survive into the merged tree as unresolved
-    // annotations. PR 5 will replace this with proper recursive
-    // resolution that tracks each loaded file's own host_dir.
-    recurse_into_children(children, host_dir, config, loader)?;
-    process_includes(children, host_dir, config, loader, ContainerKind::Session)
+    // Post-order: recurse into nested containers first, splice this
+    // container's includes second. The recurse step walks the *original*
+    // tree; the splice step inserts already-fully-resolved content
+    // (recursion happens inside `process_includes`), which is therefore
+    // never re-walked.
+    recurse_into_children(children, host_dir, state)?;
+    process_includes(children, host_dir, state, ContainerKind::Session)
 }
 
 fn splice_in_general_container(
     container: &mut GeneralContainer,
     host_dir: &Path,
-    config: &ResolveConfig,
-    loader: &dyn Loader,
+    state: &mut ResolverState<'_>,
     kind: ContainerKind,
 ) -> Result<(), IncludeError> {
-    recurse_into_children(container.as_mut_vec(), host_dir, config, loader)?;
-    process_includes(container.as_mut_vec(), host_dir, config, loader, kind)
+    recurse_into_children(container.as_mut_vec(), host_dir, state)?;
+    process_includes(container.as_mut_vec(), host_dir, state, kind)
 }
 
 // Allow &mut Vec because `splice` needs Vec-specific operations.
@@ -331,8 +395,7 @@ fn splice_in_general_container(
 fn process_includes(
     children: &mut Vec<ContentItem>,
     host_dir: &Path,
-    config: &ResolveConfig,
-    loader: &dyn Loader,
+    state: &mut ResolverState<'_>,
     kind: ContainerKind,
 ) -> Result<(), IncludeError> {
     // Collect indices of standalone include annotations in this container.
@@ -352,26 +415,7 @@ fn process_includes(
             _ => unreachable!("index came from include filter"),
         };
 
-        let src = annotation
-            .include_src()
-            .ok_or_else(|| IncludeError::MissingSrc {
-                include_site: annotation.location.clone(),
-            })?;
-
-        let target_path = resolve_path(&src, host_dir, &config.root)?;
-        let target_source = loader.load(&target_path)?;
-
-        let mut included =
-            parse_no_attach(&target_source).map_err(|message| IncludeError::ParseFailed {
-                path: target_path.clone(),
-                message,
-            })?;
-
-        let target_origin = Arc::new(target_path.clone());
-        stamp_doc(&mut included, &target_origin);
-
-        let splice_items = prepare_splice_list(included);
-        validate_against_kind(&splice_items, kind, &annotation.location, &target_path)?;
+        let splice_items = resolve_one_include(&annotation, host_dir, state, kind)?;
 
         // Replace the include annotation with the splice content.
         // The annotation itself stays in the children list immediately
@@ -387,24 +431,104 @@ fn process_includes(
     Ok(())
 }
 
+/// Resolve a single include annotation: path → load → parse → recurse →
+/// stamp → policy-check → splice list.
+///
+/// The recursion happens *here*: after parsing the loaded file, we walk
+/// its tree with the loaded file's own directory as `host_dir`, with the
+/// loaded file pushed onto `state.chain` and `state.depth` bumped by 1.
+/// When this call returns, the splice list is fully resolved and ready to
+/// be inserted into the host container.
+fn resolve_one_include(
+    annotation: &crate::lex::ast::elements::annotation::Annotation,
+    host_dir: &Path,
+    state: &mut ResolverState<'_>,
+    parent_kind: ContainerKind,
+) -> Result<Vec<ContentItem>, IncludeError> {
+    let src = annotation
+        .include_src()
+        .ok_or_else(|| IncludeError::MissingSrc {
+            include_site: annotation.location.clone(),
+        })?;
+
+    let target_path = resolve_path(&src, host_dir, &state.config.root)?;
+
+    // Cycle check before load — keep loader free of duplicate work.
+    if state.chain.iter().any(|p| p == &target_path) {
+        return Err(IncludeError::Cycle {
+            include_site: annotation.location.clone(),
+            path: target_path,
+            chain: state.chain.clone(),
+        });
+    }
+
+    // Depth check before recursing into the loaded file. A site that sits
+    // exactly at `max_depth` is fine; a site that would push us *past* it
+    // is the failure case.
+    if state.depth >= state.config.max_depth {
+        return Err(IncludeError::DepthExceeded {
+            include_site: annotation.location.clone(),
+            limit: state.config.max_depth,
+            chain: state.chain.clone(),
+        });
+    }
+
+    let target_source = state.loader.load(&target_path)?;
+
+    let mut included =
+        parse_no_attach(&target_source).map_err(|message| IncludeError::ParseFailed {
+            path: target_path.clone(),
+            message,
+        })?;
+
+    let target_origin = Arc::new(target_path.clone());
+    stamp_doc(&mut included, &target_origin);
+
+    // Recursively resolve includes inside the loaded file. The host_dir
+    // for that walk is the loaded file's own parent; the chain gains
+    // this path and depth bumps by 1 — both are popped/restored on the
+    // way back so siblings see the same state we got.
+    let included_dir = target_path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| state.config.root.clone());
+
+    state.chain.push(target_path.clone());
+    let saved_depth = state.depth;
+    state.depth = saved_depth + 1;
+    let recurse_result =
+        splice_in_session_container(included.root.children.as_mut_vec(), &included_dir, state);
+    state.depth = saved_depth;
+    state.chain.pop();
+    recurse_result?;
+
+    let splice_items = prepare_splice_list(included);
+    validate_against_kind(
+        &splice_items,
+        parent_kind,
+        &annotation.location,
+        &target_path,
+    )?;
+
+    Ok(splice_items)
+}
+
 #[allow(clippy::ptr_arg)]
 fn recurse_into_children(
     children: &mut Vec<ContentItem>,
     host_dir: &Path,
-    config: &ResolveConfig,
-    loader: &dyn Loader,
+    state: &mut ResolverState<'_>,
 ) -> Result<(), IncludeError> {
     for item in children.iter_mut() {
         match item {
             ContentItem::Session(s) => {
-                splice_in_session_container(s.children.as_mut_vec(), host_dir, config, loader)?;
+                splice_in_session_container(s.children.as_mut_vec(), host_dir, state)?;
             }
             ContentItem::Definition(d) => {
                 splice_in_general_container(
                     &mut d.children,
                     host_dir,
-                    config,
-                    loader,
+                    state,
                     ContainerKind::Definition,
                 )?;
             }
@@ -412,8 +536,7 @@ fn recurse_into_children(
                 splice_in_general_container(
                     &mut a.children,
                     host_dir,
-                    config,
-                    loader,
+                    state,
                     ContainerKind::AnnotationBody,
                 )?;
             }
@@ -423,8 +546,7 @@ fn recurse_into_children(
                         splice_in_general_container(
                             &mut item.children,
                             host_dir,
-                            config,
-                            loader,
+                            state,
                             ContainerKind::ListItem,
                         )?;
                     }
