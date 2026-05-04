@@ -883,7 +883,7 @@ fn cycle_direct_self_reference_errors() {
         &[("/repo/a.lex", ":: lex.include src=\"a.lex\" ::\n")],
     );
     let err = assert_err_kind!(result, IncludeError::Cycle { .. });
-    if let IncludeError::Cycle { path, chain } = err {
+    if let IncludeError::Cycle { path, chain, .. } = err {
         assert_eq!(path, PathBuf::from("/repo/a.lex"));
         // chain at the moment of detection: entry → a.lex (about to push a.lex again)
         assert!(chain.iter().any(|p| *p == PathBuf::from("/repo/a.lex")));
@@ -941,8 +941,11 @@ fn depth_limit_triggers_at_configured_threshold() {
         &loader,
     );
     let err = assert_err_kind!(result, IncludeError::DepthExceeded { .. });
-    if let IncludeError::DepthExceeded { limit } = err {
+    if let IncludeError::DepthExceeded { limit, chain, .. } = err {
         assert_eq!(limit, 3);
+        // The chain at failure shows the path TO the offending include site:
+        // entry → a → b → c (depth=3, about to push d which would exceed).
+        assert_eq!(chain.len(), 4);
     }
 }
 
@@ -1015,10 +1018,32 @@ fn invariant_sibling_includes_in_loaded_file_share_chain_state() {
 }
 
 #[test]
-fn invariant_includes_inside_included_files_are_left_unresolved_in_pr4() {
-    // (Renamed from its PR 4 spelling for clarity, but kept as a depth
-    // probe: deep nesting still resolves correctly without leaking
-    // unresolved annotations.)
+fn cycle_back_to_unnormalized_entry_path_still_detected() {
+    // Regression: if the entry's source_path has `.` or `..` components,
+    // it must be lexically normalized before being seeded into the chain
+    // — otherwise a cycle that loops back to it (using the normalized
+    // form, as `resolve_path` produces) compares unequal and is missed.
+    let mut loader = MemoryLoader::new();
+    loader.insert("/repo/main.lex", ":: lex.include src=\"a.lex\" ::\n");
+    loader.insert("/repo/a.lex", ":: lex.include src=\"main.lex\" ::\n");
+    let config = ResolveConfig::with_root(PathBuf::from(TEST_ROOT));
+    // Entry path written with a non-normalized form (`./main.lex`) — the
+    // resolver must normalize it to `/repo/main.lex` before chain
+    // comparisons, so the loop-back from a.lex catches the cycle.
+    let result = resolve_from_source(
+        ":: lex.include src=\"a.lex\" ::\n",
+        Some(PathBuf::from("/repo/./main.lex")),
+        &config,
+        &loader,
+    );
+    assert_err_kind!(result, IncludeError::Cycle { .. });
+}
+
+#[test]
+fn invariant_nested_resolution_leaves_no_unresolved_includes() {
+    // Recursion contract: every `lex.include` annotation in every file
+    // (entry + each loaded file) is resolved by the time the merged tree
+    // is returned. Two-level nesting is the simplest non-trivial probe.
     let tree = fixture(
         ":: lex.include src=\"outer.lex\" ::\n",
         &[
@@ -1101,6 +1126,7 @@ fn load_error_converts_to_include_error_preserving_kind() {
 #[test]
 fn errors_format_with_relevant_paths() {
     let cycle = IncludeError::Cycle {
+        include_site: Range::default(),
         path: PathBuf::from("/a.lex"),
         chain: vec![PathBuf::from("/main.lex"), PathBuf::from("/a.lex")],
     };
@@ -1108,8 +1134,14 @@ fn errors_format_with_relevant_paths() {
     assert!(s.contains("/a.lex"));
     assert!(s.contains("/main.lex"));
 
-    let depth = IncludeError::DepthExceeded { limit: 8 };
-    assert!(depth.to_string().contains("8"));
+    let depth = IncludeError::DepthExceeded {
+        include_site: Range::default(),
+        limit: 8,
+        chain: vec![PathBuf::from("/main.lex"), PathBuf::from("/a.lex")],
+    };
+    let s = depth.to_string();
+    assert!(s.contains("8"));
+    assert!(s.contains("/main.lex"));
 
     let escape = IncludeError::RootEscape {
         path: PathBuf::from("/etc/passwd"),

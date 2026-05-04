@@ -118,10 +118,25 @@ impl std::error::Error for LoadError {}
 /// Errors the include resolver can produce.
 #[derive(Debug, Clone)]
 pub enum IncludeError {
-    /// An include chain looped back on itself. (PR 5.)
-    Cycle { path: PathBuf, chain: Vec<PathBuf> },
-    /// The include depth exceeded [`ResolveConfig::max_depth`]. (PR 5.)
-    DepthExceeded { limit: usize },
+    /// An include chain looped back on itself. `chain` is the resolution
+    /// stack at the moment the duplicate `path` was about to be pushed,
+    /// in source-order (entry first, deepest last). `include_site` is the
+    /// range of the offending `lex.include` annotation in its host file —
+    /// useful for diagnostics that highlight the exact line.
+    Cycle {
+        include_site: Range,
+        path: PathBuf,
+        chain: Vec<PathBuf>,
+    },
+    /// The include depth exceeded [`ResolveConfig::max_depth`]. `chain`
+    /// shows the resolution stack at the moment of failure, in source
+    /// order. `include_site` is the range of the offending
+    /// `lex.include` annotation in its host file.
+    DepthExceeded {
+        include_site: Range,
+        limit: usize,
+        chain: Vec<PathBuf>,
+    },
     /// A path resolved outside the configured [`ResolveConfig::root`].
     RootEscape { path: PathBuf, root: PathBuf },
     /// The loader could not find or read the included file.
@@ -152,7 +167,7 @@ pub enum IncludeError {
 impl std::fmt::Display for IncludeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            IncludeError::Cycle { path, chain } => {
+            IncludeError::Cycle { path, chain, .. } => {
                 let chain_display: Vec<String> =
                     chain.iter().map(|p| p.display().to_string()).collect();
                 write!(
@@ -162,8 +177,14 @@ impl std::fmt::Display for IncludeError {
                     chain_display.join(" -> ")
                 )
             }
-            IncludeError::DepthExceeded { limit } => {
-                write!(f, "include depth exceeded limit of {limit}")
+            IncludeError::DepthExceeded { limit, chain, .. } => {
+                let chain_display: Vec<String> =
+                    chain.iter().map(|p| p.display().to_string()).collect();
+                write!(
+                    f,
+                    "include depth exceeded limit of {limit} (chain: {})",
+                    chain_display.join(" -> ")
+                )
             }
             IncludeError::RootEscape { path, root } => write!(
                 f,
@@ -288,9 +309,15 @@ pub fn resolve_from_source(
         stamp_doc(&mut doc, origin);
     }
 
-    // Seed the chain with the entry path (when known) so an include that
-    // loops back to the entry is detected as a cycle.
-    let mut chain: Vec<PathBuf> = source_path.iter().cloned().collect();
+    // Seed the chain with the lexically-normalized entry path (when known)
+    // so an include that loops back to the entry is detected as a cycle.
+    // Normalization here is essential — `target_path` values produced by
+    // `resolve_path` are also lexically normalized, so an unnormalized
+    // entry would never compare equal to its normalized self.
+    let mut chain: Vec<PathBuf> = source_path
+        .as_ref()
+        .map(|p| vec![lexical_normalize(p)])
+        .unwrap_or_default();
     let mut state = ResolverState {
         config,
         loader,
@@ -321,9 +348,18 @@ pub fn resolve_from_source(
 struct ResolverState<'a> {
     config: &'a ResolveConfig,
     loader: &'a dyn Loader,
-    /// Active resolution stack: paths currently being resolved. Pushed when
-    /// we begin loading a file and popped when its tree is fully resolved.
-    /// A push that finds the path already on the stack is a cycle.
+    /// Active resolution stack: lexically-normalized absolute paths
+    /// currently being resolved. Pushed when we begin loading a file and
+    /// popped when its tree is fully resolved. A push that finds the
+    /// path already on the stack is a cycle.
+    ///
+    /// Normalization (not filesystem canonicalization) is what's used
+    /// here: the resolver never touches `std::fs`, so symlink resolution
+    /// is out. Two paths that lexically refer to the same file (after
+    /// `.`/`..` collapse) compare equal; two paths reaching the same
+    /// inode via different routes do not. For real-FS use cases this is
+    /// fine because `FsLoader` will canonicalize on load before the
+    /// chain comparison sees the path.
     chain: &'a mut Vec<PathBuf>,
     /// Number of include hops from the entry point. Each recursion into a
     /// loaded file increments by 1. Hitting `config.max_depth` is an error.
@@ -420,6 +456,7 @@ fn resolve_one_include(
     // Cycle check before load — keep loader free of duplicate work.
     if state.chain.iter().any(|p| p == &target_path) {
         return Err(IncludeError::Cycle {
+            include_site: annotation.location.clone(),
             path: target_path,
             chain: state.chain.clone(),
         });
@@ -430,7 +467,9 @@ fn resolve_one_include(
     // is the failure case.
     if state.depth >= state.config.max_depth {
         return Err(IncludeError::DepthExceeded {
+            include_site: annotation.location.clone(),
             limit: state.config.max_depth,
+            chain: state.chain.clone(),
         });
     }
 
