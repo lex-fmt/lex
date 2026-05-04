@@ -21,22 +21,25 @@
 //!   (chain stack) + depth limit. Each loaded file gets walked in its OWN
 //!   directory, so relative paths inside an included file resolve from
 //!   that file's directory, not the entry's.
-//! - PR 6 (this PR): origin-aware reference helpers. New
-//!   [`resolve_file_reference`] resolves a `ReferenceType::File` target
-//!   from the authoring file's directory using `Range.origin_path`. New
+//! - PR 6: origin-aware reference helpers. [`resolve_file_reference`]
+//!   resolves a `ReferenceType::File` target from the authoring file's
+//!   directory using `Range.origin_path`.
 //!   `Document::find_annotation_by_label_in_origin` scopes footnote
-//!   lookups to the file the reference was authored in. These complete
-//!   the machinery; downstream wiring lands in PR 7 (CLI) and PR 8 (LSP).
+//!   lookups to the file the reference was authored in.
+//! - PR 7 (this PR): [`FsLoader`] — production loader that reads from the
+//!   filesystem with `std::fs::read_to_string`. CLI wires the resolver
+//!   into `lex convert` and `lex inspect` (default-on, opt-out via
+//!   `--no-includes`); `lex format` never expands.
 //!
 //! # Layering
 //!
-//! lex-core's own code does *not* reference `std::fs` for include resolution.
-//! Production [`Loader`] implementations live in the calling layer:
+//! Of all of lex-core, only [`FsLoader`] references `std::fs`. The
+//! resolver itself does no I/O — it always goes through the [`Loader`]
+//! trait. Callers can swap loaders to keep the resolver sandboxed:
 //!
-//! - `FsLoader` will land in PR 7 (CLI integration), in lex-core but feature-gated
-//!   to keep the no-FS-by-default property of this crate's library code.
-//! - The LSP wraps an FS loader with file-watch invalidation (PR 8).
-//! - WASM builds provide a JS-backed loader.
+//! - The LSP wraps [`FsLoader`] with file-watch invalidation (PR 8).
+//! - WASM builds provide a JS-backed loader instead of [`FsLoader`].
+//! - Tests use [`MemoryLoader`] (gated behind `test-support`).
 //!
 //! For tests, lex-core itself ships [`MemoryLoader`] gated behind the
 //! `test-support` cargo feature. It is not intended for production use.
@@ -796,6 +799,50 @@ fn stamp_item(item: &mut ContentItem, origin: &Arc<PathBuf>) {
 /// so include annotations are findable in container children lists.
 fn parse_no_attach(source: &str) -> Result<Document, String> {
     crate::lex::testing::parse_without_annotation_attachment(source)
+}
+
+// ============================================================================
+// Filesystem-backed loader
+// ============================================================================
+
+/// [`Loader`] that reads files from the filesystem with `std::fs::read_to_string`.
+///
+/// This is the production loader used by the CLI; the LSP wraps it with a
+/// file-watch invalidation layer in PR 8. lex-core's *resolver* code does not
+/// reference `std::fs` — `FsLoader` is the one place where it does, isolated
+/// behind the [`Loader`] trait so the rest of the crate stays sandbox- and
+/// WASM-friendly.
+///
+/// `FsLoader` is stateless; construct one at the start of a resolution and
+/// share it for the duration. Errors map cleanly:
+/// - `std::io::ErrorKind::NotFound` → [`LoadError::NotFound`]
+/// - any other I/O error → [`LoadError::Io`]
+pub struct FsLoader;
+
+impl FsLoader {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for FsLoader {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Loader for FsLoader {
+    fn load(&self, path: &Path) -> Result<String, LoadError> {
+        std::fs::read_to_string(path).map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => LoadError::NotFound {
+                path: path.to_path_buf(),
+            },
+            _ => LoadError::Io {
+                path: path.to_path_buf(),
+                message: e.to_string(),
+            },
+        })
+    }
 }
 
 // ============================================================================

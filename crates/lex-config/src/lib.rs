@@ -26,6 +26,9 @@ pub struct LexConfig {
     /// Diagnostics options.
     #[config(nested)]
     pub diagnostics: DiagnosticsConfig,
+    /// Include-resolution options.
+    #[config(nested)]
+    pub includes: IncludesConfig,
 }
 
 /// Formatting-related configuration groups.
@@ -173,6 +176,26 @@ pub struct DiagnosticsConfig {
     /// Enable spellcheck diagnostics.
     #[config(default = true)]
     pub spellcheck: bool,
+}
+
+/// Include-resolution options consumed by `lex convert`, `lex inspect`,
+/// and the LSP. `lex format` never expands includes regardless.
+#[derive(Debug, Clone, Config, Serialize, Deserialize)]
+pub struct IncludesConfig {
+    /// Resolution root for include path resolution.
+    ///
+    /// All include paths — relative or root-absolute (`/...`) — must
+    /// canonicalize inside this directory. Outside-the-root paths fail
+    /// with a `RootEscape` error.
+    ///
+    /// When `None` (default), the CLI discovers the root by walking up
+    /// from the entry-point document to find the nearest `lex.toml`,
+    /// falling back to the entry-point's own directory.
+    pub root: Option<String>,
+    /// Maximum include depth. Default 8. Hitting the limit is an error,
+    /// not a silent truncation.
+    #[config(default = 8)]
+    pub max_depth: usize,
 }
 
 #[cfg(test)]
