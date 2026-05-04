@@ -14,11 +14,12 @@
 //! This module is being built up across PRs 3–6:
 //!
 //! - PR 3: skeleton — trait, config, errors, stub.
-//! - PR 4 (this PR): single-file splice + container-policy validation +
-//!   doc-title/doc-annotation conversion + origin stamping. **No recursion
-//!   yet** — `lex.include` annotations inside *included* files survive into
-//!   the merged tree as unresolved annotations.
-//! - PR 5: recursion, cycle detection, depth limit, root-escape check.
+//! - PR 4 (this PR): single-pass splice + container-policy validation +
+//!   doc-title/doc-annotation conversion + origin stamping + root-escape
+//!   check. **No recursion into included files yet** — `lex.include`
+//!   annotations inside *included* files survive into the merged tree
+//!   as unresolved annotations.
+//! - PR 5: recursive resolution + cycle detection + depth limit.
 //! - PR 6: per-file footnote resolution + file-ref `Range.origin_path`
 //!   consultation.
 //!
@@ -51,6 +52,12 @@ use std::sync::Arc;
 pub struct ResolveConfig {
     /// Directory all include paths resolve under. Any include that
     /// canonicalizes outside this root is a [`IncludeError::RootEscape`].
+    ///
+    /// Must be an **absolute** path. Lexical normalization treats `.`
+    /// and `..` against an empty buffer as no-ops; passing a relative
+    /// or unnormalized root weakens the root-escape prefix check.
+    /// Callers (CLI, LSP) should canonicalize the root before
+    /// constructing `ResolveConfig`.
     pub root: PathBuf,
     /// Maximum include depth. Default 8 (see [`ResolveConfig::DEFAULT_MAX_DEPTH`]).
     /// Hitting the limit is an error, not a silent truncation.
@@ -297,8 +304,15 @@ fn splice_in_session_container(
     config: &ResolveConfig,
     loader: &dyn Loader,
 ) -> Result<(), IncludeError> {
-    process_includes(children, host_dir, config, loader, ContainerKind::Session)?;
-    recurse_into_children(children, host_dir, config, loader)
+    // Post-order: recurse into the *original* nested containers first,
+    // splice this container's includes second. Any newly-spliced content
+    // (which itself may contain `lex.include` annotations) is therefore
+    // never re-walked, so this PR stays single-pass: includes inside
+    // included files survive into the merged tree as unresolved
+    // annotations. PR 5 will replace this with proper recursive
+    // resolution that tracks each loaded file's own host_dir.
+    recurse_into_children(children, host_dir, config, loader)?;
+    process_includes(children, host_dir, config, loader, ContainerKind::Session)
 }
 
 fn splice_in_general_container(
@@ -308,8 +322,8 @@ fn splice_in_general_container(
     loader: &dyn Loader,
     kind: ContainerKind,
 ) -> Result<(), IncludeError> {
-    process_includes(container.as_mut_vec(), host_dir, config, loader, kind)?;
-    recurse_into_children(container.as_mut_vec(), host_dir, config, loader)
+    recurse_into_children(container.as_mut_vec(), host_dir, config, loader)?;
+    process_includes(container.as_mut_vec(), host_dir, config, loader, kind)
 }
 
 // Allow &mut Vec because `splice` needs Vec-specific operations.
@@ -495,12 +509,22 @@ fn resolve_path(src: &str, host_dir: &Path, root: &Path) -> Result<PathBuf, Incl
 /// version is sufficient for include-site path resolution because the
 /// resolver only needs a stable identity for cycle detection and a uniform
 /// shape for the root-escape prefix check.
+///
+/// Unresolvable `..` components (those that would pop past the start of the
+/// buffer) are *preserved* in the output. This matters when the buffer
+/// happens to be empty or holds only a relative prefix — silently dropping
+/// the `..` would let a path masquerade as inside the root and defeat the
+/// escape check. With absolute roots (the documented contract) `..`
+/// components only matter near the root itself, where preserving them
+/// makes the prefix check fail correctly.
 fn lexical_normalize(p: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for c in p.components() {
         match c {
             std::path::Component::ParentDir => {
-                out.pop();
+                if !out.pop() {
+                    out.push("..");
+                }
             }
             std::path::Component::CurDir => {}
             other => out.push(other.as_os_str()),

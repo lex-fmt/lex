@@ -805,6 +805,46 @@ fn invariant_unrelated_annotations_in_included_file_keep_their_attachment_target
 }
 
 #[test]
+fn invariant_includes_inside_included_files_are_left_unresolved_in_pr4() {
+    // PR 4 is single-pass. An include inside an *included* file must NOT be
+    // recursively resolved here — that would silently apply the entry's
+    // host_dir to a path authored against the included file's directory,
+    // producing wrong paths. PR 5 will add proper recursive resolution
+    // with per-file host_dir tracking.
+    //
+    // We assert the include annotation from the inner file survives in the
+    // merged tree (attached to its target) rather than being expanded.
+    let tree = fixture(
+        ":: lex.include src=\"outer.lex\" ::\n",
+        &[
+            (
+                "/repo/outer.lex",
+                "1. Outer\n\n    :: lex.include src=\"inner.lex\" ::\n",
+            ),
+            ("/repo/inner.lex", "Inner body.\n"),
+        ],
+    )
+    .unwrap();
+
+    // The outer session is in the tree.
+    assert!(tree.find_session("1. Outer").is_some());
+    // The inner include annotation survived (attached to outer session or
+    // its content, not silently dropped). We check via the labels helper.
+    let labels = tree.all_attached_annotation_labels();
+    assert!(
+        labels.iter().any(|l| l == "lex.include"),
+        "inner lex.include should survive in PR 4 (recursion arrives in PR 5), got {labels:?}"
+    );
+    // And the inner file's body must NOT have been spliced — that's the
+    // whole point of "no recursion in PR 4".
+    let texts = tree.root_paragraph_texts();
+    assert!(
+        !texts.iter().any(|t| t == "Inner body."),
+        "inner.lex body should not be spliced in PR 4 (recursion arrives in PR 5), got {texts:?}"
+    );
+}
+
+#[test]
 fn invariant_multiple_inclusions_of_same_file_do_not_collide() {
     let tree = fixture(
         ":: lex.include src=\"chapter.lex\" ::\n\n:: lex.include src=\"chapter.lex\" ::\n",
