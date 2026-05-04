@@ -71,6 +71,7 @@ pub mod ast;
 pub mod building;
 pub mod escape;
 pub mod formats;
+pub mod includes;
 pub mod inlines;
 pub mod lexing;
 pub mod loader;

@@ -6,6 +6,7 @@
 
 - `lex-core`: `Range.origin_path: Option<Arc<PathBuf>>` field with `with_origin` builder and `origin()` accessor. Currently always `None` — pure additive scaffolding for the upcoming includes feature (PR 1 of 10). The field is `#[serde(skip)]` so existing AST JSON output is byte-identical. `Range` is now `#[non_exhaustive]`; equality and hashing ignore `origin_path` (positional only). See `comms/specs/proposals/includes.lex` for the full design.
 - `lex-core`: `Annotation::is_include()` and `Annotation::include_src()` accessors plus `RESERVED_NAMESPACE_PREFIX` (`"lex."`) and `INCLUDE_LABEL` (`"lex.include"`) constants. The `lex.*` annotation label namespace is now reserved for core-defined semantics; the accessors hide the string-match on the reserved label and serve as a migration boundary if includes are later modeled as a distinct AST node type. Pure additive scaffolding for the includes feature (PR 2 of 10).
+- `lex-core`: new `lex_core::lex::includes` module skeleton — `Loader` trait, `ResolveConfig`, `LoadError`, `IncludeError`, and a stub `resolve_includes` that returns its input unchanged. The trait/config/error surface is stable from this PR; splice logic, container-policy validation, recursion, cycle detection, and depth limiting land in PRs 4–6. lex-core's own code does not reference `std::fs`; loaders are injected. New `test-support` cargo feature exposes `MemoryLoader` so downstream crates' tests can exercise APIs that take a `Loader`. Pure additive scaffolding (PR 3 of 10).
 
 ## [0.9.2] - 2026-05-02
 
