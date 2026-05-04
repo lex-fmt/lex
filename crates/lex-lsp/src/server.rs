@@ -212,17 +212,6 @@ impl DocumentStore {
         parsed
     }
 
-    /// Store an already-resolved Document. Used by the include resolution
-    /// path, which produces a fully-attached merged tree directly via
-    /// `resolve_from_source` (bypassing the standard parse → attach pipeline).
-    async fn insert_resolved(&self, uri: Url, document: Document, text: String) {
-        let entry = DocumentEntry {
-            document: Arc::new(document),
-            text: Arc::new(text),
-        };
-        self.entries.write().await.insert(uri, Some(entry));
-    }
-
     async fn get(&self, uri: &Url) -> Option<DocumentEntry> {
         self.entries.read().await.get(uri).cloned().flatten()
     }
@@ -320,22 +309,44 @@ where
             .await;
     }
 
-    /// Drives include resolution (when the URI is a file path), stores the
-    /// resulting Document under `uri`, and returns any include-related
-    /// diagnostics to attach. On success this is empty; on failure we
-    /// store a fall-back unresolved parse and return one diagnostic
-    /// pointing at the include site (or the document head when the
-    /// resolver couldn't pin it down).
+    /// Drives include resolution (when the URI is a file path) for
+    /// *diagnostic* purposes only. Always stores the **unresolved**
+    /// parse under `uri`; that's what every LSP feature
+    /// (semantic tokens, hover, goto-definition, document symbols) sees.
+    ///
+    /// Why not store the merged tree: nodes spliced in from included
+    /// files carry Ranges in the *included file's* coordinate space —
+    /// `range.start.line == 0` means "line 0 of chapter.lex", not
+    /// "line 0 of the host buffer." Serving those ranges back as if
+    /// they were positions in the host URI's text would highlight the
+    /// wrong tokens, send goto-definition to the wrong spot, etc. Until
+    /// we have an origin-path-aware location-mapping layer (PR 9+),
+    /// the safe behavior is to use the merged tree only to decide
+    /// whether resolution succeeded, and emit diagnostics if it didn't.
+    ///
+    /// Returns include-related diagnostics: empty on success or when
+    /// the document doesn't use includes at all; one diagnostic
+    /// pointing at the include site (or document head as fallback) on
+    /// resolver failure.
     async fn resolve_and_upsert(&self, uri: &Url, text: &str) -> Vec<Diagnostic> {
+        // Standard parse goes in regardless — this is the tree every
+        // LSP feature works against.
+        self.documents.upsert(uri.clone(), text.to_string()).await;
+
+        // Fast path: no `lex.include` literal in source, nothing to
+        // resolve, nothing to diagnose. Avoids per-keystroke resolver
+        // work for documents that don't use the feature, and prevents
+        // the resolver's `ParseFailed` from firing as a spurious
+        // include diagnostic for ordinary parse errors.
+        if !text.contains("lex.include") {
+            return Vec::new();
+        }
+
         let path = match uri.to_file_path() {
             Ok(p) => p,
             // Untitled / non-file URIs (e.g. `untitled:Untitled-1`)
-            // can't anchor relative include paths; just do the plain
-            // parse path.
-            Err(_) => {
-                self.documents.upsert(uri.clone(), text.to_string()).await;
-                return Vec::new();
-            }
+            // can't anchor relative include paths.
+            Err(_) => return Vec::new(),
         };
 
         // Canonicalize the entry path so it lives in the same absolute-
@@ -357,23 +368,14 @@ where
         };
         let loader = FsLoader::new();
 
-        match resolve_from_source(text, Some(path.clone()), &resolve_config, &loader) {
-            Ok(doc) => {
-                // Store the resolved document directly. We bypass the
-                // standard parse path because resolve_from_source already
-                // returns a fully-attached Document.
-                self.documents
-                    .insert_resolved(uri.clone(), doc, text.to_string())
-                    .await;
+        match resolve_from_source(text, Some(path), &resolve_config, &loader) {
+            Ok(_doc) => {
+                // Resolution succeeded. We *don't* store the merged
+                // tree — see fn-level docstring. The resolver was run
+                // only to surface errors; the tree itself is dropped.
                 Vec::new()
             }
-            Err(err) => {
-                // Fall back to the standard parse so the rest of the
-                // server keeps working on this document, and emit a
-                // diagnostic that points at the include site.
-                self.documents.upsert(uri.clone(), text.to_string()).await;
-                vec![include_error_to_diagnostic(&err)]
-            }
+            Err(err) => vec![include_error_to_diagnostic(&err)],
         }
     }
 
@@ -2492,11 +2494,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn includes_resolved_tree_replaces_unresolved_for_other_features() {
-        // After resolution, the stored Document is the merged tree —
-        // semantic tokens, hover, goto-def all see post-include
-        // content. We probe via document_symbols (a FeatureProvider
-        // entry point), which receives the stored Document.
+    async fn includes_stored_tree_remains_unresolved_so_positions_match_host_buffer() {
+        // The stored Document MUST be the unresolved parse of the host
+        // buffer. Storing the merged tree would mix in nodes whose
+        // Range.{start,end,span} reference the *included file's*
+        // coordinate space, so semantic-token / hover / goto positions
+        // served back to the editor would point at the wrong text.
+        // (The merged tree is computed for diagnostic purposes only —
+        // resolver errors get surfaced — and then dropped.)
         let (server, _client, uri, _dir) = open_in_tempdir(
             &[
                 ("main.lex", ":: lex.include src=\"chapter.lex\" ::\n"),
@@ -2509,9 +2514,10 @@ mod tests {
         )
         .await;
 
-        // The stored Document should contain the spliced chapter.
         let entry = server.document_entry(&uri).await.expect("entry stored");
-        // Walk to find the session title.
+        // Walk to find the session title — "1. Spliced Chapter" should
+        // NOT be present in the host buffer's parse (it lives in the
+        // included file).
         use lex_core::lex::ast::elements::content_item::ContentItem;
         let titles: Vec<String> = entry
             .document
@@ -2524,8 +2530,9 @@ mod tests {
             })
             .collect();
         assert!(
-            titles.iter().any(|t| t == "1. Spliced Chapter"),
-            "spliced chapter should appear in stored document, got titles {titles:?}"
+            !titles.iter().any(|t| t == "1. Spliced Chapter"),
+            "spliced chapter must NOT be in the stored host tree (its Ranges \
+             would point at the wrong buffer); got titles {titles:?}"
         );
     }
 
