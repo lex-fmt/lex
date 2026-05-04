@@ -17,12 +17,16 @@
 //! - PR 4: single-pass splice + container-policy validation +
 //!   doc-title/doc-annotation conversion + origin stamping + root-escape
 //!   check.
-//! - PR 5 (this PR): recursive resolution into included files + cycle
-//!   detection (chain stack) + depth limit. Each loaded file gets walked
-//!   in its OWN directory, so relative paths inside an included file
-//!   resolve from that file's directory, not the entry's.
-//! - PR 6: per-file footnote resolution + file-ref `Range.origin_path`
-//!   consultation.
+//! - PR 5: recursive resolution into included files + cycle detection
+//!   (chain stack) + depth limit. Each loaded file gets walked in its OWN
+//!   directory, so relative paths inside an included file resolve from
+//!   that file's directory, not the entry's.
+//! - PR 6 (this PR): origin-aware reference helpers. New
+//!   [`resolve_file_reference`] resolves a `ReferenceType::File` target
+//!   from the authoring file's directory using `Range.origin_path`. New
+//!   `Document::find_annotation_by_label_in_origin` scopes footnote
+//!   lookups to the file the reference was authored in. These complete
+//!   the machinery; downstream wiring lands in PR 7 (CLI) and PR 8 (LSP).
 //!
 //! # Layering
 //!
@@ -604,6 +608,37 @@ fn validate_against_kind(
 // ============================================================================
 // Path resolution
 // ============================================================================
+
+/// Resolve a file-reference target string the same way the include
+/// resolver resolves include paths.
+///
+/// Use this when consuming `ReferenceType::File { target }` (or any other
+/// node-attached path) so that relative paths resolve from the *authoring*
+/// file's directory, not from wherever the merged document happens to be
+/// rooted. Pass `ref_origin` as the [`Range::origin_path`] of the inline's
+/// containing node (or `None` if the node was never stamped — in that case
+/// the path is treated as if authored at the root).
+///
+/// Behaviour matches the include resolver:
+/// - Root-absolute targets (leading `/`) resolve under `root`.
+/// - Other targets resolve relative to `ref_origin`'s parent (or `root`
+///   when `ref_origin` is `None`).
+/// - The result is lexically normalized and checked against `root` —
+///   paths that escape it return `RootEscape`.
+///
+/// This is a sister to the resolver's internal `resolve_path` and shares
+/// the same lexical-normalization caveat: it does not touch the filesystem.
+pub fn resolve_file_reference(
+    target: &str,
+    ref_origin: Option<&Path>,
+    root: &Path,
+) -> Result<PathBuf, IncludeError> {
+    let host_dir: PathBuf = ref_origin
+        .and_then(|p| p.parent())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| root.to_path_buf());
+    resolve_path(target, &host_dir, root)
+}
 
 fn resolve_path(src: &str, host_dir: &Path, root: &Path) -> Result<PathBuf, IncludeError> {
     let candidate = if let Some(rel) = src.strip_prefix('/') {

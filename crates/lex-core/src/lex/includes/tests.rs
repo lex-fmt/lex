@@ -1076,6 +1076,166 @@ fn invariant_multiple_inclusions_of_same_file_do_not_collide() {
 }
 
 // ============================================================================
+// Origin-aware reference helpers (PR 6)
+// ============================================================================
+
+#[test]
+fn find_annotation_by_label_in_origin_filters_to_origin() {
+    // After include resolution, `[1]` in chapter.lex must find the `:: 1 ::`
+    // defined in chapter.lex — not the one in main.lex that happens to
+    // share the same label.
+    let tree = fixture(
+        ":: 1 :: Main's footnote.\n\n:: lex.include src=\"chapter.lex\" ::\n",
+        &[(
+            "/repo/chapter.lex",
+            "1. Chapter\n\n    A para.\n\n    :: 1 :: Chapter's footnote.\n",
+        )],
+    )
+    .unwrap();
+
+    let main_origin = std::path::Path::new("/repo/main.lex");
+    let chapter_origin = std::path::Path::new("/repo/chapter.lex");
+
+    let main_one = tree
+        .doc
+        .find_annotation_by_label_in_origin("1", main_origin)
+        .expect("main's :: 1 :: missing");
+    let chapter_one = tree
+        .doc
+        .find_annotation_by_label_in_origin("1", chapter_origin)
+        .expect("chapter's :: 1 :: missing");
+
+    // The two annotations are physically different — confirms we're
+    // returning the per-origin match, not the same first-found node.
+    assert!(
+        !std::ptr::eq(main_one, chapter_one),
+        "per-origin lookup returned the same annotation for both origins"
+    );
+}
+
+#[test]
+fn find_annotation_by_label_in_origin_finds_attached_on_list_table_verbatim() {
+    // Regression: the walker must also check `.annotations` on List,
+    // Table, and Verbatim — not just Session/Definition/ListItem/Paragraph.
+    // We resolve a real source so the parser + AttachAnnotations does
+    // the work, then probe origin-aware lookup for an annotation that
+    // would land on each of the three node types.
+    let tree = fixture(
+        // The :: my_list_note :: precedes a list (attaches to List).
+        // The :: my_table_note :: precedes a table (attaches to Table).
+        // The :: my_verbatim_note :: precedes a verbatim block (attaches to Verbatim).
+        ":: my_list_note ::\n\n\
+         - item one\n\
+         - item two\n\n\
+         :: my_table_note ::\n\n\
+         A table:\n\
+             | a | b |\n\
+             | c | d |\n\
+         :: table ::\n\n\
+         :: my_verbatim_note ::\n\n\
+         Some code:\n\
+             let x = 1;\n\
+         :: rust ::\n",
+        &[],
+    )
+    .unwrap();
+
+    let origin = std::path::Path::new("/repo/main.lex");
+    for label in ["my_list_note", "my_table_note", "my_verbatim_note"] {
+        assert!(
+            tree.doc
+                .find_annotation_by_label_in_origin(label, origin)
+                .is_some(),
+            "origin-aware lookup missed {label:?} attached to its container — \
+             walker must check .annotations on List/Table/VerbatimBlock too"
+        );
+    }
+}
+
+#[test]
+fn find_annotation_by_label_in_origin_returns_none_when_no_match() {
+    // Tree only has annotations with origin = main.lex; a query for
+    // chapter.lex's origin returns None, even though a label exists.
+    let tree = fixture(":: 1 :: Only one.\n\nA para.\n", &[]).unwrap();
+    let chapter_origin = std::path::Path::new("/repo/chapter.lex");
+    assert!(tree
+        .doc
+        .find_annotation_by_label_in_origin("1", chapter_origin)
+        .is_none());
+}
+
+#[test]
+fn resolve_file_reference_uses_ref_origin_for_relative_paths() {
+    // A reference at /repo/chapter.lex pointing to "./figure.png" must
+    // resolve to /repo/figure.png, regardless of where the merged tree
+    // happens to be rooted on disk.
+    let result = resolve_file_reference(
+        "./figure.png",
+        Some(std::path::Path::new("/repo/chapter.lex")),
+        std::path::Path::new("/repo"),
+    )
+    .unwrap();
+    assert_eq!(result, PathBuf::from("/repo/figure.png"));
+}
+
+#[test]
+fn resolve_file_reference_handles_root_absolute() {
+    // Leading slash means "from the resolution root" — same rule as
+    // include path resolution.
+    let result = resolve_file_reference(
+        "/shared/logo.svg",
+        Some(std::path::Path::new("/repo/chapters/c1.lex")),
+        std::path::Path::new("/repo"),
+    )
+    .unwrap();
+    assert_eq!(result, PathBuf::from("/repo/shared/logo.svg"));
+}
+
+#[test]
+fn resolve_file_reference_falls_back_to_root_when_origin_missing() {
+    // No origin (node never stamped — pre-include-resolution document)
+    // → resolve from root as if the reference were authored at the root.
+    let result = resolve_file_reference("figure.png", None, std::path::Path::new("/repo")).unwrap();
+    assert_eq!(result, PathBuf::from("/repo/figure.png"));
+}
+
+#[test]
+fn resolve_file_reference_rejects_root_escape() {
+    // Same root-escape protection as include resolution.
+    let result = resolve_file_reference(
+        "../../etc/passwd",
+        Some(std::path::Path::new("/repo/pages/host.lex")),
+        std::path::Path::new("/repo"),
+    );
+    assert_err_kind!(result, IncludeError::RootEscape { .. });
+}
+
+#[test]
+fn invariant_resolve_file_reference_matches_include_path_resolution() {
+    // The two helpers should agree: a path that resolve_path accepts
+    // (via the include resolver) must also resolve_file_reference accept,
+    // and vice versa. We exercise this through a successful include
+    // resolution — the included file's origin equals the resolved path
+    // we get back from `resolve_file_reference` with that include's src.
+    let tree = fixture_at(
+        "/repo/pages/host.lex",
+        ":: lex.include src=\"../shared/inc.lex\" ::\n",
+        &[("/repo/shared/inc.lex", "Body.\n")],
+    )
+    .unwrap();
+    let origins = tree.distinct_origin_paths();
+    assert!(origins.contains(&Some(PathBuf::from("/repo/shared/inc.lex"))));
+
+    let computed = resolve_file_reference(
+        "../shared/inc.lex",
+        Some(std::path::Path::new("/repo/pages/host.lex")),
+        std::path::Path::new("/repo"),
+    )
+    .unwrap();
+    assert_eq!(computed, PathBuf::from("/repo/shared/inc.lex"));
+}
+
+// ============================================================================
 // Pre-existing skeleton tests (kept for surface stability)
 // ============================================================================
 

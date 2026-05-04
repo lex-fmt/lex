@@ -300,6 +300,48 @@ impl Document {
             .or_else(|| self.root.find_annotation_by_label(label))
     }
 
+    /// Find the first annotation with `label` whose `Range.origin_path`
+    /// matches `origin`.
+    ///
+    /// Used after include resolution so that footnote references like `[1]`
+    /// scope to the file they were authored in: a `[1]` in `chapter.lex`
+    /// finds `:: 1 ::` defined in `chapter.lex` and not in some other
+    /// included file that happens to also have a `:: 1 ::`. The reference's
+    /// origin is the `Range.origin_path` of the inline's containing node
+    /// (paragraph / session title / etc.).
+    ///
+    /// Unlike [`Document::find_annotation_by_label`], this walker checks
+    /// both *standalone* annotations (children of containers) **and**
+    /// *attached* annotations (those moved into a node's `.annotations`
+    /// field by `AttachAnnotations`). The bare `find_annotation_by_label`
+    /// only sees standalone ones, which is fine for an unresolved tree
+    /// (annotations live in children pre-attachment) but misses footnote
+    /// definitions in any tree that has been through the parser's
+    /// attachment phase. After include resolution every annotation has
+    /// either form, so the more thorough walker is the right one.
+    ///
+    /// `find_annotation_by_label` (without origin filter) remains the
+    /// right call when origin filtering is not needed and the caller
+    /// knows annotations have not been attached.
+    pub fn find_annotation_by_label_in_origin(
+        &self,
+        label: &str,
+        origin: &std::path::Path,
+    ) -> Option<&Annotation> {
+        fn matches(ann: &Annotation, label: &str, origin: &std::path::Path) -> bool {
+            ann.data.label.value == label
+                && ann.location.origin().map(|p| p == origin).unwrap_or(false)
+        }
+
+        // Document-level annotations first.
+        if let Some(ann) = self.annotations.iter().find(|a| matches(a, label, origin)) {
+            return Some(ann);
+        }
+        // Then walk the body. The recursive helper visits both the
+        // children stream and each node's attached `.annotations` slots.
+        find_annotation_in_session_with_origin(&self.root, label, origin)
+    }
+
     /// Find all annotations with a matching label.
     ///
     /// This searches recursively through all annotations in the document,
@@ -431,6 +473,96 @@ impl Default for Document {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Recursive walker for `find_annotation_by_label_in_origin`. Visits both
+/// standalone annotations (in containers' children) and attached
+/// annotations (in each node's `.annotations` slot).
+fn find_annotation_in_session_with_origin<'a>(
+    s: &'a Session,
+    label: &str,
+    origin: &std::path::Path,
+) -> Option<&'a Annotation> {
+    fn matches(ann: &Annotation, label: &str, origin: &std::path::Path) -> bool {
+        ann.data.label.value == label && ann.location.origin().map(|p| p == origin).unwrap_or(false)
+    }
+    for ann in &s.annotations {
+        if matches(ann, label, origin) {
+            return Some(ann);
+        }
+    }
+    find_annotation_in_items_with_origin(&s.children, label, origin)
+}
+
+fn find_annotation_in_items_with_origin<'a>(
+    items: &'a [ContentItem],
+    label: &str,
+    origin: &std::path::Path,
+) -> Option<&'a Annotation> {
+    fn matches(ann: &Annotation, label: &str, origin: &std::path::Path) -> bool {
+        ann.data.label.value == label && ann.location.origin().map(|p| p == origin).unwrap_or(false)
+    }
+    for item in items {
+        // Attached annotations live on every node that has a public
+        // `.annotations: Vec<Annotation>` field. Today that's:
+        // Session, Definition, ListItem, Paragraph, List, Table, and
+        // Verbatim (as VerbatimBlock). Missing any of these would let
+        // origin-aware lookups silently skip a valid match.
+        let attached: &[Annotation] = match item {
+            ContentItem::Session(s) => &s.annotations,
+            ContentItem::Definition(d) => &d.annotations,
+            ContentItem::ListItem(li) => &li.annotations,
+            ContentItem::Paragraph(p) => &p.annotations,
+            ContentItem::List(l) => &l.annotations,
+            ContentItem::Table(t) => &t.annotations,
+            ContentItem::VerbatimBlock(v) => &v.annotations,
+            _ => &[],
+        };
+        for ann in attached {
+            if matches(ann, label, origin) {
+                return Some(ann);
+            }
+        }
+        // Standalone annotation directly in the children stream:
+        if let ContentItem::Annotation(a) = item {
+            if matches(a, label, origin) {
+                return Some(a);
+            }
+            // Annotation body can host more annotations.
+            if let Some(found) = find_annotation_in_items_with_origin(&a.children, label, origin) {
+                return Some(found);
+            }
+        }
+        // Recurse into container-style nodes' children:
+        match item {
+            ContentItem::Session(s) => {
+                if let Some(found) = find_annotation_in_session_with_origin(s, label, origin) {
+                    return Some(found);
+                }
+            }
+            ContentItem::Definition(d) => {
+                if let Some(found) =
+                    find_annotation_in_items_with_origin(&d.children, label, origin)
+                {
+                    return Some(found);
+                }
+            }
+            ContentItem::ListItem(li) => {
+                if let Some(found) =
+                    find_annotation_in_items_with_origin(&li.children, label, origin)
+                {
+                    return Some(found);
+                }
+            }
+            ContentItem::List(l) => {
+                if let Some(found) = find_annotation_in_items_with_origin(&l.items, label, origin) {
+                    return Some(found);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 impl fmt::Display for Document {
