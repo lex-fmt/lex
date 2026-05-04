@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- `lex-core`: `Range.origin_path: Option<Arc<PathBuf>>` field with `with_origin` builder and `origin()` accessor. Currently always `None` — pure additive scaffolding for the upcoming includes feature (PR 1 of 10). The field is `#[serde(skip)]` so existing AST JSON output is byte-identical. See `comms/specs/proposals/includes.lex` for the full design.
+
 ## [0.9.2] - 2026-05-02
 
 

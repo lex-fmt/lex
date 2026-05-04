@@ -29,6 +29,8 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::ops::Range as ByteRange;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// Represents a position in source code (line and column)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -56,16 +58,83 @@ impl Default for Position {
 }
 
 /// Represents a location in source code (start and end positions)
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+///
+/// Carries an optional `origin_path` identifying the source file the range refers
+/// to. For ranges built directly by the parser this is `None`; ranges produced
+/// by include resolution (`lex_core::includes`) carry the canonical path of the
+/// file they came from. The field is metadata: it does not affect parsing,
+/// formatting, or any structural operation, but it is consulted by file-reference
+/// resolution and diagnostics so that information attached to nodes from an
+/// included file points at the authoring location, not the post-merge one.
+///
+/// `Range` is `#[non_exhaustive]`: external code must construct via `Range::new`
+/// (or builders such as `with_origin`) rather than struct literals, so future
+/// metadata fields can be added without a breaking API change.
+///
+/// Equality and hashing are *positional only* — `origin_path` is intentionally
+/// excluded from `PartialEq`/`Hash`. Two ranges with the same span and positions
+/// are equal regardless of which file they came from. This matches what is
+/// preserved through serde (`origin_path` is `#[serde(skip)]`), so a value can
+/// round-trip through JSON without breaking equality.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Range {
     pub span: ByteRange<usize>,
     pub start: Position,
     pub end: Position,
+    /// Optional path of the file this range was authored in.
+    ///
+    /// `None` for ranges that have not been touched by include resolution.
+    /// Currently skipped from (de)serialization because `Arc<T>` deserialization
+    /// requires serde's opt-in `rc` feature; the field is metadata and is not
+    /// part of any wire format today. When a use case needs origin info on the
+    /// wire, switch to a custom (de)serialization that emits the path as a
+    /// string.
+    #[serde(skip)]
+    pub origin_path: Option<Arc<PathBuf>>,
+}
+
+impl PartialEq for Range {
+    fn eq(&self, other: &Self) -> bool {
+        // Positional equality only — see struct doc.
+        self.span == other.span && self.start == other.start && self.end == other.end
+    }
+}
+
+impl Eq for Range {}
+
+impl std::hash::Hash for Range {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        // Positional hashing only — see struct doc.
+        self.span.hash(state);
+        self.start.hash(state);
+        self.end.hash(state);
+    }
 }
 
 impl Range {
     pub fn new(span: ByteRange<usize>, start: Position, end: Position) -> Self {
-        Self { span, start, end }
+        Self {
+            span,
+            start,
+            end,
+            origin_path: None,
+        }
+    }
+
+    /// Builder: attach an origin path to this range.
+    ///
+    /// Intended use: the include resolver, after parsing each loaded file,
+    /// walks the resulting tree and stamps the file's canonical path on every
+    /// range. Direct parser output should leave this `None`.
+    pub fn with_origin(mut self, path: Arc<PathBuf>) -> Self {
+        self.origin_path = Some(path);
+        self
+    }
+
+    /// Borrow the origin path, if any.
+    pub fn origin(&self) -> Option<&Path> {
+        self.origin_path.as_deref().map(PathBuf::as_path)
     }
 
     /// Check if a position is contained within this location
@@ -85,6 +154,13 @@ impl Range {
     }
 
     /// Build a bounding box that contains all provided ranges.
+    ///
+    /// The result's `origin_path` is `Some(p)` only when every input range
+    /// shares the same origin `p`; mixed-origin inputs (or any `None` mixed
+    /// with `Some`) yield `None`. This avoids reporting one file's origin on
+    /// coordinates that came from another file — relevant after include
+    /// resolution, when a parent node may aggregate children from the host
+    /// file and from spliced-in files.
     pub fn bounding_box<'a, I>(mut ranges: I) -> Option<Range>
     where
         I: Iterator<Item = &'a Range>,
@@ -94,6 +170,7 @@ impl Range {
         let mut span_end = first.span.end;
         let mut start_pos = first.start;
         let mut end_pos = first.end;
+        let mut origin = first.origin_path.clone();
 
         for range in ranges {
             if range.start < start_pos {
@@ -109,9 +186,15 @@ impl Range {
             } else if range.end == end_pos {
                 span_end = span_end.max(range.span.end);
             }
+
+            if origin != range.origin_path {
+                origin = None;
+            }
         }
 
-        Some(Range::new(span_start..span_end, start_pos, end_pos))
+        let mut bbox = Range::new(span_start..span_end, start_pos, end_pos);
+        bbox.origin_path = origin;
+        Some(bbox)
     }
 }
 
@@ -282,6 +365,132 @@ mod tests {
     fn test_bounding_box_empty_iter() {
         let iter = std::iter::empty::<&Range>();
         assert!(Range::bounding_box(iter).is_none());
+    }
+
+    #[test]
+    fn test_origin_defaults_to_none() {
+        let range = Range::new(0..5, Position::new(0, 0), Position::new(0, 5));
+        assert!(range.origin_path.is_none());
+        assert!(range.origin().is_none());
+        assert!(Range::default().origin_path.is_none());
+    }
+
+    #[test]
+    fn test_with_origin_attaches_path() {
+        let path = Arc::new(PathBuf::from("/tmp/foo.lex"));
+        let range = Range::new(0..5, Position::new(0, 0), Position::new(0, 5))
+            .with_origin(Arc::clone(&path));
+        assert_eq!(range.origin(), Some(Path::new("/tmp/foo.lex")));
+        assert!(Arc::ptr_eq(&path, range.origin_path.as_ref().unwrap()));
+    }
+
+    #[test]
+    fn test_origin_does_not_affect_position_predicates() {
+        let with_origin = Range::new(0..5, Position::new(0, 0), Position::new(0, 5))
+            .with_origin(Arc::new(PathBuf::from("/x.lex")));
+        let without = Range::new(0..5, Position::new(0, 0), Position::new(0, 5));
+
+        // Position-based queries are unaffected by origin.
+        assert!(with_origin.contains(Position::new(0, 2)));
+        assert!(without.contains(Position::new(0, 2)));
+        assert!(with_origin.overlaps(&without));
+    }
+
+    #[test]
+    fn test_equality_ignores_origin() {
+        // Origin is metadata; two ranges at the same position are equal
+        // regardless of origin. This preserves equality across serde
+        // round-trips (origin_path is `#[serde(skip)]`).
+        let a = Range::new(0..5, Position::new(0, 0), Position::new(0, 5));
+        let b = Range::new(0..5, Position::new(0, 0), Position::new(0, 5))
+            .with_origin(Arc::new(PathBuf::from("/x.lex")));
+        let c = Range::new(0..5, Position::new(0, 0), Position::new(0, 5))
+            .with_origin(Arc::new(PathBuf::from("/y.lex")));
+        assert_eq!(a, b);
+        assert_eq!(b, c);
+        // Same hash too, otherwise PartialEq/Hash contract is violated.
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let h = |r: &Range| {
+            let mut s = DefaultHasher::new();
+            r.hash(&mut s);
+            s.finish()
+        };
+        assert_eq!(h(&a), h(&b));
+        assert_eq!(h(&b), h(&c));
+    }
+
+    #[test]
+    fn test_bounding_box_keeps_origin_when_all_match() {
+        let path = Arc::new(PathBuf::from("/included.lex"));
+        let ranges = [
+            Range::new(2..5, Position::new(0, 2), Position::new(0, 5))
+                .with_origin(Arc::clone(&path)),
+            Range::new(10..20, Position::new(3, 0), Position::new(4, 3))
+                .with_origin(Arc::clone(&path)),
+        ];
+        let bbox = Range::bounding_box(ranges.iter()).unwrap();
+        assert_eq!(bbox.origin(), Some(Path::new("/included.lex")));
+    }
+
+    #[test]
+    fn test_bounding_box_clears_origin_on_mixed_inputs() {
+        // Same-origin first, mixed later → None.
+        let ranges_some_then_none = [
+            Range::new(2..5, Position::new(0, 2), Position::new(0, 5))
+                .with_origin(Arc::new(PathBuf::from("/a.lex"))),
+            Range::new(10..20, Position::new(3, 0), Position::new(4, 3)),
+        ];
+        let bbox = Range::bounding_box(ranges_some_then_none.iter()).unwrap();
+        assert!(bbox.origin().is_none());
+
+        // Different Some origins → None.
+        let ranges_two_origins = [
+            Range::new(2..5, Position::new(0, 2), Position::new(0, 5))
+                .with_origin(Arc::new(PathBuf::from("/a.lex"))),
+            Range::new(10..20, Position::new(3, 0), Position::new(4, 3))
+                .with_origin(Arc::new(PathBuf::from("/b.lex"))),
+        ];
+        let bbox = Range::bounding_box(ranges_two_origins.iter()).unwrap();
+        assert!(bbox.origin().is_none());
+
+        // None first, Some later → still None (the previous behavior in
+        // the "first wins" implementation would also be None here, but
+        // for the wrong reason; this asserts the policy now is uniform).
+        let ranges_none_then_some = [
+            Range::new(2..5, Position::new(0, 2), Position::new(0, 5)),
+            Range::new(10..20, Position::new(3, 0), Position::new(4, 3))
+                .with_origin(Arc::new(PathBuf::from("/x.lex"))),
+        ];
+        let bbox = Range::bounding_box(ranges_none_then_some.iter()).unwrap();
+        assert!(bbox.origin().is_none());
+    }
+
+    #[test]
+    fn test_serialization_skips_origin_field() {
+        // origin_path is `#[serde(skip)]` — never appears in JSON in either
+        // direction. This keeps existing AST JSON output byte-identical and
+        // avoids the serde `rc` feature for Arc deserialization. When a wire
+        // format needs origin info, swap to a custom (de)serializer.
+        let none_range = Range::new(0..5, Position::new(0, 0), Position::new(0, 5));
+        let some_range = Range::new(0..5, Position::new(0, 0), Position::new(0, 5))
+            .with_origin(Arc::new(PathBuf::from("/x.lex")));
+        let json_none = serde_json::to_string(&none_range).unwrap();
+        let json_some = serde_json::to_string(&some_range).unwrap();
+        assert!(!json_none.contains("origin_path"));
+        assert!(!json_some.contains("origin_path"));
+        assert_eq!(json_none, json_some);
+    }
+
+    #[test]
+    fn test_deserialization_yields_none_origin() {
+        // Deserializing JSON that has no origin_path field gives None, even
+        // when the in-memory value originally had Some.
+        let original = Range::new(0..5, Position::new(0, 0), Position::new(0, 5))
+            .with_origin(Arc::new(PathBuf::from("/x.lex")));
+        let json = serde_json::to_string(&original).unwrap();
+        let restored: Range = serde_json::from_str(&json).unwrap();
+        assert!(restored.origin().is_none());
     }
 
     // @audit: no_source
