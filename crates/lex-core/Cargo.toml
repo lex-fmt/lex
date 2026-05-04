@@ -13,6 +13,11 @@ categories = ["parsing", "text-processing"]
 # Disable doctests for the library; docs contain lex examples that aren't Rust
 doctest = false
 
+[features]
+# Expose test fixtures (MemoryLoader, etc.) so downstream crates' tests can
+# exercise APIs that take injected dependencies.
+test-support = []
+
 [dependencies]
 logos = "0.16"
 serde = { workspace = true }
