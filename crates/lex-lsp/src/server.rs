@@ -386,10 +386,14 @@ where
     /// Resolve a `lex.include` annotation at `position` to a Location
     /// pointing at the target file. Returns `None` when the cursor isn't
     /// on a `lex.include`, when the URI has no on-disk anchor (untitled
-    /// buffers), when the include has no `src=` parameter, or when the
-    /// path resolves outside the include root. The Location range is
-    /// the file head (line 0, column 0) — cross-file goto-def lands the
-    /// user at the top of the target.
+    /// buffers), when the include has no `src=` parameter, when the
+    /// path resolves outside the include root, **or when the target
+    /// file does not exist on disk**. The last guard avoids navigating
+    /// the editor to a non-existent path — the user gets the
+    /// `include-not-found` diagnostic from PR 8 instead, which surfaces
+    /// the underlying problem clearly. The Location range is the file
+    /// head (line 0, column 0) — cross-file goto-def lands the user at
+    /// the top of the target.
     async fn goto_for_include(
         &self,
         uri: &Url,
@@ -413,6 +417,15 @@ where
             inc_root.as_path(),
         )
         .ok()?;
+        // Existence check: don't send the editor to nowhere.
+        // `resolve_file_reference` is filesystem-free (lexical only),
+        // so the path it returns may not exist. The PR 8 diagnostic
+        // already surfaces missing-target errors; goto-def returning
+        // None here lets the editor render its native "no definition
+        // found" UX instead of opening a phantom buffer.
+        if !target.is_file() {
+            return None;
+        }
         let target_uri = Url::from_file_path(&target).ok()?;
         Some(Location {
             uri: target_uri,
@@ -421,11 +434,11 @@ where
     }
 
     /// Build a hover preview for a `lex.include` annotation at `position`.
-    /// The preview shows the target file's title (if any) and first body
-    /// line (if any) — enough to confirm the include points where the
-    /// author thinks. Returns `None` when the cursor isn't on a
-    /// `lex.include`, the URI has no on-disk anchor, or the target can't
-    /// be loaded/parsed.
+    /// The preview shows the target file's first two non-blank lines
+    /// (no AST parsing — just the raw text) — enough to confirm the
+    /// include points where the author thinks. Returns `None` when the
+    /// cursor isn't on a `lex.include`, the URI has no on-disk anchor,
+    /// or the target can't be loaded.
     async fn hover_for_include(
         &self,
         uri: &Url,
@@ -1534,19 +1547,18 @@ fn head_range() -> Range {
 
 /// Build the markdown body for an include hover. Shows the source path
 /// from the annotation, the resolved on-disk path, and a small content
-/// preview (title + first body line, or first non-blank line if the file
-/// has no detectable title). Designed to fit in a hover popup, not to
-/// replace opening the file.
+/// preview consisting of the first two non-blank lines of the target
+/// (no AST parsing — just raw text). Designed to fit in a hover popup,
+/// not to replace opening the file.
+///
+/// Uses a four-backtick code fence so a triple-backtick that happens to
+/// appear in a previewed line (e.g., a markdown verbatim block) does
+/// not terminate the fence early and corrupt the rendered hover.
 fn include_preview_markdown(src: &str, target: &Path, target_source: &str) -> String {
     let mut out = String::new();
     out.push_str(&format!("**`lex.include`** → `{src}`\n\n"));
     out.push_str(&format!("Resolved: `{}`\n\n", target.display()));
 
-    // Try a minimal "preview" by walking the loaded source line by
-    // line and grabbing the first two non-blank lines. We don't parse
-    // — a hover popup is not the place to surface AST detail — and a
-    // line-based preview is robust enough across documents that have
-    // titles, that have only sessions, or that have neither.
     let preview_lines: Vec<&str> = target_source
         .lines()
         .map(|l| l.trim_end())
@@ -1556,12 +1568,12 @@ fn include_preview_markdown(src: &str, target: &Path, target_source: &str) -> St
     if preview_lines.is_empty() {
         out.push_str("_(empty file)_");
     } else {
-        out.push_str("```lex\n");
+        out.push_str("````lex\n");
         for line in &preview_lines {
             out.push_str(line);
             out.push('\n');
         }
-        out.push_str("```");
+        out.push_str("````");
     }
     out
 }
@@ -2800,21 +2812,21 @@ mod tests {
 
     #[tokio::test]
     async fn goto_definition_on_include_with_missing_target_returns_none() {
-        // A broken include (target file doesn't exist) — goto-def
-        // gracefully returns None rather than panicking or constructing
-        // a bogus URI. The diagnostic surfaces the underlying error.
+        // A broken include (target file doesn't exist on disk) — goto-def
+        // returns None so the editor renders its native "no definition
+        // found" UX. The user already gets the missing-target signal via
+        // the PR 8 `include-not-found` diagnostic; we don't want to also
+        // navigate them to a phantom buffer.
         let (server, _client, uri, _dir) = open_in_tempdir(
             &[("main.lex", ":: lex.include src=\"missing.lex\" ::\n")],
             "main.lex",
         )
         .await;
         let response = server.goto_definition(goto_at(&uri, 0, 5)).await.unwrap();
-        // The target_uri construction succeeds even for a non-existent
-        // file (we just normalize the path), so goto returns Some.
-        // What matters: it does NOT panic and the URI is well-formed.
-        if let Some(GotoDefinitionResponse::Scalar(loc)) = response {
-            assert!(loc.uri.as_str().ends_with("missing.lex"));
-        }
+        assert!(
+            response.is_none(),
+            "goto-def must return None for missing targets, got {response:?}"
+        );
     }
 
     #[tokio::test]
