@@ -146,8 +146,11 @@ pub enum IncludeError {
     },
     /// A path resolved outside the configured [`ResolveConfig::root`].
     RootEscape { path: PathBuf, root: PathBuf },
-    /// The loader could not find or read the included file.
-    NotFound { path: PathBuf },
+    /// The loader could not find or read the included file. `include_site`
+    /// is the range of the offending `lex.include` annotation in its host
+    /// file, so editors can squiggle the line that asked for the missing
+    /// file rather than the document head.
+    NotFound { include_site: Range, path: PathBuf },
     /// The loader returned text that the parser rejected.
     ParseFailed { path: PathBuf, message: String },
     /// The included file's content is not legal in the include site's
@@ -199,7 +202,9 @@ impl std::fmt::Display for IncludeError {
                 path.display(),
                 root.display()
             ),
-            IncludeError::NotFound { path } => write!(f, "include not found: {}", path.display()),
+            IncludeError::NotFound { path, .. } => {
+                write!(f, "include not found: {}", path.display())
+            }
             IncludeError::ParseFailed { path, message } => {
                 write!(f, "failed to parse {}: {message}", path.display())
             }
@@ -229,14 +234,10 @@ impl std::fmt::Display for IncludeError {
 
 impl std::error::Error for IncludeError {}
 
-impl From<LoadError> for IncludeError {
-    fn from(err: LoadError) -> Self {
-        match err {
-            LoadError::NotFound { path } => IncludeError::NotFound { path },
-            LoadError::Io { path, message } => IncludeError::LoaderIo { path, message },
-        }
-    }
-}
+// No `From<LoadError>` impl: `IncludeError::NotFound` carries the include
+// site (the `lex.include` annotation's range), which a loader doesn't know
+// about. Callers map `LoadError` explicitly at the call site, where the
+// site is available.
 
 /// Which container the include site sits in. Determines the splice-time
 /// policy check (the only one today is "no Sessions in `GeneralContainer`").
@@ -480,7 +481,13 @@ fn resolve_one_include(
         });
     }
 
-    let target_source = state.loader.load(&target_path)?;
+    let target_source = state.loader.load(&target_path).map_err(|e| match e {
+        LoadError::NotFound { path } => IncludeError::NotFound {
+            include_site: annotation.location.clone(),
+            path,
+        },
+        LoadError::Io { path, message } => IncludeError::LoaderIo { path, message },
+    })?;
 
     let mut included =
         parse_no_attach(&target_source).map_err(|message| IncludeError::ParseFailed {
