@@ -1,9 +1,9 @@
 use lex_analysis::utils::collect_footnote_definitions;
 use lex_core::lex::ast::Document;
-use std::collections::HashMap;
-use tower_lsp::lsp_types::{
+use lsp_types::{
     CodeAction, CodeActionKind, CodeActionParams, Position, Range, TextEdit, WorkspaceEdit,
 };
+use std::collections::HashMap;
 
 pub fn compute_actions(
     document: &Document,
@@ -19,10 +19,9 @@ pub fn compute_actions(
     // attaches every matching diagnostic. Preserve first-encountered order
     // so the quickfix list is stable across runs.
     let mut label_order: Vec<String> = Vec::new();
-    let mut diagnostics_by_label: HashMap<String, Vec<tower_lsp::lsp_types::Diagnostic>> =
-        HashMap::new();
+    let mut diagnostics_by_label: HashMap<String, Vec<lsp_types::Diagnostic>> = HashMap::new();
     for diagnostic in &params.context.diagnostics {
-        let Some(tower_lsp::lsp_types::NumberOrString::String(code)) = &diagnostic.code else {
+        let Some(lsp_types::NumberOrString::String(code)) = &diagnostic.code else {
             continue;
         };
         if code.as_str() != "missing-footnote" {
@@ -72,7 +71,7 @@ pub fn compute_actions(
 
     if wants_refactor {
         // Compute reordered content
-        let new_content = crate::features::footnotes::reorder_footnotes(document, source);
+        let new_content = crate::footnotes::reorder_footnotes(document, source);
 
         if new_content != source {
             let line_count = source.lines().count().max(1) as u32;
@@ -258,7 +257,7 @@ mod tests {
     use super::*;
     use lex_core::lex::parsing::parse_document;
     use lex_core::lex::testing::lexplore::Lexplore;
-    use tower_lsp::lsp_types::{
+    use lsp_types::{
         CodeActionContext, Diagnostic, DiagnosticSeverity, NumberOrString, PartialResultParams,
         TextDocumentIdentifier, Url, WorkDoneProgressParams,
     };

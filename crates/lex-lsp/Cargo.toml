@@ -21,6 +21,7 @@ lex-core = { workspace = true }
 lex-analysis = { workspace = true }
 lex-babel = { workspace = true }
 lex-config = { workspace = true }
+lex-lsp-core = { workspace = true }
 clapfig = { workspace = true }
 tower-lsp = "0.20"
 lsp-types = { workspace = true }

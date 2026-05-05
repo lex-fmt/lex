@@ -1,0 +1,21 @@
+[package]
+name = "lex-lsp-core"
+version = "0.10.2"
+edition = "2021"
+authors = ["lex contributors"]
+description = "Sync language-server core for the lex format. Powers both the stdio LSP server (lexd-lsp) and the WASM bindings (lex-wasm)."
+license = "MIT"
+repository = "https://github.com/lex-fmt/lex"
+keywords = ["lsp", "language-server", "lex", "wasm"]
+categories = ["development-tools", "text-editors"]
+
+[lib]
+doctest = false
+
+[dependencies]
+lex-core = { workspace = true }
+lex-analysis = { workspace = true }
+lex-babel = { workspace = true }
+lsp-types = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
