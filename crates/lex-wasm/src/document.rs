@@ -319,13 +319,7 @@ impl LexDocument {
     /// bindings and the stdio LSP share a single format implementation.
     pub fn format(&self) -> Result<String, JsError> {
         let edits = formatting::format_document(&self.document, &self.source, None);
-        match edits.as_slice() {
-            [] => Ok(self.source.clone()),
-            [edit] if edit.start == 0 && edit.end == self.source.len() => Ok(edit.new_text.clone()),
-            _ => Err(JsError::new(
-                "Format error: unexpected non-full-document edit set",
-            )),
-        }
+        Ok(formatting::apply_edits(&self.source, &edits))
     }
 
     /// Export the document as HTML.

@@ -49,6 +49,22 @@ pub fn format_document(
     }]
 }
 
+/// Apply a sequence of `TextEditSpan`s to `source` and return the result.
+///
+/// Edits are applied right-to-left so earlier byte offsets remain valid as
+/// later ones are rewritten. Spans are assumed non-overlapping and within
+/// bounds, which holds for everything `format_document` / `format_range`
+/// produces today; out-of-bounds spans will panic via `replace_range`.
+pub fn apply_edits(source: &str, edits: &[TextEditSpan]) -> String {
+    let mut sorted: Vec<&TextEditSpan> = edits.iter().collect();
+    sorted.sort_by_key(|e| std::cmp::Reverse(e.start));
+    let mut result = source.to_string();
+    for edit in sorted {
+        result.replace_range(edit.start..edit.end, &edit.new_text);
+    }
+    result
+}
+
 /// Produce formatting edits for a range (currently formats entire document).
 ///
 /// Note: Range formatting currently applies full document replacement.
@@ -116,6 +132,47 @@ mod tests {
         let document = parse(source);
         let edits = format_document(&document, source, None);
         assert!(edits.is_empty());
+    }
+
+    #[test]
+    fn apply_edits_handles_empty_and_full_replacement() {
+        let source = "abc\n";
+        assert_eq!(apply_edits(source, &[]), source);
+
+        let edits = vec![TextEditSpan {
+            start: 0,
+            end: source.len(),
+            new_text: "xyz\n".to_string(),
+        }];
+        assert_eq!(apply_edits(source, &edits), "xyz\n");
+    }
+
+    #[test]
+    fn apply_edits_applies_multiple_non_overlapping_edits_right_to_left() {
+        let source = "alpha beta gamma";
+        let edits = vec![
+            TextEditSpan {
+                start: 0,
+                end: 5,
+                new_text: "ALPHA".to_string(),
+            },
+            TextEditSpan {
+                start: 11,
+                end: 16,
+                new_text: "GAMMA".to_string(),
+            },
+        ];
+        assert_eq!(apply_edits(source, &edits), "ALPHA beta GAMMA");
+    }
+
+    #[test]
+    fn apply_edits_round_trip_with_format_document() {
+        let source = FULL_FIXTURE;
+        let document = parse(source);
+        let edits = format_document(&document, source, None);
+        let formatted_via_apply = apply_edits(source, &edits);
+        let formatted_direct = serialize_to_lex(&document).unwrap();
+        assert_eq!(formatted_via_apply, formatted_direct);
     }
 
     #[test]
