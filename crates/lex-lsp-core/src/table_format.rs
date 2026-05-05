@@ -1,6 +1,6 @@
 use lex_core::lex::ast::{ContentItem, Document, Position, Session, Table};
 
-use super::formatting::TextEditSpan;
+use crate::formatting::TextEditSpan;
 
 /// Format the table at the given cursor position, aligning columns.
 ///

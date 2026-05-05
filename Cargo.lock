@@ -1045,6 +1045,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "lex-lsp-core"
+version = "0.10.2"
+dependencies = [
+ "lex-analysis",
+ "lex-babel",
+ "lex-core",
+ "lsp-types",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "lex-wasm"
 version = "0.10.2"
 dependencies = [
@@ -1053,6 +1065,7 @@ dependencies = [
  "lex-analysis",
  "lex-babel",
  "lex-core",
+ "lex-lsp-core",
  "lsp-types",
  "serde",
  "serde-wasm-bindgen",
@@ -1088,6 +1101,7 @@ dependencies = [
  "lex-babel",
  "lex-config",
  "lex-core",
+ "lex-lsp-core",
  "lsp-types",
  "proptest",
  "serde",

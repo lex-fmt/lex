@@ -13,10 +13,10 @@ use lex_analysis::{
     semantic_tokens, spellcheck,
 };
 use lex_babel::format::Format;
-use lex_babel::formats::lex::LexFormat;
 use lex_babel::formats::HtmlFormat;
 use lex_core::lex::ast::{Document, Position};
 use lex_core::lex::transforms::standard::STRING_TO_AST;
+use lex_lsp_core::formatting;
 use lsp_types::{
     CompletionItem, Diagnostic, DocumentSymbol, FoldingRange, FoldingRangeKind, Hover,
     HoverContents, Location, MarkupContent, MarkupKind, Range, SemanticToken, Url,
@@ -314,11 +314,18 @@ impl LexDocument {
     }
 
     /// Format the document source.
+    ///
+    /// Routes through `lex_lsp_core::formatting::format_document` so the WASM
+    /// bindings and the stdio LSP share a single format implementation.
     pub fn format(&self) -> Result<String, JsError> {
-        let format = LexFormat::default();
-        format
-            .serialize(&self.document)
-            .map_err(|e| JsError::new(&format!("Format error: {e}")))
+        let edits = formatting::format_document(&self.document, &self.source, None);
+        match edits.as_slice() {
+            [] => Ok(self.source.clone()),
+            [edit] if edit.start == 0 && edit.end == self.source.len() => Ok(edit.new_text.clone()),
+            _ => Err(JsError::new(
+                "Format error: unexpected non-full-document edit set",
+            )),
+        }
     }
 
     /// Export the document as HTML.

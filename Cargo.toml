@@ -5,6 +5,7 @@ members = [
     "crates/lex-config",
     "crates/lex-cli",
     "crates/lex-analysis",
+    "crates/lex-lsp-core",
     "crates/lex-lsp",
     "crates/lex-wasm",
 ]
@@ -15,6 +16,7 @@ lex-core = { version = "0.10.2", path = "crates/lex-core" }
 lex-babel = { version = "0.10.2", path = "crates/lex-babel", default-features = true }
 lex-config = { version = "0.10.2", path = "crates/lex-config" }
 lex-analysis = { version = "0.10.2", path = "crates/lex-analysis" }
+lex-lsp-core = { version = "0.10.2", path = "crates/lex-lsp-core" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_yaml = "0.9"
