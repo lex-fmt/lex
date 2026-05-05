@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+## [0.10.2] - 2026-05-05
+
+
 ### Fixed
 
 - `lex-core::includes`: platform-absolute include `src` (Windows `C:\foo`, `\\server\share`, `\foo`) is now rejected up front in `resolve_path` with the new `IncludeError::AbsolutePath` variant instead of relying on `PathBuf::join`'s "absolute replaces base" semantics + the downstream root-escape check. The spec forbids absolute filesystem paths from entering the resolution pipeline; this holds the line at the input boundary and surfaces a clear "use relative or root-absolute" message instead of a misleading "escapes root" error. The root-absolute form (leading `/` against the includes root) is unchanged. Addresses item #4 from the security review. (#TBD)
@@ -19,7 +22,6 @@
 - `lex-core::includes`: `Loader::load` now returns `LoadedFile { source, canonical_path }` instead of `String`. Implementations decide what `canonical_path` means — `FsLoader` returns the post-`fs::canonicalize` path (symlinks resolved, case-folded on case-insensitive FS); `MemoryLoader` returns the lookup key unchanged. The resolver uses `canonical_path` for cycle detection and origin stamping, so symlink loops and case-folded re-includes are now caught as `IncludeError::Cycle` rather than slipping through to `IncludeError::DepthExceeded`.
 - `lex-core::includes`: `FsLoader::new` now takes the resolution root: `FsLoader::new(root: PathBuf)`. `Default` impl removed (a loader without a root would be unsafe).
 - `lex-core::includes`: `FsLoader` now rejects non-regular files (FIFOs, sockets, devices, directories) before reading. Previously a malicious symlink to `/dev/zero` could block or OOM the reader once the symlink check landed; this is the second layer of defense.
-
 ## [0.10.1] - 2026-05-05
 
 ### Fixed
