@@ -70,6 +70,15 @@ pub struct ResolveConfig {
     /// Maximum include depth. Default 8 (see [`ResolveConfig::DEFAULT_MAX_DEPTH`]).
     /// Hitting the limit is an error, not a silent truncation.
     pub max_depth: usize,
+    /// Maximum total number of `lex.include` annotations resolved across
+    /// the whole tree (depth × breadth). Default 1000
+    /// (see [`ResolveConfig::DEFAULT_MAX_TOTAL_INCLUDES`]).
+    ///
+    /// Caps fan-out: `max_depth` alone bounds chain length but not
+    /// breadth. A document with 100 thousand top-level includes at depth
+    /// 1 sits inside `max_depth` but can still OOM the resolver / LSP /
+    /// CI. Hitting this limit is an error, not a silent truncation.
+    pub max_total_includes: usize,
 }
 
 impl ResolveConfig {
@@ -78,11 +87,18 @@ impl ResolveConfig {
     /// keep the resolver's worst-case work predictable.
     pub const DEFAULT_MAX_DEPTH: usize = 8;
 
-    /// Construct a config with the given root and default depth.
+    /// Default maximum total include count (DoS bound). Generous enough
+    /// for a book-length document with thousands of small fragments,
+    /// tight enough to contain adversarial fan-out within a few seconds
+    /// of resolver work.
+    pub const DEFAULT_MAX_TOTAL_INCLUDES: usize = 1000;
+
+    /// Construct a config with the given root and default limits.
     pub fn with_root(root: PathBuf) -> Self {
         Self {
             root,
             max_depth: Self::DEFAULT_MAX_DEPTH,
+            max_total_includes: Self::DEFAULT_MAX_TOTAL_INCLUDES,
         }
     }
 }
@@ -128,6 +144,14 @@ pub enum LoadError {
     /// check post-canonicalization to catch symlinks that escape the
     /// boundary lexically-correct paths can't reach.
     OutsideRoot { path: PathBuf, root: PathBuf },
+    /// The resource exists but its size exceeds the loader's configured
+    /// limit. `size` and `limit` are in bytes. The resolver maps this to
+    /// [`IncludeError::FileTooLarge`] with the offending annotation's site.
+    TooLarge {
+        path: PathBuf,
+        size: u64,
+        limit: u64,
+    },
     /// Underlying I/O error (or virtual-filesystem equivalent).
     Io { path: PathBuf, message: String },
 }
@@ -141,6 +165,11 @@ impl std::fmt::Display for LoadError {
                 "include path {} resolves outside loader root {}",
                 path.display(),
                 root.display()
+            ),
+            LoadError::TooLarge { path, size, limit } => write!(
+                f,
+                "include file {} is {size} bytes, exceeds limit of {limit} bytes",
+                path.display()
             ),
             LoadError::Io { path, message } => {
                 write!(f, "io error reading {}: {message}", path.display())
@@ -172,6 +201,21 @@ pub enum IncludeError {
         include_site: Range,
         limit: usize,
         chain: Vec<PathBuf>,
+    },
+    /// The total number of includes resolved across the document
+    /// exceeded [`ResolveConfig::max_total_includes`]. Bounds adversarial
+    /// fan-out (which `max_depth` alone does not). `include_site` is the
+    /// `lex.include` annotation that pushed the count past the limit.
+    TotalIncludesExceeded { include_site: Range, limit: usize },
+    /// The included file's size exceeded the loader's configured limit.
+    /// Surfaced by loaders that read from a real filesystem (FsLoader)
+    /// to bound memory allocation per include. `include_site` is the
+    /// offending annotation; `size` and `limit` are in bytes.
+    FileTooLarge {
+        include_site: Range,
+        path: PathBuf,
+        size: u64,
+        limit: u64,
     },
     /// A path resolved outside the configured [`ResolveConfig::root`].
     RootEscape { path: PathBuf, root: PathBuf },
@@ -223,6 +267,18 @@ impl std::fmt::Display for IncludeError {
                     f,
                     "include depth exceeded limit of {limit} (chain: {})",
                     chain_display.join(" -> ")
+                )
+            }
+            IncludeError::TotalIncludesExceeded { limit, .. } => {
+                write!(f, "total include count exceeded limit of {limit}")
+            }
+            IncludeError::FileTooLarge {
+                path, size, limit, ..
+            } => {
+                write!(
+                    f,
+                    "included file {} is {size} bytes, exceeds limit of {limit} bytes",
+                    path.display()
                 )
             }
             IncludeError::RootEscape { path, root } => write!(
@@ -360,6 +416,7 @@ pub fn resolve_from_source(
         loader,
         chain: &mut chain,
         depth: 0,
+        total_resolved: 0,
     };
 
     splice_in_session_container(doc.root.children.as_mut_vec(), &host_dir, &mut state)?;
@@ -401,6 +458,11 @@ struct ResolverState<'a> {
     /// Number of include hops from the entry point. Each recursion into a
     /// loaded file increments by 1. Hitting `config.max_depth` is an error.
     depth: usize,
+    /// Total includes resolved across the entire walk (depth × breadth).
+    /// Incremented on every successful load. Hitting
+    /// `config.max_total_includes` aborts with `TotalIncludesExceeded` —
+    /// caps adversarial fan-out that `max_depth` alone wouldn't catch.
+    total_resolved: usize,
 }
 
 fn splice_in_session_container(
@@ -501,6 +563,16 @@ fn resolve_one_include(
         });
     }
 
+    // Total-count check before loading. Caps fan-out — a doc with
+    // 100k top-level includes would blow past max_total_includes long
+    // before max_depth would catch anything.
+    if state.total_resolved >= state.config.max_total_includes {
+        return Err(IncludeError::TotalIncludesExceeded {
+            include_site: annotation.location.clone(),
+            limit: state.config.max_total_includes,
+        });
+    }
+
     // Load via the injected loader. The loader returns the source plus
     // a *canonical* identity for the resource — for FsLoader that's
     // post-`fs::canonicalize` (symlinks resolved, case-folded on
@@ -517,8 +589,15 @@ fn resolve_one_include(
             path,
         },
         LoadError::OutsideRoot { path, root } => IncludeError::RootEscape { path, root },
+        LoadError::TooLarge { path, size, limit } => IncludeError::FileTooLarge {
+            include_site: annotation.location.clone(),
+            path,
+            size,
+            limit,
+        },
         LoadError::Io { path, message } => IncludeError::LoaderIo { path, message },
     })?;
+    state.total_resolved += 1;
 
     // Cycle check uses the canonical path so symlink/case-fold cycles
     // are caught even though `target_path` (which we used for the load
@@ -896,15 +975,36 @@ pub struct FsLoader {
     /// as a `LoadError::OutsideRoot` instead of silently disabling the
     /// security check.
     canonical_root: PathBuf,
+    /// Per-file size cap (bytes). Loads of larger files surface as
+    /// `LoadError::TooLarge` before any bytes are read into memory.
+    /// Default [`FsLoader::DEFAULT_MAX_FILE_SIZE`].
+    max_file_size: u64,
 }
 
 impl FsLoader {
-    /// Construct a loader rooted at `root`. The loader stores `root`'s
-    /// fs-canonical form (with symlinks resolved); subsequent loads
-    /// validate that the requested path's canonical form lives under it.
+    /// Default per-file size cap: 10 MiB. Generous for realistic Lex
+    /// source documents (text only) and tight enough to bound memory
+    /// allocation per include against an adversarial 1 GB file.
+    pub const DEFAULT_MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;
+
+    /// Construct a loader rooted at `root` with default size limits.
+    /// The loader stores `root`'s fs-canonical form (with symlinks
+    /// resolved); subsequent loads validate that the requested path's
+    /// canonical form lives under it.
     pub fn new(root: PathBuf) -> Self {
         let canonical_root = std::fs::canonicalize(&root).unwrap_or(root);
-        Self { canonical_root }
+        Self {
+            canonical_root,
+            max_file_size: Self::DEFAULT_MAX_FILE_SIZE,
+        }
+    }
+
+    /// Override the default per-file size cap (bytes). Use to widen the
+    /// limit for projects with genuinely large source files, or tighten
+    /// it for stricter sandboxes (e.g., LSPs serving untrusted content).
+    pub fn with_max_file_size(mut self, max_file_size: u64) -> Self {
+        self.max_file_size = max_file_size;
+        self
     }
 }
 
@@ -948,9 +1048,20 @@ impl Loader for FsLoader {
             });
         }
 
-        // 4. Read. By this point we know the path is a regular file under
-        //    the canonical root; anything that fails here is a real I/O
-        //    error worth surfacing.
+        // 4. Size cap. Bounds memory allocation per include against an
+        //    adversarial 1 GB file before any bytes hit the heap.
+        let size = meta.len();
+        if size > self.max_file_size {
+            return Err(LoadError::TooLarge {
+                path: canonical_path,
+                size,
+                limit: self.max_file_size,
+            });
+        }
+
+        // 5. Read. By this point we know the path is a regular file under
+        //    the canonical root and within the size cap; anything that
+        //    fails here is a real I/O error worth surfacing.
         let source = std::fs::read_to_string(&canonical_path).map_err(|e| LoadError::Io {
             path: canonical_path.clone(),
             message: e.to_string(),

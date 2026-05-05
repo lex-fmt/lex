@@ -360,13 +360,16 @@ where
         let cfg = self.config.read().await;
         let inc_root = inc_root_for(&path, &cfg);
         let max_depth = cfg.includes.max_depth;
+        let max_total_includes = cfg.includes.max_total_includes;
+        let max_file_size = cfg.includes.max_file_size;
         drop(cfg);
 
         let resolve_config = ResolveConfig {
             root: inc_root.clone(),
             max_depth,
+            max_total_includes,
         };
-        let loader = FsLoader::new(inc_root);
+        let loader = FsLoader::new(inc_root).with_max_file_size(max_file_size);
 
         match resolve_from_source(text, Some(path), &resolve_config, &loader) {
             Ok(_doc) => {
@@ -1494,9 +1497,10 @@ fn absolutize_path(p: &Path) -> PathBuf {
 ///
 /// The diagnostic's range points at the offending `lex.include`
 /// annotation when the error carries one (Cycle, DepthExceeded,
-/// NotFound, ContainerPolicy, MissingSrc); otherwise it falls back to the
-/// document head (line 0, column 0) so the user at least sees something
-/// in the editor's diagnostics panel.
+/// NotFound, ContainerPolicy, MissingSrc, TotalIncludesExceeded,
+/// FileTooLarge); otherwise it falls back to the document head
+/// (line 0, column 0) so the user at least sees something in the
+/// editor's diagnostics panel.
 fn include_error_to_diagnostic(err: &IncludeError) -> Diagnostic {
     let (range, code, message) = match err {
         IncludeError::Cycle { include_site, .. } => {
@@ -1523,6 +1527,16 @@ fn include_error_to_diagnostic(err: &IncludeError) -> Diagnostic {
         IncludeError::MissingSrc { include_site } => (
             to_lsp_range(include_site),
             "include-missing-src",
+            err.to_string(),
+        ),
+        IncludeError::TotalIncludesExceeded { include_site, .. } => (
+            to_lsp_range(include_site),
+            "include-total-exceeded",
+            err.to_string(),
+        ),
+        IncludeError::FileTooLarge { include_site, .. } => (
+            to_lsp_range(include_site),
+            "include-file-too-large",
             err.to_string(),
         ),
     };

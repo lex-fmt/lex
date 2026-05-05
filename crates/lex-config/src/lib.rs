@@ -198,6 +198,18 @@ pub struct IncludesConfig {
     /// not a silent truncation.
     #[config(default = 8)]
     pub max_depth: usize,
+    /// Maximum total include count across the document (DoS bound).
+    /// Default 1000. Caps fan-out — `max_depth` alone bounds chain
+    /// length but a doc with thousands of includes at depth 1 still
+    /// blows past it.
+    #[config(default = 1000)]
+    pub max_total_includes: usize,
+    /// Maximum size of any single included file in bytes (DoS bound).
+    /// Default 10 MiB (10485760). Files larger than this are rejected
+    /// before any bytes hit memory. Used by `FsLoader`; the in-memory
+    /// `MemoryLoader` doesn't enforce a size limit.
+    #[config(default = 10485760)]
+    pub max_file_size: u64,
 }
 
 #[cfg(test)]
