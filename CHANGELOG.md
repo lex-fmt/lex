@@ -2,9 +2,13 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- `lex-core::includes`: platform-absolute include `src` (Windows `C:\foo`, `\\server\share`, `\foo`) is now rejected up front in `resolve_path` with the new `IncludeError::AbsolutePath` variant instead of relying on `PathBuf::join`'s "absolute replaces base" semantics + the downstream root-escape check. The spec forbids absolute filesystem paths from entering the resolution pipeline; this holds the line at the input boundary and surfaces a clear "use relative or root-absolute" message instead of a misleading "escapes root" error. The root-absolute form (leading `/` against the includes root) is unchanged. Addresses item #4 from the security review. (#TBD)
+
 ### Added
 
-- `lex-core::includes`: resource limits to bound resolver work against adversarial input. `ResolveConfig::max_total_includes` (default 1000) caps the total number of `lex.include` annotations resolved across the entire document — `max_depth` alone bounds chain length but a doc with thousands of includes at depth 1 still blows past it. `FsLoader::with_max_file_size(bytes)` (default 10 MiB) caps per-include file size; oversize files are rejected before any bytes hit memory. Both are surfaced as their own `IncludeError` variants (`TotalIncludesExceeded`, `FileTooLarge`) with `include_site` for editor diagnostics. Configurable via new `[includes].max_total_includes` and `[includes].max_file_size` keys in `lex.toml`. Addresses item #3 from the security review. (#TBD)
+- `lex-core::includes`: resource limits to bound resolver work against adversarial input. `ResolveConfig::max_total_includes` (default 1000) caps the total number of `lex.include` annotations resolved across the entire document — `max_depth` alone bounds chain length but a doc with thousands of includes at depth 1 still blows past it. `FsLoader::with_max_file_size(bytes)` (default 10 MiB) caps per-include file size; oversize files are rejected before any bytes hit memory. Both are surfaced as their own `IncludeError` variants (`TotalIncludesExceeded`, `FileTooLarge`) with `include_site` for editor diagnostics. Configurable via new `[includes].max_total_includes` and `[includes].max_file_size` keys in `lex.toml`. Addresses item #3 from the security review. (#503)
 
 ### Security
 

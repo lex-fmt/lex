@@ -219,6 +219,17 @@ pub enum IncludeError {
     },
     /// A path resolved outside the configured [`ResolveConfig::root`].
     RootEscape { path: PathBuf, root: PathBuf },
+    /// The include `src` was a platform-absolute filesystem path
+    /// (e.g. Windows `C:\foo`, `\\server\share`, `\foo`). The spec
+    /// forbids absolute filesystem paths from entering the
+    /// resolution pipeline; the *root-absolute* form (leading `/`
+    /// resolved against the includes root) is the only spec-allowed
+    /// way to write a path that doesn't start from the host's
+    /// directory. On Unix the only thing that's `Path::is_absolute()`
+    /// is a leading `/`, which is consumed by the root-absolute
+    /// branch first; this variant therefore only fires in practice
+    /// for Windows-shaped absolute paths.
+    AbsolutePath { path: PathBuf },
     /// The loader could not find or read the included file. `include_site`
     /// is the range of the offending `lex.include` annotation in its host
     /// file, so editors can squiggle the line that asked for the missing
@@ -286,6 +297,13 @@ impl std::fmt::Display for IncludeError {
                 "include path {} escapes resolution root {}",
                 path.display(),
                 root.display()
+            ),
+            IncludeError::AbsolutePath { path } => write!(
+                f,
+                "include src {} is a platform-absolute path; \
+                 the spec forbids absolute filesystem paths — use a relative path \
+                 (chapters/01.lex) or a root-absolute path (/shared/01.lex)",
+                path.display()
             ),
             IncludeError::NotFound { path, .. } => {
                 write!(f, "include not found: {}", path.display())
@@ -775,10 +793,27 @@ pub fn resolve_file_reference(
 
 fn resolve_path(src: &str, host_dir: &Path, root: &Path) -> Result<PathBuf, IncludeError> {
     let candidate = if let Some(rel) = src.strip_prefix('/') {
-        // Root-absolute: leading slash means "from the resolution root".
+        // Root-absolute (Lex spec convention): leading `/` means "from
+        // the resolution root", not "filesystem root".
         root.join(rel)
     } else {
-        // Relative: from the host file's directory.
+        // Anything else must be a relative path. Reject inputs the
+        // host platform would treat as absolute (Windows `C:\foo`,
+        // `\\server\share`, `\foo`) up front: the spec forbids
+        // platform-absolute paths from entering the resolution
+        // pipeline. Without this, `host_dir.join(src)` would silently
+        // discard `host_dir` because Rust's `PathBuf::join` replaces
+        // the base when the joined path is absolute. The downstream
+        // root-escape check would still catch the security side, but
+        // we'd surface a misleading "escapes root" error instead of
+        // "absolute paths not allowed", and we'd be relying on
+        // `PathBuf::join`'s override semantics for the security
+        // outcome rather than holding the line at the input boundary.
+        if Path::new(src).is_absolute() {
+            return Err(IncludeError::AbsolutePath {
+                path: PathBuf::from(src),
+            });
+        }
         host_dir.join(src)
     };
     let normalized = lexical_normalize(&candidate);

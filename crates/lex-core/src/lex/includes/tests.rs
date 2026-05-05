@@ -1709,3 +1709,62 @@ fn file_too_large_carries_include_site() {
         other => panic!("expected FileTooLarge, got {other:?}"),
     }
 }
+
+// ============================================================================
+// Absolute-path rejection (#4 from security review)
+// ============================================================================
+
+/// Root-absolute paths (leading `/` per spec convention) keep working
+/// after the `is_absolute()` rejection lands. Regression test: the
+/// rejection must sit *after* the strip_prefix branch.
+#[test]
+fn root_absolute_leading_slash_still_works() {
+    let mut loader = MemoryLoader::new();
+    loader.insert("/repo/leaf.lex", "Body.\n");
+    loader.insert("/repo/main.lex", ":: lex.include src=\"/leaf.lex\" ::\n");
+    let cfg = ResolveConfig::with_root(PathBuf::from("/repo"));
+    let _doc = resolve_from_source(
+        ":: lex.include src=\"/leaf.lex\" ::\n",
+        Some(PathBuf::from("/repo/main.lex")),
+        &cfg,
+        &loader,
+    )
+    .expect("root-absolute (leading /) include must still resolve");
+}
+
+/// Windows-shaped absolute paths (`C:\foo`) trip `Path::is_absolute()`
+/// only on Windows runners — on Unix `C:\` parses as a relative path
+/// with `C:` as a literal directory name. Test gated accordingly.
+#[cfg(windows)]
+#[test]
+fn windows_absolute_path_is_rejected_up_front() {
+    let cfg = ResolveConfig::with_root(PathBuf::from("C:\\repo"));
+    let loader = MemoryLoader::new();
+    let result = resolve_from_source(
+        ":: lex.include src=\"C:\\\\secret.txt\" ::\n",
+        Some(PathBuf::from("C:\\repo\\main.lex")),
+        &cfg,
+        &loader,
+    );
+    match result.expect_err("Windows-absolute src must be rejected") {
+        IncludeError::AbsolutePath { path } => {
+            assert_eq!(path, PathBuf::from("C:\\secret.txt"));
+        }
+        other => panic!("expected AbsolutePath, got {other:?}"),
+    }
+}
+
+/// Display message names the offending path and points the user at
+/// the two spec-allowed shapes.
+#[test]
+fn absolute_path_error_message_is_actionable() {
+    let err = IncludeError::AbsolutePath {
+        path: PathBuf::from("C:\\secret.txt"),
+    };
+    let s = err.to_string();
+    assert!(s.contains("C:\\secret.txt"), "names the offending path");
+    assert!(
+        s.contains("relative") && s.contains("root-absolute"),
+        "points the user at the two spec-allowed shapes; got: {s}"
+    );
+}
