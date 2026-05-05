@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- `lex-lsp`: `include-not-found` diagnostic now points at the offending `:: lex.include src=… ::` annotation instead of falling back to the document head. Without this fix, vscode rendered the diagnostic as a zero-length point at line 1 col 1, giving no signal which include in a multi-include doc was broken. `IncludeError::NotFound` now carries `include_site: Range`; the resolver wires `annotation.location` through. The other no-site error variants (`RootEscape`, `LoaderIo`, `ParseFailed`) still fall back to head_range for now — same fix pattern applies but kept out of scope here. (#500)
+
 ## [0.10.0] - 2026-05-04
 
 
