@@ -578,6 +578,12 @@ struct IncludeOptions {
     /// Maximum include depth, taken from `[includes].max_depth`
     /// (default 8).
     max_depth: usize,
+    /// Maximum total include count, taken from
+    /// `[includes].max_total_includes` (default 1000).
+    max_total_includes: usize,
+    /// Maximum size of any single included file in bytes, taken from
+    /// `[includes].max_file_size` (default 10 MiB).
+    max_file_size: u64,
 }
 
 impl IncludeOptions {
@@ -590,6 +596,8 @@ impl IncludeOptions {
                 .map(PathBuf::from)
                 .or_else(|| config.includes.root.as_ref().map(PathBuf::from)),
             max_depth: config.includes.max_depth,
+            max_total_includes: config.includes.max_total_includes,
+            max_file_size: config.includes.max_file_size,
         }
     }
 
@@ -599,6 +607,8 @@ impl IncludeOptions {
             enabled: false,
             root_override: None,
             max_depth: 8,
+            max_total_includes: 1000,
+            max_file_size: 10 * 1024 * 1024,
         }
     }
 
@@ -743,8 +753,9 @@ fn expand_includes_to_source(source: &str, entry_path: &str, inc: &IncludeOption
     let resolve_config = ResolveConfig {
         root: root.clone(),
         max_depth: inc.max_depth,
+        max_total_includes: inc.max_total_includes,
     };
-    let loader = FsLoader::new(root);
+    let loader = FsLoader::new(root).with_max_file_size(inc.max_file_size);
     let doc =
         resolve_from_source(source, Some(entry), &resolve_config, &loader).unwrap_or_else(|e| {
             eprintln!("Include resolution error: {e}");
@@ -796,8 +807,9 @@ fn handle_convert_command(
         let resolve_config = ResolveConfig {
             root: root.clone(),
             max_depth: inc.max_depth,
+            max_total_includes: inc.max_total_includes,
         };
-        let loader = FsLoader::new(root);
+        let loader = FsLoader::new(root).with_max_file_size(inc.max_file_size);
         resolve_from_source(&source, Some(entry), &resolve_config, &loader).unwrap_or_else(|e| {
             eprintln!("Include resolution error: {e}");
             std::process::exit(1);

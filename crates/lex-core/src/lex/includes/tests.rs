@@ -965,6 +965,7 @@ fn depth_limit_triggers_at_configured_threshold() {
     let config = ResolveConfig {
         root: PathBuf::from(TEST_ROOT),
         max_depth: 3,
+        max_total_includes: ResolveConfig::DEFAULT_MAX_TOTAL_INCLUDES,
     };
     let result = resolve_from_source(
         ":: lex.include src=\"a.lex\" ::\n",
@@ -992,6 +993,7 @@ fn depth_limit_at_exact_max_is_allowed() {
     let config = ResolveConfig {
         root: PathBuf::from(TEST_ROOT),
         max_depth: 2,
+        max_total_includes: ResolveConfig::DEFAULT_MAX_TOTAL_INCLUDES,
     };
     let doc = resolve_from_source(
         ":: lex.include src=\"a.lex\" ::\n",
@@ -1566,5 +1568,144 @@ fn cycle_detection_uses_canonical_path_from_loader() {
              cycle detection isn't using canonical_path from the loader"
         ),
         other => panic!("unexpected error variant: {other:?}"),
+    }
+}
+
+// ============================================================================
+// Resource-limit tests (max_total_includes + max_file_size, post-PR2)
+// ============================================================================
+
+/// `max_total_includes` caps fan-out: a doc with many top-level
+/// includes at depth 1 (well within `max_depth`) still trips the
+/// total-count limit and aborts cleanly with `TotalIncludesExceeded`.
+#[test]
+fn total_includes_limit_caps_breadth() {
+    let mut loader = MemoryLoader::new();
+    loader.insert("/repo/leaf.lex", "Body.\n");
+    // Host with 5 sibling includes, all pointing at the same leaf.
+    let host = "1. Host\n\n    :: lex.include src=\"leaf.lex\" ::\n\n    :: lex.include src=\"leaf.lex\" ::\n\n    :: lex.include src=\"leaf.lex\" ::\n\n    :: lex.include src=\"leaf.lex\" ::\n\n    :: lex.include src=\"leaf.lex\" ::\n";
+    loader.insert("/repo/main.lex", host);
+    let config = ResolveConfig {
+        root: PathBuf::from(TEST_ROOT),
+        max_depth: ResolveConfig::DEFAULT_MAX_DEPTH,
+        max_total_includes: 3,
+    };
+    let result = resolve_from_source(
+        host,
+        Some(PathBuf::from(DEFAULT_MAIN_PATH)),
+        &config,
+        &loader,
+    );
+    match result.expect_err("breadth past total limit must error") {
+        IncludeError::TotalIncludesExceeded { limit, .. } => {
+            assert_eq!(limit, 3, "error reports the configured limit");
+        }
+        other => panic!("expected TotalIncludesExceeded, got {other:?}"),
+    }
+}
+
+/// Total-include count is on a successful-load basis. A failed load
+/// (NotFound, etc.) should not consume budget — otherwise the user
+/// gets a confusing TotalIncludesExceeded for a doc with mostly-broken
+/// links.
+#[test]
+fn total_includes_limit_only_counts_successful_loads() {
+    let mut loader = MemoryLoader::new();
+    loader.insert("/repo/leaf.lex", "Body.\n");
+    // 1 broken + 2 working = 2 successful loads, well under limit of 5.
+    let host = "1. Host\n\n    :: lex.include src=\"missing.lex\" ::\n";
+    loader.insert("/repo/main.lex", host);
+    let config = ResolveConfig {
+        root: PathBuf::from(TEST_ROOT),
+        max_depth: 8,
+        max_total_includes: 5,
+    };
+    let result = resolve_from_source(
+        host,
+        Some(PathBuf::from(DEFAULT_MAIN_PATH)),
+        &config,
+        &loader,
+    );
+    // Should fail with NotFound, not TotalIncludesExceeded.
+    match result.expect_err("missing include must surface NotFound") {
+        IncludeError::NotFound { .. } => {}
+        other => panic!("expected NotFound, got {other:?}"),
+    }
+}
+
+/// FsLoader's `max_file_size` rejects oversize files before reading.
+/// We construct a file just above the limit so the test stays small
+/// (default test budget = 1 KiB; real file = 2 KiB).
+#[test]
+fn fsloader_rejects_file_exceeding_max_size() {
+    let (_dir, root) = canonical_tempdir();
+    let target = root.join("oversize.lex");
+    let body = "x".repeat(2 * 1024); // 2 KiB
+    std::fs::write(&target, &body).unwrap();
+
+    let loader = FsLoader::new(root.clone()).with_max_file_size(1024);
+    match loader
+        .load(&target)
+        .expect_err("file over limit must be rejected")
+    {
+        LoadError::TooLarge { size, limit, .. } => {
+            assert_eq!(size, 2048, "reports actual size");
+            assert_eq!(limit, 1024, "reports configured limit");
+        }
+        other => panic!("expected TooLarge, got {other:?}"),
+    }
+}
+
+/// FsLoader at the default size limit accepts a small file. Pure
+/// regression check that the size machinery doesn't break the
+/// happy path.
+#[test]
+fn fsloader_accepts_small_file_under_default_limit() {
+    let (_dir, root) = canonical_tempdir();
+    let target = root.join("small.lex");
+    std::fs::write(&target, "Body.\n").unwrap();
+    let loader = FsLoader::new(root.clone());
+    let loaded = loader.load(&target).expect("small file loads");
+    assert_eq!(loaded.source, "Body.\n");
+}
+
+/// `LoadError::TooLarge` from the loader maps to
+/// `IncludeError::FileTooLarge` with the offending annotation site.
+#[test]
+fn file_too_large_carries_include_site() {
+    // Custom loader that always reports TooLarge for the requested
+    // file. Avoids needing a real on-disk oversize file in this test.
+    struct AlwaysTooLargeLoader;
+    impl Loader for AlwaysTooLargeLoader {
+        fn load(&self, path: &std::path::Path) -> Result<LoadedFile, LoadError> {
+            Err(LoadError::TooLarge {
+                path: path.to_path_buf(),
+                size: 100,
+                limit: 50,
+            })
+        }
+    }
+    let cfg = ResolveConfig::with_root(PathBuf::from("/repo"));
+    let entry = ":: lex.include src=\"big.lex\" ::\n";
+    let result = resolve_from_source(
+        entry,
+        Some(PathBuf::from("/repo/main.lex")),
+        &cfg,
+        &AlwaysTooLargeLoader,
+    );
+    match result.expect_err("too-large include must error") {
+        IncludeError::FileTooLarge {
+            include_site,
+            path,
+            size,
+            limit,
+        } => {
+            assert_eq!(size, 100);
+            assert_eq!(limit, 50);
+            assert_eq!(path, PathBuf::from("/repo/big.lex"));
+            // Site must locate the annotation, not be the default.
+            assert_ne!(include_site, crate::lex::ast::Range::default());
+        }
+        other => panic!("expected FileTooLarge, got {other:?}"),
     }
 }

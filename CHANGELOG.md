@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- `lex-core::includes`: resource limits to bound resolver work against adversarial input. `ResolveConfig::max_total_includes` (default 1000) caps the total number of `lex.include` annotations resolved across the entire document — `max_depth` alone bounds chain length but a doc with thousands of includes at depth 1 still blows past it. `FsLoader::with_max_file_size(bytes)` (default 10 MiB) caps per-include file size; oversize files are rejected before any bytes hit memory. Both are surfaced as their own `IncludeError` variants (`TotalIncludesExceeded`, `FileTooLarge`) with `include_site` for editor diagnostics. Configurable via new `[includes].max_total_includes` and `[includes].max_file_size` keys in `lex.toml`. Addresses item #3 from the security review. (#TBD)
+
 ### Security
 
 - `lex-core`: `FsLoader` now defends against arbitrary-file-read via symlink path traversal. Previously the resolver's lexical `..`-normalization correctly blocked textual root escapes, but a symlink inside the repository pointing outside the resolution root (e.g., `repo/sneaky -> /etc`) bypassed the check — `lexical_normalize` doesn't touch the filesystem, so it can't see through symlinks. `FsLoader` now stores its allowed root and, on every load, calls `fs::canonicalize` on both the requested path and the root, then verifies the canonical target sits under the canonical root. Symlinks pointing outside root are rejected as `IncludeError::RootEscape` before any read happens. Editors and CI that process untrusted Lex repositories should pick up this fix immediately. Surfaces a new `LoadError::OutsideRoot` variant; `Loader` trait now returns `LoadedFile { source, canonical_path }` instead of bare `String` so the resolver can use the loader's authoritative identity for cycle detection. (#502)
