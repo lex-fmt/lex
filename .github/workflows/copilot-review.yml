@@ -13,3 +13,5 @@ jobs:
     uses: arthur-debert/release/.github/workflows/copilot-review.yml@v1
     with:
       pr_number: ${{ github.event.pull_request.number }}
+    secrets:
+      gh_token: ${{ secrets.RELEASE_TOKEN }}
