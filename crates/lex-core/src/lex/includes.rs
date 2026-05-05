@@ -94,10 +94,27 @@ impl ResolveConfig {
 /// `std::fs` directly through this trait; that keeps the resolver pure and
 /// usable in WASM, sandboxes, and unit tests.
 pub trait Loader {
-    /// Load the source text for `path`. The path is the canonical absolute
-    /// path the resolver decided on after applying the rules in §4 of the
-    /// proposal.
-    fn load(&self, path: &Path) -> Result<String, LoadError>;
+    /// Load the source text for `path` and return both the contents and a
+    /// canonical identity for the loaded resource. The path is what the
+    /// resolver decided on after applying the rules in §4 of the proposal.
+    ///
+    /// `LoadedFile::canonical_path` is the loader's authoritative identity
+    /// for the resource. For [`FsLoader`] this is the filesystem-canonical
+    /// path (symlinks resolved, case-folded if the underlying FS is
+    /// case-insensitive); for [`MemoryLoader`] it's the lookup key (since
+    /// memory loaders have no symlinks). The resolver uses this for cycle
+    /// detection and for stamping `Range.origin_path` on the loaded tree.
+    fn load(&self, path: &Path) -> Result<LoadedFile, LoadError>;
+}
+
+/// Result of a successful [`Loader::load`].
+#[derive(Debug, Clone)]
+pub struct LoadedFile {
+    /// The file's source text.
+    pub source: String,
+    /// The loader's authoritative identity for the resource. See
+    /// [`Loader::load`] for how loaders decide this.
+    pub canonical_path: PathBuf,
 }
 
 /// Errors a [`Loader`] can produce.
@@ -105,6 +122,12 @@ pub trait Loader {
 pub enum LoadError {
     /// The loader could not find a resource at the given path.
     NotFound { path: PathBuf },
+    /// The resource exists but resolves outside the loader's allowed
+    /// boundary. The lexical resolver normalizes `..` in the requested
+    /// path, but loaders that touch a real filesystem must do a second
+    /// check post-canonicalization to catch symlinks that escape the
+    /// boundary lexically-correct paths can't reach.
+    OutsideRoot { path: PathBuf, root: PathBuf },
     /// Underlying I/O error (or virtual-filesystem equivalent).
     Io { path: PathBuf, message: String },
 }
@@ -113,6 +136,12 @@ impl std::fmt::Display for LoadError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             LoadError::NotFound { path } => write!(f, "include not found: {}", path.display()),
+            LoadError::OutsideRoot { path, root } => write!(
+                f,
+                "include path {} resolves outside loader root {}",
+                path.display(),
+                root.display()
+            ),
             LoadError::Io { path, message } => {
                 write!(f, "io error reading {}: {message}", path.display())
             }
@@ -461,18 +490,9 @@ fn resolve_one_include(
 
     let target_path = resolve_path(&src, host_dir, &state.config.root)?;
 
-    // Cycle check before load — keep loader free of duplicate work.
-    if state.chain.iter().any(|p| p == &target_path) {
-        return Err(IncludeError::Cycle {
-            include_site: annotation.location.clone(),
-            path: target_path,
-            chain: state.chain.clone(),
-        });
-    }
-
-    // Depth check before recursing into the loaded file. A site that sits
-    // exactly at `max_depth` is fine; a site that would push us *past* it
-    // is the failure case.
+    // Depth check before any FS access. A site sitting exactly at
+    // `max_depth` is fine; one that would push us *past* it is the
+    // failure case.
     if state.depth >= state.config.max_depth {
         return Err(IncludeError::DepthExceeded {
             include_site: annotation.location.clone(),
@@ -481,33 +501,55 @@ fn resolve_one_include(
         });
     }
 
-    let target_source = state.loader.load(&target_path).map_err(|e| match e {
+    // Load via the injected loader. The loader returns the source plus
+    // a *canonical* identity for the resource — for FsLoader that's
+    // post-`fs::canonicalize` (symlinks resolved, case-folded on
+    // case-insensitive FS); for MemoryLoader it's the lookup key. We
+    // use the canonical path for cycle detection so a symlink loop or
+    // a case-folded re-include is caught here rather than slipping
+    // through to `max_depth`.
+    let LoadedFile {
+        source: target_source,
+        canonical_path,
+    } = state.loader.load(&target_path).map_err(|e| match e {
         LoadError::NotFound { path } => IncludeError::NotFound {
             include_site: annotation.location.clone(),
             path,
         },
+        LoadError::OutsideRoot { path, root } => IncludeError::RootEscape { path, root },
         LoadError::Io { path, message } => IncludeError::LoaderIo { path, message },
     })?;
 
+    // Cycle check uses the canonical path so symlink/case-fold cycles
+    // are caught even though `target_path` (which we used for the load
+    // request) was just lexically resolved.
+    if state.chain.iter().any(|p| p == &canonical_path) {
+        return Err(IncludeError::Cycle {
+            include_site: annotation.location.clone(),
+            path: canonical_path,
+            chain: state.chain.clone(),
+        });
+    }
+
     let mut included =
         parse_no_attach(&target_source).map_err(|message| IncludeError::ParseFailed {
-            path: target_path.clone(),
+            path: canonical_path.clone(),
             message,
         })?;
 
-    let target_origin = Arc::new(target_path.clone());
+    let target_origin = Arc::new(canonical_path.clone());
     stamp_doc(&mut included, &target_origin);
 
     // Recursively resolve includes inside the loaded file. The host_dir
-    // for that walk is the loaded file's own parent; the chain gains
-    // this path and depth bumps by 1 — both are popped/restored on the
-    // way back so siblings see the same state we got.
-    let included_dir = target_path
+    // for that walk is the loaded file's own canonical parent; the
+    // chain gains the canonical path and depth bumps by 1 — both are
+    // popped/restored on the way back so siblings see the same state.
+    let included_dir = canonical_path
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| state.config.root.clone());
 
-    state.chain.push(target_path.clone());
+    state.chain.push(canonical_path.clone());
     let saved_depth = state.depth;
     state.depth = saved_depth + 1;
     let recurse_result =
@@ -521,7 +563,7 @@ fn resolve_one_include(
         &splice_items,
         parent_kind,
         &annotation.location,
-        &target_path,
+        &canonical_path,
     )?;
 
     Ok(splice_items)
@@ -833,27 +875,45 @@ fn parse_no_attach(source: &str) -> Result<Document, String> {
 /// behind the [`Loader`] trait so the rest of the crate stays sandbox- and
 /// WASM-friendly.
 ///
-/// `FsLoader` is stateless; construct one at the start of a resolution and
-/// share it for the duration. Errors map cleanly:
-/// - `std::io::ErrorKind::NotFound` → [`LoadError::NotFound`]
-/// - any other I/O error → [`LoadError::Io`]
-pub struct FsLoader;
-
-impl FsLoader {
-    pub fn new() -> Self {
-        Self
-    }
+/// `FsLoader` is constructed with the resolution root and rechecks every
+/// load against it post-`fs::canonicalize`, so a symlink pointing outside
+/// the root is rejected even though the lexical-only check in
+/// [`resolve_path`] cannot see it. Also rejects non-regular files (devices,
+/// FIFOs, directories) before reading, so the loader can't be tricked into
+/// blocking on `/dev/zero` or allocating against an open device.
+///
+/// Errors map:
+/// - canonicalization fails (file missing, permission denied at a parent,
+///   broken symlink, …) → [`LoadError::NotFound`]
+/// - canonical path doesn't sit under canonical root → [`LoadError::OutsideRoot`]
+/// - target is not a regular file → [`LoadError::Io`] with a clear message
+/// - any other I/O error during read → [`LoadError::Io`]
+pub struct FsLoader {
+    /// Filesystem-canonical resolution root. Constructed once at
+    /// `FsLoader::new`; if canonicalization fails (e.g., the configured
+    /// root doesn't exist on disk), we fall back to the input verbatim
+    /// and the bounds check will simply never pass — visible to the user
+    /// as a `LoadError::OutsideRoot` instead of silently disabling the
+    /// security check.
+    canonical_root: PathBuf,
 }
 
-impl Default for FsLoader {
-    fn default() -> Self {
-        Self::new()
+impl FsLoader {
+    /// Construct a loader rooted at `root`. The loader stores `root`'s
+    /// fs-canonical form (with symlinks resolved); subsequent loads
+    /// validate that the requested path's canonical form lives under it.
+    pub fn new(root: PathBuf) -> Self {
+        let canonical_root = std::fs::canonicalize(&root).unwrap_or(root);
+        Self { canonical_root }
     }
 }
 
 impl Loader for FsLoader {
-    fn load(&self, path: &Path) -> Result<String, LoadError> {
-        std::fs::read_to_string(path).map_err(|e| match e.kind() {
+    fn load(&self, path: &Path) -> Result<LoadedFile, LoadError> {
+        // 1. Canonicalize. Resolves symlinks and `..` segments against the
+        //    real filesystem. NotFound / broken-symlink / permission errors
+        //    all surface here.
+        let canonical_path = std::fs::canonicalize(path).map_err(|e| match e.kind() {
             std::io::ErrorKind::NotFound => LoadError::NotFound {
                 path: path.to_path_buf(),
             },
@@ -861,6 +921,44 @@ impl Loader for FsLoader {
                 path: path.to_path_buf(),
                 message: e.to_string(),
             },
+        })?;
+
+        // 2. Bounds check against the *canonical* root. This is the
+        //    actual security gate against symlink traversal — the lexical
+        //    check in resolve_path can't see through symlinks.
+        if !canonical_path.starts_with(&self.canonical_root) {
+            return Err(LoadError::OutsideRoot {
+                path: canonical_path,
+                root: self.canonical_root.clone(),
+            });
+        }
+
+        // 3. Reject non-regular files. Without this, an attacker (with
+        //    write access to the repo) could symlink an include target to
+        //    `/dev/zero` or a FIFO and block / OOM the reader. The
+        //    is_file() metadata call is a cheap sanity check.
+        let meta = std::fs::metadata(&canonical_path).map_err(|e| LoadError::Io {
+            path: canonical_path.clone(),
+            message: e.to_string(),
+        })?;
+        if !meta.is_file() {
+            return Err(LoadError::Io {
+                path: canonical_path,
+                message: "include target is not a regular file".to_string(),
+            });
+        }
+
+        // 4. Read. By this point we know the path is a regular file under
+        //    the canonical root; anything that fails here is a real I/O
+        //    error worth surfacing.
+        let source = std::fs::read_to_string(&canonical_path).map_err(|e| LoadError::Io {
+            path: canonical_path.clone(),
+            message: e.to_string(),
+        })?;
+
+        Ok(LoadedFile {
+            source,
+            canonical_path,
         })
     }
 }
@@ -915,13 +1013,22 @@ impl Default for MemoryLoader {
 
 #[cfg(any(test, feature = "test-support"))]
 impl Loader for MemoryLoader {
-    fn load(&self, path: &Path) -> Result<String, LoadError> {
-        self.files
+    fn load(&self, path: &Path) -> Result<LoadedFile, LoadError> {
+        // Memory loaders have no symlinks; the lookup key *is* the
+        // canonical identity. Cycle detection in the resolver compares
+        // `LoadedFile::canonical_path` values; for tests this matches the
+        // lexically-normalized paths the resolver already produces.
+        let source = self
+            .files
             .get(path)
             .cloned()
             .ok_or_else(|| LoadError::NotFound {
                 path: path.to_path_buf(),
-            })
+            })?;
+        Ok(LoadedFile {
+            source,
+            canonical_path: path.to_path_buf(),
+        })
     }
 }
 

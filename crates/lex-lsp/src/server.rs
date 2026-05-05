@@ -363,10 +363,10 @@ where
         drop(cfg);
 
         let resolve_config = ResolveConfig {
-            root: inc_root,
+            root: inc_root.clone(),
             max_depth,
         };
-        let loader = FsLoader::new();
+        let loader = FsLoader::new(inc_root);
 
         match resolve_from_source(text, Some(path), &resolve_config, &loader) {
             Ok(_doc) => {
@@ -463,10 +463,9 @@ where
         )
         .ok()?;
 
-        let loader = FsLoader::new();
-        let target_source =
-            lex_core::lex::includes::Loader::load(&loader, target.as_path()).ok()?;
-        let preview = include_preview_markdown(&src, &target, &target_source);
+        let loader = FsLoader::new(inc_root.clone());
+        let loaded = lex_core::lex::includes::Loader::load(&loader, target.as_path()).ok()?;
+        let preview = include_preview_markdown(&src, &target, &loaded.source);
 
         Some(Hover {
             contents: HoverContents::Markup(MarkupContent {

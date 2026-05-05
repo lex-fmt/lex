@@ -1304,8 +1304,12 @@ fn memory_loader_returns_inserted_files() {
         (PathBuf::from("/b.lex"), "Bbb\n"),
     ]);
     use std::path::Path;
-    assert_eq!(loader.load(Path::new("/a.lex")).unwrap(), "Aaa\n");
-    assert_eq!(loader.load(Path::new("/b.lex")).unwrap(), "Bbb\n");
+    let a = loader.load(Path::new("/a.lex")).unwrap();
+    assert_eq!(a.source, "Aaa\n");
+    assert_eq!(a.canonical_path, PathBuf::from("/a.lex"));
+    let b = loader.load(Path::new("/b.lex")).unwrap();
+    assert_eq!(b.source, "Bbb\n");
+    assert_eq!(b.canonical_path, PathBuf::from("/b.lex"));
 }
 
 #[test]
@@ -1357,4 +1361,210 @@ fn errors_format_with_relevant_paths() {
     assert!(s.contains("/chapter.lex"));
     assert!(s.contains("Sessions"));
     assert!(s.contains("does not allow Sessions"));
+}
+
+// ============================================================================
+// FsLoader security tests (post v0.10.1 hardening)
+//
+// These exercise the real filesystem via tempdirs. The FsLoader's job is to
+// be the security gate: lexical_normalize handles textual `..` traversal,
+// but only the loader can defend against symlinks (which require touching
+// the real FS to detect) and special device files (which require metadata).
+// ============================================================================
+
+use tempfile::TempDir;
+
+/// Build a tempdir whose canonical path matches what FsLoader will use.
+/// On macOS `TempDir` returns paths under `/var/folders/...` but the real
+/// path is `/private/var/folders/...`; canonicalizing once at construction
+/// keeps every assertion in this module working in canonical-path space.
+fn canonical_tempdir() -> (TempDir, std::path::PathBuf) {
+    let dir = TempDir::new().expect("tempdir");
+    let canonical = std::fs::canonicalize(dir.path()).expect("canonicalize tempdir");
+    (dir, canonical)
+}
+
+#[test]
+fn fsloader_reads_regular_file_under_root() {
+    let (_dir, root) = canonical_tempdir();
+    let target = root.join("legit.lex");
+    std::fs::write(&target, "Body\n").unwrap();
+
+    let loader = FsLoader::new(root.clone());
+    let loaded = loader.load(&target).expect("legit file under root loads");
+    assert_eq!(loaded.source, "Body\n");
+    assert_eq!(loaded.canonical_path, target);
+}
+
+#[test]
+fn fsloader_missing_file_returns_not_found() {
+    let (_dir, root) = canonical_tempdir();
+    let loader = FsLoader::new(root.clone());
+    let target = root.join("does-not-exist.lex");
+    let err = loader.load(&target).expect_err("missing file should error");
+    assert!(matches!(err, LoadError::NotFound { .. }));
+}
+
+#[test]
+fn fsloader_directory_target_is_rejected() {
+    let (_dir, root) = canonical_tempdir();
+    let sub = root.join("not-a-file");
+    std::fs::create_dir(&sub).unwrap();
+
+    let loader = FsLoader::new(root.clone());
+    let err = loader.load(&sub).expect_err("directory should not load");
+    match err {
+        LoadError::Io { message, .. } => assert!(
+            message.contains("regular file"),
+            "directory should be rejected as non-regular file, got: {message}"
+        ),
+        other => panic!("expected Io with not-a-regular-file message, got {other:?}"),
+    }
+}
+
+/// Symlink pointing OUTSIDE the resolution root must be rejected even
+/// though the lexical path looks innocent. This is the central
+/// security test for the v0.10.2 hardening — without canonicalize +
+/// post-canonical bounds check, an attacker who can write a symlink
+/// inside the repo can read arbitrary files via `lex.include`.
+#[cfg(unix)]
+#[test]
+fn fsloader_rejects_symlink_pointing_outside_root() {
+    let (_root_dir, root) = canonical_tempdir();
+    let (_outside_dir, outside) = canonical_tempdir();
+    let secret = outside.join("secret.lex");
+    std::fs::write(&secret, "STOLEN\n").unwrap();
+
+    // root/sneaky.lex -> outside/secret.lex
+    let link = root.join("sneaky.lex");
+    std::os::unix::fs::symlink(&secret, &link).unwrap();
+
+    let loader = FsLoader::new(root.clone());
+    let err = loader
+        .load(&link)
+        .expect_err("symlink to file outside root must be rejected");
+    match err {
+        LoadError::OutsideRoot { path, root: r } => {
+            assert_eq!(
+                path, secret,
+                "error reports the canonical out-of-root target"
+            );
+            assert_eq!(r, root, "error reports the canonical root");
+        }
+        other => panic!("expected OutsideRoot, got {other:?}"),
+    }
+}
+
+/// A symlink that resolves *inside* the root is fine — the loader
+/// should accept it without complaint and report the canonical path.
+#[cfg(unix)]
+#[test]
+fn fsloader_accepts_symlink_within_root() {
+    let (_dir, root) = canonical_tempdir();
+    let real = root.join("real.lex");
+    std::fs::write(&real, "Body\n").unwrap();
+    let link = root.join("link.lex");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+
+    let loader = FsLoader::new(root.clone());
+    let loaded = loader
+        .load(&link)
+        .expect("symlink within root should resolve");
+    assert_eq!(loaded.source, "Body\n");
+    // The canonical path is the real file, not the symlink — important
+    // for cycle detection (symlinks to the same target match).
+    assert_eq!(loaded.canonical_path, real);
+}
+
+/// Special device files (FIFOs, character devices, sockets) must be
+/// rejected before reading, otherwise `read_to_string` on `/dev/zero`
+/// would block / OOM. We construct a FIFO since it's cheap and works
+/// on every Unix without admin privileges.
+#[cfg(unix)]
+#[test]
+fn fsloader_rejects_fifo_special_file() {
+    use std::ffi::CString;
+
+    let (_dir, root) = canonical_tempdir();
+    let fifo = root.join("named-pipe.lex");
+    let cpath = CString::new(fifo.as_os_str().to_str().unwrap()).unwrap();
+    // mkfifo with 0o644
+    let rc = unsafe { libc_mkfifo(cpath.as_ptr(), 0o644) };
+    assert_eq!(rc, 0, "mkfifo failed");
+
+    let loader = FsLoader::new(root.clone());
+    let err = loader.load(&fifo).expect_err("FIFO must be rejected");
+    match err {
+        LoadError::Io { message, .. } => assert!(
+            message.contains("regular file"),
+            "FIFO should be rejected as non-regular file, got: {message}"
+        ),
+        other => panic!("expected Io non-regular-file, got {other:?}"),
+    }
+}
+
+// We don't pull `libc` in as a dep just for one mkfifo. Bind the symbol
+// directly — it's stable on every Unix.
+#[cfg(unix)]
+extern "C" {
+    #[link_name = "mkfifo"]
+    fn libc_mkfifo(path: *const std::os::raw::c_char, mode: u32) -> std::os::raw::c_int;
+}
+
+/// Cycle detection now uses `LoadedFile::canonical_path` from the loader.
+/// We prove the wiring with a MemoryLoader that reports a fixed canonical
+/// path regardless of which lexical key was requested — if the resolver
+/// is using the canonical identity for cycle checks, the second include
+/// of the "same" canonical resource (under different lexical names) will
+/// be caught as a cycle, not as DepthExceeded.
+#[test]
+fn cycle_detection_uses_canonical_path_from_loader() {
+    // Two files that are LEXICALLY distinct (`/repo/A.lex` vs
+    // `/repo/a.lex`) but the loader pretends they have the same
+    // canonical path (simulating a case-insensitive FS).
+    struct CaseFoldLoader;
+    impl Loader for CaseFoldLoader {
+        fn load(&self, path: &std::path::Path) -> Result<LoadedFile, LoadError> {
+            // Lowercase the file name to produce a stable canonical
+            // identity regardless of which case was requested.
+            let canonical = lowercase_name(path);
+            let source = match canonical.to_str().unwrap() {
+                "/repo/a.lex" => ":: lex.include src=\"A.lex\" ::\n".to_string(),
+                _ => {
+                    return Err(LoadError::NotFound {
+                        path: path.to_path_buf(),
+                    })
+                }
+            };
+            Ok(LoadedFile {
+                source,
+                canonical_path: canonical,
+            })
+        }
+    }
+    fn lowercase_name(p: &std::path::Path) -> std::path::PathBuf {
+        let parent = p.parent().unwrap_or_else(|| std::path::Path::new(""));
+        let name = p.file_name().unwrap().to_str().unwrap().to_lowercase();
+        parent.join(name)
+    }
+
+    let cfg = ResolveConfig::with_root(PathBuf::from("/repo"));
+    let entry = "1. Top\n\n    :: lex.include src=\"A.lex\" ::\n";
+    let result = resolve_from_source(
+        entry,
+        Some(PathBuf::from("/repo/main.lex")),
+        &cfg,
+        &CaseFoldLoader,
+    );
+
+    // Without canonical-path cycle detection this would be DepthExceeded;
+    // with the v0.10.2 fix it's caught as a Cycle on the second visit.
+    match result.expect_err("case-folded self-include must error") {
+        IncludeError::Cycle { .. } => {}
+        IncludeError::DepthExceeded { .. } => panic!(
+            "case-folded re-include should be caught as Cycle, not DepthExceeded — \
+             cycle detection isn't using canonical_path from the loader"
+        ),
+        other => panic!("unexpected error variant: {other:?}"),
+    }
 }

@@ -2,12 +2,22 @@
 
 ## [Unreleased]
 
-## [0.10.1] - 2026-05-05
+### Security
 
+- `lex-core`: `FsLoader` now defends against arbitrary-file-read via symlink path traversal. Previously the resolver's lexical `..`-normalization correctly blocked textual root escapes, but a symlink inside the repository pointing outside the resolution root (e.g., `repo/sneaky -> /etc`) bypassed the check — `lexical_normalize` doesn't touch the filesystem, so it can't see through symlinks. `FsLoader` now stores its allowed root and, on every load, calls `fs::canonicalize` on both the requested path and the root, then verifies the canonical target sits under the canonical root. Symlinks pointing outside root are rejected as `IncludeError::RootEscape` before any read happens. Editors and CI that process untrusted Lex repositories should pick up this fix immediately. Surfaces a new `LoadError::OutsideRoot` variant; `Loader` trait now returns `LoadedFile { source, canonical_path }` instead of bare `String` so the resolver can use the loader's authoritative identity for cycle detection. (#502)
+
+### Changed
+
+- `lex-core::includes`: `Loader::load` now returns `LoadedFile { source, canonical_path }` instead of `String`. Implementations decide what `canonical_path` means — `FsLoader` returns the post-`fs::canonicalize` path (symlinks resolved, case-folded on case-insensitive FS); `MemoryLoader` returns the lookup key unchanged. The resolver uses `canonical_path` for cycle detection and origin stamping, so symlink loops and case-folded re-includes are now caught as `IncludeError::Cycle` rather than slipping through to `IncludeError::DepthExceeded`.
+- `lex-core::includes`: `FsLoader::new` now takes the resolution root: `FsLoader::new(root: PathBuf)`. `Default` impl removed (a loader without a root would be unsafe).
+- `lex-core::includes`: `FsLoader` now rejects non-regular files (FIFOs, sockets, devices, directories) before reading. Previously a malicious symlink to `/dev/zero` could block or OOM the reader once the symlink check landed; this is the second layer of defense.
+
+## [0.10.1] - 2026-05-05
 
 ### Fixed
 
 - `lex-lsp`: `include-not-found` diagnostic now points at the offending `:: lex.include src=… ::` annotation instead of falling back to the document head. Without this fix, vscode rendered the diagnostic as a zero-length point at line 1 col 1, giving no signal which include in a multi-include doc was broken. `IncludeError::NotFound` now carries `include_site: Range`; the resolver wires `annotation.location` through. The other no-site error variants (`RootEscape`, `LoaderIo`, `ParseFailed`) still fall back to head_range for now — same fix pattern applies but kept out of scope here. (#500)
+
 ## [0.10.0] - 2026-05-04
 
 
