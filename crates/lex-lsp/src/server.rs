@@ -1512,6 +1512,9 @@ fn include_error_to_diagnostic(err: &IncludeError) -> Diagnostic {
             err.to_string(),
         ),
         IncludeError::RootEscape { .. } => (head_range(), "include-root-escape", err.to_string()),
+        IncludeError::AbsolutePath { .. } => {
+            (head_range(), "include-absolute-path", err.to_string())
+        }
         IncludeError::NotFound { include_site, .. } => (
             to_lsp_range(include_site),
             "include-not-found",
