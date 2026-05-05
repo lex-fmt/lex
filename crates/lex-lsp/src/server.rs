@@ -1495,7 +1495,7 @@ fn absolutize_path(p: &Path) -> PathBuf {
 ///
 /// The diagnostic's range points at the offending `lex.include`
 /// annotation when the error carries one (Cycle, DepthExceeded,
-/// ContainerPolicy, MissingSrc); otherwise it falls back to the
+/// NotFound, ContainerPolicy, MissingSrc); otherwise it falls back to the
 /// document head (line 0, column 0) so the user at least sees something
 /// in the editor's diagnostics panel.
 fn include_error_to_diagnostic(err: &IncludeError) -> Diagnostic {
@@ -1509,7 +1509,11 @@ fn include_error_to_diagnostic(err: &IncludeError) -> Diagnostic {
             err.to_string(),
         ),
         IncludeError::RootEscape { .. } => (head_range(), "include-root-escape", err.to_string()),
-        IncludeError::NotFound { .. } => (head_range(), "include-not-found", err.to_string()),
+        IncludeError::NotFound { include_site, .. } => (
+            to_lsp_range(include_site),
+            "include-not-found",
+            err.to_string(),
+        ),
         IncludeError::ParseFailed { .. } => (head_range(), "include-parse-failed", err.to_string()),
         IncludeError::ContainerPolicy { include_site, .. } => (
             to_lsp_range(include_site),
@@ -2567,11 +2571,13 @@ mod tests {
 
     #[tokio::test]
     async fn includes_missing_target_emits_diagnostic_with_path() {
+        // The include sits on line 0, column 0 — flat fixture so the
+        // diagnostic should pin to that exact location, not the
+        // document head fallback (which would also be (0,0)–(0,0); the
+        // distinction the test cares about is "did the resolver wire
+        // annotation.location through to the diagnostic at all").
         let (_server, client, uri, _dir) = open_in_tempdir(
-            &[(
-                "main.lex",
-                "1. Host\n\n    :: lex.include src=\"missing.lex\" ::\n",
-            )],
+            &[("main.lex", ":: lex.include src=\"missing.lex\" ::\n")],
             "main.lex",
         )
         .await;
@@ -2584,6 +2590,25 @@ mod tests {
         assert!(
             diags.iter().any(|d| d.message.contains("missing.lex")),
             "diagnostic should name the missing file, got {diags:?}"
+        );
+        // The diagnostic must span more than a single point at (0,0).
+        // The default `head_range()` fallback was (0,0)–(0,0), a
+        // zero-width point — vscode renders nothing useful for that.
+        // After wiring annotation.location through, the range covers
+        // the annotation text.
+        let not_found = diags
+            .iter()
+            .find(|d| {
+                matches!(
+                    &d.code,
+                    Some(tower_lsp::lsp_types::NumberOrString::String(c)) if c == "include-not-found"
+                )
+            })
+            .expect("not-found diag");
+        let r = &not_found.range;
+        assert!(
+            r.end.line > r.start.line || r.end.character > r.start.character,
+            "include-not-found should span the annotation, not collapse to a point; got {r:?}",
         );
     }
 

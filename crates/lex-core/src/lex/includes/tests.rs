@@ -609,8 +609,19 @@ fn relative_path_resolves_from_host_directory() {
 fn missing_target_surfaces_not_found_with_canonical_path() {
     let result = fixture(":: lex.include src=\"missing.lex\" ::\n", &[]);
     let err = assert_err_kind!(result, IncludeError::NotFound { .. });
-    if let IncludeError::NotFound { path } = err {
+    if let IncludeError::NotFound {
+        path, include_site, ..
+    } = err
+    {
         assert_eq!(path, PathBuf::from("/repo/missing.lex"));
+        // Site spans the offending annotation in the host source — not the
+        // default head-range. The exact span is the parser's concern; here
+        // we just need to know we're not collapsing to (0,0).
+        assert_ne!(
+            include_site,
+            crate::lex::ast::Range::default(),
+            "include_site should locate the annotation, not be the default head-range",
+        );
     }
 }
 
@@ -1305,22 +1316,6 @@ fn memory_loader_missing_returns_not_found() {
         Err(LoadError::NotFound { path }) => assert_eq!(path, PathBuf::from("/missing.lex")),
         other => panic!("expected NotFound, got {other:?}"),
     }
-}
-
-#[test]
-fn load_error_converts_to_include_error_preserving_kind() {
-    let not_found: IncludeError = LoadError::NotFound {
-        path: PathBuf::from("/x"),
-    }
-    .into();
-    assert!(matches!(not_found, IncludeError::NotFound { .. }));
-
-    let io: IncludeError = LoadError::Io {
-        path: PathBuf::from("/y"),
-        message: "boom".into(),
-    }
-    .into();
-    assert!(matches!(io, IncludeError::LoaderIo { .. }));
 }
 
 #[test]
