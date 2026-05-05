@@ -31,3 +31,4 @@ polymath-rs = "0.1.2"
 proptest = { workspace = true }
 insta = { workspace = true }
 trybuild = "1.0"
+tempfile = { workspace = true }

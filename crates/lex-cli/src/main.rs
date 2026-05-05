@@ -741,10 +741,10 @@ fn expand_includes_to_source(source: &str, entry_path: &str, inc: &IncludeOption
     let entry = absolutize_path(&PathBuf::from(entry_path));
     let root = inc.resolved_root(&entry);
     let resolve_config = ResolveConfig {
-        root,
+        root: root.clone(),
         max_depth: inc.max_depth,
     };
-    let loader = FsLoader::new();
+    let loader = FsLoader::new(root);
     let doc =
         resolve_from_source(source, Some(entry), &resolve_config, &loader).unwrap_or_else(|e| {
             eprintln!("Include resolution error: {e}");
@@ -794,10 +794,10 @@ fn handle_convert_command(
         let entry = absolutize_path(&PathBuf::from(input.expect("input is Some by guard")));
         let root = inc.resolved_root(&entry);
         let resolve_config = ResolveConfig {
-            root,
+            root: root.clone(),
             max_depth: inc.max_depth,
         };
-        let loader = FsLoader::new();
+        let loader = FsLoader::new(root);
         resolve_from_source(&source, Some(entry), &resolve_config, &loader).unwrap_or_else(|e| {
             eprintln!("Include resolution error: {e}");
             std::process::exit(1);
