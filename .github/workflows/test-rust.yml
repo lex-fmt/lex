@@ -67,15 +67,20 @@ jobs:
       - name: Build lex-wasm for wasm32-unknown-unknown
         run: cargo build -p lex-wasm --target wasm32-unknown-unknown
 
-      - name: wasm-pack build (web target)
-        run: wasm-pack build crates/lex-wasm --target web --out-dir pkg
+      - name: wasm-pack build (bundler target, scoped)
+        run: wasm-pack build crates/lex-wasm --target bundler --scope lex-fmt --out-dir pkg
 
       - name: Verify wasm-pack artifacts
         run: |
           test -f crates/lex-wasm/pkg/lex_wasm_bg.wasm
           test -f crates/lex-wasm/pkg/lex_wasm.js
+          test -f crates/lex-wasm/pkg/lex_wasm_bg.js
           test -f crates/lex-wasm/pkg/lex_wasm.d.ts
           test -f crates/lex-wasm/pkg/package.json
+          test -f crates/lex-wasm/pkg/README.md
+          test -f crates/lex-wasm/pkg/LICENSE
+          # Sanity-check the published name
+          grep -q '"name": "@lex-fmt/lex-wasm"' crates/lex-wasm/pkg/package.json
 
   docs:
     name: Documentation
