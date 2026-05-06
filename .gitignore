@@ -3,6 +3,9 @@
 **/*.rs.bk
 *.pdb
 
+# wasm-pack output
+crates/lex-wasm/pkg/
+
 # Coverage files
 lcov.info
 coverage/
