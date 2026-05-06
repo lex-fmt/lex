@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Release pipeline consolidation: WASM/npm publishing is now part of
+  the canonical `arthur-debert/release@v1.2.0` rust-cli workflow
+  (opt-in via `wasm-package` input). Replaces the separate
+  `release-wasm.yml` workflow that re-installed Rust and recompiled the
+  workspace dep tree. One tag, one workflow run, one operator dashboard
+  view — `crates.io`, GH release tarballs (incl. `lex-wasm-wasm.tar.gz`
+  for direct-download consumers), Homebrew, and `npm` all ship from a
+  single pipeline. (#510)
+- `lex-lsp-core` is now part of the cargo publish list so its version
+  ships to crates.io in lockstep with the rest of the workspace.
+
 ## [0.10.3] - 2026-05-06
 
 
