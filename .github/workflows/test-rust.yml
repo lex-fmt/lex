@@ -41,6 +41,42 @@ jobs:
       - name: Test
         run: cargo nextest run --workspace --exclude lex-wasm
 
+  wasm:
+    name: WASM build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: true
+
+      - name: Install Rust (with wasm32 target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: wasm32
+
+      - name: Install wasm-pack
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
+
+      - name: Build lex-wasm for wasm32-unknown-unknown
+        run: cargo build -p lex-wasm --target wasm32-unknown-unknown
+
+      - name: wasm-pack build (web target)
+        run: wasm-pack build crates/lex-wasm --target web --out-dir pkg
+
+      - name: Verify wasm-pack artifacts
+        run: |
+          test -f crates/lex-wasm/pkg/lex_wasm_bg.wasm
+          test -f crates/lex-wasm/pkg/lex_wasm.js
+          test -f crates/lex-wasm/pkg/lex_wasm.d.ts
+          test -f crates/lex-wasm/pkg/package.json
+
   docs:
     name: Documentation
     runs-on: ubuntu-latest

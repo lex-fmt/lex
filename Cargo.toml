@@ -13,7 +13,7 @@ resolver = "2"
 
 [workspace.dependencies]
 lex-core = { version = "0.10.2", path = "crates/lex-core" }
-lex-babel = { version = "0.10.2", path = "crates/lex-babel", default-features = true }
+lex-babel = { version = "0.10.2", path = "crates/lex-babel", default-features = false }
 lex-config = { version = "0.10.2", path = "crates/lex-config" }
 lex-analysis = { version = "0.10.2", path = "crates/lex-analysis" }
 lex-lsp-core = { version = "0.10.2", path = "crates/lex-lsp-core" }

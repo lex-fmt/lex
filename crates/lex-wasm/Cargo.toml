@@ -16,7 +16,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 lex-core = { workspace = true }
 lex-analysis = { workspace = true }
-lex-babel = { workspace = true, default-features = false }
+lex-babel = { workspace = true }
 lex-lsp-core = { workspace = true }
 lsp-types = { workspace = true }
 spellbook = "0.4"
