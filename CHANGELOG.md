@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+## [0.10.3] - 2026-05-06
+
+
 ### Added
 
 - New `lex-lsp-core` crate consolidating the sync LSP feature surface
@@ -26,7 +29,6 @@
   every `lex-babel` consumer including `lex-wasm`. (#508)
 - `rust-toolchain.toml` declares `wasm32-unknown-unknown` as a target so
   rustup auto-installs it for the project-pinned 1.88.0 toolchain. (#508)
-
 ## [0.10.2] - 2026-05-05
 
 
