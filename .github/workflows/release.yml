@@ -23,9 +23,10 @@ jobs:
       version: ${{ inputs.version }}
       # Topological dep order. lex-config depends on lex-babel (not
       # the other way around — CLAUDE.md was stale on this), so lex-babel
-      # must publish first. lex-wasm has publish = false and isn't in
-      # the list.
-      crates: lex-core,lex-babel,lex-config,lex-analysis,lexd-lsp,lexd
+      # must publish first. lex-lsp-core depends on lex-core + lex-babel
+      # and is depended on by lexd-lsp, so it sits between them. lex-wasm
+      # has publish = false and isn't in the list.
+      crates: lex-core,lex-babel,lex-config,lex-analysis,lex-lsp-core,lexd-lsp,lexd
       # Brew formula subject. The other binary (lexd-lsp) is built and
       # signed alongside but ships as a tarball-only artifact (editor
       # extensions bundle it themselves).
