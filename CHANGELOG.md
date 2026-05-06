@@ -2,6 +2,31 @@
 
 ## [Unreleased]
 
+### Added
+
+- New `lex-lsp-core` crate consolidating the sync LSP feature surface
+  (formatting, table navigation, available actions, document links,
+  footnotes) shared by `lexd-lsp` (stdio) and `lex-wasm`. Eliminates
+  hand-port drift between the two surfaces. (#506)
+- `wasm32-unknown-unknown` build + `wasm-pack` artifact verification job
+  in CI. Concretely closes the "spellbook on wasm32" risk in #465. (#508)
+- npm publish workflow for `@lex-fmt/lex-wasm`, fired on `vX.Y.Z` tag
+  push. The wasm package version is taken from `crates/lex-wasm/Cargo.toml`,
+  so it stays in lockstep with the Rust crates. (#509)
+- `lex_lsp_core::formatting::apply_edits(source, edits)` helper and
+  routed the WASM `format()` binding through it. WASM no longer
+  pattern-matches on the edit shape and is decoupled from the
+  full-document-edit invariant. (#506 follow-up)
+
+### Changed
+
+- `lex-babel` workspace dep now uses `default-features = false`; `lex-cli`
+  opts in to `native-export` (PDF/PNG via Pandoc) explicitly. The previous
+  default pulled `which` (broken on wasm32 — incomplete `Sys` impl) into
+  every `lex-babel` consumer including `lex-wasm`. (#508)
+- `rust-toolchain.toml` declares `wasm32-unknown-unknown` as a target so
+  rustup auto-installs it for the project-pinned 1.88.0 toolchain. (#508)
+
 ## [0.10.2] - 2026-05-05
 
 
