@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+## [0.10.5] - 2026-05-07
+
+
 ### Fixed
 
 - `lex_core::ast::Document::find_all_links` /
@@ -45,7 +48,6 @@
   single pipeline. (#510)
 - `lex-lsp-core` is now part of the cargo publish list so its version
   ships to crates.io in lockstep with the rest of the workspace.
-
 ## [0.10.3] - 2026-05-06
 
 
