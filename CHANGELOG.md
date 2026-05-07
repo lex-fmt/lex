@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- `lex-core::ast::links::find_all_links` now returns
+  `DocumentLink` ranges that cover only the `[bracketed]` reference,
+  not the containing paragraph or title line. Editors render LSP
+  `textDocument/documentLink` ranges as clickable underlined link
+  surfaces; the previous code used `paragraph.range()` (with a comment
+  acknowledging the limitation: "we don't have inline-level ranges
+  yet") for URL and File reference types, so any paragraph containing
+  a `[https://…]` or `[./path]` reference was rendered end-to-end as
+  one giant link in VSCode. A new internal `ReferenceLocator` walks
+  the inline tree with the same cursor / escape logic that
+  `lex-analysis::semantic_tokens::InlineWalker` uses, producing
+  precise byte and `Position` ranges for each URL/File reference.
+  Verbatim `src` parameters retain their verbatim-block range
+  (they aren't bracketed inline references). Existing extraction
+  tests only asserted `target` + `link_type`, never `range`; new
+  tests lock in the bracket-bounded invariant.
+
 ### Changed
 
 - Release pipeline consolidation: WASM/npm publishing is now part of
