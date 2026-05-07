@@ -20,6 +20,17 @@
   (they aren't bracketed inline references). Existing extraction
   tests only asserted `target` + `link_type`, never `range`; new
   tests lock in the bracket-bounded invariant.
+- `lex-core::ast::links::find_all_links` now scans nested-session
+  titles, not just the session it is invoked on. Because
+  `Document::find_all_links` calls into the implicit root session
+  (whose title is empty) and paragraph traversal yields paragraphs
+  only, URL/File references that appear in a section heading like
+  `1. See [./handlers.lex] for details` were silently dropped from the
+  LSP `documentLink` response — editors had no clickable surface on
+  the heading even though the same reference inside a body paragraph
+  worked. The fix walks `iter_sessions_recursive()` after the
+  session's own title, so every heading at every depth contributes
+  bracket-bounded link ranges.
 
 ### Changed
 
