@@ -2,6 +2,27 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- LSP `Position.column` is now reported in UTF-16 code units to match
+  the LSP spec's default `positionEncoding`, instead of UTF-8 bytes.
+  Two cursor walkers — `lex_core::lex::ast::inline_positions::position_at`
+  (semantic tokens + document links) and
+  `lex_analysis::inline::ReferenceWalker::position_at`
+  (`find_references` + `goto_definition`) — were accumulating
+  `column += ch.len_utf8()` for each char in the line. For any
+  character wider than its UTF-16 representation (notably the `→`
+  arrow at 3 UTF-8 bytes / 1 UTF-16 unit, and any non-BMP emoji at 4
+  bytes / 2 units), every subsequent token's column was offset by the
+  delta. In VSCode this surfaced as the open-backtick of a code span
+  landing on the *next* character, painting the wrong glyph in the
+  marker style and shifting the InlineCode content range one character
+  right of where it should be. `find_references` and `goto_definition`
+  jumps were similarly off when the line contained any non-ASCII
+  character before the reference. Switched both walkers to
+  `column += ch.len_utf16()`. Byte-level `Range::span` values are
+  unchanged — they are and remain UTF-8 byte offsets, which is correct.
+
 ## [0.10.5] - 2026-05-07
 
 
