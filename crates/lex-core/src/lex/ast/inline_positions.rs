@@ -11,7 +11,8 @@
 //!
 //! Two consumers in the workspace need the same cursor logic:
 //!
-//! - [`super::links::find_all_links`] — emits a `DocumentLink` per
+//! - [`super::Document::find_all_links`] /
+//!   [`super::Session::find_all_links`] — emit a `DocumentLink` per
 //!   URL/File reference, with a range covering exactly the `[bracketed]`
 //!   text.
 //! - `lex-analysis::semantic_tokens` — emits per-marker semantic tokens
@@ -93,10 +94,11 @@ pub trait InlinePositionVisitor {
 ///
 /// Returns immediately without invoking the visitor when `text.location` is
 /// `None` (no source range to anchor positions) or the raw text is empty.
-/// Inline nodes are obtained via [`TextContent::inline_items`], which parses
-/// fresh if [`crate::lex::transforms::stages::ParseInlines`] hasn't run yet
-/// — so this works on both pipeline-parsed documents and programmatically
-/// constructed ASTs (provided `location` is set).
+/// Inline nodes come from [`TextContent::inlines`] when already parsed
+/// (zero-allocation borrow — the common case after the standard
+/// `parse_document` pipeline ran [`crate::lex::transforms::stages::ParseInlines`]),
+/// falling back to [`TextContent::inline_items`] for programmatically
+/// constructed ASTs that haven't been parsed yet.
 ///
 /// Concretely the cursor advances through `text.as_string()` byte-for-byte,
 /// applying the inline parser's escape rules (`\X` where `X` is
@@ -111,13 +113,23 @@ pub fn walk_text_content_positions<V: InlinePositionVisitor>(text: &TextContent,
     if raw.is_empty() {
         return;
     }
-    let nodes = text.inline_items();
+    // Borrow when inlines were pre-parsed; only allocate when we have to
+    // parse fresh. The standard `parse_document` pipeline always pre-parses,
+    // so production traffic hits the borrow path.
+    let owned;
+    let nodes: &[InlineNode] = match text.inlines() {
+        Some(borrowed) => borrowed,
+        None => {
+            owned = text.inline_items();
+            &owned
+        }
+    };
     let mut walker = InlinePositionWalker {
         raw,
         base_range,
         cursor: 0,
     };
-    walker.walk_nodes(&nodes, visitor);
+    walker.walk_nodes(nodes, visitor);
 }
 
 struct InlinePositionWalker<'a> {

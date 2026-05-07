@@ -36,7 +36,7 @@
 //!         - Users get syntax highlighting that respects their theme
 //!         - Mapping logic is isolated to editor plugins; adding a new editor doesn't touch the LSP
 //!
-//! The file editors/vscode/themes/lex-light.json has the reocommended theming for Lex to be used in
+//! The file editors/vscode/themes/lex-light.json has the recommended theming for Lex to be used in
 //! tests and so forth.
 use lex_core::lex::ast::inline_positions::{walk_text_content_positions, InlinePositionVisitor};
 use lex_core::lex::ast::{
