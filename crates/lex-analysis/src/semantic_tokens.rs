@@ -36,13 +36,14 @@
 //!         - Users get syntax highlighting that respects their theme
 //!         - Mapping logic is isolated to editor plugins; adding a new editor doesn't touch the LSP
 //!
-//! The file editors/vscode/themes/lex-light.json has the reocommended theming for Lex to be used in
+//! The file editors/vscode/themes/lex-light.json has the recommended theming for Lex to be used in
 //! tests and so forth.
+use lex_core::lex::ast::inline_positions::{walk_text_content_positions, InlinePositionVisitor};
 use lex_core::lex::ast::{
-    Annotation, ContentItem, Definition, Document, List, ListItem, Paragraph, Position, Range,
-    Session, Table, TextContent, Verbatim,
+    Annotation, ContentItem, Definition, Document, List, ListItem, Paragraph, Range, Session,
+    Table, TextContent, Verbatim,
 };
-use lex_core::lex::inlines::{InlineNode, ReferenceType};
+use lex_core::lex::inlines::{ReferenceInline, ReferenceType};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LexSemanticTokenKind {
@@ -439,278 +440,123 @@ impl TokenCollector {
     }
 
     fn process_text_content(&mut self, text: &TextContent) {
-        let Some(base_range) = text.location.as_ref() else {
-            return;
-        };
-        let raw = text.as_string();
-        if raw.is_empty() {
-            return;
-        }
-        let nodes = text.inline_items();
-        let mut walker = InlineWalker {
-            raw,
-            base_range,
-            cursor: 0,
+        let mut emitter = InlineTokenEmitter {
             tokens: &mut self.tokens,
             in_annotation: self.in_annotation,
             in_definition: self.in_definition,
-            in_formatted: false,
+            in_formatted: 0,
         };
-        walker.walk_nodes(&nodes);
+        walk_text_content_positions(text, &mut emitter);
     }
 }
 
-/// Walks the InlineNode tree and raw text in parallel to produce positioned semantic tokens.
+/// Visitor that converts inline-tree positions into [`LexSemanticToken`]s.
 ///
-/// The inline parser consumes escape sequences and delimiters, so InlineNode text doesn't
-/// directly correspond to byte offsets in the raw source. This walker maintains a cursor
-/// into the raw text and advances it according to the same rules the inline parser uses,
-/// producing correctly positioned Range values for each token.
-struct InlineWalker<'a> {
-    raw: &'a str,
-    base_range: &'a Range,
-    cursor: usize,
+/// Bridges the shared inline-position walker (which only tracks structural
+/// ranges) with the editor-facing semantic-token taxonomy. Marker tokens
+/// (`InlineMarker_*_start`/`_end`) are emitted on every container/literal
+/// boundary; content tokens take the appropriate kind for the surrounding
+/// element, including reference-type discrimination
+/// (`ReferenceCitation`/`ReferenceFootnote`/`ReferenceAnnotation`/
+/// `Reference`). Plain text inside a Strong/Emphasis container is suppressed
+/// (`in_formatted > 0`) because the container's content span already covers
+/// it.
+struct InlineTokenEmitter<'a> {
     tokens: &'a mut Vec<LexSemanticToken>,
     in_annotation: bool,
     in_definition: bool,
-    /// True when inside a formatting container (Strong/Emphasis). Plain text inside
-    /// containers is covered by the container's content span, so context-dependent
-    /// tokens (AnnotationContent, DefinitionContent) are suppressed.
-    in_formatted: bool,
+    in_formatted: usize,
 }
 
-impl<'a> InlineWalker<'a> {
-    fn walk_nodes(&mut self, nodes: &[InlineNode]) {
-        for node in nodes {
-            self.walk_node(node);
+impl<'a> InlineTokenEmitter<'a> {
+    fn push(&mut self, range: &Range, kind: LexSemanticTokenKind) {
+        if range.span.start < range.span.end {
+            self.tokens.push(LexSemanticToken {
+                kind,
+                range: range.clone(),
+            });
         }
     }
+}
 
-    fn walk_node(&mut self, node: &InlineNode) {
-        match node {
-            InlineNode::Plain { text, .. } => self.walk_plain(text),
-            InlineNode::Strong { content, .. } => self.walk_container(
-                content,
-                '*',
-                LexSemanticTokenKind::InlineStrong,
-                LexSemanticTokenKind::InlineMarkerStrongStart,
-                LexSemanticTokenKind::InlineMarkerStrongEnd,
-            ),
-            InlineNode::Emphasis { content, .. } => self.walk_container(
-                content,
-                '_',
-                LexSemanticTokenKind::InlineEmphasis,
-                LexSemanticTokenKind::InlineMarkerEmphasisStart,
-                LexSemanticTokenKind::InlineMarkerEmphasisEnd,
-            ),
-            InlineNode::Code { text, .. } => self.walk_literal(
-                text,
-                '`',
-                LexSemanticTokenKind::InlineCode,
-                LexSemanticTokenKind::InlineMarkerCodeStart,
-                LexSemanticTokenKind::InlineMarkerCodeEnd,
-            ),
-            InlineNode::Math { text, .. } => self.walk_literal(
-                text,
-                '#',
-                LexSemanticTokenKind::InlineMath,
-                LexSemanticTokenKind::InlineMarkerMathStart,
-                LexSemanticTokenKind::InlineMarkerMathEnd,
-            ),
-            InlineNode::Reference { data, .. } => self.walk_reference(data),
+impl<'a> InlinePositionVisitor for InlineTokenEmitter<'a> {
+    fn visit_plain(&mut self, range: &Range, _text: &str) {
+        if self.in_formatted > 0 {
+            // Covered by the enclosing container's content span — see leave_strong/leave_emphasis.
+            return;
         }
+        let kind = if self.in_annotation {
+            LexSemanticTokenKind::AnnotationContent
+        } else if self.in_definition {
+            LexSemanticTokenKind::DefinitionContent
+        } else {
+            return;
+        };
+        self.push(range, kind);
     }
 
-    /// Walk a Plain text node, advancing cursor through escape sequences in raw text.
-    /// Emits AnnotationContent or DefinitionContent when inside those contexts.
-    fn walk_plain(&mut self, text: &str) {
-        let start = self.cursor;
-        self.advance_unescaped(text);
-        let end = self.cursor;
-
-        if start < end {
-            let kind = if self.in_formatted {
-                None // Covered by the container's content span
-            } else if self.in_annotation {
-                Some(LexSemanticTokenKind::AnnotationContent)
-            } else if self.in_definition {
-                Some(LexSemanticTokenKind::DefinitionContent)
-            } else {
-                None
-            };
-            if let Some(kind) = kind {
-                self.push(self.make_range(start, end), kind);
-            }
-        }
+    fn enter_strong(&mut self, open_marker: &Range) {
+        self.push(open_marker, LexSemanticTokenKind::InlineMarkerStrongStart);
+        self.in_formatted += 1;
     }
 
-    /// Walk a container node (Strong/Emphasis) which has an opening marker, children, and closing marker.
-    fn walk_container(
+    fn leave_strong(&mut self, content: &Range, close_marker: &Range) {
+        self.in_formatted -= 1;
+        self.push(content, LexSemanticTokenKind::InlineStrong);
+        self.push(close_marker, LexSemanticTokenKind::InlineMarkerStrongEnd);
+    }
+
+    fn enter_emphasis(&mut self, open_marker: &Range) {
+        self.push(open_marker, LexSemanticTokenKind::InlineMarkerEmphasisStart);
+        self.in_formatted += 1;
+    }
+
+    fn leave_emphasis(&mut self, content: &Range, close_marker: &Range) {
+        self.in_formatted -= 1;
+        self.push(content, LexSemanticTokenKind::InlineEmphasis);
+        self.push(close_marker, LexSemanticTokenKind::InlineMarkerEmphasisEnd);
+    }
+
+    fn visit_code(
         &mut self,
-        content: &[InlineNode],
-        marker: char,
-        content_kind: LexSemanticTokenKind,
-        start_marker_kind: LexSemanticTokenKind,
-        end_marker_kind: LexSemanticTokenKind,
+        open_marker: &Range,
+        content: &Range,
+        close_marker: &Range,
+        _text: &str,
     ) {
-        let marker_len = marker.len_utf8();
-
-        // Opening marker
-        let marker_start = self.cursor;
-        self.cursor += marker_len;
-        self.push(
-            self.make_range(marker_start, self.cursor),
-            start_marker_kind,
-        );
-
-        // Recurse into children — record span boundaries for the content token
-        let content_start = self.cursor;
-        let was_in_formatted = self.in_formatted;
-        self.in_formatted = true;
-        self.walk_nodes(content);
-        self.in_formatted = was_in_formatted;
-        let content_end = self.cursor;
-
-        // Emit a single content span covering all children
-        if content_start < content_end {
-            self.push(self.make_range(content_start, content_end), content_kind);
-        }
-
-        // Closing marker
-        let close_start = self.cursor;
-        self.cursor += marker_len;
-        self.push(self.make_range(close_start, self.cursor), end_marker_kind);
+        self.push(open_marker, LexSemanticTokenKind::InlineMarkerCodeStart);
+        self.push(content, LexSemanticTokenKind::InlineCode);
+        self.push(close_marker, LexSemanticTokenKind::InlineMarkerCodeEnd);
     }
 
-    /// Walk a literal node (Code/Math) — no escape processing inside.
-    fn walk_literal(
+    fn visit_math(
         &mut self,
-        text: &str,
-        marker: char,
-        content_kind: LexSemanticTokenKind,
-        start_marker_kind: LexSemanticTokenKind,
-        end_marker_kind: LexSemanticTokenKind,
+        open_marker: &Range,
+        content: &Range,
+        close_marker: &Range,
+        _text: &str,
     ) {
-        let marker_len = marker.len_utf8();
-
-        // Opening marker
-        let marker_start = self.cursor;
-        self.cursor += marker_len;
-        self.push(
-            self.make_range(marker_start, self.cursor),
-            start_marker_kind,
-        );
-
-        // Literal content (verbatim, no escape processing)
-        let content_start = self.cursor;
-        self.cursor += text.len();
-        if content_start < self.cursor {
-            self.push(self.make_range(content_start, self.cursor), content_kind);
-        }
-
-        // Closing marker
-        let close_start = self.cursor;
-        self.cursor += marker_len;
-        self.push(self.make_range(close_start, self.cursor), end_marker_kind);
+        self.push(open_marker, LexSemanticTokenKind::InlineMarkerMathStart);
+        self.push(content, LexSemanticTokenKind::InlineMath);
+        self.push(close_marker, LexSemanticTokenKind::InlineMarkerMathEnd);
     }
 
-    /// Walk a Reference node — literal content wrapped in `[` `]`.
-    fn walk_reference(&mut self, data: &lex_core::lex::inlines::ReferenceInline) {
+    fn visit_reference(
+        &mut self,
+        open_marker: &Range,
+        content: &Range,
+        close_marker: &Range,
+        data: &ReferenceInline,
+    ) {
+        self.push(open_marker, LexSemanticTokenKind::InlineMarkerRefStart);
         let ref_kind = match &data.reference_type {
             ReferenceType::Citation(_) => LexSemanticTokenKind::ReferenceCitation,
             ReferenceType::FootnoteNumber { .. } => LexSemanticTokenKind::ReferenceFootnote,
             ReferenceType::AnnotationReference { .. } => LexSemanticTokenKind::ReferenceAnnotation,
             _ => LexSemanticTokenKind::Reference,
         };
-
-        // Opening bracket
-        let open_start = self.cursor;
-        self.cursor += 1;
-        self.push(
-            self.make_range(open_start, self.cursor),
-            LexSemanticTokenKind::InlineMarkerRefStart,
-        );
-
-        // Reference content (literal — matches raw verbatim)
-        let content_start = self.cursor;
-        self.cursor += data.raw.len();
-        if content_start < self.cursor {
-            self.push(self.make_range(content_start, self.cursor), ref_kind);
-        }
-
-        // Closing bracket
-        let close_start = self.cursor;
-        self.cursor += 1;
-        self.push(
-            self.make_range(close_start, self.cursor),
-            LexSemanticTokenKind::InlineMarkerRefEnd,
-        );
-    }
-
-    /// Advance the raw-text cursor to match unescaped `text` from an InlineNode::Plain.
-    ///
-    /// The inline parser applies escape rules: `\*` → `*`, `\\` → `\`, but `\n` stays `\n`.
-    /// This function mirrors that logic to track how many raw bytes correspond to each
-    /// unescaped character.
-    fn advance_unescaped(&mut self, text: &str) {
-        for expected in text.chars() {
-            if self.cursor >= self.raw.len() {
-                break;
-            }
-            let raw_ch = self.raw[self.cursor..].chars().next().unwrap();
-            if raw_ch == '\\' {
-                if self.cursor + 1 >= self.raw.len() {
-                    // Trailing backslash: treat as literal to mirror parser behavior and
-                    // avoid out-of-bounds slicing on `self.raw[self.cursor + 1..]`.
-                    self.cursor += 1;
-                } else {
-                    let next_ch = self.raw[self.cursor + 1..].chars().next();
-                    match next_ch {
-                        Some(nc) if !nc.is_alphanumeric() => {
-                            // Escaped: raw `\X` maps to unescaped `X`
-                            self.cursor += 1 + nc.len_utf8();
-                        }
-                        _ => {
-                            // Literal backslash: raw `\` stays as `\` in the node
-                            self.cursor += 1;
-                        }
-                    }
-                }
-            } else {
-                self.cursor += raw_ch.len_utf8();
-            }
-            let _ = expected; // cursor already advanced
-        }
-    }
-
-    fn make_range(&self, start: usize, end: usize) -> Range {
-        let start_pos = self.position_at(start);
-        let end_pos = self.position_at(end);
-        Range::new(
-            (self.base_range.span.start + start)..(self.base_range.span.start + end),
-            start_pos,
-            end_pos,
-        )
-    }
-
-    fn position_at(&self, offset: usize) -> Position {
-        let mut line = self.base_range.start.line;
-        let mut column = self.base_range.start.column;
-        for ch in self.raw[..offset].chars() {
-            if ch == '\n' {
-                line += 1;
-                column = 0;
-            } else {
-                column += ch.len_utf8();
-            }
-        }
-        Position::new(line, column)
-    }
-
-    fn push(&mut self, range: Range, kind: LexSemanticTokenKind) {
-        if range.span.start < range.span.end {
-            self.tokens.push(LexSemanticToken { kind, range });
-        }
+        self.push(content, ref_kind);
+        self.push(close_marker, LexSemanticTokenKind::InlineMarkerRefEnd);
     }
 }
 
