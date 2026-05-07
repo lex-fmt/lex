@@ -28,10 +28,11 @@
 //! 3. **Verbatim src**: `:: image src=./image.png ::` - External resource references
 
 use super::elements::Verbatim;
-use super::range::{Position, Range};
+use super::inline_positions::{walk_text_content_positions, InlinePositionVisitor};
+use super::range::Range;
 use super::text_content::TextContent;
 use super::{Document, Session};
-use crate::lex::inlines::{InlineNode, ReferenceInline, ReferenceType};
+use crate::lex::inlines::{ReferenceInline, ReferenceType};
 use std::fmt;
 
 /// Represents a document link with its location and type
@@ -194,143 +195,42 @@ impl Document {
 /// would underline the whole element — which is exactly the bug this function
 /// is replacing.
 ///
-/// The cursor logic mirrors `lex-analysis::semantic_tokens::InlineWalker`
-/// (which produces semantic-token ranges over the same raw text). The two
-/// implementations must stay in sync; consolidating them into a single
-/// inline-position walker in `lex-core` is a follow-up.
+/// The cursor work is delegated to the shared
+/// [`crate::lex::ast::inline_positions::walk_text_content_positions`] visitor;
+/// this function only contributes the link-shaping logic in `LinkCollector`.
 fn collect_text_content_links(text: &TextContent, out: &mut Vec<DocumentLink>) {
-    let Some(base_range) = text.location.as_ref() else {
-        return;
-    };
-    let Some(nodes) = text.inlines() else {
-        return;
-    };
-    let raw = text.as_string();
-    if raw.is_empty() {
-        return;
-    }
-    let mut locator = ReferenceLocator {
-        raw,
-        base_range,
-        cursor: 0,
-    };
-    locator.walk_nodes(nodes, out);
+    let mut collector = LinkCollector { out };
+    walk_text_content_positions(text, &mut collector);
 }
 
-/// Cursor-tracking walker that produces precise byte/position ranges for
-/// inline `Reference` nodes. Only emits links for URL and File reference
-/// types; other types intentionally fall through (footnote/citation/session/
+/// Visitor that emits a [`DocumentLink`] per URL/File reference. All other
+/// inline node variants are intentionally ignored (footnote/citation/session/
 /// annotation/TK refs do not become document links).
-struct ReferenceLocator<'a> {
-    raw: &'a str,
-    base_range: &'a Range,
-    cursor: usize,
+struct LinkCollector<'a> {
+    out: &'a mut Vec<DocumentLink>,
 }
 
-impl<'a> ReferenceLocator<'a> {
-    fn walk_nodes(&mut self, nodes: &'a [InlineNode], out: &mut Vec<DocumentLink>) {
-        for node in nodes {
-            self.walk_node(node, out);
-        }
-    }
-
-    fn walk_node(&mut self, node: &'a InlineNode, out: &mut Vec<DocumentLink>) {
-        match node {
-            InlineNode::Plain { text, .. } => self.advance_unescaped(text),
-            InlineNode::Strong { content, .. } => self.walk_container(content, '*', out),
-            InlineNode::Emphasis { content, .. } => self.walk_container(content, '_', out),
-            InlineNode::Code { text, .. } => self.skip_literal(text, '`'),
-            InlineNode::Math { text, .. } => self.skip_literal(text, '#'),
-            InlineNode::Reference { data, .. } => self.emit_reference(data, out),
-        }
-    }
-
-    fn walk_container(
+impl<'a> InlinePositionVisitor for LinkCollector<'a> {
+    fn visit_reference(
         &mut self,
-        content: &'a [InlineNode],
-        marker: char,
-        out: &mut Vec<DocumentLink>,
+        open_marker: &Range,
+        _content: &Range,
+        close_marker: &Range,
+        data: &ReferenceInline,
     ) {
-        let m = marker.len_utf8();
-        self.cursor += m;
-        self.walk_nodes(content, out);
-        self.cursor += m;
-    }
-
-    fn skip_literal(&mut self, text: &str, marker: char) {
-        let m = marker.len_utf8();
-        self.cursor += m;
-        self.cursor += text.len();
-        self.cursor += m;
-    }
-
-    fn emit_reference(&mut self, data: &'a ReferenceInline, out: &mut Vec<DocumentLink>) {
-        let start = self.cursor;
-        // `[` + content + `]`. Reference content is literal — no escape rules
-        // apply, so the raw inline content length is the byte length.
-        self.cursor += 1 + data.raw.len() + 1;
-        let end = self.cursor;
         let (target, link_type) = match &data.reference_type {
             ReferenceType::Url { target } => (target.clone(), LinkType::Url),
             ReferenceType::File { target } => (target.clone(), LinkType::File),
             _ => return,
         };
-        let range = self.make_range(start, end);
-        out.push(DocumentLink::new(range, target, link_type));
-    }
-
-    /// Mirrors the inline parser's escape rules so cursor advances through
-    /// raw bytes match each unescaped char emitted into a `Plain` node.
-    /// `\X` where `X` is non-alphanumeric → consumes 2 raw bytes (`\` + `X`)
-    /// for 1 unescaped char. Any other backslash stays literal.
-    fn advance_unescaped(&mut self, text: &str) {
-        for _expected in text.chars() {
-            if self.cursor >= self.raw.len() {
-                break;
-            }
-            let raw_ch = self.raw[self.cursor..].chars().next().unwrap();
-            if raw_ch == '\\' {
-                if self.cursor + 1 >= self.raw.len() {
-                    self.cursor += 1;
-                } else {
-                    let next_ch = self.raw[self.cursor + 1..].chars().next();
-                    match next_ch {
-                        Some(nc) if !nc.is_alphanumeric() => {
-                            self.cursor += 1 + nc.len_utf8();
-                        }
-                        _ => {
-                            self.cursor += 1;
-                        }
-                    }
-                }
-            } else {
-                self.cursor += raw_ch.len_utf8();
-            }
-        }
-    }
-
-    fn make_range(&self, start: usize, end: usize) -> Range {
-        let start_pos = self.position_at(start);
-        let end_pos = self.position_at(end);
-        Range::new(
-            (self.base_range.span.start + start)..(self.base_range.span.start + end),
-            start_pos,
-            end_pos,
-        )
-    }
-
-    fn position_at(&self, offset: usize) -> Position {
-        let mut line = self.base_range.start.line;
-        let mut column = self.base_range.start.column;
-        for ch in self.raw[..offset].chars() {
-            if ch == '\n' {
-                line += 1;
-                column = 0;
-            } else {
-                column += ch.len_utf8();
-            }
-        }
-        Position::new(line, column)
+        // The link covers `[content]` inclusive of brackets — span from the
+        // open marker's start to the close marker's end.
+        let full = Range::new(
+            open_marker.span.start..close_marker.span.end,
+            open_marker.start,
+            close_marker.end,
+        );
+        self.out.push(DocumentLink::new(full, target, link_type));
     }
 }
 

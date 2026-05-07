@@ -105,6 +105,7 @@
 pub mod diagnostics;
 pub mod elements;
 pub mod error;
+pub mod inline_positions;
 pub mod links;
 pub mod range;
 pub mod snapshot;
