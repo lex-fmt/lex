@@ -284,6 +284,16 @@ impl<'a> InlinePositionWalker<'a> {
     }
 
     fn position_at(&self, offset: usize) -> Position {
+        // `column` units must match the LSP `positionEncoding` capability
+        // negotiated with the client. We don't currently negotiate
+        // `utf-8`/`utf-32`, so the spec-default `utf-16` applies — and that
+        // matches what VSCode, Helix, and most other LSP clients use even
+        // when they accept negotiation. So columns advance by each char's
+        // UTF-16 code-unit width: 1 for BMP chars, 2 for supplementary
+        // (e.g., emoji). Using `len_utf8` (the byte width) instead used to
+        // shift every subsequent token right by `len_utf8 - len_utf16` for
+        // each non-ASCII char on the line — visible in editors as semantic
+        // tokens landing on the wrong character.
         let mut line = self.base_range.start.line;
         let mut column = self.base_range.start.column;
         for ch in self.raw[..offset].chars() {
@@ -291,7 +301,7 @@ impl<'a> InlinePositionWalker<'a> {
                 line += 1;
                 column = 0;
             } else {
-                column += ch.len_utf8();
+                column += ch.len_utf16();
             }
         }
         Position::new(line, column)
@@ -301,4 +311,132 @@ impl<'a> InlinePositionWalker<'a> {
 enum EmitLiteral {
     Code,
     Math,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::range::Position;
+    use super::super::text_content::TextContent;
+    use super::*;
+
+    #[derive(Default)]
+    struct CodeCapture {
+        opens: Vec<Range>,
+        contents: Vec<Range>,
+        closes: Vec<Range>,
+    }
+
+    impl InlinePositionVisitor for CodeCapture {
+        fn visit_code(&mut self, open: &Range, content: &Range, close: &Range, _text: &str) {
+            self.opens.push(open.clone());
+            self.contents.push(content.clone());
+            self.closes.push(close.clone());
+        }
+    }
+
+    #[derive(Default)]
+    struct StrongCapture {
+        opens: Vec<Range>,
+    }
+
+    impl InlinePositionVisitor for StrongCapture {
+        fn enter_strong(&mut self, open: &Range) {
+            self.opens.push(open.clone());
+        }
+    }
+
+    fn make_text_content(raw: &str) -> TextContent {
+        // Build a TextContent rooted at line 0, column 0, spanning the full
+        // input. `end.column` is the UTF-16 code-unit width — irrelevant for
+        // these tests since we only assert positions at offsets we compute.
+        let location = Range::new(
+            0..raw.len(),
+            Position::new(0, 0),
+            Position::new(0, raw.chars().map(char::len_utf16).sum::<usize>()),
+        );
+        TextContent::from_string(raw.to_string(), Some(location))
+    }
+
+    /// LSP's default `positionEncoding` is UTF-16 code units, but the cursor
+    /// walker's `position_at` was accumulating `column += ch.len_utf8()` for
+    /// each char — the byte width. After any non-ASCII char (e.g., `→` is 3
+    /// UTF-8 bytes / 1 UTF-16 unit) every following column was offset by
+    /// `len_utf8 - len_utf16`, so VSCode painted the open-backtick token on
+    /// the *next* character. This test pins the `→` case.
+    ///
+    /// ```text
+    ///   "Hello → `Setup`"
+    ///   utf-16 col:  H=0 e=1 l=2 l=3 o=4 ' '=5 →=6 ' '=7 `=8 S=9 ...
+    ///   utf-8  byte: H=0 e=1 l=2 l=3 o=4 ' '=5 →=6,7,8 ' '=9 `=10 S=11 ...
+    /// ```
+    #[test]
+    fn code_marker_columns_are_utf16_code_units_after_arrow() {
+        let raw = "Hello → `Setup`";
+        let content = make_text_content(raw);
+
+        let mut visitor = CodeCapture::default();
+        walk_text_content_positions(&content, &mut visitor);
+
+        let open = visitor.opens.first().expect("captured open marker");
+        // Byte span is UTF-8 bytes — `Range::span` semantics — and that's right.
+        assert_eq!(open.span, 10..11, "byte span of the open backtick");
+        assert_eq!(
+            open.start,
+            Position::new(0, 8),
+            "open-marker column must be UTF-16 unit (8) not UTF-8 byte (10) — \
+             got {:?}",
+            open.start
+        );
+        assert_eq!(open.end, Position::new(0, 9));
+
+        let body = visitor.contents.first().expect("captured content");
+        assert_eq!(body.span, 11..16, "byte span of `Setup` content");
+        assert_eq!(body.start, Position::new(0, 9));
+        assert_eq!(body.end, Position::new(0, 14));
+
+        let close = visitor.closes.first().expect("captured close marker");
+        assert_eq!(close.span, 16..17, "byte span of close backtick");
+        assert_eq!(close.start, Position::new(0, 14));
+        assert_eq!(close.end, Position::new(0, 15));
+    }
+
+    /// Same root cause covers `*strong*` — the bug isn't specific to
+    /// backticks, every container/literal goes through the same `position_at`.
+    #[test]
+    fn strong_marker_columns_are_utf16_code_units_after_arrow() {
+        let raw = "Hello → *bold*";
+        let content = make_text_content(raw);
+
+        let mut visitor = StrongCapture::default();
+        walk_text_content_positions(&content, &mut visitor);
+
+        let open = visitor.opens.first().expect("captured open marker");
+        assert_eq!(open.span, 10..11, "byte span of `*`");
+        assert_eq!(open.start, Position::new(0, 8));
+        assert_eq!(open.end, Position::new(0, 9));
+    }
+
+    /// A character outside the BMP — `🦀` (U+1F980) — is 4 UTF-8 bytes and
+    /// 2 UTF-16 code units. So `len_utf8 != 1` and `len_utf16 != 1`. Pin the
+    /// math here too: column should advance by `len_utf16` (2), not by
+    /// `len_utf8` (4) and not by `1` either.
+    #[test]
+    fn columns_advance_by_utf16_units_for_supplementary_chars() {
+        let raw = "x🦀 `c`";
+        // utf-16 cols: x=0 🦀=1,2 ' '=3 `=4 c=5 `=6
+        // utf-8 bytes: x=0 🦀=1..5 ' '=5 `=6 c=7 `=8
+        let content = make_text_content(raw);
+
+        let mut visitor = CodeCapture::default();
+        walk_text_content_positions(&content, &mut visitor);
+
+        let open = visitor.opens.first().expect("captured open marker");
+        assert_eq!(open.span, 6..7, "byte span of `\\``");
+        assert_eq!(
+            open.start,
+            Position::new(0, 4),
+            "🦀 contributes 2 UTF-16 units (got column {:?})",
+            open.start.column
+        );
+    }
 }

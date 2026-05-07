@@ -138,6 +138,11 @@ impl<'a> ReferenceWalker<'a> {
     }
 
     fn position_at(&self, offset: usize) -> Position {
+        // `column` units are UTF-16 code units to match LSP's default
+        // `positionEncoding`. See the matching `position_at` in
+        // `lex_core::lex::ast::inline_positions` for the full rationale.
+        // This duplicate walker should be folded into the shared
+        // `InlinePositionVisitor` machinery as a follow-up.
         let mut line = self.base_range.start.line;
         let mut column = self.base_range.start.column;
         for ch in self.raw[..offset].chars() {
@@ -145,7 +150,7 @@ impl<'a> ReferenceWalker<'a> {
                 line += 1;
                 column = 0;
             } else {
-                column += ch.len_utf8();
+                column += ch.len_utf16();
             }
         }
         Position::new(line, column)
@@ -209,6 +214,43 @@ mod tests {
         let text = text_with_range("", 0, 0);
         let refs = extract_references(&text);
         assert!(refs.is_empty());
+    }
+
+    /// Mirrors the UTF-16 invariant pinned in
+    /// `lex_core::lex::ast::inline_positions` — a `→` (1 UTF-16 unit, 3
+    /// UTF-8 bytes) before the reference must shift columns by 1, not by 3.
+    /// Without this, `find_references` / `goto_definition` jump cursors
+    /// would land on the wrong character whenever the line contained any
+    /// non-ASCII text before a reference.
+    #[test]
+    fn reference_columns_are_utf16_units_after_arrow() {
+        // "see → [ref] end"
+        //  utf-16 cols: s=0 e=1 e=2 ' '=3 →=4 ' '=5 [=6 r=7 e=8 f=9 ]=10 ' '=11 e=12 ...
+        //  utf-8 bytes: s=0 e=1 e=2 ' '=3 →=4,5,6 ' '=7 [=8 r=9 ...
+        let raw = "see → [ref] end";
+        let utf16_len: usize = raw.chars().map(char::len_utf16).sum();
+        let location = Range::new(
+            0..raw.len(),
+            Position::new(0, 0),
+            Position::new(0, utf16_len),
+        );
+        let text = TextContent::from_string(raw.to_string(), Some(location));
+
+        let refs = extract_references(&text);
+        assert_eq!(refs.len(), 1);
+        let r = &refs[0];
+        assert_eq!(r.raw, "ref");
+        // Byte span for the *content* between brackets — `[` at byte 8, `r`
+        // at byte 9, `]` at byte 12, content range is 9..12.
+        assert_eq!(r.range.span, 9..12, "byte span (UTF-8 bytes)");
+        // UTF-16: `r` at column 7, `]` at column 10, content range 7..10.
+        assert_eq!(
+            r.range.start,
+            Position::new(0, 7),
+            "content start column should be UTF-16 (got {:?})",
+            r.range.start
+        );
+        assert_eq!(r.range.end, Position::new(0, 10));
     }
 
     #[test]
