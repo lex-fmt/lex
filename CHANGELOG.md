@@ -4,24 +4,33 @@
 
 ### Fixed
 
-- LSP `Position.column` is now reported in UTF-16 code units to match
-  the LSP spec's default `positionEncoding`, instead of UTF-8 bytes.
-  Two cursor walkers — `lex_core::lex::ast::inline_positions::position_at`
-  (semantic tokens + document links) and
-  `lex_analysis::inline::ReferenceWalker::position_at`
+- Inline-walker columns are now UTF-16 code units, matching what LSP
+  clients expect by default. Two cursor walkers —
+  `lex_core::lex::ast::inline_positions::position_at` (semantic tokens
+  + document links) and `lex_analysis::inline::ReferenceWalker::position_at`
   (`find_references` + `goto_definition`) — were accumulating
-  `column += ch.len_utf8()` for each char in the line. For any
-  character wider than its UTF-16 representation (notably the `→`
-  arrow at 3 UTF-8 bytes / 1 UTF-16 unit, and any non-BMP emoji at 4
-  bytes / 2 units), every subsequent token's column was offset by the
-  delta. In VSCode this surfaced as the open-backtick of a code span
-  landing on the *next* character, painting the wrong glyph in the
-  marker style and shifting the InlineCode content range one character
-  right of where it should be. `find_references` and `goto_definition`
-  jumps were similarly off when the line contained any non-ASCII
-  character before the reference. Switched both walkers to
-  `column += ch.len_utf16()`. Byte-level `Range::span` values are
-  unchanged — they are and remain UTF-8 byte offsets, which is correct.
+  `column += ch.len_utf8()` for each char as they walked through a
+  line. For any char wider in UTF-8 than in UTF-16 (notably `→` at 3
+  bytes / 1 unit, `§` at 2 bytes / 1 unit, non-BMP emoji at 4 bytes /
+  2 units), every subsequent inline token's column was shifted right
+  by `len_utf8 - len_utf16`. In VSCode this surfaced as the
+  open-backtick of an inline code span landing on the *next* glyph
+  (the `e` of `Setup` instead of the `` ` ``), and as
+  `find_references` / `goto_definition` jumping to the wrong column on
+  any line that contained a `→` before the reference. Switched both
+  walkers to `len_utf16`. Byte-level `Range::span` values are
+  unchanged — they remain UTF-8 byte offsets, which is correct.
+
+  Caveat for follow-up: the rest of the AST still records
+  `Position.column` as a UTF-8 byte offset (see
+  `SourceLocation::byte_to_position`, and the deliberate slicing-by-bytes
+  in `lex_lsp_core::available_actions::label_from_diagnostic_range`).
+  Block-level ranges sent to LSP that span content with non-ASCII
+  characters (e.g., a session title containing a `→`) therefore still
+  have a similar shift in their *end* columns. The deeper fix is to
+  convert UTF-8 byte columns to UTF-16 at the LSP wire boundary; this
+  PR is scoped to the inline-walker bug that was visible in editor
+  rendering of paragraph text.
 
 ## [0.10.5] - 2026-05-07
 
