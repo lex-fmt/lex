@@ -124,9 +124,17 @@ impl Session {
 
         let mut links = Vec::new();
 
-        // Links in the session title — bracket-bounded ranges so editors only
-        // decorate the reference, not the whole title line.
+        // Links in this session's title and every nested session's title.
+        //
+        // `Document::find_all_links` invokes us on the implicit root session
+        // (whose title is empty), so without the recursive sweep below we
+        // would silently drop every URL/File reference that appears in a
+        // section heading — `1. See [./handlers.lex] for details` and
+        // similar — even though paragraph-body refs were correctly found.
         collect_text_content_links(&self.title, &mut links);
+        for nested in self.iter_sessions_recursive() {
+            collect_text_content_links(&nested.title, &mut links);
+        }
 
         // Paragraphs (recursively into nested sessions).
         for paragraph in self.iter_paragraphs_recursive() {
@@ -574,5 +582,96 @@ For concrete types, crate layout, and trait signatures, see [./types.lex].\n\n";
             bracket_start..bracket_end,
             "Link range must be bracket-bounded. Got captured text: {captured:?}"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Nested-session title coverage
+    //
+    // `Session::find_all_links` originally only inspected `self.title`, while
+    // `Document::find_all_links` calls it on the implicit root session whose
+    // title is empty. Paragraph traversal recurses into nested sessions, but
+    // nested-session *titles* never get scanned. So URL/File refs that appear
+    // in a section heading like
+    //
+    //     1. See [./handlers.lex] for the phase list
+    //
+    //         (body)
+    //
+    // were silently dropped from the LSP `documentLink` response, and editors
+    // had no clickable surface on the heading.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_file_ref_in_nested_session_title_produces_link() {
+        // "Doc title" + blank + indent → outer session whose title is
+        // "Doc title". Then the indented "See [./other.lex] for details"
+        // line, followed by a blank and a deeper indent, becomes a *nested*
+        // session whose title contains a file reference.
+        let source =
+            "Doc title\n\n    See [./other.lex] for details\n\n        nested content here.\n\n";
+        let doc = parse_document(source).unwrap();
+        let links = doc.find_all_links();
+
+        assert_eq!(
+            links.len(),
+            1,
+            "expected one link for the file ref in the nested-session title; got {links:?}"
+        );
+        let link = &links[0];
+        assert_eq!(link.target, "./other.lex");
+        assert_eq!(link.link_type, LinkType::File);
+
+        let bracket_start = source.find("[./other.lex]").expect("bracket present");
+        let bracket_end = bracket_start + "[./other.lex]".len();
+        assert_eq!(
+            link.range.span,
+            bracket_start..bracket_end,
+            "Nested-session title link must be bracket-bounded. Got captured text: {:?}",
+            &source[link.range.span.clone()]
+        );
+    }
+
+    #[test]
+    fn test_url_ref_in_nested_session_title_produces_link() {
+        let source = "Doc title\n\n    Visit [https://example.com] today\n\n        body line.\n\n";
+        let doc = parse_document(source).unwrap();
+        let links = doc.find_all_links();
+
+        assert_eq!(links.len(), 1);
+        let link = &links[0];
+        assert_eq!(link.target, "https://example.com");
+        assert_eq!(link.link_type, LinkType::Url);
+
+        let bracket_start = source
+            .find("[https://example.com]")
+            .expect("bracket present");
+        let bracket_end = bracket_start + "[https://example.com]".len();
+        assert_eq!(link.range.span, bracket_start..bracket_end);
+    }
+
+    #[test]
+    fn test_refs_in_both_outer_and_nested_session_titles_produce_links() {
+        // The outer title also contains a file reference, so both the outer
+        // and nested titles should each contribute one link, distinct from
+        // any links found in paragraphs.
+        let source = "\
+Top [./top.lex] section
+
+    Inner [./inner.lex] subsection
+
+        See also [./body.lex] in the body.
+";
+        let doc = parse_document(source).unwrap();
+        let links = doc.find_all_links();
+
+        assert_eq!(
+            links.len(),
+            3,
+            "expected three links (outer-title, inner-title, body); got {links:?}"
+        );
+        let targets: Vec<&str> = links.iter().map(|l| l.target.as_str()).collect();
+        assert!(targets.contains(&"./top.lex"));
+        assert!(targets.contains(&"./inner.lex"));
+        assert!(targets.contains(&"./body.lex"));
     }
 }
