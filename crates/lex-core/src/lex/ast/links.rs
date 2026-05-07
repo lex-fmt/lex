@@ -551,7 +551,7 @@ mod tests {
     }
 
     #[test]
-    fn test_paragraph_with_only_other_text_around_url_does_not_include_them_in_range() {
+    fn test_long_paragraph_with_single_file_ref_does_not_include_surrounding_text_in_range() {
         // Reproduces the dodot architecture.lex case: a long paragraph that
         // contains a single file reference. Before the fix, the link's range
         // covered the whole paragraph so VSCode underlined every word.
