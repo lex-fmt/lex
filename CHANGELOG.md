@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+## [0.10.6] - 2026-05-07
+
+
 ### Fixed
 
 - Inline-walker columns are now UTF-16 code units, matching what LSP
@@ -31,7 +34,6 @@
   convert UTF-8 byte columns to UTF-16 at the LSP wire boundary; this
   PR is scoped to the inline-walker bug that was visible in editor
   rendering of paragraph text.
-
 ## [0.10.5] - 2026-05-07
 
 
