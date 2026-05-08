@@ -28,15 +28,35 @@ pub struct RelatedDiagnostic {
     pub uri: Option<String>,
 }
 
-/// Diagnostic severity. Forward compatibility: handlers must treat unknown
-/// values as [`DiagnosticSeverity::Info`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// Diagnostic severity.
+///
+/// Forward compatibility: unknown wire values deserialise as
+/// [`DiagnosticSeverity::Info`]. Adding new variants is non-breaking
+/// (`#[non_exhaustive]`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum DiagnosticSeverity {
     Error,
     Warning,
     Info,
     Hint,
+}
+
+impl<'de> Deserialize<'de> for DiagnosticSeverity {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Ok(match s.as_str() {
+            "error" => Self::Error,
+            "warning" => Self::Warning,
+            "info" => Self::Info,
+            "hint" => Self::Hint,
+            _ => Self::Info,
+        })
+    }
 }
 
 /// The result of `on_render`. Either a target-format string snippet or a
@@ -59,11 +79,30 @@ pub struct Hover {
     pub range: Option<Range>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// Hover content format.
+///
+/// Forward compatibility: unknown wire values deserialise as
+/// [`HoverFormat::Plaintext`]. Adding new variants is non-breaking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum HoverFormat {
     Plaintext,
     Markdown,
+}
+
+impl<'de> Deserialize<'de> for HoverFormat {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Ok(match s.as_str() {
+            "plaintext" => Self::Plaintext,
+            "markdown" => Self::Markdown,
+            _ => Self::Plaintext,
+        })
+    }
 }
 
 /// One completion item returned by `on_completion`.
@@ -78,15 +117,34 @@ pub struct Completion {
     pub kind: CompletionKind,
 }
 
-/// Completion item kind. Forward compatibility: handlers must treat unknown
-/// values as [`CompletionKind::Value`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// Completion item kind.
+///
+/// Forward compatibility: unknown wire values deserialise as
+/// [`CompletionKind::Value`]. Adding new variants is non-breaking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum CompletionKind {
     Value,
     Param,
     Namespace,
     Snippet,
+}
+
+impl<'de> Deserialize<'de> for CompletionKind {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Ok(match s.as_str() {
+            "value" => Self::Value,
+            "param" => Self::Param,
+            "namespace" => Self::Namespace,
+            "snippet" => Self::Snippet,
+            _ => Self::Value,
+        })
+    }
 }
 
 /// One code action returned by `on_code_action`.
@@ -98,14 +156,32 @@ pub struct CodeAction {
     pub edits: Vec<TextEdit>,
 }
 
-/// Code-action kind. Forward compatibility: handlers must treat unknown
-/// values as [`CodeActionKind::Refactor`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// Code-action kind.
+///
+/// Forward compatibility: unknown wire values deserialise as
+/// [`CodeActionKind::Refactor`]. Adding new variants is non-breaking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum CodeActionKind {
     Quickfix,
     Refactor,
     Source,
+}
+
+impl<'de> Deserialize<'de> for CodeActionKind {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Ok(match s.as_str() {
+            "quickfix" => Self::Quickfix,
+            "refactor" => Self::Refactor,
+            "source" => Self::Source,
+            _ => Self::Refactor,
+        })
+    }
 }
 
 /// A textual edit applied as part of a code action.
@@ -206,5 +282,29 @@ mod tests {
         let s = serde_json::to_string(&a).unwrap();
         let back: CodeAction = serde_json::from_str(&s).unwrap();
         assert_eq!(back, a);
+    }
+
+    #[test]
+    fn unknown_severity_falls_back_to_info() {
+        let s: DiagnosticSeverity = serde_json::from_str(r#""trace""#).unwrap();
+        assert_eq!(s, DiagnosticSeverity::Info);
+    }
+
+    #[test]
+    fn unknown_completion_kind_falls_back_to_value() {
+        let k: CompletionKind = serde_json::from_str(r#""template""#).unwrap();
+        assert_eq!(k, CompletionKind::Value);
+    }
+
+    #[test]
+    fn unknown_code_action_kind_falls_back_to_refactor() {
+        let k: CodeActionKind = serde_json::from_str(r#""rename""#).unwrap();
+        assert_eq!(k, CodeActionKind::Refactor);
+    }
+
+    #[test]
+    fn unknown_hover_format_falls_back_to_plaintext() {
+        let f: HoverFormat = serde_json::from_str(r#""asciidoc""#).unwrap();
+        assert_eq!(f, HoverFormat::Plaintext);
     }
 }

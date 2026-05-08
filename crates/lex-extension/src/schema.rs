@@ -62,10 +62,16 @@ pub struct ParamSpec {
     pub values: Vec<EnumValue>,
 }
 
-/// Allowed parameter types. Forward compatibility: schema loaders bail on
-/// unknown types (schema-format versioning is independent of `wire_version`).
+/// Allowed parameter types.
+///
+/// Forward compatibility: unlike the wire-format enums, schema loaders
+/// *reject* unknown types — schema-format versioning is independent of
+/// `wire_version` and a schema with an unknown `type` is malformed by
+/// definition. The `#[non_exhaustive]` attribute keeps adding new variants
+/// non-breaking on the Rust side.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum ParamType {
     String,
     Bool,
@@ -105,6 +111,7 @@ impl Default for BodyShape {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum BodyKind {
     None,
     Text,
@@ -119,6 +126,7 @@ impl BodyKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum BodyPresence {
     Optional,
     Required,
@@ -194,6 +202,7 @@ pub struct HandlerSpec {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum HandlerTransport {
     Native,
     Subprocess,

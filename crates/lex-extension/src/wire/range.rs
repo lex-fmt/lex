@@ -1,17 +1,30 @@
 //! Source-range types.
 //!
 //! The wire format encodes positions as `[line, column]` arrays — two-element
-//! tuples — to keep payload size small and match the LSP convention. Both
-//! values are 0-indexed; ranges are start-inclusive and end-exclusive.
+//! tuples — to keep payload size small. Both values are 0-indexed; ranges
+//! are start-inclusive and end-exclusive.
+//!
+//! # Column semantics
+//!
+//! `column` is a **0-indexed UTF-8 byte offset** within the line, matching
+//! lex-core's internal source representation (`byte_offset - line_start`).
+//! It is *not* an LSP-style UTF-16 code unit count and *not* a Unicode
+//! scalar count; multi-byte characters occupy more than one column. The
+//! `lex-lsp` server converts to UTF-16 code units at the LSP protocol
+//! boundary; that conversion is not the wire format's concern.
 
 use serde::{Deserialize, Serialize};
 
 /// A `(line, column)` position. Wire form: `[line, column]`.
+///
+/// `column` is a 0-indexed UTF-8 byte offset within the line — see the
+/// module-level docs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Position(pub u32, pub u32);
 
 impl Position {
-    /// Construct a position from a line and column.
+    /// Construct a position from a line and column (0-indexed UTF-8 byte
+    /// offset).
     pub fn new(line: u32, column: u32) -> Self {
         Self(line, column)
     }
@@ -21,7 +34,7 @@ impl Position {
         self.0
     }
 
-    /// 0-indexed column.
+    /// 0-indexed UTF-8 byte offset within the line.
     pub fn column(&self) -> u32 {
         self.1
     }

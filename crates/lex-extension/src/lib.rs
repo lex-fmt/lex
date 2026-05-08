@@ -17,14 +17,40 @@
 //!
 //! # Versioning
 //!
-//! [`WIRE_VERSION`] tracks the wire-format contract. The crate's major
-//! version mirrors it. A handler built against `lex-extension` 1.x speaks
-//! `wire_version: 1`. Non-breaking additions (new methods, new optional
-//! fields, new node kinds, new severity levels) are minor/patch bumps; any
-//! change to existing field shapes or method semantics is a major bump.
+//! There are two version axes, intentionally decoupled:
 //!
-//! See `comms/specs/proposals/lex-extension-wire.lex` for the normative wire
-//! format spec.
+//! - [`WIRE_VERSION`] identifies the JSON-RPC wire-format contract
+//!   exchanged at the `initialize` handshake. Handlers across any
+//!   transport (subprocess, native, future WASM) speaking the same
+//!   `WIRE_VERSION` interoperate. Once stable, breaking changes to the
+//!   wire format bump this integer.
+//! - The crate's *Cargo* version (`0.1.x` today) tracks the Rust API.
+//!
+//! The two axes line up at 1.0: this crate ticks to `1.0.0` when its Rust
+//! API stabilises, and at that point a handler built against
+//! `lex-extension = "1"` speaks `WIRE_VERSION = 1`. Until then the Rust
+//! API is per-Cargo unstable: any 0.x → 0.y bump may be source-incompatible.
+//!
+//! Where forward-compatibility is implementable today without API churn,
+//! it is:
+//!
+//! - String-shaped enums (severity, completion kind, code-action kind,
+//!   ref kind, hover format) deserialise unknown wire values as a
+//!   documented fallback (`Info`, `Value`, `Refactor`, `General`,
+//!   `Plaintext`). New variants in the wire protocol are non-breaking
+//!   *for handlers* — older handlers see the fallback.
+//! - Block AST kinds ([`WireNode`], [`WireInline`]) are *closed* within a
+//!   `WIRE_VERSION`. Adding a new kind is a wire-version bump, not a
+//!   silent extension. The `#[non_exhaustive]` attribute on those enums
+//!   keeps the Rust side additive across `lex-extension` major versions.
+//! - Public structs (`Diagnostic`, `Hover`, `Completion`, etc.) are *not*
+//!   `#[non_exhaustive]` today, by design — pre-1.0, struct-literal
+//!   construction is the right ergonomics for handler authors. Before
+//!   tagging 1.0 the public structs will gain `#[non_exhaustive]` plus
+//!   constructors, so post-1.0 field additions stay non-breaking.
+//!
+//! See `comms/specs/proposals/lex-extension-wire.lex` for the normative
+//! wire-format spec.
 
 pub mod handler;
 pub mod schema;

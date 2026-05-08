@@ -3,9 +3,23 @@
 //! [`WireNode`] is a tagged enum (kind discriminator) covering all block
 //! kinds. Inline content uses [`WireInline`](crate::wire::WireInline).
 //!
-//! Forward compatibility: handlers must ignore unknown `kind` values
-//! gracefully (per wire spec §2.2). Adding new node kinds is a non-breaking
-//! change.
+//! # Forward compatibility
+//!
+//! Adding a new `kind` to the wire format is a *breaking* change: the
+//! `wire_version` integer bumps, and old hosts/handlers reject the
+//! mismatched protocol at the `initialize` handshake. Within a single
+//! `wire_version`, the set of node kinds is closed.
+//!
+//! This is deliberately stricter than the per-string-enum forward-compat
+//! policy used for [`DiagnosticSeverity`](crate::wire::DiagnosticSeverity)
+//! and similar (which fall back to a documented default on unknown
+//! values). Block AST is structural; treating an unknown `kind` as
+//! "ignore me" silently drops document content, which is worse than
+//! refusing the document with a clear protocol-version diagnostic.
+//!
+//! On the Rust side, [`WireNode`] is `#[non_exhaustive]` so that adding a
+//! new variant in a future major-version release of this crate is not a
+//! breaking source-level change for downstream `match` consumers.
 
 use serde::{Deserialize, Serialize};
 
@@ -14,8 +28,11 @@ use super::range::Range;
 
 /// A block-level wire AST node. Wire form is a tagged object with `"kind"`
 /// selecting the variant, plus shared `range` and optional `origin` fields.
+///
+/// See the module-level docs for the forward-compatibility contract.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum WireNode {
     Document {
         range: Range,
