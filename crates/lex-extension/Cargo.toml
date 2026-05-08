@@ -1,0 +1,14 @@
+[package]
+name = "lex-extension"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["lex contributors"]
+description = "Public surface for Lex extensions: handler trait, wire types, schema types"
+repository = "https://github.com/lex-fmt/lex"
+keywords = ["lex", "extension"]
+categories = ["text-processing"]
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
