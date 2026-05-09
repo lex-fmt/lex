@@ -11,7 +11,14 @@ use serde::{Deserialize, Serialize};
 
 /// One label's schema. Mirrors the YAML format documented in the *Extending
 /// Lex* proposal §13.2.
+///
+/// Schemas are strict on deserialise: unknown fields are rejected. Forward
+/// compatibility lives at the `wire_version` axis, not at the schema-format
+/// level — a schema with a field this version doesn't know about is
+/// malformed by definition. The schema loader (`lex-extension-host`)
+/// surfaces this as a precise `SchemaError`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Schema {
     /// Schema-format version. Currently `1`.
     pub schema_version: u32,
@@ -46,6 +53,7 @@ pub struct Schema {
 
 /// One parameter declaration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ParamSpec {
     #[serde(rename = "type")]
     pub ty: ParamType,
@@ -82,6 +90,7 @@ pub enum ParamType {
 
 /// One legal value of an enum-typed parameter.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EnumValue {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -90,6 +99,7 @@ pub struct EnumValue {
 
 /// Body shape for annotation-form usage.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BodyShape {
     #[serde(default = "BodyKind::default_kind")]
     pub kind: BodyKind,
@@ -141,6 +151,7 @@ impl Default for BodyPresence {
 /// Declared capabilities. The subprocess transport will sandbox the handler
 /// to honour these once OS-level enforcement ships (see proposal §8).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Capabilities {
     #[serde(default)]
     pub fs: bool,
@@ -166,6 +177,7 @@ impl Capabilities {
 
 /// Hook participation. Each field defaults to "not implemented".
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HookSet {
     #[serde(default)]
     pub label: bool,
@@ -198,6 +210,7 @@ impl RenderHook {
 
 /// Handler delivery info.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HandlerSpec {
     pub transport: HandlerTransport,
     /// Argv for the subprocess transport. Variables in the form `${NAME}`

@@ -20,10 +20,12 @@ subprocess = ["dep:tokio"]
 lex-extension = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_yaml = { workspace = true }
 tokio = { workspace = true, optional = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
+tempfile = { workspace = true }
 
 # Subprocess test fixture: a single binary with several behavioural modes
 # (echo, slow, crash, malformed, version-mismatch). Built only when the
