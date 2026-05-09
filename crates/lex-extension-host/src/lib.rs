@@ -13,23 +13,26 @@
 //! the first built-in `LexHandler` — can depend on it. Handler authors
 //! should depend on `lex-extension`, not this crate.
 //!
-//! What's in this crate today (PR 2 of the extension-system rollout):
+//! What's in this crate today:
 //!
 //! - [`Registry`] — namespace registration, label lookup, and dispatch
 //!   helpers wrapping every hook event with `HandlerError` folding and
 //!   panic catch.
+//! - [`schema::SchemaLoader`] — YAML schema loader + post-deserialise
+//!   validator.
 //! - [`transport::native`] — the trivial transport: a registered
 //!   `Box<dyn LexHandler>` is its own transport, no adapter required.
 //!
 //! Coming in later PRs:
 //!
-//! - PR 4: schema YAML loader and namespace URI resolver.
 //! - PR 5: subprocess transport (JSON-RPC over stdio + `initialize`
 //!   handshake).
 //! - PR 6: trust store and decision matrix.
 //! - PR 12: OS-level sandboxing for declared-pure subprocess handlers.
 
 pub mod registry;
+pub mod schema;
 pub mod transport;
 
 pub use registry::{Registry, RegistryError};
+pub use schema::{SchemaError, SchemaLoader};
