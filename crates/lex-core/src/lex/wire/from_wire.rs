@@ -42,47 +42,68 @@ use super::range::{range_from_wire_with_origin, OriginInterner};
 /// Non-document roots are accepted: if `node` is not a `Document` (for
 /// example a single `WireNode::Paragraph`), the result is a single-
 /// element vector containing the converted item.
+///
+/// When `node` is `WireNode::Document`, its `origin` (if any) is
+/// inherited by every child whose own `origin` slot is `None` —
+/// matching how the parser's `stamp_doc` walks the tree, so handler
+/// authors only need to stamp the document root and the codec
+/// propagates the origin to every node downstream.
 pub fn from_wire_node(node: &WireNode) -> Result<Vec<ContentItem>, FromWireError> {
     let mut interner = OriginInterner::new();
     match node {
-        WireNode::Document { children, .. } => from_wire_subtree_interned(children, &mut interner),
-        single => Ok(vec![convert_one(single, &mut interner)?]),
+        WireNode::Document {
+            children, origin, ..
+        } => from_wire_subtree_interned(children, origin.as_deref(), &mut interner),
+        single => Ok(vec![convert_one(single, None, &mut interner)?]),
     }
 }
 
 /// Convert a slice of wire nodes into a vector of `ContentItem`s.
 pub fn from_wire_subtree(nodes: &[WireNode]) -> Result<Vec<ContentItem>, FromWireError> {
     let mut interner = OriginInterner::new();
-    from_wire_subtree_interned(nodes, &mut interner)
+    from_wire_subtree_interned(nodes, None, &mut interner)
 }
 
 /// Internal worker shared by `from_wire_node` and `from_wire_subtree`
 /// so a single [`OriginInterner`] is threaded through every nested
-/// recursion of a single decode call. Without sharing one interner,
-/// each `convert_one` would build its own and the dedup would be
-/// trivially per-node.
+/// recursion of a single decode call. `inherited_origin` is the
+/// effective origin from the closest ancestor with a stamped
+/// `origin`; child nodes whose own `origin` slot is `None` inherit
+/// it so handler authors don't have to manually stamp every node.
 fn from_wire_subtree_interned(
     nodes: &[WireNode],
+    inherited_origin: Option<&str>,
     interner: &mut OriginInterner,
 ) -> Result<Vec<ContentItem>, FromWireError> {
-    nodes.iter().map(|n| convert_one(n, interner)).collect()
+    nodes
+        .iter()
+        .map(|n| convert_one(n, inherited_origin, interner))
+        .collect()
 }
 
 fn convert_one(
     node: &WireNode,
+    inherited_origin: Option<&str>,
     interner: &mut OriginInterner,
 ) -> Result<ContentItem, FromWireError> {
+    // Helper: a node's effective origin is its own `origin` if set,
+    // otherwise the inherited one from the parent. Children are
+    // walked with this effective origin as their inherited.
+    fn effective<'a>(own: Option<&'a str>, inherited: Option<&'a str>) -> Option<&'a str> {
+        own.or(inherited)
+    }
+
     match node {
         WireNode::Paragraph {
             range,
             origin,
             inlines,
-        } => Ok(ContentItem::Paragraph(paragraph_from_wire(
-            range,
-            origin.as_deref(),
-            inlines,
-            interner,
-        ))),
+        } => {
+            let eff = effective(origin.as_deref(), inherited_origin);
+            Ok(ContentItem::Paragraph(paragraph_from_wire(
+                range, eff, inlines, interner,
+            )))
+        }
         WireNode::Blank { range, origin } => {
             // Reconstruct the blank-line count from the range when
             // possible: an N-line blank group spans N lines, so
@@ -93,7 +114,8 @@ fn convert_one(
             let span_lines = range.end.line().saturating_sub(range.start.line());
             let count = (span_lines as usize).max(1);
             let mut blg = BlankLineGroup::new(count, Vec::new());
-            blg.location = range_from_wire_with_origin(range, origin.as_deref(), interner);
+            let eff = effective(origin.as_deref(), inherited_origin);
+            blg.location = range_from_wire_with_origin(range, eff, interner);
             Ok(ContentItem::BlankLineGroup(blg))
         }
         WireNode::Annotation {
@@ -102,52 +124,50 @@ fn convert_one(
             label,
             params,
             body,
-        } => Ok(ContentItem::Annotation(annotation_from_wire(
-            range,
-            origin.as_deref(),
-            label,
-            params,
-            body,
-            interner,
-        )?)),
+        } => {
+            let eff = effective(origin.as_deref(), inherited_origin);
+            Ok(ContentItem::Annotation(annotation_from_wire(
+                range, eff, label, params, body, interner,
+            )?))
+        }
         WireNode::Session {
             range,
             origin,
             title,
             marker,
             children,
-        } => Ok(ContentItem::Session(session_from_wire(
-            range,
-            origin.as_deref(),
-            title,
-            marker,
-            children,
-            interner,
-        )?)),
+        } => {
+            let eff = effective(origin.as_deref(), inherited_origin);
+            Ok(ContentItem::Session(session_from_wire(
+                range, eff, title, marker, children, interner,
+            )?))
+        }
         WireNode::Definition {
             range,
             origin,
             subject,
             children,
-        } => Ok(ContentItem::Definition(definition_from_wire(
-            range,
-            origin.as_deref(),
-            subject,
-            children,
-            interner,
-        )?)),
+        } => {
+            let eff = effective(origin.as_deref(), inherited_origin);
+            Ok(ContentItem::Definition(definition_from_wire(
+                range, eff, subject, children, interner,
+            )?))
+        }
         WireNode::List {
             range,
             origin,
             marker_style,
             items,
-        } => Ok(ContentItem::List(list_from_wire(
-            range,
-            origin.as_deref(),
-            marker_style,
-            items,
-            interner,
-        )?)),
+        } => {
+            let eff = effective(origin.as_deref(), inherited_origin);
+            Ok(ContentItem::List(list_from_wire(
+                range,
+                eff,
+                marker_style,
+                items,
+                interner,
+            )?))
+        }
         WireNode::Table {
             range,
             origin,
@@ -156,16 +176,19 @@ fn convert_one(
             align,
             rows,
             footnotes,
-        } => Ok(ContentItem::Table(Box::new(table_from_wire(
-            range,
-            origin.as_deref(),
-            caption,
-            *header_rows,
-            align,
-            rows,
-            footnotes,
-            interner,
-        )?))),
+        } => {
+            let eff = effective(origin.as_deref(), inherited_origin);
+            Ok(ContentItem::Table(Box::new(table_from_wire(
+                range,
+                eff,
+                caption,
+                *header_rows,
+                align,
+                rows,
+                footnotes,
+                interner,
+            )?)))
+        }
         WireNode::Verbatim {
             range,
             origin,
@@ -174,16 +197,12 @@ fn convert_one(
             body_text,
             subject,
             mode,
-        } => Ok(verbatim_from_wire(
-            range,
-            origin.as_deref(),
-            label,
-            params,
-            body_text,
-            subject,
-            mode,
-            interner,
-        )?),
+        } => {
+            let eff = effective(origin.as_deref(), inherited_origin);
+            Ok(verbatim_from_wire(
+                range, eff, label, params, body_text, subject, mode, interner,
+            )?)
+        }
         // WireNode is `#[non_exhaustive]` — future kinds surface here.
         _ => Err(FromWireError::UnsupportedKind {
             kind: kind_name(node).into(),
@@ -242,7 +261,7 @@ fn annotation_from_wire(
     let label = Label::new(label.to_string());
     let data = Data::new(label, parameters);
 
-    let children = annotation_body_from_json(body, interner)?;
+    let children = annotation_body_from_json(body, origin, interner)?;
     let mut a = CoreAnnotation::from_data(data, Vec::new());
     a.location = range_from_wire_with_origin(range, origin, interner);
     if !children.is_empty() {
@@ -262,7 +281,9 @@ fn session_from_wire(
     interner: &mut OriginInterner,
 ) -> Result<Session, FromWireError> {
     let title_tc = TextContent::from_string(title.to_string(), None);
-    let typed_children = wire_children_to_session_content(children, interner)?;
+    // Children inherit the session's effective origin if they don't
+    // carry one of their own — same rule as the parser's stamp pass.
+    let typed_children = wire_children_to_session_content(children, origin, interner)?;
     let mut s = Session::new(title_tc, typed_children);
     s.location = range_from_wire_with_origin(range, origin, interner);
     s.marker = marker
@@ -279,7 +300,7 @@ fn definition_from_wire(
     interner: &mut OriginInterner,
 ) -> Result<Definition, FromWireError> {
     let subject_tc = TextContent::from_string(subject.to_string(), None);
-    let typed_children = wire_children_to_content_elements(children, interner)?;
+    let typed_children = wire_children_to_content_elements(children, origin, interner)?;
     let mut d = Definition::new(subject_tc, typed_children);
     d.location = range_from_wire_with_origin(range, origin, interner);
     Ok(d)
@@ -328,7 +349,8 @@ fn list_item_from_wire(
             .collect()
     };
     let marker_text = synthetic_marker_text(marker_style, index);
-    let typed_children = wire_children_to_content_elements(&item.children, interner)?;
+    let typed_children =
+        wire_children_to_content_elements(&item.children, parent_origin, interner)?;
     let mut li = ListItem::with_text_content(
         TextContent::from_string(marker_text, None),
         text_lines
@@ -558,6 +580,7 @@ fn parameters_from_json(params: &Value) -> Result<Vec<Parameter>, FromWireError>
 
 fn annotation_body_from_json(
     body: &Value,
+    inherited_origin: Option<&str>,
     interner: &mut OriginInterner,
 ) -> Result<Vec<ContentItem>, FromWireError> {
     match body {
@@ -584,7 +607,7 @@ fn annotation_body_from_json(
                     .map_err(|e| FromWireError::DeserialisationFailed(e.to_string()))?,
                 None => Vec::new(),
             };
-            from_wire_subtree_interned(&children, interner)
+            from_wire_subtree_interned(&children, inherited_origin, interner)
         }
         _ => Err(FromWireError::MalformedField {
             field: "body",
@@ -595,17 +618,19 @@ fn annotation_body_from_json(
 
 fn wire_children_to_session_content(
     children: &[WireNode],
+    inherited_origin: Option<&str>,
     interner: &mut OriginInterner,
 ) -> Result<Vec<SessionContent>, FromWireError> {
-    let items = from_wire_subtree_interned(children, interner)?;
+    let items = from_wire_subtree_interned(children, inherited_origin, interner)?;
     Ok(items.into_iter().map(SessionContent::from).collect())
 }
 
 fn wire_children_to_content_elements(
     children: &[WireNode],
+    inherited_origin: Option<&str>,
     interner: &mut OriginInterner,
 ) -> Result<Vec<ContentElement>, FromWireError> {
-    let items = from_wire_subtree_interned(children, interner)?;
+    let items = from_wire_subtree_interned(children, inherited_origin, interner)?;
     items
         .into_iter()
         .map(|item| {

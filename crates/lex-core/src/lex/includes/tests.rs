@@ -2228,4 +2228,106 @@ mod registry_dispatch {
             "the inner resolve-hooked annotation must be dispatched even when the outer handler returned Ok(None)"
         );
     }
+
+    /// Children whose own `origin` slot is `None` must inherit
+    /// their parent's origin during wire decoding, matching the
+    /// parser's `stamp_doc` behaviour. Without this, third-party
+    /// handler authors who procedurally generate a wire AST and
+    /// only stamp the document root would lose origin information
+    /// on every nested node — breaking file-reference resolution
+    /// and scoped-footnote lookup downstream.
+    #[test]
+    fn children_inherit_parent_origin_when_unset() {
+        struct ProceduralHandler;
+        impl LexHandler for ProceduralHandler {
+            fn on_resolve(&self, _ctx: &LabelCtx) -> Result<Option<WireNode>, HandlerError> {
+                // Document carries the origin; the Session inside
+                // it does *not*, and its child Paragraph also has
+                // no origin. Both should inherit "/handler/synth.lex"
+                // after decoding.
+                Ok(Some(WireNode::Document {
+                    range: WireRange::new(Position::new(0, 0), Position::new(2, 0)),
+                    origin: Some("/handler/synth.lex".into()),
+                    children: vec![WireNode::Session {
+                        range: WireRange::new(Position::new(0, 0), Position::new(2, 0)),
+                        origin: None,
+                        title: "Title".into(),
+                        marker: None,
+                        children: vec![WireNode::Paragraph {
+                            range: WireRange::new(Position::new(1, 0), Position::new(1, 4)),
+                            origin: None,
+                            inlines: vec![lex_extension::wire::WireInline::Text {
+                                text: "body".into(),
+                            }],
+                        }],
+                    }],
+                }))
+            }
+        }
+
+        let acme_schema = Schema {
+            schema_version: 1,
+            label: "acme.expand".into(),
+            description: None,
+            params: std::collections::BTreeMap::new(),
+            attaches_to: vec!["annotation".into()],
+            body: BodyShape {
+                kind: BodyKind::None,
+                presence: BodyPresence::Optional,
+                description: None,
+            },
+            verbatim_label: false,
+            capabilities: Capabilities::default(),
+            hooks: HookSet {
+                resolve: true,
+                ..HookSet::default()
+            },
+            handler: None,
+        };
+
+        let registry = Registry::new();
+        registry
+            .register_namespace("acme", vec![acme_schema], Box::new(ProceduralHandler))
+            .expect("register acme");
+
+        let doc = resolve_with_registry("/repo/main.lex", ":: acme.expand ::\n", registry)
+            .expect("resolve");
+
+        // Walk the spliced subtree and find the leaf paragraph
+        // (three levels below the only stamped origin). It should
+        // inherit the document root's origin via the new
+        // `inherited_origin` threading.
+        fn find_paragraph_origin(items: &[ContentItem]) -> Option<String> {
+            for item in items {
+                match item {
+                    ContentItem::Paragraph(p) => {
+                        if let Some(o) = p.location.origin_path.as_ref() {
+                            return Some(o.display().to_string());
+                        }
+                    }
+                    ContentItem::Session(s) => {
+                        let owned: Vec<ContentItem> = s.children.iter().cloned().collect();
+                        if let Some(o) = find_paragraph_origin(&owned) {
+                            return Some(o);
+                        }
+                    }
+                    ContentItem::Annotation(a) => {
+                        let owned: Vec<ContentItem> = a.children.iter().cloned().collect();
+                        if let Some(o) = find_paragraph_origin(&owned) {
+                            return Some(o);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            None
+        }
+        let root_items: Vec<ContentItem> = doc.root.children.iter().cloned().collect();
+        let paragraph_origin = find_paragraph_origin(&root_items);
+        assert_eq!(
+            paragraph_origin.as_deref(),
+            Some("/handler/synth.lex"),
+            "the leaf paragraph must inherit the document root's origin even though its own wire `origin` was None"
+        );
+    }
 }
