@@ -42,14 +42,19 @@ pub fn dispatch_labels(
 
 fn walk_session(
     session: &Session,
-    parent_kind: &str,
+    self_kind: &str,
     registry: &Registry,
     diagnostics: &mut Vec<AnalysisDiagnostic>,
 ) {
     for annotation in session.annotations() {
-        visit_annotation(annotation, parent_kind, registry, diagnostics);
+        visit_annotation(annotation, self_kind, registry, diagnostics);
     }
     for child in session.children.iter() {
+        // Nested sessions get attached_to: "session" regardless of
+        // their parent's kind. The previous version threaded the
+        // parent kind into the recursion, which mis-attributed
+        // session-attached annotations as "definition" / "list_item"
+        // for nested sessions.
         visit_content(child, "session", registry, diagnostics);
     }
 }
@@ -116,9 +121,23 @@ fn visit_annotation(
 ) {
     let label = annotation.data.label.value.clone();
     let Some(schema) = registry.schema_for(&label) else {
-        // Unknown namespace → silent pass-through. (Bounded
-        // extensibility: a document with unknown labels is not in
-        // error.)
+        // Unknown label. If the namespace IS registered, this is an
+        // error worth surfacing — the namespace owner doesn't declare
+        // a label by this name. If the namespace is unregistered we
+        // pass through silently (bounded extensibility: unknown
+        // namespaces are never document errors).
+        if let Some((ns, _)) = label.split_once('.') {
+            if registry.is_namespace_healthy(ns) {
+                diagnostics.push(AnalysisDiagnostic {
+                    range: annotation.location.clone(),
+                    severity: DiagnosticSeverity::Error,
+                    kind: DiagnosticKind::SchemaValidation(SchemaValidationKind::UnknownLabel),
+                    message: format!(
+                        "label `{label}` is not declared in registered namespace `{ns}`"
+                    ),
+                });
+            }
+        }
         return;
     };
 
@@ -162,11 +181,16 @@ fn visit_annotation(
         registry.dispatch_label(&ctx);
     }
 
+    let namespace = label
+        .split_once('.')
+        .map(|(n, _)| n.to_string())
+        .unwrap_or_else(|| label.clone());
+
     if schema.hooks.validate {
         for d in registry.dispatch_validate(&ctx) {
             diagnostics.push(handler_diagnostic_to_analysis(
                 d,
-                schema.label.clone(),
+                namespace.clone(),
                 annotation.location.clone(),
             ));
         }
@@ -176,7 +200,7 @@ fn visit_annotation(
     for d in registry.take_root_diagnostics() {
         diagnostics.push(handler_diagnostic_to_analysis(
             d,
-            schema.label.clone(),
+            namespace.clone(),
             annotation.location.clone(),
         ));
     }
@@ -225,6 +249,11 @@ fn visit_verbatim(v: &Verbatim, registry: &Registry, diagnostics: &mut Vec<Analy
         },
     };
 
+    let namespace = label
+        .split_once('.')
+        .map(|(n, _)| n.to_string())
+        .unwrap_or_else(|| label.clone());
+
     if schema.hooks.label {
         registry.dispatch_label(&ctx);
     }
@@ -232,7 +261,7 @@ fn visit_verbatim(v: &Verbatim, registry: &Registry, diagnostics: &mut Vec<Analy
         for d in registry.dispatch_validate(&ctx) {
             diagnostics.push(handler_diagnostic_to_analysis(
                 d,
-                schema.label.clone(),
+                namespace.clone(),
                 v.location.clone(),
             ));
         }
@@ -240,7 +269,7 @@ fn visit_verbatim(v: &Verbatim, registry: &Registry, diagnostics: &mut Vec<Analy
     for d in registry.take_root_diagnostics() {
         diagnostics.push(handler_diagnostic_to_analysis(
             d,
-            schema.label.clone(),
+            namespace.clone(),
             v.location.clone(),
         ));
     }
@@ -266,7 +295,7 @@ fn pre_validate(
     attached_to: &str,
     range: &CoreRange,
 ) -> Option<AnalysisDiagnostic> {
-    use lex_extension::schema::{BodyKind, BodyPresence, ParamType};
+    use lex_extension::schema::{BodyKind, BodyPresence};
 
     // 5. attaches_to (cheaper than param walks; do first).
     if !schema.attaches_to.is_empty() && !schema.attaches_to.iter().any(|kind| kind == attached_to)
@@ -362,7 +391,6 @@ fn pre_validate(
         });
     }
 
-    let _ = ParamType::Bool; // silence unused-import warning if branch above changes
     None
 }
 
@@ -612,7 +640,7 @@ mod tests {
         assert!(diags[0].message.contains("acme.task"));
         match &diags[0].kind {
             DiagnosticKind::Handler { namespace, code } => {
-                assert_eq!(namespace, "acme.task");
+                assert_eq!(namespace, "acme");
                 assert_eq!(code.as_deref(), Some("test.code"));
             }
             other => panic!("expected Handler, got {other:?}"),
