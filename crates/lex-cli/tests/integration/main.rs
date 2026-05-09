@@ -3,6 +3,7 @@
 mod element_at;
 mod format_config;
 mod includes;
+mod labels;
 mod markdown_import;
 mod nodemap;
 mod pdf;

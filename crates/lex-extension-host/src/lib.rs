@@ -34,11 +34,13 @@
 //!   (the post-δ trust matrix flip).
 
 pub mod registry;
+pub mod resolve;
 pub mod schema;
 pub mod transport;
 pub mod trust;
 
 pub use registry::{Registry, RegistryError};
+pub use resolve::{resolve_namespace, ResolveError, ResolvedNamespace};
 pub use schema::{SchemaError, SchemaLoader};
 pub use trust::{
     detect_ci_environment, Capability, Source, Surface, Transport, TrustDecision, TrustGate,

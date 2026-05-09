@@ -1032,6 +1032,8 @@ dependencies = [
  "confique",
  "lex-babel",
  "serde",
+ "tempfile",
+ "toml 0.8.23",
 ]
 
 [[package]]
@@ -1116,6 +1118,7 @@ dependencies = [
  "lex-babel",
  "lex-config",
  "lex-core",
+ "lex-extension",
  "lex-extension-host",
  "predicates",
  "serde_json",

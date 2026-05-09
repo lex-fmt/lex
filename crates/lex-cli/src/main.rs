@@ -348,6 +348,59 @@ fn build_cli() -> Command {
                     lexd generate-lex-css > custom.css       # Save to file for editing"
                 ),
         )
+        .arg(
+            Arg::new("ext-schema")
+                .long("ext-schema")
+                .help("Register a local extension schema directory (repeatable)")
+                .long_help(
+                    "Add an extension namespace by pointing at a local directory of\n\
+                     YAML schemas. Repeatable: --ext-schema ./acme --ext-schema ./other.\n\
+                     The directory's basename becomes the namespace name.",
+                )
+                .value_name("DIR")
+                .value_parser(clap::value_parser!(PathBuf))
+                .action(ArgAction::Append)
+                .global(true),
+        )
+        .arg(
+            Arg::new("enable-handlers")
+                .long("enable-handlers")
+                .help("Allow subprocess extension handlers to run")
+                .long_help(
+                    "Subprocess extension handlers don't run by default in CLI mode\n\
+                     (the trust gate denies them). Pass --enable-handlers to opt in for\n\
+                     this run. The flag does not persist any trust decisions to the\n\
+                     workspace's .lex/trust.json — it's a one-shot.",
+                )
+                .action(ArgAction::SetTrue)
+                .global(true),
+        )
+        .subcommand(
+            Command::new("labels")
+                .about("Manage and inspect extension namespaces")
+                .long_about(
+                    "Inspect the extension namespaces visible to lexd, validate documents\n\
+                     against registered schemas, and (in future releases) emit and update\n\
+                     namespace caches.\n\n\
+                     Subcommands:\n  \
+                     list           — print every registered namespace with its source\n  \
+                     validate <doc> — run analysis against a document, print diagnostics",
+                )
+                .subcommand_required(true)
+                .subcommand(
+                    Command::new("list").about("List registered extension namespaces"),
+                )
+                .subcommand(
+                    Command::new("validate")
+                        .about("Validate a document against registered schemas")
+                        .arg(
+                            Arg::new("path")
+                                .help("Path to the .lex document")
+                                .value_hint(ValueHint::FilePath)
+                                .required(true),
+                        ),
+                ),
+        )
 }
 
 fn main() {
@@ -368,6 +421,7 @@ fn main() {
                 "element-at",
                 "token-at",
                 "generate-lex-css",
+                "labels",
                 "help",
             ];
             let first_arg = args.get(1).map(String::as_str);
@@ -497,11 +551,62 @@ fn main() {
                 Some(("generate-lex-css", _)) => {
                     handle_generate_lex_css_command();
                 }
+                Some(("labels", sub_matches)) => {
+                    let exit = handle_labels_command(&matches, sub_matches);
+                    if exit != 0 {
+                        std::process::exit(exit);
+                    }
+                }
                 _ => {
                     eprintln!("Unknown subcommand. Use --help for usage information.");
                     std::process::exit(1);
                 }
             }
+        }
+    }
+}
+
+/// Dispatch `lexd labels {list,validate}`. Returns the exit code
+/// to propagate.
+fn handle_labels_command(top: &ArgMatches, sub: &ArgMatches) -> i32 {
+    let workspace = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let labels_path = workspace.join(CONFIG_FILE_NAME);
+    let labels_config = match lex_config::load_labels_from_toml(&labels_path) {
+        Ok(c) => c,
+        Err(lex_config::LabelsConfigError::Io { source, .. })
+            if source.kind() == std::io::ErrorKind::NotFound =>
+        {
+            lex_config::LabelsConfig::default()
+        }
+        Err(e) => {
+            eprintln!("lexd labels: {e}");
+            return 2;
+        }
+    };
+    let ext_schemas: Vec<PathBuf> = top
+        .get_many::<PathBuf>("ext-schema")
+        .map(|values| values.cloned().collect())
+        .unwrap_or_default();
+    let enable_handlers = top.get_flag("enable-handlers");
+    let outcome = lexd::extension_setup::boot_registry(lexd::extension_setup::ExtensionSetup {
+        workspace_root: &workspace,
+        labels_config: &labels_config,
+        ext_schemas: &ext_schemas,
+        enable_handlers,
+        surface_override: None,
+    });
+    match sub.subcommand() {
+        Some(("list", _)) => lexd::labels_subcommand::list(&outcome),
+        Some(("validate", v)) => {
+            let path = v
+                .get_one::<String>("path")
+                .map(PathBuf::from)
+                .expect("path is required");
+            lexd::labels_subcommand::validate(&path, &outcome)
+        }
+        _ => {
+            eprintln!("lexd labels: subcommand required (list, validate)");
+            2
         }
     }
 }
