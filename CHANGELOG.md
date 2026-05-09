@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+### Added
+
+- `lex-babel`: new `serialize_to_html_with_registry(doc, options, &Registry)`
+  entry point and `HtmlExportOutcome { html, diagnostics }` result type.
+  Walks the AST, dispatches `on_render` for every labelled annotation /
+  verbatim whose schema declares `hooks.render: ["html"]`, and surfaces
+  handler diagnostics. Splice integration of handler-rendered output
+  into the HTML stream is a separate follow-up — today's entry point
+  produces the same default HTML as the registry-less path while
+  collecting handler diagnostics. Part of the extension-system β phase
+  (lex-fmt/lex#516).
+- `lex-babel::render_dispatch`: format-independent render-hook walker
+  that builds a `RenderPlan` of `(label, output, diagnostic)` triples
+  for the format-specific serializer to splice. Sister module to
+  `lex-analysis::label_dispatch` (validate hooks).
+
 ## [0.10.6] - 2026-05-07
 
 

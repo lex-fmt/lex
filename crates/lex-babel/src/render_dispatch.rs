@@ -34,14 +34,17 @@ use lex_extension::{schema::Schema, AnnotationBody, LabelCtx, NodeRef, RenderOut
 use lex_extension_host::Registry;
 
 /// One render result for a labelled node, captured during the AST
-/// walk so the post-process pass can splice it into the final output.
+/// walk so the format-specific serializer can splice it into the
+/// final output.
 pub struct RenderedNode {
     /// Fully-qualified label.
     pub label: String,
-    /// HTML the handler returned. `None` means "fall back to default
-    /// rendering" — either because the handler said `Ok(None)` or
-    /// because it errored / returned a wrong-shape value.
-    pub html: Option<String>,
+    /// Format-shaped string the handler returned (HTML for the HTML
+    /// pipeline, Markdown for the Markdown pipeline, etc.). `None`
+    /// means "fall back to default rendering" — either because the
+    /// handler said `Ok(None)` or because it errored / returned a
+    /// wrong-shape value.
+    pub output: Option<String>,
     /// Optional diagnostic the handler produced via `Err`. Surfaced
     /// to the caller alongside the rendered output so they can route
     /// it onto whatever channel the host uses (stderr in `lexd`,
@@ -76,10 +79,13 @@ pub fn dispatch_render(document: &Document, registry: &Registry, format_name: &s
         };
     }
     let format = format_for_name(format_name);
-    walk_session(&document.root, registry, format_name, &format, &mut nodes);
+    // Document-level annotations (parsed before the body) come first
+    // so the plan reflects source order. Walking root first would
+    // misorder document metadata after body content.
     for ann in document.annotations() {
         visit_annotation(ann, registry, format_name, &format, &mut nodes);
     }
+    walk_session(&document.root, registry, format_name, &format, &mut nodes);
     let root_diagnostics = registry
         .take_root_diagnostics()
         .into_iter()
@@ -166,6 +172,27 @@ fn visit_content(
             for ann in t.annotations() {
                 visit_annotation(ann, registry, format_name, format, out);
             }
+            // Walk block-level content nested inside table cells (a
+            // cell can hold a list / definition / verbatim, which can
+            // in turn carry labelled annotations).
+            for child in t.cell_children_iter() {
+                visit_content(child, registry, format_name, format, out);
+            }
+            if let Some(footnotes) = t.footnotes.as_deref() {
+                for ann in footnotes.annotations() {
+                    visit_annotation(ann, registry, format_name, format, out);
+                }
+                for entry in &footnotes.items {
+                    if let ContentItem::ListItem(li) = entry {
+                        for ann in li.annotations() {
+                            visit_annotation(ann, registry, format_name, format, out);
+                        }
+                        for child in li.children.iter() {
+                            visit_content(child, registry, format_name, format, out);
+                        }
+                    }
+                }
+            }
         }
         _ => {}
     }
@@ -179,35 +206,57 @@ fn visit_annotation(
     out: &mut Vec<RenderedNode>,
 ) {
     let label = annotation.data.label.value.clone();
-    let Some(schema) = registry.schema_for(&label) else {
-        return;
-    };
-    if !schema_has_render(&schema, format_name) {
-        return;
+    if let Some(schema) = registry.schema_for(&label) {
+        if schema_has_render(&schema, format_name) {
+            let wire = to_wire_node(&ContentItem::Annotation(annotation.clone()));
+            if let WireNode::Annotation {
+                params,
+                body,
+                range,
+                origin,
+                ..
+            } = wire
+            {
+                // Body deserialization is only fallible if the wire
+                // codec produced a value `AnnotationBody`'s untagged
+                // representation can't accept — that's a codec bug
+                // worth surfacing rather than silently dropping the
+                // body.
+                let body = match serde_json::from_value::<AnnotationBody>(body) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        out.push(RenderedNode {
+                            label: label.clone(),
+                            output: None,
+                            diagnostic: Some(format!(
+                                "internal: failed to decode annotation body for `{label}`: {e}"
+                            )),
+                        });
+                        AnnotationBody::None
+                    }
+                };
+                let ctx = LabelCtx {
+                    label: label.clone(),
+                    params,
+                    body,
+                    node: NodeRef {
+                        kind: "annotation".into(),
+                        range,
+                        origin,
+                    },
+                };
+                out.push(dispatch_one(&label, registry, &ctx, format));
+            }
+        }
     }
-    let wire = to_wire_node(&ContentItem::Annotation(annotation.clone()));
-    let WireNode::Annotation {
-        params,
-        body,
-        range,
-        origin,
-        ..
-    } = wire
-    else {
-        return;
-    };
-    let body = serde_json::from_value::<AnnotationBody>(body).unwrap_or(AnnotationBody::None);
-    let ctx = LabelCtx {
-        label: label.clone(),
-        params,
-        body,
-        node: NodeRef {
-            kind: "annotation".into(),
-            range,
-            origin,
-        },
-    };
-    out.push(dispatch_one(&label, registry, &ctx, format));
+    // Long-form annotations carry nested content (further annotations,
+    // verbatim blocks, …) that also needs render dispatch. Walk
+    // children unconditionally — even when this annotation's own
+    // schema doesn't match, a registered label inside its body still
+    // needs its handler called.
+    for child in annotation.children.iter() {
+        visit_content(child, registry, format_name, format, out);
+    }
 }
 
 fn visit_verbatim(
@@ -255,24 +304,24 @@ fn dispatch_one(label: &str, registry: &Registry, ctx: &LabelCtx, format: &Forma
     match registry.dispatch_render(ctx, format.clone()) {
         Ok(Some(RenderOut::String { string })) => RenderedNode {
             label: label.to_string(),
-            html: Some(string),
+            output: Some(string),
             diagnostic: None,
         },
         Ok(Some(RenderOut::WireAst { .. })) => RenderedNode {
             label: label.to_string(),
-            html: None,
+            output: None,
             diagnostic: Some(format!(
                 "handler returned WireAst output for label `{label}` but the requested format is string-shaped; falling back to default rendering"
             )),
         },
         Ok(None) => RenderedNode {
             label: label.to_string(),
-            html: None,
+            output: None,
             diagnostic: None,
         },
         Err(diag) => RenderedNode {
             label: label.to_string(),
-            html: None,
+            output: None,
             diagnostic: Some(diag.message),
         },
     }
@@ -363,7 +412,7 @@ mod tests {
         assert_eq!(plan.nodes.len(), 1);
         assert_eq!(plan.nodes[0].label, "acme.task");
         assert_eq!(
-            plan.nodes[0].html.as_deref(),
+            plan.nodes[0].output.as_deref(),
             Some(r#"<RENDERED label="acme.task"/>"#)
         );
     }
@@ -403,7 +452,7 @@ mod tests {
             .unwrap();
         let plan = dispatch_render(&doc, &registry, "html");
         assert_eq!(plan.nodes.len(), 1);
-        assert!(plan.nodes[0].html.is_none());
+        assert!(plan.nodes[0].output.is_none());
         let diag = plan.nodes[0].diagnostic.as_deref().expect("diagnostic");
         assert!(diag.contains("render failed"));
     }
@@ -440,7 +489,7 @@ mod tests {
             .unwrap();
         let plan = dispatch_render(&doc, &registry, "html");
         assert_eq!(plan.nodes.len(), 1);
-        assert!(plan.nodes[0].html.is_none());
+        assert!(plan.nodes[0].output.is_none());
         assert!(plan.nodes[0]
             .diagnostic
             .as_deref()
