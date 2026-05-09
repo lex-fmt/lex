@@ -81,7 +81,6 @@ pub fn dispatch_render(document: &Document, registry: &Registry, format_name: &s
     let format = format_for_name(format_name);
     let mut ctx = WalkCtx {
         registry,
-        format_name,
         format: &format,
         out: &mut nodes,
     };
@@ -118,7 +117,10 @@ fn format_for_name(name: &str) -> Format {
 /// anything that needs lifetime management here.
 struct WalkCtx<'a> {
     registry: &'a Registry,
-    format_name: &'a str,
+    /// The canonical [`Format`] for the dispatch pass. Schema gating
+    /// uses `format.as_str()` so callers can pass aliases (`"md"`,
+    /// `"tex"`) at the entry point without breaking schema lookup —
+    /// `format_for_name` normalises before we get here.
     format: &'a Format,
     out: &'a mut Vec<RenderedNode>,
 }
@@ -207,7 +209,7 @@ fn visit_content(item: &ContentItem, parent_kind: HostNodeKind, ctx: &mut WalkCt
 fn visit_annotation(annotation: &Annotation, attached_to: HostNodeKind, ctx: &mut WalkCtx<'_>) {
     let label = annotation.data.label.value.clone();
     if let Some(schema) = ctx.registry.schema_for(&label) {
-        if schema_has_render(&schema, ctx.format_name) {
+        if schema_has_render(&schema, ctx.format.as_str()) {
             let wire = to_wire_node(&ContentItem::Annotation(annotation.clone()));
             if let WireNode::Annotation {
                 params,
@@ -225,6 +227,13 @@ fn visit_annotation(annotation: &Annotation, attached_to: HostNodeKind, ctx: &mu
                 let body = match serde_json::from_value::<AnnotationBody>(body) {
                     Ok(b) => b,
                     Err(e) => {
+                        // Codec bug: emit the diagnostic plan entry
+                        // (one entry per labelled node, per the
+                        // RenderPlan contract) and skip dispatch. The
+                        // earlier flow continued to dispatch with
+                        // `AnnotationBody::None`, producing a second
+                        // entry for the same node and breaking the
+                        // 1:1 invariant the splice site relies on.
                         ctx.out.push(RenderedNode {
                             label: label.clone(),
                             output: None,
@@ -232,7 +241,13 @@ fn visit_annotation(annotation: &Annotation, attached_to: HostNodeKind, ctx: &mu
                                 "internal: failed to decode annotation body for `{label}`: {e}"
                             )),
                         });
-                        AnnotationBody::None
+                        // Children still need walking — a malformed
+                        // body codec doesn't excuse skipping nested
+                        // labelled content.
+                        for child in annotation.children.iter() {
+                            visit_content(child, HostNodeKind::Annotation, ctx);
+                        }
+                        return;
                     }
                 };
                 let label_ctx = LabelCtx {
@@ -274,7 +289,7 @@ fn visit_verbatim(v: &Verbatim, ctx: &mut WalkCtx<'_>) {
     let Some(schema) = ctx.registry.schema_for(&label) else {
         return;
     };
-    if !schema.verbatim_label || !schema_has_render(&schema, ctx.format_name) {
+    if !schema.verbatim_label || !schema_has_render(&schema, ctx.format.as_str()) {
         return;
     }
     let wire = to_wire_node(&ContentItem::VerbatimBlock(Box::new(v.clone())));
@@ -433,6 +448,29 @@ mod tests {
         let plan = dispatch_render(&doc, &registry, "html");
         // Schema declares markdown only — html dispatch skipped.
         assert!(plan.nodes.is_empty());
+    }
+
+    /// Regression for the format-alias mismatch: `format_for_name`
+    /// normalises `"md"` → `Format::Markdown`, but the schema's
+    /// `hooks.render` list contains the canonical `"markdown"`.
+    /// Schema gating must compare against the canonical
+    /// `Format::as_str()`, not the raw caller input — otherwise an
+    /// alias caller would never match a canonical schema.
+    #[test]
+    fn alias_format_name_matches_canonical_schema_render_hook() {
+        let doc = parse(":: acme.task ::\n");
+        let registry = Registry::new();
+        registry
+            .register_namespace(
+                "acme",
+                vec![schema("acme.task", &["markdown"])],
+                Box::new(EchoRender),
+            )
+            .unwrap();
+        // Caller passes the alias "md"; schema declares "markdown".
+        let plan = dispatch_render(&doc, &registry, "md");
+        assert_eq!(plan.nodes.len(), 1);
+        assert_eq!(plan.nodes[0].label, "acme.task");
     }
 
     #[test]

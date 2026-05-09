@@ -1,16 +1,22 @@
 //! Wire-format names for AST node kinds that can host a label
 //! invocation (annotation header or verbatim block closing).
 //!
-//! This is the canonical source for two consumers that previously
-//! kept their own copies of the list:
+//! Designed as the canonical source for two consumers that
+//! previously kept their own copies of the list:
 //!
-//! - The schema loader (`lex-extension-host`): every entry in a
+//! - The schema loader (in `lex-extension-host`): every entry in a
 //!   schema's `attaches_to` list must parse as one of these names.
-//! - The analysis / render walkers (`lex-analysis::label_dispatch`,
-//!   `lex-babel::render_dispatch`): each labelled node is reported
-//!   with one of these names as its `attached_to` kind.
+//! - The analysis / render walkers (in `lex-analysis` and
+//!   `lex-babel`): each labelled node is reported with one of these
+//!   names as its `attached_to` kind.
 //!
-//! Keeping the list in one place prevents the two consumers from
+//! Adoption lands in those crates' own PRs (the loader in #538;
+//! `lex-babel::render_dispatch` in this PR; `lex-analysis::label_dispatch`
+//! in #540). Once all three merge, the kind list lives only here —
+//! the duplicated allowed-set arrays in the original implementations
+//! are removed in lockstep.
+//!
+//! Keeping the list in one place prevents the consumers from
 //! drifting. A variant present in the walker but missing from the
 //! loader's whitelist would cause valid schemas to fail
 //! pre-validation; a typo in the walker would let invalid
@@ -130,10 +136,18 @@ mod tests {
 
     #[test]
     fn allowed_list_includes_every_variant() {
+        // Use exact-token membership rather than substring, otherwise
+        // `list_item` would falsely match the assertion for `list`.
         let list = HostNodeKind::allowed_list();
+        let tokens: std::collections::HashSet<&str> = list.split(", ").collect();
         for k in HostNodeKind::ALL {
-            assert!(list.contains(k.as_str()));
+            assert!(
+                tokens.contains(k.as_str()),
+                "allowed_list missing variant `{}`: {list}",
+                k.as_str()
+            );
         }
+        assert_eq!(tokens.len(), HostNodeKind::ALL.len());
     }
 
     #[test]
