@@ -3,6 +3,7 @@ use lex_core::lex::ast::{
     Annotation, ContentItem, Document, Range, Session, Table, TableRow, TextContent,
 };
 use lex_core::lex::inlines::ReferenceType;
+use lex_extension_host::Registry;
 use std::collections::HashSet;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -10,19 +11,84 @@ pub enum DiagnosticKind {
     MissingFootnoteDefinition,
     UnusedFootnoteDefinition,
     TableInconsistentColumns,
+    /// A label invocation failed schema pre-validation before the
+    /// handler was dispatched. The variant carries which of the six
+    /// pre-validation checks tripped.
+    SchemaValidation(SchemaValidationKind),
+    /// A diagnostic emitted by a registered extension handler. The
+    /// `namespace` field is the namespace name (the part before the
+    /// first `.`, e.g., `"acme"` for label `"acme.task"`) — `lex-lsp`
+    /// surfaces it as the diagnostic `source: "lex:<namespace>"` so
+    /// editors can filter by extension. `code` mirrors the wire
+    /// `Diagnostic.code` field.
+    Handler {
+        namespace: String,
+        code: Option<String>,
+    },
+}
+
+/// Severity for analysis-emitted diagnostics. The analyser populates
+/// it for every diagnostic — `lex-lsp` reads `diag.severity`
+/// directly when mapping onto the LSP wire. (Earlier the LSP layer
+/// derived severity from `DiagnosticKind`; that mapping moved
+/// upstream once the extension-emitted diagnostics needed
+/// per-instance severities.)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiagnosticSeverity {
+    Error,
+    Warning,
+    Info,
+    Hint,
+}
+
+/// One of the six schema pre-validation checks the analyser owns
+/// before dispatching to a handler. Wire spec / proposal §13.2.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SchemaValidationKind {
+    /// The namespace is registered but the schema set for that
+    /// namespace doesn't declare this exact label. The walker emits
+    /// this when `Registry::schema_for(label)` returns `None` while
+    /// `is_namespace_healthy(<ns prefix>)` is `true`. Distinguishes
+    /// "typo / out-of-version label" (this variant, surfaced as a
+    /// document error) from "unknown namespace" (silent pass-through
+    /// per the bounded-extensibility rule).
+    UnknownLabel,
+    MissingParam,
+    ParamTypeMismatch,
+    BadAttachment,
+    BodyShapeMismatch,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnalysisDiagnostic {
     pub range: Range,
+    /// Severity, set by the analyser for every diagnostic it
+    /// produces. `lex-lsp` reads this directly when mapping onto LSP
+    /// wire severities; the kind-to-severity mapping that lived in
+    /// `to_lsp_diagnostic` is no longer authoritative.
+    pub severity: DiagnosticSeverity,
     pub kind: DiagnosticKind,
     pub message: String,
 }
 
+/// Run the analyser without an extension registry — equivalent to
+/// running with an empty registry. Provided for callers that haven't
+/// adopted the extension system yet.
 pub fn analyze(document: &Document) -> Vec<AnalysisDiagnostic> {
+    let registry = Registry::new();
+    analyze_with_registry(document, &registry)
+}
+
+/// Run the analyser with a populated extension registry. Labels whose
+/// namespace is registered get pre-validated against their schema and,
+/// if pre-validation passes, dispatched to the handler's `on_validate`
+/// hook. Handler-emitted diagnostics are merged into the same stream as
+/// the built-in checks.
+pub fn analyze_with_registry(document: &Document, registry: &Registry) -> Vec<AnalysisDiagnostic> {
     let mut diagnostics = Vec::new();
     check_footnotes(document, &mut diagnostics);
     check_tables(document, &mut diagnostics);
+    crate::label_dispatch::dispatch_labels(document, registry, &mut diagnostics);
     diagnostics
 }
 
@@ -184,6 +250,7 @@ fn check_text(text: &TextContent, defs: &HashSet<u32>, diagnostics: &mut Vec<Ana
             if !defs.contains(&number) {
                 diagnostics.push(AnalysisDiagnostic {
                     range: reference.range,
+                    severity: DiagnosticSeverity::Error,
                     kind: DiagnosticKind::MissingFootnoteDefinition,
                     message: format!(
                         "Footnote [{number}] has no matching footnote definition in scope"
@@ -249,6 +316,7 @@ fn check_table_columns(table: &Table, diagnostics: &mut Vec<AnalysisDiagnostic>)
         if width != expected {
             diagnostics.push(AnalysisDiagnostic {
                 range: rows[i].location.clone(),
+                severity: DiagnosticSeverity::Warning,
                 kind: DiagnosticKind::TableInconsistentColumns,
                 message: format!(
                     "Row has {width} columns, expected {expected} (matching first row)"

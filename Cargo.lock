@@ -993,8 +993,11 @@ version = "0.10.6"
 dependencies = [
  "ignore",
  "lex-core",
+ "lex-extension",
+ "lex-extension-host",
  "lsp-types",
  "pathdiff",
+ "serde_json",
  "tempfile",
 ]
 
