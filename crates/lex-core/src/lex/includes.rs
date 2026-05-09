@@ -673,10 +673,16 @@ fn resolve_one_invocation(
         });
     }
 
-    // Depth check — both the user-facing config and the hard kernel
-    // backstop. Whichever fires first wins; both surface as
-    // DepthExceeded since the user-facing message reflects the
-    // configured limit.
+    // Depth check. The effective limit is the lower of the
+    // user-facing `config.max_depth` (default 8) and the hard
+    // [`KERNEL_DEPTH_BACKSTOP`] (32, fixed). The kernel backstop
+    // exists for adversarial varying-position recursion that the
+    // cycle key can't catch — even if a user bumps `max_depth`
+    // higher than 32 for legitimate deep atomization, the backstop
+    // still terminates. The error reports `effective_depth_limit`
+    // (the actual cap that fired) rather than `config.max_depth`,
+    // so when the backstop is the binding limit the user sees `32`
+    // and not the (higher) config value.
     let effective_depth_limit = state.config.max_depth.min(KERNEL_DEPTH_BACKSTOP);
     if state.depth >= effective_depth_limit {
         return Err(IncludeError::DepthExceeded {
