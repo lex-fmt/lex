@@ -731,7 +731,16 @@ fn resolve_one_invocation(
     // `lex.include`) that wasn't in the handler's original output,
     // and the final shape is what has to satisfy the parent
     // container's policy.
-    let included_path = key.origin.clone().unwrap_or_default();
+    //
+    // The `IncludeError::ContainerPolicy.file` field describes the
+    // *spliced content's* source file (the file containing the
+    // disallowed shape), not the invocation site. Take it from the
+    // handler-returned wire payload's origin when present, falling
+    // back to the first decoded item's origin path if the wire
+    // payload didn't stamp a `Document` origin.
+    let included_path = wire_node_origin_pathbuf(&wire_node)
+        .or_else(|| splice_items_first_origin(&splice_items))
+        .unwrap_or_default();
     state.chain.push(key);
     let saved_depth = state.depth;
     state.depth = saved_depth + 1;
@@ -827,6 +836,53 @@ fn build_label_ctx(
 /// third-party `acme.expand` handler that returns malformed wire
 /// will surface as `IncludeError::HandlerFailed { label:
 /// "acme.expand", .. }`.
+/// Lift a [`WireNode`]'s top-level `origin` field into a `PathBuf`
+/// when present. Used by the resolve pass to attribute
+/// container-policy errors to the *spliced content's* source file
+/// rather than the invocation site.
+fn wire_node_origin_pathbuf(node: &lex_extension::wire::WireNode) -> Option<PathBuf> {
+    use lex_extension::wire::WireNode as W;
+    let s = match node {
+        W::Document { origin, .. } => origin.as_deref(),
+        W::Session { origin, .. } => origin.as_deref(),
+        W::Definition { origin, .. } => origin.as_deref(),
+        W::Paragraph { origin, .. } => origin.as_deref(),
+        W::List { origin, .. } => origin.as_deref(),
+        W::Verbatim { origin, .. } => origin.as_deref(),
+        W::Table { origin, .. } => origin.as_deref(),
+        W::Annotation { origin, .. } => origin.as_deref(),
+        W::Blank { origin, .. } => origin.as_deref(),
+        _ => None,
+    };
+    s.map(PathBuf::from)
+}
+
+/// Fallback when `WireNode::Document.origin` is unset: walk the
+/// decoded splice list and return the first item that carries an
+/// origin. The interner from `from_wire_node` ensures every item
+/// shares one Arc per origin string, so iterating is cheap.
+fn splice_items_first_origin(items: &[ContentItem]) -> Option<PathBuf> {
+    for item in items {
+        let r = match item {
+            ContentItem::Paragraph(p) => &p.location,
+            ContentItem::Session(s) => &s.location,
+            ContentItem::Definition(d) => &d.location,
+            ContentItem::List(l) => &l.location,
+            ContentItem::ListItem(li) => &li.location,
+            ContentItem::Annotation(a) => &a.location,
+            ContentItem::VerbatimBlock(v) => &v.location,
+            ContentItem::VerbatimLine(vl) => &vl.location,
+            ContentItem::Table(t) => &t.location,
+            ContentItem::TextLine(tl) => &tl.location,
+            ContentItem::BlankLineGroup(blg) => &blg.location,
+        };
+        if let Some(arc) = r.origin_path.as_ref() {
+            return Some((**arc).clone());
+        }
+    }
+    None
+}
+
 fn decode_wire_to_items(
     wire: &lex_extension::wire::WireNode,
     invocation_label: &str,

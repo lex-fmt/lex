@@ -724,11 +724,21 @@ fn include_inside_definition_with_sessions_is_policy_error() {
     if let IncludeError::ContainerPolicy {
         container,
         violation,
+        file,
         ..
     } = err
     {
         assert_eq!(container, "Definition");
         assert_eq!(violation, "Sessions");
+        // The `file` field describes the *spliced content's* source
+        // (chapter.lex, the file with the Session inside), NOT the
+        // host file (main.lex). Without the wire-payload origin
+        // attribution, this would erroneously be the host file.
+        assert_eq!(
+            file,
+            PathBuf::from("/repo/chapter.lex"),
+            "ContainerPolicy.file must point at the included file containing the disallowed shape, not the host file"
+        );
     }
 }
 
