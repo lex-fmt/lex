@@ -1054,6 +1054,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "lex-extension-host"
+version = "0.1.0"
+dependencies = [
+ "lex-extension",
+ "serde_json",
+]
+
+[[package]]
 name = "lex-lsp-core"
 version = "0.10.6"
 dependencies = [

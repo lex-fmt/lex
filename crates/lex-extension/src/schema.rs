@@ -149,9 +149,18 @@ pub struct Capabilities {
 }
 
 impl Capabilities {
-    /// True when the handler declares neither fs nor network access.
+    /// True when the handler declares no privileged capabilities — the
+    /// "pure handler" classification used by the trust matrix in
+    /// proposal §8.
+    ///
+    /// Implementation note: this is exact equality with
+    /// [`Capabilities::default`] rather than an explicit
+    /// `!self.fs && !self.net`. As future capability fields are added
+    /// (e.g., `exec`, scoped network, …), they default to `false` and
+    /// participate in this check automatically — there is no second
+    /// place to remember to update.
     pub fn is_pure(&self) -> bool {
-        !self.fs && !self.net
+        *self == Self::default()
     }
 }
 
