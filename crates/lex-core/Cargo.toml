@@ -27,7 +27,9 @@ regex = { workspace = true }
 once_cell = { workspace = true }
 polymath-rs = "0.1.2"
 lex-extension = { workspace = true }
-lex-extension-host = { workspace = true }
+# Native built-ins only; opt out of the subprocess transport (and its
+# tokio dep). CLI/LSP consumers re-enable it via their own dep.
+lex-extension-host = { workspace = true, default-features = false }
 
 [dev-dependencies]
 proptest = { workspace = true }

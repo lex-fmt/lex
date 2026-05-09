@@ -1060,7 +1060,10 @@ name = "lex-extension-host"
 version = "0.1.0"
 dependencies = [
  "lex-extension",
+ "serde",
  "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]

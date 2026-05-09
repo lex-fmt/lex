@@ -11,8 +11,16 @@
 //! - WASM (deferred) — same wire format delivered as component-model
 //!   imports.
 //!
-//! Today this module hosts only the native transport. Subprocess and WASM
-//! adapters land in their own PRs and slot into the same dispatch path
-//! by virtue of also implementing `LexHandler`.
+//! WASM lands later. Subprocess sits behind the `subprocess` Cargo
+//! feature (default-on for CLI/LSP, off in `lex-core`) so native-only
+//! consumers don't pull in `tokio`.
 
 pub mod native;
+
+#[cfg(feature = "subprocess")]
+pub(crate) mod jsonrpc;
+#[cfg(feature = "subprocess")]
+pub mod subprocess;
+
+#[cfg(feature = "subprocess")]
+pub use subprocess::{SpawnEnv, SpawnError, SubprocessHandler};
