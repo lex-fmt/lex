@@ -29,7 +29,7 @@
 
 use lex_core::lex::ast::{Annotation, ContentItem, Document, Session, Verbatim};
 use lex_core::lex::wire::to_wire_node;
-use lex_extension::wire::{Format, WireNode};
+use lex_extension::wire::{Format, HostNodeKind, WireNode};
 use lex_extension::{schema::Schema, AnnotationBody, LabelCtx, NodeRef, RenderOut};
 use lex_extension_host::Registry;
 
@@ -79,13 +79,18 @@ pub fn dispatch_render(document: &Document, registry: &Registry, format_name: &s
         };
     }
     let format = format_for_name(format_name);
+    let mut ctx = WalkCtx {
+        registry,
+        format_name,
+        format: &format,
+        out: &mut nodes,
+    };
     // Document-level annotations (parsed before the body) come first
-    // so the plan reflects source order. Walking root first would
-    // misorder document metadata after body content.
+    // so the plan reflects source order.
     for ann in document.annotations() {
-        visit_annotation(ann, registry, format_name, &format, &mut nodes);
+        visit_annotation(ann, HostNodeKind::Document, &mut ctx);
     }
-    walk_session(&document.root, registry, format_name, &format, &mut nodes);
+    walk_session(&document.root, HostNodeKind::Session, &mut ctx);
     let root_diagnostics = registry
         .take_root_diagnostics()
         .into_iter()
@@ -107,88 +112,89 @@ fn format_for_name(name: &str) -> Format {
     }
 }
 
-fn walk_session(
-    session: &Session,
-    registry: &Registry,
-    format_name: &str,
-    format: &Format,
-    out: &mut Vec<RenderedNode>,
-) {
+/// Bundle the parameters that thread through every walker frame so
+/// the function signatures don't grow another argument every time we
+/// add a piece of context. Borrowed-only — the walk doesn't own
+/// anything that needs lifetime management here.
+struct WalkCtx<'a> {
+    registry: &'a Registry,
+    format_name: &'a str,
+    format: &'a Format,
+    out: &'a mut Vec<RenderedNode>,
+}
+
+fn walk_session(session: &Session, self_kind: HostNodeKind, ctx: &mut WalkCtx<'_>) {
     for ann in session.annotations() {
-        visit_annotation(ann, registry, format_name, format, out);
+        visit_annotation(ann, self_kind, ctx);
     }
     for child in session.children.iter() {
-        visit_content(child, registry, format_name, format, out);
+        visit_content(child, HostNodeKind::Session, ctx);
     }
 }
 
-fn visit_content(
-    item: &ContentItem,
-    registry: &Registry,
-    format_name: &str,
-    format: &Format,
-    out: &mut Vec<RenderedNode>,
-) {
+fn visit_content(item: &ContentItem, parent_kind: HostNodeKind, ctx: &mut WalkCtx<'_>) {
     match item {
         ContentItem::Paragraph(p) => {
             for ann in p.annotations() {
-                visit_annotation(ann, registry, format_name, format, out);
+                visit_annotation(ann, HostNodeKind::Paragraph, ctx);
             }
         }
-        ContentItem::Session(s) => walk_session(s, registry, format_name, format, out),
+        ContentItem::Session(s) => walk_session(s, HostNodeKind::Session, ctx),
         ContentItem::Definition(def) => {
             for ann in def.annotations() {
-                visit_annotation(ann, registry, format_name, format, out);
+                visit_annotation(ann, HostNodeKind::Definition, ctx);
             }
             for child in def.children.iter() {
-                visit_content(child, registry, format_name, format, out);
+                visit_content(child, HostNodeKind::Definition, ctx);
             }
         }
         ContentItem::List(list) => {
+            // List-level annotations attach to the list itself, NOT
+            // to its items.
             for ann in list.annotations() {
-                visit_annotation(ann, registry, format_name, format, out);
+                visit_annotation(ann, HostNodeKind::List, ctx);
             }
             for entry in &list.items {
                 if let ContentItem::ListItem(li) = entry {
                     for ann in li.annotations() {
-                        visit_annotation(ann, registry, format_name, format, out);
+                        visit_annotation(ann, HostNodeKind::ListItem, ctx);
                     }
                     for child in li.children.iter() {
-                        visit_content(child, registry, format_name, format, out);
+                        visit_content(child, HostNodeKind::ListItem, ctx);
                     }
                 }
             }
         }
         ContentItem::Annotation(a) => {
-            visit_annotation(a, registry, format_name, format, out);
+            visit_annotation(a, parent_kind, ctx);
         }
         ContentItem::VerbatimBlock(v) => {
-            visit_verbatim(v, registry, format_name, format, out);
+            visit_verbatim(v, ctx);
             for ann in v.annotations() {
-                visit_annotation(ann, registry, format_name, format, out);
+                visit_annotation(ann, HostNodeKind::Verbatim, ctx);
             }
         }
         ContentItem::Table(t) => {
             for ann in t.annotations() {
-                visit_annotation(ann, registry, format_name, format, out);
+                visit_annotation(ann, HostNodeKind::Table, ctx);
             }
             // Walk block-level content nested inside table cells (a
             // cell can hold a list / definition / verbatim, which can
             // in turn carry labelled annotations).
             for child in t.cell_children_iter() {
-                visit_content(child, registry, format_name, format, out);
+                visit_content(child, HostNodeKind::Table, ctx);
             }
             if let Some(footnotes) = t.footnotes.as_deref() {
                 for ann in footnotes.annotations() {
-                    visit_annotation(ann, registry, format_name, format, out);
+                    visit_annotation(ann, HostNodeKind::List, ctx);
                 }
                 for entry in &footnotes.items {
                     if let ContentItem::ListItem(li) = entry {
                         for ann in li.annotations() {
-                            visit_annotation(ann, registry, format_name, format, out);
+                            visit_annotation(ann, HostNodeKind::ListItem, ctx);
                         }
                         for child in li.children.iter() {
-                            visit_content(child, registry, format_name, format, out);
+                            visit_content(child, HostNodeKind::ListItem, ctx);
                         }
                     }
                 }
@@ -198,16 +204,10 @@ fn visit_content(
     }
 }
 
-fn visit_annotation(
-    annotation: &Annotation,
-    registry: &Registry,
-    format_name: &str,
-    format: &Format,
-    out: &mut Vec<RenderedNode>,
-) {
+fn visit_annotation(annotation: &Annotation, attached_to: HostNodeKind, ctx: &mut WalkCtx<'_>) {
     let label = annotation.data.label.value.clone();
-    if let Some(schema) = registry.schema_for(&label) {
-        if schema_has_render(&schema, format_name) {
+    if let Some(schema) = ctx.registry.schema_for(&label) {
+        if schema_has_render(&schema, ctx.format_name) {
             let wire = to_wire_node(&ContentItem::Annotation(annotation.clone()));
             if let WireNode::Annotation {
                 params,
@@ -225,7 +225,7 @@ fn visit_annotation(
                 let body = match serde_json::from_value::<AnnotationBody>(body) {
                     Ok(b) => b,
                     Err(e) => {
-                        out.push(RenderedNode {
+                        ctx.out.push(RenderedNode {
                             label: label.clone(),
                             output: None,
                             diagnostic: Some(format!(
@@ -235,17 +235,24 @@ fn visit_annotation(
                         AnnotationBody::None
                     }
                 };
-                let ctx = LabelCtx {
+                let label_ctx = LabelCtx {
                     label: label.clone(),
                     params,
                     body,
                     node: NodeRef {
-                        kind: "annotation".into(),
+                        // Wire spec §2.1: NodeRef.kind is the host AST
+                        // kind the label is attached to (paragraph /
+                        // list / table / …) — handlers use it to
+                        // disambiguate context. Previously hardcoded
+                        // to "annotation" regardless of the actual
+                        // host.
+                        kind: attached_to.as_str().to_string(),
                         range,
                         origin,
                     },
                 };
-                out.push(dispatch_one(&label, registry, &ctx, format));
+                ctx.out
+                    .push(dispatch_one(&label, ctx.registry, &label_ctx, ctx.format));
             }
         }
     }
@@ -255,25 +262,19 @@ fn visit_annotation(
     // schema doesn't match, a registered label inside its body still
     // needs its handler called.
     for child in annotation.children.iter() {
-        visit_content(child, registry, format_name, format, out);
+        visit_content(child, HostNodeKind::Annotation, ctx);
     }
 }
 
-fn visit_verbatim(
-    v: &Verbatim,
-    registry: &Registry,
-    format_name: &str,
-    format: &Format,
-    out: &mut Vec<RenderedNode>,
-) {
+fn visit_verbatim(v: &Verbatim, ctx: &mut WalkCtx<'_>) {
     let label = v.closing_data.label.value.clone();
     if label.is_empty() {
         return;
     }
-    let Some(schema) = registry.schema_for(&label) else {
+    let Some(schema) = ctx.registry.schema_for(&label) else {
         return;
     };
-    if !schema.verbatim_label || !schema_has_render(&schema, format_name) {
+    if !schema.verbatim_label || !schema_has_render(&schema, ctx.format_name) {
         return;
     }
     let wire = to_wire_node(&ContentItem::VerbatimBlock(Box::new(v.clone())));
@@ -287,17 +288,18 @@ fn visit_verbatim(
     else {
         return;
     };
-    let ctx = LabelCtx {
+    let label_ctx = LabelCtx {
         label: label.clone(),
         params,
         body: AnnotationBody::Text(body_text),
         node: NodeRef {
-            kind: "verbatim".into(),
+            kind: HostNodeKind::Verbatim.as_str().to_string(),
             range,
             origin,
         },
     };
-    out.push(dispatch_one(&label, registry, &ctx, format));
+    ctx.out
+        .push(dispatch_one(&label, ctx.registry, &label_ctx, ctx.format));
 }
 
 fn dispatch_one(label: &str, registry: &Registry, ctx: &LabelCtx, format: &Format) -> RenderedNode {
@@ -536,6 +538,51 @@ mod tests {
         // The default HTML is still produced (no panic, no error
         // bubbling up).
         assert!(!outcome.html.is_empty());
+    }
+
+    /// Regression for the NodeRef.kind misalignment: the wire spec
+    /// §2.1 says the LabelCtx's `node.kind` is the host AST kind the
+    /// label is attached to (paragraph / list / table / …). Before
+    /// the `HostNodeKind` unification it was hardcoded to
+    /// `"annotation"` regardless of the host node, so handlers
+    /// couldn't distinguish a label attached to a paragraph from one
+    /// attached to a list.
+    #[test]
+    fn handler_sees_host_node_kind_in_label_ctx() {
+        use std::sync::Mutex;
+        struct CaptureKind {
+            seen: std::sync::Arc<Mutex<Vec<String>>>,
+        }
+        impl LexHandler for CaptureKind {
+            fn on_render(
+                &self,
+                ctx: &LabelCtx,
+                _: Format,
+            ) -> Result<Option<RenderOut>, HandlerError> {
+                self.seen.lock().unwrap().push(ctx.node.kind.clone());
+                Ok(None)
+            }
+        }
+        let seen = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let registry = Registry::new();
+        registry
+            .register_namespace(
+                "acme",
+                vec![schema("acme.task", &["html"])],
+                Box::new(CaptureKind { seen: seen.clone() }),
+            )
+            .unwrap();
+        // Top-level annotation (parsed as document-level metadata).
+        // Before the HostNodeKind fix this would have been reported as
+        // "annotation"; it should now be "document".
+        let doc = parse(":: acme.task ::\n");
+        let _ = dispatch_render(&doc, &registry, "html");
+        let kinds = seen.lock().unwrap().clone();
+        assert_eq!(
+            kinds.as_slice(),
+            &["document"],
+            "top-level annotation must surface as host kind \"document\", not the hardcoded \"annotation\"",
+        );
     }
 
     /// End-to-end without registered hooks: the registry is consulted
