@@ -57,7 +57,7 @@ fn walk_session(
 
 fn visit_content(
     item: &ContentItem,
-    parent_kind: HostNodeKind,
+    _parent_kind: HostNodeKind,
     registry: &Registry,
     diagnostics: &mut Vec<AnalysisDiagnostic>,
 ) {
@@ -94,7 +94,12 @@ fn visit_content(
             }
         }
         ContentItem::Annotation(a) => {
-            visit_annotation(a, parent_kind, registry, diagnostics);
+            // A standalone annotation node IS an annotation host
+            // (per wire spec §2.2 — `annotation` is itself a node
+            // kind). Schemas declaring `attaches_to: ["annotation"]`
+            // (e.g. the lex.* built-ins like `lex.include`) match
+            // here regardless of the parent container.
+            visit_annotation(a, HostNodeKind::Annotation, registry, diagnostics);
         }
         ContentItem::VerbatimBlock(v) => {
             visit_verbatim(v, registry, diagnostics);
@@ -163,7 +168,12 @@ fn visit_annotation(
         params: params.clone(),
         body,
         node: NodeRef {
-            kind: "annotation".into(),
+            // Wire spec §2.1: NodeRef.kind is the host AST kind the
+            // label is attached to, NOT the literal "annotation" tag.
+            // Handlers use this to disambiguate context — e.g., a
+            // commenting label rendered differently when attached to
+            // a paragraph vs. a session.
+            kind: attached_to.as_str().to_string(),
             range,
             origin,
         },
@@ -210,6 +220,21 @@ fn visit_verbatim(v: &Verbatim, registry: &Registry, diagnostics: &mut Vec<Analy
         return;
     }
     let Some(schema) = registry.schema_for(&label) else {
+        // Mirror the annotation path: an unknown label inside a
+        // registered namespace is an error worth surfacing; an
+        // unregistered namespace passes through silently.
+        if let Some((ns, _)) = label.split_once('.') {
+            if registry.is_namespace_healthy(ns) {
+                diagnostics.push(AnalysisDiagnostic {
+                    range: v.location.clone(),
+                    severity: DiagnosticSeverity::Error,
+                    kind: DiagnosticKind::SchemaValidation(SchemaValidationKind::UnknownLabel),
+                    message: format!(
+                        "verbatim label `{label}` is not declared in registered namespace `{ns}`"
+                    ),
+                });
+            }
+        }
         return;
     };
     if !schema.verbatim_label {
@@ -241,11 +266,21 @@ fn visit_verbatim(v: &Verbatim, registry: &Registry, diagnostics: &mut Vec<Analy
         params,
         body: AnnotationBody::Text(body_text),
         node: NodeRef {
-            kind: "verbatim".into(),
+            kind: HostNodeKind::Verbatim.as_str().to_string(),
             range,
             origin,
         },
     };
+
+    // Run schema pre-validation before reaching the handler — same
+    // contract as the annotation path. Without this the handler
+    // received malformed contexts (missing required params, wrong
+    // attachment for the verbatim kind, etc.) and the host bypassed
+    // its own gating layer.
+    if let Some(diag) = pre_validate(&schema, &ctx, HostNodeKind::Verbatim, &v.location) {
+        diagnostics.push(diag);
+        return;
+    }
 
     let namespace = label
         .split_once('.')

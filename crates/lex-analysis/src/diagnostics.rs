@@ -16,8 +16,10 @@ pub enum DiagnosticKind {
     /// pre-validation checks tripped.
     SchemaValidation(SchemaValidationKind),
     /// A diagnostic emitted by a registered extension handler. The
-    /// `namespace` field is the fully-qualified label so editors can
-    /// surface the source of the diagnostic; `code` mirrors the wire
+    /// `namespace` field is the namespace name (the part before the
+    /// first `.`, e.g., `"acme"` for label `"acme.task"`) — `lex-lsp`
+    /// surfaces it as the diagnostic `source: "lex:<namespace>"` so
+    /// editors can filter by extension. `code` mirrors the wire
     /// `Diagnostic.code` field.
     Handler {
         namespace: String,
@@ -25,9 +27,12 @@ pub enum DiagnosticKind {
     },
 }
 
-/// Severity for analysis-emitted diagnostics. Pre-extension diagnostics
-/// derive their severity from `DiagnosticKind` (the `to_lsp_diagnostic`
-/// mapping in lex-lsp); extension diagnostics use this field directly.
+/// Severity for analysis-emitted diagnostics. The analyser populates
+/// it for every diagnostic — `lex-lsp` reads `diag.severity`
+/// directly when mapping onto the LSP wire. (Earlier the LSP layer
+/// derived severity from `DiagnosticKind`; that mapping moved
+/// upstream once the extension-emitted diagnostics needed
+/// per-instance severities.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiagnosticSeverity {
     Error,
@@ -40,11 +45,13 @@ pub enum DiagnosticSeverity {
 /// before dispatching to a handler. Wire spec / proposal §13.2.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SchemaValidationKind {
-    /// Label exists in a registered namespace but the schema itself
-    /// rejects this exact label name. (Currently unreachable since
-    /// `Registry::schema_for` only returns `Some` when the label is
-    /// known; reserved for future namespace-versioning that ships
-    /// a label aliased away.)
+    /// The namespace is registered but the schema set for that
+    /// namespace doesn't declare this exact label. The walker emits
+    /// this when `Registry::schema_for(label)` returns `None` while
+    /// `is_namespace_healthy(<ns prefix>)` is `true`. Distinguishes
+    /// "typo / out-of-version label" (this variant, surfaced as a
+    /// document error) from "unknown namespace" (silent pass-through
+    /// per the bounded-extensibility rule).
     UnknownLabel,
     MissingParam,
     ParamTypeMismatch,
@@ -55,10 +62,10 @@ pub enum SchemaValidationKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnalysisDiagnostic {
     pub range: Range,
-    /// Severity. For the legacy `Missing/Unused/Table` kinds this is
-    /// derived by callers (LSP) from the kind itself; for
-    /// `SchemaValidation` and `Handler` kinds the analyser sets it
-    /// directly. Default `Error` matches the pre-extension contract.
+    /// Severity, set by the analyser for every diagnostic it
+    /// produces. `lex-lsp` reads this directly when mapping onto LSP
+    /// wire severities; the kind-to-severity mapping that lived in
+    /// `to_lsp_diagnostic` is no longer authoritative.
     pub severity: DiagnosticSeverity,
     pub kind: DiagnosticKind,
     pub message: String,
