@@ -5,25 +5,51 @@
 //! crate. The codec is what lets the registry-driven resolve pass round-trip
 //! handler-returned wire ASTs back into typed lex-core nodes for splicing.
 //!
-//! # Status: skeleton only
+//! # Direction
 //!
-//! This module is the placeholder landed in PR 3a (lex-fmt/lex#519); the
-//! actual codec implementation lands in PR 3b (lex-fmt/lex#531). PR 3c
-//! ([lex-fmt/lex#532](https://github.com/lex-fmt/lex/issues/532)) is the
-//! first consumer (`LexIncludeHandler`); PR 3d
-//! ([lex-fmt/lex#533](https://github.com/lex-fmt/lex/issues/533)) wires
-//! the codec into the resolve pass.
+//! - [`to_wire_node`] — forward: total over the AST shapes a parsed lex
+//!   document can produce. Output is a [`lex_extension::WireNode`] tree.
+//! - [`from_wire_node`] — reverse: fallible. Recognised `WireNode`
+//!   variants become lex-core [`crate::lex::ast::ContentItem`]s; unknown
+//!   shapes return [`FromWireError::UnsupportedKind`].
 //!
-//! # Design overview (forward reference for PR 3b)
+//! # Lossy in places, by design
 //!
-//! - **Forward** (`Document → WireNode`): a total walk over lex-core's AST
-//!   that produces a `WireNode::Document` rooted at the document's root
-//!   session. Per-variant conversion for sessions, definitions, paragraphs,
-//!   annotations, blank groups, lists, tables, and verbatim blocks.
-//! - **Reverse** (`WireNode → Vec<ContentItem>`): fallible — wire input may
-//!   be malformed. The reverse direction is what the registry-driven
-//!   resolve pass uses to splice handler output back into the host AST.
-//! - **Versioning**: this codec speaks `lex_extension::WIRE_VERSION = 1`.
-//!   The codec lives next to the AST it converts so internal AST changes
-//!   that affect the wire format are caught at compile time here, not
-//!   downstream in handler crates.
+//! The forward codec preserves *structural* fidelity but drops some
+//! representation-only details:
+//!
+//! - `Range::span` (byte offsets) — the wire format encodes only
+//!   `(line, column)`. Reverse codec reconstructs `span = 0..0` since
+//!   spliced content's byte offsets are advisory.
+//! - Inline-attached annotations on inline nodes — wire `WireInline`
+//!   doesn't carry annotation slots. (Block-level annotations on
+//!   paragraphs/sessions/etc. are preserved.)
+//! - `TextContent` always normalises to a single `WireInline::Text`
+//!   carrying the raw source string when the internal representation
+//!   is `Text(s)` (Phase 1 of the inline-parsing migration). When the
+//!   internal representation is parsed inlines (Phase 2), the codec
+//!   walks the inline tree and produces matching `WireInline` variants;
+//!   reverse codec round-trips through a stringified form that the
+//!   parser re-interprets identically.
+//!
+//! For the consumer that matters today (`LexIncludeHandler` in PR 3c),
+//! these losses are invisible: the spliced content renders to the same
+//! `.lex` source as the original.
+//!
+//! # Versioning
+//!
+//! This codec speaks `lex_extension::WIRE_VERSION = 1`. Wire-format
+//! changes that bump that constant require codec updates here.
+
+mod error;
+pub mod from_wire;
+mod inline;
+mod range;
+pub mod to_wire;
+
+#[cfg(test)]
+mod tests;
+
+pub use error::FromWireError;
+pub use from_wire::{from_wire_node, from_wire_subtree};
+pub use to_wire::{to_wire_document, to_wire_node};
