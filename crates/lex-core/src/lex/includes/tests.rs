@@ -2128,4 +2128,104 @@ mod registry_dispatch {
             "Ok(None) handler must leave the annotation in the tree, got {labels:?}"
         );
     }
+
+    /// When a handler returns `Ok(None)`, the resolve walker must
+    /// still descend into the unexpanded annotation's body. Without
+    /// that walk, any nested resolve-hooked annotations inside the
+    /// body would be silently left unresolved — `recurse_into_children`
+    /// skips resolve-hooked annotations to prevent double-resolution,
+    /// so the `Unexpanded` arm in `process_resolves` is the only
+    /// path that reaches the body of an opt-out invocation.
+    ///
+    /// Test mechanic: `acme.outer` returns `Ok(None)` (opt-out).
+    /// `acme.inner` is also resolve-hooked and increments a counter
+    /// when called. The fixture nests `acme.inner` inside
+    /// `acme.outer`'s body. If the body walk is skipped, the inner
+    /// counter stays at zero. We assert the inner handler was
+    /// invoked, which proves the body walk reaches it.
+    #[test]
+    fn unexpanded_annotation_body_still_walked_for_nested_invocations() {
+        struct Outer;
+        impl LexHandler for Outer {
+            fn on_resolve(&self, _ctx: &LabelCtx) -> Result<Option<WireNode>, HandlerError> {
+                Ok(None)
+            }
+        }
+        struct Inner {
+            calls: Arc<AtomicUsize>,
+        }
+        impl LexHandler for Inner {
+            fn on_resolve(&self, _ctx: &LabelCtx) -> Result<Option<WireNode>, HandlerError> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                Ok(Some(WireNode::Document {
+                    range: WireRange::new(Position::new(0, 0), Position::new(1, 0)),
+                    origin: None,
+                    children: vec![],
+                }))
+            }
+        }
+
+        fn schema(label: &str) -> Schema {
+            Schema {
+                schema_version: 1,
+                label: label.into(),
+                description: None,
+                params: std::collections::BTreeMap::new(),
+                attaches_to: vec!["annotation".into()],
+                body: BodyShape {
+                    kind: BodyKind::Lex,
+                    presence: BodyPresence::Optional,
+                    description: None,
+                },
+                verbatim_label: false,
+                capabilities: Capabilities::default(),
+                hooks: HookSet {
+                    resolve: true,
+                    ..HookSet::default()
+                },
+                handler: None,
+            }
+        }
+
+        let inner_calls = Arc::new(AtomicUsize::new(0));
+        let registry = Registry::new();
+        registry
+            .register_namespace(
+                "acme",
+                vec![schema("acme.outer"), schema("acme.inner")],
+                Box::new(Combined {
+                    inner: Inner {
+                        calls: inner_calls.clone(),
+                    },
+                    outer: Outer,
+                }),
+            )
+            .expect("register");
+
+        // Combined handler so a single namespace can dispatch two
+        // labels with different behaviours. The Registry registers
+        // one handler per namespace, so we route by ctx.label.
+        struct Combined {
+            inner: Inner,
+            outer: Outer,
+        }
+        impl LexHandler for Combined {
+            fn on_resolve(&self, ctx: &LabelCtx) -> Result<Option<WireNode>, HandlerError> {
+                match ctx.label.as_str() {
+                    "acme.inner" => self.inner.on_resolve(ctx),
+                    "acme.outer" => self.outer.on_resolve(ctx),
+                    _ => Ok(None),
+                }
+            }
+        }
+
+        let main_source = ":: acme.outer ::\n    A body line.\n\n    :: acme.inner ::\n";
+        let _doc = resolve_with_registry("/repo/main.lex", main_source, registry).expect("resolve");
+
+        assert_eq!(
+            inner_calls.load(Ordering::SeqCst),
+            1,
+            "the inner resolve-hooked annotation must be dispatched even when the outer handler returned Ok(None)"
+        );
+    }
 }

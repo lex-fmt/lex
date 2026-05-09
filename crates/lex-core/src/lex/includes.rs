@@ -595,31 +595,68 @@ fn process_resolves(
             _ => unreachable!("index came from resolve filter"),
         };
 
-        let splice_items = resolve_one_invocation(&annotation, state, kind)?;
-
-        // Replace the annotation with `[annotation, ...splice_items]`.
-        // The annotation itself stays in the children list immediately
-        // before the splice, so the post-resolution AttachAnnotations
-        // pass moves it onto the first spliced node by the standard
-        // "attach to next sibling" rule.
-        let mut replacement = Vec::with_capacity(splice_items.len() + 1);
-        replacement.push(ContentItem::Annotation(annotation));
-        replacement.extend(splice_items);
-        children.splice(i..=i, replacement);
+        match resolve_one_invocation(&annotation, state, kind)? {
+            ResolveOutcome::Spliced(splice_items) => {
+                // Replace the annotation with `[annotation, ...splice_items]`.
+                // The annotation itself stays in the children list immediately
+                // before the splice, so the post-resolution AttachAnnotations
+                // pass moves it onto the first spliced node by the standard
+                // "attach to next sibling" rule.
+                let mut replacement = Vec::with_capacity(splice_items.len() + 1);
+                replacement.push(ContentItem::Annotation(annotation));
+                replacement.extend(splice_items);
+                children.splice(i..=i, replacement);
+            }
+            ResolveOutcome::Unexpanded => {
+                // Handler opted out of expanding this invocation. The
+                // annotation stays in place, but its body wasn't
+                // walked by `recurse_into_children` (that walker
+                // skips resolve-hooked annotations to avoid double-
+                // resolution). Walk the body now so any nested
+                // invocations inside the unexpanded annotation get
+                // resolved on the way back up.
+                let mut owned = annotation;
+                splice_in_general_container(
+                    &mut owned.children,
+                    state,
+                    ContainerKind::AnnotationBody,
+                )?;
+                children[i] = ContentItem::Annotation(owned);
+            }
+        }
     }
 
     Ok(())
+}
+
+/// Outcome of dispatching a single resolve-hooked annotation. The
+/// pass needs to distinguish between "handler returned content,
+/// splice it in" and "handler opted out, leave the annotation
+/// alone": the second case still requires walking the annotation's
+/// body for nested invocations because `recurse_into_children`
+/// otherwise skips resolve-hooked annotations to prevent double-
+/// resolution.
+enum ResolveOutcome {
+    Spliced(Vec<ContentItem>),
+    Unexpanded,
 }
 
 /// Dispatch a single resolve-hooked annotation through the registry,
 /// decode the returned `WireNode` back into typed children, then
 /// recursively walk the splice items so nested invocations resolve
 /// before the splice is placed into the parent container.
+///
+/// Returns [`ResolveOutcome::Unexpanded`] when the handler returned
+/// `Ok(None)` (third-party handlers can opt out of expanding a
+/// particular invocation). The caller is then responsible for
+/// walking the annotation's body for nested invocations — the
+/// resolve walker normally skips resolve-hooked annotations'
+/// bodies.
 fn resolve_one_invocation(
     annotation: &crate::lex::ast::elements::annotation::Annotation,
     state: &mut ResolverState<'_>,
     parent_kind: ContainerKind,
-) -> Result<Vec<ContentItem>, IncludeError> {
+) -> Result<ResolveOutcome, IncludeError> {
     let label = &annotation.data.label.value;
     let key = ResolveKey::from_annotation(annotation);
 
@@ -667,10 +704,11 @@ fn resolve_one_invocation(
         Ok(Some(node)) => node,
         Ok(None) => {
             // Handler returned "nothing to splice" — leave the
-            // annotation in place. (Built-in lex.include never returns
-            // None; this is reachable only via third-party handlers
-            // that opt out of resolving a particular invocation.)
-            return Ok(Vec::new());
+            // annotation in place. The caller still needs to walk
+            // its body for nested invocations (built-in lex.include
+            // never returns None; this path is reachable only via
+            // third-party handlers that opt out per-invocation).
+            return Ok(ResolveOutcome::Unexpanded);
         }
         Err(handler_err) => {
             return Err(handler_error_to_include_error(
@@ -713,7 +751,7 @@ fn resolve_one_invocation(
         &included_path,
     )?;
 
-    Ok(splice_items)
+    Ok(ResolveOutcome::Spliced(splice_items))
 }
 
 /// Build a [`LabelCtx`] from a lex-core [`Annotation`]. The body is
