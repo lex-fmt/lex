@@ -878,7 +878,7 @@ fn lexical_normalize(p: &Path) -> PathBuf {
 // fields here; finer-grained inline ranges land in PR 6 when file-ref
 // resolution starts consulting them.
 
-fn stamp_doc(doc: &mut Document, origin: &Arc<PathBuf>) {
+pub(crate) fn stamp_doc(doc: &mut Document, origin: &Arc<PathBuf>) {
     if let Some(title) = doc.title.as_mut() {
         title.location.origin_path = Some(Arc::clone(origin));
     }
@@ -973,7 +973,7 @@ fn stamp_item(item: &mut ContentItem, origin: &Arc<PathBuf>) {
 
 /// Parse `source` into a Document but skip the annotation-attachment stage,
 /// so include annotations are findable in container children lists.
-fn parse_no_attach(source: &str) -> Result<Document, String> {
+pub(crate) fn parse_no_attach(source: &str) -> Result<Document, String> {
     crate::lex::testing::parse_without_annotation_attachment(source)
 }
 

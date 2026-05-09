@@ -36,15 +36,28 @@
 //! - **Marker structure** on sessions and lists — the wire format
 //!   stringifies the marker (`"1.1."`, `"(a)"`); the parser
 //!   reconstructs the typed marker on the next parse.
+//! - **List-item per-item markers** — list-item markers are derived
+//!   from the parent list's `marker_style` plus item index in the
+//!   reverse direction; the original raw marker text on each item is
+//!   not preserved.
+//! - **Verbatim multi-group bodies** — a multi-group verbatim block
+//!   collapses to its first group in the forward direction; the
+//!   additional groups are dropped. `lex.include` never returns
+//!   multi-group verbatims, so this loss is invisible to the current
+//!   codec consumer.
+//! - **Table per-cell alignment** — wire tables carry one alignment
+//!   string for the whole table; lex-core tracks alignment per cell.
+//!   Forward picks the first non-`None` cell alignment; reverse
+//!   applies that alignment to every cell.
 //! - **`TextContent`** uses the parsed-inline path
-//!   ([`TextContent::inline_nodes`]) when available (Phase 2),
-//!   producing matching `WireInline` variants; otherwise emits the
-//!   raw source as a single `WireInline::Text`. Reverse codec
-//!   re-serialises through a `.lex` source-form string that the
-//!   parser re-interprets identically.
+//!   ([`TextContent::inline_nodes`]) when available, producing
+//!   matching `WireInline` variants; otherwise emits the raw source
+//!   as a single `WireInline::Text`. Reverse codec re-serialises
+//!   through a `.lex` source-form string that the parser
+//!   re-interprets identically.
 //!
-//! For the consumer that matters today (`LexIncludeHandler` in PR 3c),
-//! these losses are invisible: the spliced content renders to the same
+//! For the consumer that matters today (`LexIncludeHandler`), these
+//! losses are invisible: the spliced content renders to the same
 //! `.lex` source as the original.
 //!
 //! # Versioning
