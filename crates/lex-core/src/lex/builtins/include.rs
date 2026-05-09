@@ -56,10 +56,17 @@ pub const CODE_ABSOLUTE_PATH: i32 = -32004;
 /// Error code: underlying I/O error during load.
 pub const CODE_IO: i32 = -32005;
 
+/// Function-pointer type for the parse step. Tests can substitute a
+/// stub via [`LexIncludeHandler::with_parse_fn`] to deterministically
+/// exercise the parse-error mapping without depending on which inputs
+/// the (permissive) lex parser happens to reject.
+pub(crate) type ParseFn = fn(&str) -> Result<crate::lex::ast::Document, String>;
+
 /// Built-in handler for the `lex.include` label.
 pub struct LexIncludeHandler {
     loader: Arc<dyn Loader + Send + Sync>,
     config: ResolveConfig,
+    parse_fn: ParseFn,
 }
 
 impl LexIncludeHandler {
@@ -74,7 +81,28 @@ impl LexIncludeHandler {
     /// so that future hooks (validate, render) can read its limits
     /// without an additional indirection.
     pub fn new(loader: Arc<dyn Loader + Send + Sync>, config: ResolveConfig) -> Self {
-        Self { loader, config }
+        Self {
+            loader,
+            config,
+            parse_fn: parse_no_attach,
+        }
+    }
+
+    /// Construct a handler with a custom parse function. Used by
+    /// tests to deterministically exercise the parse-error path; the
+    /// production constructor [`Self::new`] uses
+    /// [`parse_no_attach`].
+    #[cfg(test)]
+    pub(crate) fn with_parse_fn(
+        loader: Arc<dyn Loader + Send + Sync>,
+        config: ResolveConfig,
+        parse_fn: ParseFn,
+    ) -> Self {
+        Self {
+            loader,
+            config,
+            parse_fn,
+        }
     }
 
     /// Read-only access to the resolution root the handler was built
@@ -109,8 +137,11 @@ impl LexHandler for LexIncludeHandler {
 
         // Parse without annotation attachment — annotations stay
         // visible as standalone children, matching what
-        // `resolve_from_source` does in the inline path.
-        let mut included = parse_no_attach(&source).map_err(|message| {
+        // `resolve_from_source` does in the inline path. The parse
+        // function is injectable so tests can deterministically
+        // exercise the parse-error mapping; production uses
+        // `parse_no_attach`.
+        let mut included = (self.parse_fn)(&source).map_err(|message| {
             HandlerError::internal(format!(
                 "parse of `{}` failed: {message}",
                 canonical_path.display()
@@ -457,50 +488,40 @@ mod tests {
 
     #[test]
     fn parse_failure_maps_to_internal_error() {
-        // Deterministic test of the parse-failure → HandlerError mapping.
-        // The lex parser is permissive (most malformed inputs parse to
-        // *something*), so rather than depending on parser behaviour we
-        // test the mapping via a `MockParseFail` loader whose `load`
-        // returns source the wrapping `parse_no_attach` is documented
-        // to reject. To stay robust against future parser changes
-        // we *also* directly invoke `parse_no_attach` and verify it
-        // either errors (in which case the handler must produce
-        // `Internal`) or succeeds (in which case we exercise the
-        // mapping function via a synthetic call).
-        let probe = "Subject:\n    line one\n    line two\n";
-        let probe_parses_cleanly = parse_no_attach(probe).is_ok();
-
-        if !probe_parses_cleanly {
-            let mut loader = MemoryLoader::new();
-            loader.insert(PathBuf::from("/root/broken.lex"), probe);
-            let handler = handler_with_loader(loader, PathBuf::from("/root"));
-            let ctx = make_ctx("broken.lex", Some("/root/host.lex"));
-            let err = handler.on_resolve(&ctx).expect_err("must error");
-            assert!(
-                matches!(err, HandlerError::Internal { .. }),
-                "parse failures must map to HandlerError::Internal, got {err:?}"
-            );
-            return;
+        // Deterministic test of the parse-failure → HandlerError
+        // mapping. The lex parser is permissive — most malformed
+        // inputs parse to *something* — so finding a fixture that
+        // reliably trips `parse_no_attach` is brittle. Instead we
+        // inject a stub parser that always returns `Err` (via
+        // `LexIncludeHandler::with_parse_fn`) and assert the handler
+        // maps that error onto `HandlerError::Internal` with the
+        // offending path and underlying parser message both present
+        // in the diagnostic.
+        fn always_fails(_source: &str) -> Result<crate::lex::ast::Document, String> {
+            Err("synthetic parser failure".into())
         }
 
-        // Parser accepted the probe; exercise the mapping function
-        // directly so the test still covers the error path.
-        let synthesised = HandlerError::internal(format!(
-            "parse of `{}` failed: {}",
-            std::path::Path::new("/root/broken.lex").display(),
-            "synthetic parse failure"
-        ));
+        let mut loader = MemoryLoader::new();
+        loader.insert(PathBuf::from("/root/broken.lex"), "anything\n");
+        let handler = LexIncludeHandler::with_parse_fn(
+            Arc::new(loader),
+            ResolveConfig::with_root(PathBuf::from("/root")),
+            always_fails,
+        );
+        let ctx = make_ctx("broken.lex", Some("/root/host.lex"));
+        let err = handler.on_resolve(&ctx).expect_err("must error");
         assert!(
-            matches!(synthesised, HandlerError::Internal { .. }),
-            "synthesised parse-failure must be HandlerError::Internal"
+            matches!(err, HandlerError::Internal { .. }),
+            "parse failures must map to HandlerError::Internal, got {err:?}"
+        );
+        let message = err.to_string();
+        assert!(
+            message.contains("/root/broken.lex"),
+            "internal error message must include the offending path: {message}"
         );
         assert!(
-            synthesised.to_string().contains("/root/broken.lex"),
-            "internal error message must include the offending path"
-        );
-        assert!(
-            synthesised.to_string().contains("synthetic parse failure"),
-            "internal error message must include the underlying parser message"
+            message.contains("synthetic parser failure"),
+            "internal error message must include the underlying parser message: {message}"
         );
     }
 

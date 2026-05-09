@@ -28,11 +28,16 @@
 //!   `Table`, etc. — none of the wire `WireNode` variants carry an
 //!   `annotations` field, so attached annotations are dropped in the
 //!   forward direction. (Standalone `ContentItem::Annotation` nodes
-//!   *are* round-tripped fully via `WireNode::Annotation`.)
+//!   *are* round-tripped fully via `WireNode::Annotation`.) The
+//!   `LexIncludeHandler` mitigates this for include splicing by
+//!   promoting `Document.annotations` to leading root children
+//!   *before* the codec runs, matching the legacy
+//!   `prepare_splice_list` behaviour.
 //! - **Document-level metadata** — `Document.title` and
-//!   `Document.annotations` are dropped: the forward codec returns a
-//!   `WireNode::Document` whose `children` are the root session's
-//!   children, and only those.
+//!   `Document.annotations` are dropped by the codec itself. The
+//!   `LexIncludeHandler` re-applies the legacy `prepare_splice_list`
+//!   transformation in front of the codec so these surface as
+//!   leading children of the wire `Document`.
 //! - **Marker structure** on sessions and lists — the wire format
 //!   stringifies the marker (`"1.1."`, `"(a)"`); the parser
 //!   reconstructs the typed marker on the next parse.
@@ -47,8 +52,9 @@
 //!   codec consumer.
 //! - **Table per-cell alignment** — wire tables carry one alignment
 //!   string for the whole table; lex-core tracks alignment per cell.
-//!   Forward picks the first non-`None` cell alignment; reverse
-//!   applies that alignment to every cell.
+//!   Forward picks the first non-`None` *body* cell's alignment
+//!   (header-row alignment is skipped because it is often a styling
+//!   artefact); reverse applies that alignment to every cell.
 //! - **Tables with block-content cells** — `WireTableCell` only
 //!   carries inline content; lex-core's `TableCell.children` (block
 //!   content inside a cell, e.g. nested lists) has no slot in the
@@ -65,9 +71,19 @@
 //!   through a `.lex` source-form string that the parser
 //!   re-interprets identically.
 //!
-//! For the consumer that matters today (`LexIncludeHandler`), these
-//! losses are invisible: the spliced content renders to the same
-//! `.lex` source as the original.
+//! Verbatim `subject` and `mode` (`Inflow` / `Fullwidth`) **are**
+//! preserved end-to-end: `WireNode::Verbatim` carries dedicated
+//! `subject` and `mode` fields that the forward codec populates and
+//! the reverse codec applies during reconstruction.
+//!
+//! For the consumer that matters today (`LexIncludeHandler`), the
+//! remaining losses do not change observable include output: the
+//! handler's `prepare_splice_list`-equivalent normalisation covers
+//! the document-level losses, table-with-block-cells surfaces as a
+//! visible `UnsupportedKind` rather than silent drop, and the
+//! representation-only losses (spans, marker structure, per-cell
+//! alignment) re-derive identically when the spliced content is
+//! re-formatted to `.lex` source.
 //!
 //! # Versioning
 //!

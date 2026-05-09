@@ -207,6 +207,8 @@ fn table_to_wire(t: &Table) -> WireNode {
             label: "lex.internal.unsupported.table_block_cells".into(),
             params: Value::Object(Map::new()),
             body_text: String::new(),
+            subject: String::new(),
+            mode: "inflow".into(),
         };
     }
 
@@ -251,10 +253,14 @@ fn table_cell_to_wire(cell: &TableCell) -> WireTableCell {
 
 /// Summarise a table's per-cell alignment into a single string. Wire
 /// tables carry one alignment per table; lex-core tracks alignment per
-/// cell. We pick the alignment of the first non-`None` body cell, or
-/// the empty string when no alignment is set anywhere.
+/// cell. We pick the alignment of the first non-`None` *body* cell —
+/// header cells are skipped because their alignment is often a
+/// styling artefact (centered headers over left-aligned columns) and
+/// would mislead the reverse codec, which applies the chosen
+/// alignment to every cell in the table. Returns the empty string
+/// when no body alignment is set anywhere.
 fn table_align_summary(t: &Table) -> String {
-    for row in t.all_rows() {
+    for row in &t.body_rows {
         for cell in &row.cells {
             match cell.align {
                 TableCellAlignment::Left => return "left".into(),
@@ -307,6 +313,8 @@ fn verbatim_to_wire(v: &Verbatim) -> WireNode {
         label,
         params,
         body_text,
+        subject: v.subject.as_string().to_string(),
+        mode: verbatim_mode_name(v.mode).to_string(),
     }
 }
 
@@ -321,6 +329,8 @@ fn verbatim_line_standalone_to_wire(vl: &VerbatimLine) -> WireNode {
         label: String::new(),
         params: Value::Object(Map::new()),
         body_text: vl.content.as_string().to_string(),
+        subject: String::new(),
+        mode: "inflow".into(),
     }
 }
 
@@ -364,5 +374,15 @@ fn decoration_style_name(style: DecorationStyle) -> &'static str {
         DecorationStyle::Numerical => "numerical",
         DecorationStyle::Alphabetical => "alphabetical",
         DecorationStyle::Roman => "roman",
+    }
+}
+
+fn verbatim_mode_name(
+    mode: crate::lex::ast::elements::verbatim::VerbatimBlockMode,
+) -> &'static str {
+    use crate::lex::ast::elements::verbatim::VerbatimBlockMode;
+    match mode {
+        VerbatimBlockMode::Inflow => "inflow",
+        VerbatimBlockMode::Fullwidth => "fullwidth",
     }
 }

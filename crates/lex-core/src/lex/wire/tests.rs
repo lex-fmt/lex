@@ -147,6 +147,8 @@ fn unsupported_kind_in_internal_namespace_surfaces_as_error() {
         label: "lex.internal.unsupported.session".into(),
         params: serde_json::json!({}),
         body_text: String::new(),
+        subject: String::new(),
+        mode: "inflow".into(),
     };
     let result = from_wire_node(&wire);
     assert!(matches!(
@@ -462,11 +464,15 @@ fn verbatim_round_trips_label_and_body() {
     if let WireNode::Verbatim {
         ref label,
         ref body_text,
+        ref subject,
+        ref mode,
         ..
     } = wire
     {
         assert_eq!(label, "rust");
         assert_eq!(body_text, "fn main() {\n    println!(\"hi\");\n}");
+        assert_eq!(subject, "Code:");
+        assert_eq!(mode, "inflow");
     } else {
         panic!("expected WireNode::Verbatim");
     }
@@ -474,6 +480,16 @@ fn verbatim_round_trips_label_and_body() {
     match &back[0] {
         ContentItem::VerbatimBlock(v) => {
             assert_eq!(v.closing_data.label.value, "rust");
+            assert_eq!(
+                v.subject.as_string(),
+                "Code:",
+                "subject must round-trip verbatim"
+            );
+            assert_eq!(
+                v.mode,
+                VerbatimBlockMode::Inflow,
+                "mode must round-trip verbatim"
+            );
             let lines: Vec<String> = v
                 .children
                 .iter()
@@ -490,6 +506,34 @@ fn verbatim_round_trips_label_and_body() {
                     "}".to_string(),
                 ]
             );
+        }
+        other => panic!("expected VerbatimBlock, got {other:?}"),
+    }
+}
+
+#[test]
+fn verbatim_fullwidth_mode_round_trips() {
+    use crate::lex::ast::elements::data::Data;
+    use crate::lex::ast::elements::label::Label;
+    use crate::lex::ast::elements::verbatim::{Verbatim, VerbatimBlockMode};
+    let v = Verbatim::new(
+        TextContent::from_string("Wide:".into(), None),
+        Vec::new(),
+        Data::new(Label::new("text".into()), Vec::new()),
+        VerbatimBlockMode::Fullwidth,
+    );
+    let item = ContentItem::VerbatimBlock(Box::new(v));
+    let wire = to_wire_node(&item);
+    if let WireNode::Verbatim { ref mode, .. } = wire {
+        assert_eq!(mode, "fullwidth");
+    } else {
+        panic!("expected WireNode::Verbatim");
+    }
+    let back = from_wire_node(&json_round_trip(&wire)).expect("ok");
+    match &back[0] {
+        ContentItem::VerbatimBlock(v) => {
+            assert_eq!(v.mode, VerbatimBlockMode::Fullwidth);
+            assert_eq!(v.subject.as_string(), "Wide:");
         }
         other => panic!("expected VerbatimBlock, got {other:?}"),
     }

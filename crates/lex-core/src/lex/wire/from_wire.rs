@@ -129,8 +129,12 @@ fn convert_one(node: &WireNode) -> Result<ContentItem, FromWireError> {
             label,
             params,
             body_text,
+            subject,
+            mode,
             ..
-        } => Ok(verbatim_from_wire(range, label, params, body_text)?),
+        } => Ok(verbatim_from_wire(
+            range, label, params, body_text, subject, mode,
+        )?),
         // WireNode is `#[non_exhaustive]` — future kinds surface here.
         _ => Err(FromWireError::UnsupportedKind {
             kind: kind_name(node).into(),
@@ -276,7 +280,10 @@ fn synthetic_marker_text(marker_style: &str, index: usize) -> String {
     match marker_style {
         "dash" => "-".into(),
         "numerical" => format!("{}.", index + 1),
-        "alphabetical" => format!("{}.", char::from(b'a' + (index as u8 % 26))),
+        // Compute the modulo on `usize` first so lists with more than
+        // 256 items don't wrap before the cast — `index as u8` would
+        // truncate at index=256, mis-numbering everything past.
+        "alphabetical" => format!("{}.", char::from(b'a' + ((index % 26) as u8))),
         "roman" => format!("{}.", roman_numeral(index + 1)),
         _ => "-".into(),
     }
@@ -385,6 +392,8 @@ fn verbatim_from_wire(
     label: &str,
     params: &Value,
     body_text: &str,
+    subject: &str,
+    mode: &str,
 ) -> Result<ContentItem, FromWireError> {
     if label == "lex.internal.unsupported.unknown" {
         return Err(FromWireError::UnsupportedKind {
@@ -422,15 +431,26 @@ fn verbatim_from_wire(
             })
             .collect()
     };
-    let subject = TextContent::empty();
-    let mut v = Verbatim::new(
-        subject,
-        typed_lines,
-        closing_data,
-        VerbatimBlockMode::Inflow,
-    );
+    let subject_tc = if subject.is_empty() {
+        TextContent::empty()
+    } else {
+        TextContent::from_string(subject.to_string(), None)
+    };
+    let block_mode = parse_verbatim_mode(mode);
+    let mut v = Verbatim::new(subject_tc, typed_lines, closing_data, block_mode);
     v.location = range_from_wire(range);
     Ok(ContentItem::VerbatimBlock(Box::new(v)))
+}
+
+/// Map the wire `mode` string back to a [`VerbatimBlockMode`].
+/// Unknown values fall back to `Inflow` — the documented default
+/// matching the parser's behaviour for ambiguous mode classification.
+fn parse_verbatim_mode(mode: &str) -> VerbatimBlockMode {
+    match mode {
+        "fullwidth" => VerbatimBlockMode::Fullwidth,
+        // "inflow" or anything unrecognised
+        _ => VerbatimBlockMode::Inflow,
+    }
 }
 
 fn parameters_from_json(params: &Value) -> Result<Vec<Parameter>, FromWireError> {
