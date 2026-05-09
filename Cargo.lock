@@ -1033,6 +1033,8 @@ name = "lex-core"
 version = "0.10.6"
 dependencies = [
  "insta",
+ "lex-extension",
+ "lex-extension-host",
  "logos",
  "once_cell",
  "polymath-rs",

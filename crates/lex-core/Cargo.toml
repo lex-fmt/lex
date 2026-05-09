@@ -26,6 +26,8 @@ serde_yaml = { workspace = true }
 regex = { workspace = true }
 once_cell = { workspace = true }
 polymath-rs = "0.1.2"
+lex-extension = { workspace = true }
+lex-extension-host = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
