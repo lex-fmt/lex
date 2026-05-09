@@ -9,7 +9,21 @@ use crate::lex::ast::range::{Position as CorePosition, Range as CoreRange};
 use lex_extension::wire::{Position as WirePosition, Range as WireRange};
 
 pub(crate) fn position_to_wire(p: &CorePosition) -> WirePosition {
-    WirePosition::new(p.line as u32, p.column as u32)
+    // Wire format pins line/column to u32. lex-core stores them as
+    // usize because they index bytes within typical 64-bit address
+    // space; values that exceed u32::MAX would mean a single document
+    // containing >4 billion lines, which doesn't happen in practice.
+    // Saturate-and-debug-assert so a future regression surfaces in
+    // dev rather than producing a wrapped value silently.
+    let line = u32::try_from(p.line).unwrap_or_else(|_| {
+        debug_assert!(false, "position line {} exceeds u32::MAX", p.line);
+        u32::MAX
+    });
+    let column = u32::try_from(p.column).unwrap_or_else(|_| {
+        debug_assert!(false, "position column {} exceeds u32::MAX", p.column);
+        u32::MAX
+    });
+    WirePosition::new(line, column)
 }
 
 pub(crate) fn position_from_wire(p: &WirePosition) -> CorePosition {

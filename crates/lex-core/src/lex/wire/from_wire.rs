@@ -49,7 +49,15 @@ fn convert_one(node: &WireNode) -> Result<ContentItem, FromWireError> {
             Ok(ContentItem::Paragraph(paragraph_from_wire(range, inlines)))
         }
         WireNode::Blank { range, .. } => {
-            let mut blg = BlankLineGroup::new(1, Vec::new());
+            // Reconstruct the blank-line count from the range when
+            // possible: an N-line blank group spans N lines, so
+            // `end.line - start.line` (clamped to >= 1) recovers the
+            // count. Wire ranges that came from lex-core preserve
+            // line boundaries; ranges with collapsed start/end fall
+            // back to count = 1.
+            let span_lines = range.end.line().saturating_sub(range.start.line());
+            let count = (span_lines as usize).max(1);
+            let mut blg = BlankLineGroup::new(count, Vec::new());
             blg.location = range_from_wire(range);
             Ok(ContentItem::BlankLineGroup(blg))
         }
@@ -93,9 +101,34 @@ fn paragraph_from_wire(
     inlines: &[lex_extension::wire::WireInline],
 ) -> Paragraph {
     let location = range_from_wire(range);
-    let text = text_content_from_wire(inlines);
-    let line = TextLine::new(text);
-    let mut p = Paragraph::new(vec![ContentItem::TextLine(line)]);
+    // Round-trip the wire inlines back into a single source string,
+    // then split on `\n` to reconstruct multiple TextLines. The
+    // forward codec inserts an explicit `\n` Text inline between
+    // each TextLine, so an N-line paragraph round-trips back to N
+    // TextLines.
+    let combined = text_content_from_wire(inlines);
+    let raw = combined.as_string();
+    let line_strings: Vec<&str> = if raw.is_empty() {
+        Vec::new()
+    } else {
+        raw.split('\n').collect()
+    };
+    let lines: Vec<ContentItem> = line_strings
+        .into_iter()
+        .map(|line_str| {
+            ContentItem::TextLine(TextLine::new(crate::lex::ast::TextContent::from_string(
+                line_str.to_string(),
+                None,
+            )))
+        })
+        .collect();
+    let mut p = if lines.is_empty() {
+        Paragraph::new(vec![ContentItem::TextLine(TextLine::new(
+            crate::lex::ast::TextContent::empty(),
+        ))])
+    } else {
+        Paragraph::new(lines)
+    };
     p.location = location;
     p
 }
@@ -157,12 +190,17 @@ fn parameters_from_json(params: &Value) -> Result<Vec<Parameter>, FromWireError>
 fn annotation_body_from_json(body: &Value) -> Result<Vec<ContentItem>, FromWireError> {
     match body {
         Value::Null => Ok(Vec::new()),
-        Value::String(_) => {
-            // Opaque-text body; reverse codec doesn't carry a body
-            // type for opaque strings on annotations, so drop. (The
-            // typical "annotation with text body" case is round-
-            // tripped via the children-of-paragraphs path anyway.)
-            Ok(Vec::new())
+        Value::String(text) => {
+            // Single-line / opaque-text annotation body. lex-core
+            // represents this as a single Paragraph child (matching
+            // `extract_annotation_single_content` in the parser). We
+            // mirror that here so content isn't silently dropped.
+            let line = TextLine::new(crate::lex::ast::TextContent::from_string(
+                text.clone(),
+                None,
+            ));
+            let para = Paragraph::new(vec![ContentItem::TextLine(line)]);
+            Ok(vec![ContentItem::Paragraph(para)])
         }
         Value::Object(obj) => {
             let kind = obj.get("kind").and_then(|v| v.as_str());

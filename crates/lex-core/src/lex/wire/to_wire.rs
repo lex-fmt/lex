@@ -65,13 +65,19 @@ pub fn to_wire_node(item: &ContentItem) -> WireNode {
 }
 
 fn paragraph_to_wire(p: &Paragraph) -> WireNode {
-    // Concatenate every TextLine's text content into a single inline
-    // sequence. Round-trip through the reverse codec rebuilds a single
-    // TextLine; the parser re-interprets line breaks identically.
+    // Walk each TextLine, separating lines with explicit newline
+    // inlines so the reverse codec can reconstruct the original
+    // multi-line shape. Without the separator, "Hello" + "World"
+    // would round-trip as "HelloWorld".
     let mut inlines = Vec::new();
+    let mut first_line = true;
     for line_item in &p.lines {
         if let ContentItem::TextLine(line) = line_item {
+            if !first_line {
+                inlines.push(lex_extension::wire::WireInline::Text { text: "\n".into() });
+            }
             inlines.extend(text_content_to_wire(&line.content));
+            first_line = false;
         }
     }
     WireNode::Paragraph {

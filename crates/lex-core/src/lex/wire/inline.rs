@@ -1,19 +1,26 @@
 //! Inline-content conversion between lex-core's `TextContent` /
 //! `InlineNode` and `lex_extension::WireInline`.
 //!
-//! The current strategy is pragmatic and Phase-1-aware: most lex-core
-//! `TextContent` is stored as a raw string (`TextRepresentation::Text`)
-//! pending the inline-parser migration. We convert that as a single
-//! [`WireInline::Text`] carrying the raw source. When parsed inlines are
-//! present (`TextRepresentation::Inlines`), we walk the tree and produce
-//! matching `WireInline` variants, dropping inline-attached annotations
-//! (Phase 2 fidelity is a future codec improvement).
+//! Forward path:
 //!
-//! The reverse direction always produces a `TextContent::from_string`
-//! whose body is the concatenation of the wire inlines re-serialised to
+//! - When `TextContent` has parsed inlines available
+//!   ([`TextContent::inline_nodes`]), the codec walks the inline tree
+//!   and produces matching `WireInline` variants
+//!   (`Plain → Text`, `Strong → Bold`, `Emphasis → Italic`, `Code →
+//!   Code`, `Math → Math`, `Reference → Reference`). Inline-attached
+//!   annotations are dropped (Phase 2 fidelity is a future codec
+//!   improvement).
+//! - Otherwise (the raw-string Phase-1 representation) the codec
+//!   emits a single [`WireInline::Text`] carrying the raw source. The
+//!   parser re-interprets formatting markers when this round-trips
+//!   back through `from_wire`.
+//! - Empty text yields an empty `Vec` (no inline element is emitted).
+//!
+//! Reverse path always produces a `TextContent::from_string` whose
+//! body is the concatenation of the wire inlines re-serialised to
 //! `.lex` source form (`*x*` for bold, `_y_` for italic, `` `code` ``,
-//! `#math#`, `[ref]`). That string parses identically when fed back to
-//! the inline parser.
+//! `#math#`, `[ref]`). That string parses identically when fed back
+//! to the inline parser.
 
 use crate::lex::ast::elements::inlines::{InlineContent, InlineNode, ReferenceInline};
 use crate::lex::ast::TextContent;
@@ -21,22 +28,24 @@ use lex_extension::wire::{RefKind, WireInline};
 
 /// Forward: `TextContent` → list of `WireInline`s.
 ///
-/// Total: every TextContent shape produces at least one wire inline.
+/// Returns an empty vector for empty text. Walks parsed inline nodes
+/// when they're available; otherwise emits a single `Text` inline
+/// carrying the raw source string.
 pub(crate) fn text_content_to_wire(tc: &TextContent) -> Vec<WireInline> {
-    // For Phase 1 representations (Text(String)), emit a single Text
-    // inline with the raw source. The parser will re-interpret formatting
-    // markers when this round-trips back through from_wire.
-    let raw = tc.as_string().to_string();
+    if let Some(nodes) = tc.inline_nodes() {
+        return nodes.iter().map(inline_node_to_wire).collect();
+    }
+    let raw = tc.as_string();
     if raw.is_empty() {
         return Vec::new();
     }
-    vec![WireInline::Text { text: raw }]
+    vec![WireInline::Text {
+        text: raw.to_string(),
+    }]
 }
 
 /// Forward: walk a parsed inline tree (`Vec<InlineNode>`) into wire
-/// inlines. Used when (future) callers have access to a parsed tree
-/// directly, rather than via `TextContent`.
-#[allow(dead_code)]
+/// inlines.
 pub(crate) fn inline_nodes_to_wire(nodes: &InlineContent) -> Vec<WireInline> {
     nodes.iter().map(inline_node_to_wire).collect()
 }

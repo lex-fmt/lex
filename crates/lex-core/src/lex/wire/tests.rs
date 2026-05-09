@@ -150,3 +150,109 @@ fn from_wire_subtree_handles_empty() {
     let items = from_wire_subtree(&[]).expect("ok");
     assert!(items.is_empty());
 }
+
+#[test]
+fn multi_line_paragraph_round_trips() {
+    // A paragraph with two TextLines should preserve both lines
+    // through the wire round-trip — without explicit `\n` separators
+    // in the forward codec, "Hello" + "World" would become
+    // "HelloWorld".
+    let p = Paragraph::new(vec![
+        ContentItem::TextLine(TextLine::new(TextContent::from_string(
+            "Hello".into(),
+            None,
+        ))),
+        ContentItem::TextLine(TextLine::new(TextContent::from_string(
+            "World".into(),
+            None,
+        ))),
+    ]);
+    let item = ContentItem::Paragraph(p);
+    let wire = to_wire_node(&item);
+    let back = from_wire_node(&json_round_trip(&wire)).expect("ok");
+    match &back[0] {
+        ContentItem::Paragraph(p) => {
+            assert_eq!(p.lines.len(), 2, "expected two TextLines after round-trip");
+            let texts: Vec<&str> = p
+                .lines
+                .iter()
+                .filter_map(|li| match li {
+                    ContentItem::TextLine(line) => Some(line.content.as_string()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(texts, vec!["Hello", "World"]);
+        }
+        other => panic!("expected Paragraph, got {other:?}"),
+    }
+}
+
+#[test]
+fn string_body_annotation_becomes_paragraph_child() {
+    // A wire annotation with a string body (the single-line form,
+    // e.g. `:: note :: hello`) should round-trip into an Annotation
+    // whose children contain a single Paragraph carrying the text.
+    let wire = lex_extension::wire::WireNode::Annotation {
+        range: lex_extension::wire::Range::new(
+            lex_extension::wire::Position::new(0, 0),
+            lex_extension::wire::Position::new(0, 18),
+        ),
+        origin: None,
+        label: "note".into(),
+        params: serde_json::json!({}),
+        body: serde_json::Value::String("hello".into()),
+    };
+    let back = from_wire_node(&wire).expect("ok");
+    match &back[0] {
+        ContentItem::Annotation(a) => {
+            let children: Vec<&ContentItem> = a.children.iter().collect();
+            assert_eq!(children.len(), 1, "string body should produce one child");
+            match children[0] {
+                ContentItem::Paragraph(p) => {
+                    let line = match &p.lines[0] {
+                        ContentItem::TextLine(line) => line,
+                        _ => panic!("expected TextLine"),
+                    };
+                    assert_eq!(line.content.as_string(), "hello");
+                }
+                other => panic!("expected Paragraph child, got {other:?}"),
+            }
+        }
+        other => panic!("expected Annotation, got {other:?}"),
+    }
+}
+
+#[test]
+fn blank_count_from_range_span() {
+    // A wire blank node whose range spans 3 lines should reverse
+    // into a BlankLineGroup with count=3, not the prior fixed
+    // count=1.
+    let wire = lex_extension::wire::WireNode::Blank {
+        range: lex_extension::wire::Range::new(
+            lex_extension::wire::Position::new(5, 0),
+            lex_extension::wire::Position::new(8, 0),
+        ),
+        origin: None,
+    };
+    let back = from_wire_node(&wire).expect("ok");
+    match &back[0] {
+        ContentItem::BlankLineGroup(blg) => assert_eq!(blg.count, 3),
+        other => panic!("expected BlankLineGroup, got {other:?}"),
+    }
+}
+
+#[test]
+fn blank_count_clamps_to_one_for_collapsed_range() {
+    let wire = lex_extension::wire::WireNode::Blank {
+        range: lex_extension::wire::Range::new(
+            lex_extension::wire::Position::new(0, 0),
+            lex_extension::wire::Position::new(0, 0),
+        ),
+        origin: None,
+    };
+    let back = from_wire_node(&wire).expect("ok");
+    match &back[0] {
+        ContentItem::BlankLineGroup(blg) => assert_eq!(blg.count, 1),
+        _ => panic!("expected BlankLineGroup"),
+    }
+}
