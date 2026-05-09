@@ -22,17 +22,25 @@
 //!   validator.
 //! - [`transport::native`] — the trivial transport: a registered
 //!   `Box<dyn LexHandler>` is its own transport, no adapter required.
+//! - [`transport::subprocess`] (behind the `subprocess` feature) —
+//!   spawn a handler binary and dispatch over LSP-framed JSON-RPC.
+//! - [`trust::TrustGate`] — decides whether a handler is allowed to
+//!   run, per the β/γ-correct policy in the master tracking issue
+//!   (subprocess always prompts; native trusted by linkage).
 //!
 //! Coming in later PRs:
 //!
-//! - PR 5: subprocess transport (JSON-RPC over stdio + `initialize`
-//!   handshake).
-//! - PR 6: trust store and decision matrix.
-//! - PR 12: OS-level sandboxing for declared-pure subprocess handlers.
+//! - PR 12: OS-level sandboxing for declared-pure subprocess handlers
+//!   (the post-δ trust matrix flip).
 
 pub mod registry;
 pub mod schema;
 pub mod transport;
+pub mod trust;
 
 pub use registry::{Registry, RegistryError};
 pub use schema::{SchemaError, SchemaLoader};
+pub use trust::{
+    detect_ci_environment, Capability, Source, Surface, Transport, TrustDecision, TrustGate,
+    TrustKey, TrustPromptContext, TrustPromptHandler, TrustStore, TrustStoreError,
+};
