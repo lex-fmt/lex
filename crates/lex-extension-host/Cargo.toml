@@ -24,7 +24,6 @@ tokio = { workspace = true, optional = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
-tempfile = { workspace = true }
 
 # Subprocess test fixture: a single binary with several behavioural modes
 # (echo, slow, crash, malformed, version-mismatch). Built only when the

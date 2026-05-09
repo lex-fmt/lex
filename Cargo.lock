@@ -1062,7 +1062,6 @@ dependencies = [
  "lex-extension",
  "serde",
  "serde_json",
- "tempfile",
  "tokio",
 ]
 

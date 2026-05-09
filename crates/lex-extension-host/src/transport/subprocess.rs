@@ -38,7 +38,7 @@
 
 use std::collections::HashMap;
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -234,9 +234,24 @@ struct PendingReply {
 /// Commands the sync side sends to the worker thread.
 enum WorkerCmd {
     Call {
+        /// Pre-allocated by the sync side so the timeout path can
+        /// follow up with [`WorkerCmd::CancelPending`] for the same id.
+        id: u64,
         method: &'static str,
         params: serde_json::Value,
         reply: std::sync::mpsc::Sender<Result<serde_json::Value, JsonRpcError>>,
+    },
+    /// Fire-and-forget JSON-RPC notification. No `id`, no waiter; the
+    /// worker writes the frame and moves on.
+    Notify {
+        method: &'static str,
+        params: serde_json::Value,
+    },
+    /// The sync side timed out on a pending request. Tell the worker
+    /// to drop the entry preemptively so `pending` doesn't accumulate
+    /// when a handler is permanently slow.
+    CancelPending {
+        id: u64,
     },
     Shutdown,
 }
@@ -246,6 +261,9 @@ enum WorkerCmd {
 pub struct SubprocessHandler {
     cmd_tx: mpsc::UnboundedSender<WorkerCmd>,
     timeout: Duration,
+    /// JSON-RPC id allocator. Reserves [1..100) for handshake / future
+    /// housekeeping; live calls start at 100.
+    next_id: AtomicU64,
     /// `implements` array reported by the handler at initialize. Used
     /// to short-circuit dispatch for hooks the handler doesn't claim
     /// to support.
@@ -331,6 +349,7 @@ impl SubprocessHandler {
         Ok(Self {
             cmd_tx,
             timeout,
+            next_id: AtomicU64::new(100),
             implements: init.implements.into_iter().collect(),
             disabled,
             worker: Some(worker),
@@ -361,9 +380,11 @@ impl SubprocessHandler {
                 "handler did not advertise `{method}` in its `implements` array"
             )));
         }
+        let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let (tx, rx) = std::sync::mpsc::channel();
         self.cmd_tx
             .send(WorkerCmd::Call {
+                id,
                 method,
                 params,
                 reply: tx,
@@ -376,6 +397,12 @@ impl SubprocessHandler {
             Ok(Ok(v)) => Ok(v),
             Ok(Err(err)) => Err(handler_error_from_jsonrpc(err)),
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                // Tell the worker to drop the pending entry so a
+                // permanently-slow handler can't accumulate stale
+                // pending requests in `pending`. Send is best-effort —
+                // if the worker is gone, our shutdown ladder will
+                // collect the leak.
+                let _ = self.cmd_tx.send(WorkerCmd::CancelPending { id });
                 Err(HandlerError::internal(format!(
                     "subprocess handler timed out after {} ms on `{method}`",
                     self.timeout.as_millis()
@@ -395,9 +422,23 @@ impl Drop for SubprocessHandler {
     fn drop(&mut self) {
         let _ = self.cmd_tx.send(WorkerCmd::Shutdown);
         if let Some(handle) = self.worker.take() {
-            // Best effort — if the worker is wedged, we don't want to
-            // block Drop indefinitely.
-            let _ = handle.join();
+            // Bounded join: a healthy worker exits within milliseconds
+            // of receiving Shutdown (it sends the JSON-RPC `shutdown`
+            // notification, waits SHUTDOWN_GRACE for the child, then
+            // returns; `kill_on_drop(true)` on the child handles the
+            // SIGKILL ladder). If it's wedged in IO we don't want to
+            // block Drop forever, so we poll `is_finished` for a short
+            // window and detach the handle if it doesn't return.
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            while !handle.is_finished() && std::time::Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            if handle.is_finished() {
+                let _ = handle.join();
+            }
+            // else: detach. The OS will reap the thread when its
+            // resources finally release; we'd rather leak a thread
+            // than block our caller.
         }
     }
 }
@@ -435,10 +476,19 @@ fn handler_error_from_jsonrpc(err: JsonRpcError) -> HandlerError {
 
 impl LexHandler for SubprocessHandler {
     fn on_label(&self, ctx: &LabelCtx) {
-        // on_label is a notification — fire-and-forget. We still go
-        // through `call` for the round-trip diagnostics; handlers that
-        // don't claim to implement it short-circuit cleanly.
-        let _ = self.call("on_label", serde_json::to_value(ctx).expect("LabelCtx"));
+        // Wire spec §4.1: on_label is a JSON-RPC notification — no `id`,
+        // no response. Send via the Notify command so the worker writes
+        // the frame and moves on without registering a pending entry.
+        if self.disabled.load(Ordering::SeqCst) {
+            return;
+        }
+        if !self.implements.is_empty() && !self.implements.contains("on_label") {
+            return;
+        }
+        let _ = self.cmd_tx.send(WorkerCmd::Notify {
+            method: "on_label",
+            params: serde_json::to_value(ctx).expect("LabelCtx"),
+        });
     }
 
     fn on_validate(&self, ctx: &LabelCtx) -> Result<Vec<Diagnostic>, HandlerError> {
@@ -614,17 +664,16 @@ async fn worker_main(
     };
     let _ = init_tx.send(Ok(init_result));
 
-    // Main dispatch loop.
-    let mut next_id: u64 = 100; // reserve [1..100) for housekeeping
+    // Main dispatch loop. Ids are allocated by the sync side so the
+    // sync-side timeout path can match its CancelPending command to a
+    // specific entry.
     let mut pending: HashMap<u64, PendingReply> = HashMap::new();
 
     loop {
         tokio::select! {
             cmd = cmd_rx.recv() => {
                 match cmd {
-                    Some(WorkerCmd::Call { method, params, reply }) => {
-                        let id = next_id;
-                        next_id += 1;
+                    Some(WorkerCmd::Call { id, method, params, reply }) => {
                         let req = OutgoingRequest {
                             jsonrpc: "2.0",
                             id,
@@ -642,6 +691,31 @@ async fn worker_main(
                             break;
                         }
                         pending.insert(id, PendingReply { tx: reply });
+                    }
+                    Some(WorkerCmd::Notify { method, params }) => {
+                        let note = OutgoingNotification {
+                            jsonrpc: "2.0",
+                            method,
+                            params,
+                        };
+                        let bytes = encode_frame(
+                            &serde_json::to_value(&note).expect("OutgoingNotification"),
+                        );
+                        if io.stdin.write_all(&bytes).await.is_err() {
+                            // Stdin closed — child is gone. Disable
+                            // and bail; pending requests will fail on
+                            // the read side.
+                            disabled.store(true, Ordering::SeqCst);
+                            break;
+                        }
+                    }
+                    Some(WorkerCmd::CancelPending { id }) => {
+                        // Sync caller timed out on this id. Drop the
+                        // pending entry so it doesn't accumulate; if
+                        // the response eventually arrives we'll treat
+                        // it as an unknown id and ignore it (same as
+                        // a notification for an out-of-flight id).
+                        pending.remove(&id);
                     }
                     Some(WorkerCmd::Shutdown) | None => {
                         break;
@@ -738,34 +812,52 @@ async fn do_initialize(
         .await
         .map_err(|e| SpawnError::Initialize(InitializeError::Transport(e.to_string())))?;
 
-    // Read frames until we get the response with id=1.
-    let frame = tokio::time::timeout(INITIALIZE_TIMEOUT, io.reader.read_frame())
-        .await
-        .map_err(|_| SpawnError::Initialize(InitializeError::Timeout))?
-        .map_err(|e| SpawnError::Initialize(InitializeError::Transport(e.to_string())))?;
-    match frame {
-        IncomingFrame::Response {
-            id: 1,
-            result: Some(r),
-            error: None,
-            ..
-        } => serde_json::from_value::<InitializeResult>(r)
-            .map_err(|e| SpawnError::Initialize(InitializeError::BadResponse(e.to_string()))),
-        IncomingFrame::Response {
-            id: 1,
-            error: Some(err),
-            ..
-        } => Err(SpawnError::Initialize(InitializeError::HandlerError {
-            code: err.code,
-            message: err.message,
-        })),
-        IncomingFrame::Response { id, .. } => Err(SpawnError::Initialize(
-            InitializeError::BadResponse(format!("initialize response id={id}, expected 1")),
-        )),
-        IncomingFrame::Notification { method, .. } => {
-            Err(SpawnError::Initialize(InitializeError::BadResponse(
-                format!("received notification `{method}` before initialize response"),
-            )))
+    // Read frames until we get the response with id=1. Per the wire
+    // spec, handlers may legitimately emit notifications before the
+    // initialize response (e.g., log lines or progress); we log and
+    // skip those rather than treat them as protocol errors.
+    let deadline = tokio::time::Instant::now() + INITIALIZE_TIMEOUT;
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            return Err(SpawnError::Initialize(InitializeError::Timeout));
+        }
+        let frame = tokio::time::timeout(remaining, io.reader.read_frame())
+            .await
+            .map_err(|_| SpawnError::Initialize(InitializeError::Timeout))?
+            .map_err(|e| SpawnError::Initialize(InitializeError::Transport(e.to_string())))?;
+        match frame {
+            IncomingFrame::Response {
+                id: 1,
+                result: Some(r),
+                error: None,
+                ..
+            } => {
+                return serde_json::from_value::<InitializeResult>(r).map_err(|e| {
+                    SpawnError::Initialize(InitializeError::BadResponse(e.to_string()))
+                });
+            }
+            IncomingFrame::Response {
+                id: 1,
+                error: Some(err),
+                ..
+            } => {
+                return Err(SpawnError::Initialize(InitializeError::HandlerError {
+                    code: err.code,
+                    message: err.message,
+                }));
+            }
+            IncomingFrame::Response { id, .. } => {
+                return Err(SpawnError::Initialize(InitializeError::BadResponse(
+                    format!("initialize response id={id}, expected 1"),
+                )));
+            }
+            IncomingFrame::Notification { method, .. } => {
+                eprintln!(
+                    "[lex-extension-host] subprocess notification during initialize: {method}"
+                );
+                continue;
+            }
         }
     }
 }
@@ -796,10 +888,21 @@ impl FrameReader {
     /// [`IncomingFrame`] or a [`FrameError`] on EOF / malformed input.
     async fn read_frame(&mut self) -> Result<IncomingFrame, FrameError> {
         // Find the header/body separator in the buffer, refilling from
-        // stdout as needed.
+        // stdout as needed. Cap the unbounded fill: a misbehaving
+        // handler that streams bytes without `\r\n\r\n` could otherwise
+        // grow `self.buf` until the host runs out of memory. 8 KiB is
+        // generous for a few `Name: value` lines (LSP rarely uses more
+        // than `Content-Length` and `Content-Type`).
+        const MAX_HEADER_BYTES: usize = 8 * 1024;
         let header_end = loop {
             if let Some(pos) = find_header_end(&self.buf) {
                 break pos;
+            }
+            if self.buf.len() >= MAX_HEADER_BYTES {
+                return Err(FrameError::MalformedHeader(format!(
+                    "no header separator after {} bytes",
+                    self.buf.len()
+                )));
             }
             let mut chunk = [0u8; 4096];
             let n = self.stdout.read(&mut chunk).await?;
