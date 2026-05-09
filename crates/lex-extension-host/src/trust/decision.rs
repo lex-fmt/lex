@@ -143,11 +143,13 @@ pub trait TrustPromptHandler: Send + Sync {
     fn prompt(&self, ctx: &TrustPromptContext) -> TrustDecision;
 }
 
-/// The gate. Constructed once per host session with a [`Surface`], a
-/// [`TrustStore`] for persistence, and a [`TrustPromptHandler`] for
-/// the LSP path. Cheap to clone (the store is `Arc`-shared internally
-/// — well, we don't use Arc here yet, but the public API is small
-/// enough that callers can wrap their own).
+/// The gate. Constructed once per host session with a [`Surface`],
+/// a [`TrustStore`] for persistence, and a [`TrustPromptHandler`]
+/// for the LSP path. Owned (not `Clone`): the contained
+/// `Box<dyn TrustPromptHandler>` and the file-backed `TrustStore`
+/// don't have a sensible cheap copy, and the gate is a session-
+/// scoped singleton in practice. Wrap in `Arc<Mutex<…>>` if a
+/// caller really needs shared mutability.
 pub struct TrustGate {
     surface: Surface,
     /// `--enable-handlers` flag — when set, CLI/CI surfaces treat
@@ -252,8 +254,22 @@ impl TrustGate {
                     // subsequent session).
                     TrustDecision::Pending => None,
                 };
-                if let Some(decision) = to_store {
-                    let _ = self.store.set(key, decision);
+                if let Some(decision_to_store) = to_store {
+                    if let Err(e) = self.store.set(key, decision_to_store) {
+                        // Persist failed — most often a read-only
+                        // workspace. The store's atomicity contract
+                        // guarantees in-memory matches disk, so the
+                        // pin really wasn't recorded. We honor the
+                        // prompt's verdict for *this* session
+                        // (returning `decision` below) and log the
+                        // failure so the user can see why their
+                        // approval isn't sticking. Next session
+                        // they'll be prompted again with the same
+                        // diagnostic visible.
+                        eprintln!(
+                            "[lex-extension-host] trust store persist failed for `{namespace}`: {e}; approval applies for this session only"
+                        );
+                    }
                 }
                 match decision {
                     TrustDecision::Pending => TrustDecision::Denied {
