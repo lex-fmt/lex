@@ -93,18 +93,25 @@ fn convert_one(
         own.or(inherited)
     }
 
+    // `WireNode` is `#[non_exhaustive]` and its variants may gain
+    // new optional fields over time; the struct-variant patterns
+    // below use `..` so adding a field upstream doesn't break this
+    // crate at the next bump. The fields we explicitly bind are
+    // the only ones the codec needs; future additions land in `..`
+    // and are silently ignored until the codec opts in.
     match node {
         WireNode::Paragraph {
             range,
             origin,
             inlines,
+            ..
         } => {
             let eff = effective(origin.as_deref(), inherited_origin);
             Ok(ContentItem::Paragraph(paragraph_from_wire(
                 range, eff, inlines, interner,
             )))
         }
-        WireNode::Blank { range, origin } => {
+        WireNode::Blank { range, origin, .. } => {
             // Reconstruct the blank-line count from the range when
             // possible: an N-line blank group spans N lines, so
             // `end.line - start.line` (clamped to >= 1) recovers the
@@ -124,6 +131,7 @@ fn convert_one(
             label,
             params,
             body,
+            ..
         } => {
             let eff = effective(origin.as_deref(), inherited_origin);
             Ok(ContentItem::Annotation(annotation_from_wire(
@@ -136,6 +144,7 @@ fn convert_one(
             title,
             marker,
             children,
+            ..
         } => {
             let eff = effective(origin.as_deref(), inherited_origin);
             Ok(ContentItem::Session(session_from_wire(
@@ -147,6 +156,7 @@ fn convert_one(
             origin,
             subject,
             children,
+            ..
         } => {
             let eff = effective(origin.as_deref(), inherited_origin);
             Ok(ContentItem::Definition(definition_from_wire(
@@ -158,6 +168,7 @@ fn convert_one(
             origin,
             marker_style,
             items,
+            ..
         } => {
             let eff = effective(origin.as_deref(), inherited_origin);
             Ok(ContentItem::List(list_from_wire(
@@ -176,6 +187,7 @@ fn convert_one(
             align,
             rows,
             footnotes,
+            ..
         } => {
             let eff = effective(origin.as_deref(), inherited_origin);
             Ok(ContentItem::Table(Box::new(table_from_wire(
@@ -197,6 +209,7 @@ fn convert_one(
             body_text,
             subject,
             mode,
+            ..
         } => {
             let eff = effective(origin.as_deref(), inherited_origin);
             Ok(verbatim_from_wire(
