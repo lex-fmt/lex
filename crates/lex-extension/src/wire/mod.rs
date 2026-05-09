@@ -9,6 +9,7 @@
 mod ast;
 mod ctx;
 mod format;
+mod host_node_kind;
 mod inline;
 mod payload;
 mod range;
@@ -16,6 +17,7 @@ mod range;
 pub use ast::{WireFootnote, WireListItem, WireNode, WireRow, WireTableCell};
 pub use ctx::{AnnotationBody, LabelCtx, NodeRef};
 pub use format::Format;
+pub use host_node_kind::HostNodeKind;
 pub use inline::{RefKind, WireInline};
 pub use payload::{
     CodeAction, CodeActionKind, Completion, CompletionKind, Diagnostic, DiagnosticSeverity, Hover,

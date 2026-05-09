@@ -13,6 +13,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use lex_extension::schema::{HandlerTransport, ParamType, Schema};
+use lex_extension::wire::HostNodeKind;
 
 /// One schema file failed to load. Variants distinguish *post-deserialise*
 /// validation failures by class so callers can pattern-match on the cause.
@@ -47,7 +48,9 @@ pub enum SchemaError {
     },
 
     /// `attaches_to` referenced a node kind outside the closed set
-    /// `{paragraph, definition, session, annotation, list_item, verbatim}`.
+    /// defined by [`HostNodeKind::ALL`]. The Display impl emits the
+    /// current allowed list verbatim so the error stays in sync if
+    /// new kinds are added.
     UnknownNodeKind {
         path: PathBuf,
         label: String,
@@ -128,8 +131,9 @@ impl std::fmt::Display for SchemaError {
             ),
             SchemaError::UnknownNodeKind { path, label, kind } => write!(
                 f,
-                "{}: schema for `{label}` lists unknown node kind `{kind}` in attaches_to (allowed: paragraph, definition, session, annotation, list_item, verbatim)",
-                path.display()
+                "{}: schema for `{label}` lists unknown node kind `{kind}` in attaches_to (allowed: {})",
+                path.display(),
+                HostNodeKind::allowed_list()
             ),
             SchemaError::EmptyEnumValues { path, label, param } => write!(
                 f,
@@ -256,15 +260,10 @@ impl SchemaLoader {
 /// accept.
 const SUPPORTED_SCHEMA_VERSIONS: &[u32] = &[1];
 
-/// Allowed values of `attaches_to`. Closed set per *Extending Lex* §13.2.
-const ALLOWED_NODE_KINDS: &[&str] = &[
-    "paragraph",
-    "definition",
-    "session",
-    "annotation",
-    "list_item",
-    "verbatim",
-];
+// Allowed values of `attaches_to` come from `HostNodeKind` in
+// `lex-extension`. Centralising the list there keeps the loader and
+// the analysis/render walkers from drifting — see the
+// `host_node_kind` module for the rationale.
 
 fn validate(schema: &Schema, path: &Path) -> Result<(), SchemaError> {
     // schema_version: only the recognised versions are accepted.
@@ -310,7 +309,7 @@ fn validate(schema: &Schema, path: &Path) -> Result<(), SchemaError> {
 
     // attaches_to: every entry must be a known node kind.
     for kind in &schema.attaches_to {
-        if !ALLOWED_NODE_KINDS.contains(&kind.as_str()) {
+        if HostNodeKind::parse(kind).is_none() {
             return Err(SchemaError::UnknownNodeKind {
                 path: path.to_path_buf(),
                 label: schema.label.clone(),
@@ -538,6 +537,23 @@ params:
         );
         let err = SchemaLoader::load_file(&path).unwrap_err();
         assert!(matches!(err, SchemaError::Parse { .. }));
+    }
+
+    #[test]
+    fn document_list_and_table_are_valid_attachment_kinds() {
+        // Regression for the duplicated-allowed-list bug: the loader
+        // and the analysis/render walkers both encoded their own
+        // copies of the kind set, and the loader's was missing
+        // `document`, `list`, and `table` even though the walkers
+        // emitted those names. Centralising the list on
+        // `HostNodeKind` should make all three pass.
+        for kind in ["document", "list", "table"] {
+            let dir = TempDir::new().unwrap();
+            let body = format!("schema_version: 1\nlabel: ns.x\nattaches_to: [{kind}]\n");
+            let path = write_yaml(&dir, &format!("{kind}.yaml"), &body);
+            SchemaLoader::load_file(&path)
+                .unwrap_or_else(|e| panic!("kind `{kind}` should be accepted, got: {e}"));
+        }
     }
 
     #[test]
