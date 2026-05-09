@@ -32,7 +32,7 @@ use serde_json::Value;
 
 use super::error::FromWireError;
 use super::inline::text_content_from_wire;
-use super::range::range_from_wire_with_origin;
+use super::range::{range_from_wire_with_origin, OriginInterner};
 
 /// Convert a `WireNode::Document` into a list of lex-core
 /// `ContentItem`s — one per child. The `WireNode::Document` wrapper
@@ -43,18 +43,35 @@ use super::range::range_from_wire_with_origin;
 /// example a single `WireNode::Paragraph`), the result is a single-
 /// element vector containing the converted item.
 pub fn from_wire_node(node: &WireNode) -> Result<Vec<ContentItem>, FromWireError> {
+    let mut interner = OriginInterner::new();
     match node {
-        WireNode::Document { children, .. } => from_wire_subtree(children),
-        single => Ok(vec![convert_one(single)?]),
+        WireNode::Document { children, .. } => from_wire_subtree_interned(children, &mut interner),
+        single => Ok(vec![convert_one(single, &mut interner)?]),
     }
 }
 
 /// Convert a slice of wire nodes into a vector of `ContentItem`s.
 pub fn from_wire_subtree(nodes: &[WireNode]) -> Result<Vec<ContentItem>, FromWireError> {
-    nodes.iter().map(convert_one).collect()
+    let mut interner = OriginInterner::new();
+    from_wire_subtree_interned(nodes, &mut interner)
 }
 
-fn convert_one(node: &WireNode) -> Result<ContentItem, FromWireError> {
+/// Internal worker shared by `from_wire_node` and `from_wire_subtree`
+/// so a single [`OriginInterner`] is threaded through every nested
+/// recursion of a single decode call. Without sharing one interner,
+/// each `convert_one` would build its own and the dedup would be
+/// trivially per-node.
+fn from_wire_subtree_interned(
+    nodes: &[WireNode],
+    interner: &mut OriginInterner,
+) -> Result<Vec<ContentItem>, FromWireError> {
+    nodes.iter().map(|n| convert_one(n, interner)).collect()
+}
+
+fn convert_one(
+    node: &WireNode,
+    interner: &mut OriginInterner,
+) -> Result<ContentItem, FromWireError> {
     match node {
         WireNode::Paragraph {
             range,
@@ -64,6 +81,7 @@ fn convert_one(node: &WireNode) -> Result<ContentItem, FromWireError> {
             range,
             origin.as_deref(),
             inlines,
+            interner,
         ))),
         WireNode::Blank { range, origin } => {
             // Reconstruct the blank-line count from the range when
@@ -75,7 +93,7 @@ fn convert_one(node: &WireNode) -> Result<ContentItem, FromWireError> {
             let span_lines = range.end.line().saturating_sub(range.start.line());
             let count = (span_lines as usize).max(1);
             let mut blg = BlankLineGroup::new(count, Vec::new());
-            blg.location = range_from_wire_with_origin(range, origin.as_deref());
+            blg.location = range_from_wire_with_origin(range, origin.as_deref(), interner);
             Ok(ContentItem::BlankLineGroup(blg))
         }
         WireNode::Annotation {
@@ -90,6 +108,7 @@ fn convert_one(node: &WireNode) -> Result<ContentItem, FromWireError> {
             label,
             params,
             body,
+            interner,
         )?)),
         WireNode::Session {
             range,
@@ -103,6 +122,7 @@ fn convert_one(node: &WireNode) -> Result<ContentItem, FromWireError> {
             title,
             marker,
             children,
+            interner,
         )?)),
         WireNode::Definition {
             range,
@@ -114,6 +134,7 @@ fn convert_one(node: &WireNode) -> Result<ContentItem, FromWireError> {
             origin.as_deref(),
             subject,
             children,
+            interner,
         )?)),
         WireNode::List {
             range,
@@ -125,6 +146,7 @@ fn convert_one(node: &WireNode) -> Result<ContentItem, FromWireError> {
             origin.as_deref(),
             marker_style,
             items,
+            interner,
         )?)),
         WireNode::Table {
             range,
@@ -142,6 +164,7 @@ fn convert_one(node: &WireNode) -> Result<ContentItem, FromWireError> {
             align,
             rows,
             footnotes,
+            interner,
         )?))),
         WireNode::Verbatim {
             range,
@@ -159,6 +182,7 @@ fn convert_one(node: &WireNode) -> Result<ContentItem, FromWireError> {
             body_text,
             subject,
             mode,
+            interner,
         )?),
         // WireNode is `#[non_exhaustive]` — future kinds surface here.
         _ => Err(FromWireError::UnsupportedKind {
@@ -171,8 +195,9 @@ fn paragraph_from_wire(
     range: &lex_extension::wire::Range,
     origin: Option<&str>,
     inlines: &[lex_extension::wire::WireInline],
+    interner: &mut OriginInterner,
 ) -> Paragraph {
-    let location = range_from_wire_with_origin(range, origin);
+    let location = range_from_wire_with_origin(range, origin, interner);
     // Round-trip the wire inlines back into a single source string,
     // then split on `\n` to reconstruct multiple TextLines. The
     // forward codec inserts an explicit `\n` Text inline between
@@ -211,14 +236,15 @@ fn annotation_from_wire(
     label: &str,
     params: &Value,
     body: &Value,
+    interner: &mut OriginInterner,
 ) -> Result<CoreAnnotation, FromWireError> {
     let parameters = parameters_from_json(params)?;
     let label = Label::new(label.to_string());
     let data = Data::new(label, parameters);
 
-    let children = annotation_body_from_json(body)?;
+    let children = annotation_body_from_json(body, interner)?;
     let mut a = CoreAnnotation::from_data(data, Vec::new());
-    a.location = range_from_wire_with_origin(range, origin);
+    a.location = range_from_wire_with_origin(range, origin, interner);
     if !children.is_empty() {
         for child in children {
             a.children.as_mut_vec().push(child);
@@ -233,11 +259,12 @@ fn session_from_wire(
     title: &str,
     marker: &Option<String>,
     children: &[WireNode],
+    interner: &mut OriginInterner,
 ) -> Result<Session, FromWireError> {
     let title_tc = TextContent::from_string(title.to_string(), None);
-    let typed_children = wire_children_to_session_content(children)?;
+    let typed_children = wire_children_to_session_content(children, interner)?;
     let mut s = Session::new(title_tc, typed_children);
-    s.location = range_from_wire_with_origin(range, origin);
+    s.location = range_from_wire_with_origin(range, origin, interner);
     s.marker = marker
         .as_deref()
         .and_then(|m| SequenceMarker::parse(m, None));
@@ -249,11 +276,12 @@ fn definition_from_wire(
     origin: Option<&str>,
     subject: &str,
     children: &[WireNode],
+    interner: &mut OriginInterner,
 ) -> Result<Definition, FromWireError> {
     let subject_tc = TextContent::from_string(subject.to_string(), None);
-    let typed_children = wire_children_to_content_elements(children)?;
+    let typed_children = wire_children_to_content_elements(children, interner)?;
     let mut d = Definition::new(subject_tc, typed_children);
-    d.location = range_from_wire_with_origin(range, origin);
+    d.location = range_from_wire_with_origin(range, origin, interner);
     Ok(d)
 }
 
@@ -262,6 +290,7 @@ fn list_from_wire(
     origin: Option<&str>,
     marker_style: &str,
     items: &[WireListItem],
+    interner: &mut OriginInterner,
 ) -> Result<List, FromWireError> {
     let marker = synthetic_marker_for_style(marker_style);
     // `WireListItem` has no `origin` slot of its own. List items in
@@ -274,10 +303,10 @@ fn list_from_wire(
     let list_items = items
         .iter()
         .enumerate()
-        .map(|(index, item)| list_item_from_wire(item, marker_style, index, origin))
+        .map(|(index, item)| list_item_from_wire(item, marker_style, index, origin, interner))
         .collect::<Result<Vec<_>, _>>()?;
     let mut l = List::new(list_items);
-    l.location = range_from_wire_with_origin(range, origin);
+    l.location = range_from_wire_with_origin(range, origin, interner);
     l.marker = marker;
     Ok(l)
 }
@@ -287,6 +316,7 @@ fn list_item_from_wire(
     marker_style: &str,
     index: usize,
     parent_origin: Option<&str>,
+    interner: &mut OriginInterner,
 ) -> Result<ListItem, FromWireError> {
     let combined = text_content_from_wire(&item.inlines);
     let raw = combined.as_string();
@@ -298,7 +328,7 @@ fn list_item_from_wire(
             .collect()
     };
     let marker_text = synthetic_marker_text(marker_style, index);
-    let typed_children = wire_children_to_content_elements(&item.children)?;
+    let typed_children = wire_children_to_content_elements(&item.children, interner)?;
     let mut li = ListItem::with_text_content(
         TextContent::from_string(marker_text, None),
         text_lines
@@ -310,7 +340,7 @@ fn list_item_from_wire(
     if text_lines.len() > 1 {
         li.text = text_lines;
     }
-    li.location = range_from_wire_with_origin(&item.range, parent_origin);
+    li.location = range_from_wire_with_origin(&item.range, parent_origin, interner);
     Ok(li)
 }
 
@@ -362,6 +392,7 @@ fn roman_numeral(mut n: usize) -> String {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn table_from_wire(
     range: &lex_extension::wire::Range,
     origin: Option<&str>,
@@ -370,6 +401,7 @@ fn table_from_wire(
     align: &str,
     rows: &[WireRow],
     footnotes: &[WireFootnote],
+    interner: &mut OriginInterner,
 ) -> Result<Table, FromWireError> {
     let alignment = match align {
         "left" => TableCellAlignment::Left,
@@ -396,7 +428,7 @@ fn table_from_wire(
     }
     let subject = TextContent::from_string(caption.to_string(), None);
     let mut t = Table::new(subject, header_vec, body_vec, VerbatimBlockMode::Inflow);
-    t.location = range_from_wire_with_origin(range, origin);
+    t.location = range_from_wire_with_origin(range, origin, interner);
     if !footnotes.is_empty() {
         let footnote_items: Vec<ListItem> = footnotes
             .iter()
@@ -426,6 +458,7 @@ fn table_cell_from_wire(
         .with_header(header)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn verbatim_from_wire(
     range: &lex_extension::wire::Range,
     origin: Option<&str>,
@@ -434,6 +467,7 @@ fn verbatim_from_wire(
     body_text: &str,
     subject: &str,
     mode: &str,
+    interner: &mut OriginInterner,
 ) -> Result<ContentItem, FromWireError> {
     if label == "lex.internal.unsupported.unknown" {
         return Err(FromWireError::UnsupportedKind {
@@ -453,7 +487,7 @@ fn verbatim_from_wire(
         // `verbatim_line_standalone_to_wire` in the forward codec.
         let mut vl =
             VerbatimLine::from_text_content(TextContent::from_string(body_text.to_string(), None));
-        vl.location = range_from_wire_with_origin(range, origin);
+        vl.location = range_from_wire_with_origin(range, origin, interner);
         return Ok(ContentItem::VerbatimLine(vl));
     }
 
@@ -478,7 +512,7 @@ fn verbatim_from_wire(
     };
     let block_mode = parse_verbatim_mode(mode);
     let mut v = Verbatim::new(subject_tc, typed_lines, closing_data, block_mode);
-    v.location = range_from_wire_with_origin(range, origin);
+    v.location = range_from_wire_with_origin(range, origin, interner);
     Ok(ContentItem::VerbatimBlock(Box::new(v)))
 }
 
@@ -522,7 +556,10 @@ fn parameters_from_json(params: &Value) -> Result<Vec<Parameter>, FromWireError>
     Ok(out)
 }
 
-fn annotation_body_from_json(body: &Value) -> Result<Vec<ContentItem>, FromWireError> {
+fn annotation_body_from_json(
+    body: &Value,
+    interner: &mut OriginInterner,
+) -> Result<Vec<ContentItem>, FromWireError> {
     match body {
         Value::Null => Ok(Vec::new()),
         Value::String(text) => {
@@ -547,7 +584,7 @@ fn annotation_body_from_json(body: &Value) -> Result<Vec<ContentItem>, FromWireE
                     .map_err(|e| FromWireError::DeserialisationFailed(e.to_string()))?,
                 None => Vec::new(),
             };
-            from_wire_subtree(&children)
+            from_wire_subtree_interned(&children, interner)
         }
         _ => Err(FromWireError::MalformedField {
             field: "body",
@@ -558,15 +595,17 @@ fn annotation_body_from_json(body: &Value) -> Result<Vec<ContentItem>, FromWireE
 
 fn wire_children_to_session_content(
     children: &[WireNode],
+    interner: &mut OriginInterner,
 ) -> Result<Vec<SessionContent>, FromWireError> {
-    let items = from_wire_subtree(children)?;
+    let items = from_wire_subtree_interned(children, interner)?;
     Ok(items.into_iter().map(SessionContent::from).collect())
 }
 
 fn wire_children_to_content_elements(
     children: &[WireNode],
+    interner: &mut OriginInterner,
 ) -> Result<Vec<ContentElement>, FromWireError> {
-    let items = from_wire_subtree(children)?;
+    let items = from_wire_subtree_interned(children, interner)?;
     items
         .into_iter()
         .map(|item| {
