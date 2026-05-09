@@ -362,9 +362,8 @@ fn build_handler(
     trust_gate: &mut TrustGate,
     diagnostics: &mut Vec<BootDiagnostic>,
 ) -> Box<dyn LexHandler> {
-    let handler_spec = match find_handler_spec(schemas, namespace) {
-        Ok(Some(spec)) => spec,
-        Ok(None) => return Box::new(NoopHandler),
+    let contract = match find_namespace_contract(schemas, namespace) {
+        Ok(c) => c,
         Err(msg) => {
             diagnostics.push(BootDiagnostic {
                 namespace: Some(namespace.into()),
@@ -372,6 +371,10 @@ fn build_handler(
             });
             return Box::new(NoopHandler);
         }
+    };
+    let handler_spec = match contract.handler {
+        Some(spec) => spec,
+        None => return Box::new(NoopHandler),
     };
 
     match handler_spec.transport {
@@ -409,7 +412,7 @@ fn build_handler(
 
     // Subprocess transport — consult the trust gate.
     let command_string = handler_spec.command.join(" ");
-    let capability = Capability::from_schema(schemas[0].capabilities);
+    let capability = Capability::from_schema(contract.capabilities);
     let transport = Transport::from_schema(handler_spec.transport);
     let decision = trust_gate.evaluate(source, transport, capability, namespace, &command_string);
     match decision {
@@ -445,7 +448,7 @@ fn build_handler(
         handler_spec,
         namespace,
         &labels,
-        schemas[0].capabilities,
+        contract.capabilities,
         env!("CARGO_PKG_VERSION"),
         &env,
     ) {
@@ -462,27 +465,51 @@ fn build_handler(
     }
 }
 
-/// Find the unique `HandlerSpec` declared across the schemas of one
-/// namespace. v1's invariant: every schema in a namespace either
-/// declares the same handler or declares none. Mixed handlers are
-/// a misconfiguration that should fail loudly.
-fn find_handler_spec<'a>(
+/// One namespace's handler + capability contract, validated as
+/// uniform across all the namespace's schemas.
+///
+/// v1 invariant (called out in the issue scope and now enforced
+/// here): within a namespace, every schema must agree on its
+/// `handler` block AND its `capabilities` block. Mixed `handler`
+/// (some schemas declare it, others don't, or differ in shape)
+/// or mixed `capabilities` (different `fs`/`net` declarations
+/// across labels) are misconfiguration and surface as a diagnostic.
+struct NamespaceContract<'a> {
+    handler: Option<&'a HandlerSpec>,
+    capabilities: lex_extension::schema::Capabilities,
+}
+
+/// Validate that every schema in `schemas` agrees on its `handler`
+/// and `capabilities` blocks, then return the consensus.
+fn find_namespace_contract<'a>(
     schemas: &'a [Schema],
     namespace: &str,
-) -> Result<Option<&'a HandlerSpec>, String> {
-    let specs: Vec<&HandlerSpec> = schemas.iter().filter_map(|s| s.handler.as_ref()).collect();
-    if specs.is_empty() {
-        return Ok(None);
-    }
-    let first = specs[0];
-    for s in &specs[1..] {
-        if *s != first {
+) -> Result<NamespaceContract<'a>, String> {
+    debug_assert!(!schemas.is_empty(), "caller must pass a non-empty slice");
+    let first = &schemas[0];
+    let first_handler = first.handler.as_ref();
+    let first_caps = first.capabilities;
+
+    for (idx, s) in schemas.iter().enumerate().skip(1) {
+        if s.handler.as_ref() != first_handler {
             return Err(format!(
-                "namespace `{namespace}` has schemas declaring different `handler` blocks; v1 requires one handler per namespace"
+                "namespace `{namespace}` has schemas declaring inconsistent `handler` blocks (label `{}` differs from `{}`); v1 requires every schema in a namespace to declare the same handler — or all of them to declare none",
+                s.label, schemas[0].label
             ));
         }
+        if s.capabilities != first_caps {
+            return Err(format!(
+                "namespace `{namespace}` has schemas declaring inconsistent `capabilities` blocks (label `{}` differs from `{}`); v1 requires uniform capabilities per namespace",
+                s.label, schemas[0].label
+            ));
+        }
+        let _ = idx;
     }
-    Ok(Some(first))
+
+    Ok(NamespaceContract {
+        handler: first_handler,
+        capabilities: first_caps,
+    })
 }
 
 #[derive(Debug)]
@@ -681,14 +708,14 @@ mod tests {
         );
     }
 
-    /// Subprocess handler + CLI + `--enable-handlers` + binary that
-    /// actually exists (we use the platform's `true`/`false` shell
-    /// utilities for cross-platform reach): the trust gate trusts
-    /// the namespace and `SubprocessHandler::spawn` is called.
-    /// Spawn may still fail (initialize handshake won't work
-    /// against `/usr/bin/true`), in which case we expect a
-    /// "trusted but failed to spawn" diagnostic — proving the gate
-    /// did clear the call.
+    /// Subprocess handler + CLI + `--enable-handlers`: the trust
+    /// gate trusts the namespace and `SubprocessHandler::spawn` is
+    /// called. The test points the schema at a non-existent path
+    /// — `spawn` then fails at `Command::spawn` with a clear "no
+    /// such file" error, surfaced as a `trusted but failed to spawn`
+    /// diagnostic. Verifying the diagnostic exists is what proves
+    /// the trust gate let the request through; without that pass,
+    /// we'd see the `--enable-handlers` denial instead.
     #[test]
     fn subprocess_handler_with_enable_flag_attempts_spawn() {
         let workspace = tempfile::tempdir().unwrap();
@@ -744,8 +771,76 @@ mod tests {
             outcome
                 .diagnostics
                 .iter()
-                .any(|d| d.message.contains("different `handler` blocks")),
+                .any(|d| d.message.contains("inconsistent `handler` blocks")),
             "expected mixed-handler diagnostic, got: {:?}",
+            outcome.diagnostics
+        );
+    }
+
+    /// Partial handler declaration — some schemas in the namespace
+    /// declare a `handler` block, others don't — also surfaces as
+    /// "inconsistent handler blocks". v1 requires the declaration
+    /// to be uniform: all-have or all-don't.
+    #[test]
+    fn partial_handler_declaration_in_one_namespace_emits_diagnostic() {
+        let workspace = tempfile::tempdir().unwrap();
+        let acme_dir = workspace.path().join("acme");
+        // task has a handler, note does not.
+        write_schema_with_subprocess_handler(&acme_dir, "acme.task", &["acme-bin"]);
+        write_schema(&acme_dir, "acme.note");
+
+        let labels = LabelsConfig::default();
+        let outcome = boot_registry(ExtensionSetup {
+            workspace_root: workspace.path(),
+            labels_config: &labels,
+            ext_schemas: &[acme_dir],
+            enable_handlers: true,
+            surface_override: Some(Surface::CliOneShot),
+        });
+        assert!(
+            outcome
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains("inconsistent `handler` blocks")),
+            "expected partial-handler diagnostic, got: {:?}",
+            outcome.diagnostics
+        );
+    }
+
+    /// Mixed `capabilities` blocks across schemas in one namespace
+    /// is also a misconfiguration — capabilities feed the trust gate
+    /// and the spawn handshake, both of which need a single
+    /// authoritative answer per namespace.
+    #[test]
+    fn mixed_capabilities_in_one_namespace_emit_diagnostic() {
+        let workspace = tempfile::tempdir().unwrap();
+        let acme_dir = workspace.path().join("acme");
+        std::fs::create_dir_all(&acme_dir).unwrap();
+        std::fs::write(
+            acme_dir.join("task.yaml"),
+            "schema_version: 1\nlabel: acme.task\ncapabilities: { fs: true, net: false }\n",
+        )
+        .unwrap();
+        std::fs::write(
+            acme_dir.join("note.yaml"),
+            "schema_version: 1\nlabel: acme.note\ncapabilities: { fs: false, net: true }\n",
+        )
+        .unwrap();
+
+        let labels = LabelsConfig::default();
+        let outcome = boot_registry(ExtensionSetup {
+            workspace_root: workspace.path(),
+            labels_config: &labels,
+            ext_schemas: &[acme_dir],
+            enable_handlers: false,
+            surface_override: Some(Surface::CliOneShot),
+        });
+        assert!(
+            outcome
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains("inconsistent `capabilities`")),
+            "expected mixed-capabilities diagnostic, got: {:?}",
             outcome.diagnostics
         );
     }
