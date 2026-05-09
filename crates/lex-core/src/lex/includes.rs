@@ -1009,10 +1009,23 @@ fn recurse_into_children(
             ContentItem::Annotation(a) => {
                 // Skip the body of annotations whose schema declares
                 // `hooks.resolve = true` — those are dispatched at the
-                // parent level by `process_resolves`, and walking
-                // their bodies here would trip the resolve again on
-                // the same invocation. Other annotations recurse
-                // normally so their nested bodies get processed.
+                // parent level by `process_resolves`. Walking their
+                // bodies *here* would trip the resolve again on the
+                // same invocation.
+                //
+                // The body is still walked when the resolve actually
+                // runs: `process_resolves` calls
+                // `resolve_one_invocation`, and the
+                // [`ResolveOutcome::Spliced`] arm walks the splice
+                // subtree (which replaces the annotation), while the
+                // [`ResolveOutcome::Unexpanded`] arm explicitly
+                // walks the kept annotation's body via
+                // `splice_in_general_container`. So nested
+                // resolve-hooked annotations inside an unexpanded
+                // outer annotation are still reached.
+                //
+                // Non-resolve-hooked annotations recurse normally
+                // here so their nested bodies get processed.
                 let is_resolve_hooked = state
                     .registry
                     .schema_for(&a.data.label.value)
