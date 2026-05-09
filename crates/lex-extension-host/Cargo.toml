@@ -4,9 +4,10 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 authors = ["lex contributors"]
-description = "Internal runtime for the Lex extension system: registry, transports, trust"
+description = "Runtime for the Lex extension system: registry, transports, trust gate, sandboxing"
 repository = "https://github.com/lex-fmt/lex"
-publish = false
+keywords = ["lex", "extension"]
+categories = ["text-processing"]
 
 [dependencies]
 lex-extension = { workspace = true }

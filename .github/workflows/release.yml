@@ -21,12 +21,16 @@ jobs:
     uses: arthur-debert/release/.github/workflows/rust-cli.yml@v1
     with:
       version: ${{ inputs.version }}
-      # Topological dep order. lex-config depends on lex-babel (not
-      # the other way around — CLAUDE.md was stale on this), so lex-babel
-      # must publish first. lex-lsp-core depends on lex-core + lex-babel
-      # and is depended on by lexd-lsp, so it sits between them. lex-wasm
-      # has publish = false and isn't in the list.
-      crates: lex-core,lex-babel,lex-config,lex-analysis,lex-lsp-core,lexd-lsp,lexd
+      # Topological dep order. lex-extension publishes the public handler
+      # surface (trait, wire types, schema types). lex-extension-host
+      # publishes the runtime (registry, transports, trust gate); it
+      # depends on lex-extension and is depended on by lex-core (for the
+      # built-in `lex.include` handler). lex-config depends on lex-babel
+      # (not the other way around — CLAUDE.md was stale on this), so
+      # lex-babel must publish before lex-config. lex-lsp-core depends on
+      # lex-core + lex-babel and is depended on by lexd-lsp, so it sits
+      # between them. lex-wasm has publish = false and isn't in the list.
+      crates: lex-extension,lex-extension-host,lex-core,lex-babel,lex-config,lex-analysis,lex-lsp-core,lexd-lsp,lexd
       # Brew formula subject. The other binary (lexd-lsp) is built and
       # signed alongside but ships as a tarball-only artifact (editor
       # extensions bundle it themselves).
