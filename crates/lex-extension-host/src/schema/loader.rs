@@ -14,24 +14,37 @@ use std::path::{Path, PathBuf};
 
 use lex_extension::schema::{HandlerTransport, ParamType, Schema};
 
-/// One schema file failed to load. Each variant is reachable by exactly
-/// one failure class so callers can pattern-match on the cause.
+/// One schema file failed to load. Variants distinguish *post-deserialise*
+/// validation failures by class so callers can pattern-match on the cause.
+/// The deserialise step is one variant — `Parse` — because serde_yaml
+/// reports missing required fields, wrong-typed fields, and unknown fields
+/// (rejected by `deny_unknown_fields`) all through the same error path
+/// with line/column attribution baked into the message.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum SchemaError {
-    /// Reading the file (or, for `load_dir`, listing the directory)
-    /// failed at the OS level.
+    /// Reading the file (or, for `load_dir`, listing the directory or one
+    /// of its entries) failed at the OS level.
     Io {
         path: PathBuf,
         source: std::io::Error,
     },
 
-    /// The YAML body did not deserialise into a [`Schema`]. Includes the
-    /// pre-formatted serde_yaml error message — which already carries
-    /// line/column information when serde_yaml could attribute it — so
-    /// this is the variant that fires on missing required fields, wrong
-    /// types, *and* unknown fields rejected by `deny_unknown_fields`.
+    /// The YAML body did not deserialise into a [`Schema`]. The message
+    /// is whatever serde_yaml produced — which carries line/column
+    /// information when attribution is possible. Reasons covered by
+    /// this single variant: missing required field, wrong-typed field,
+    /// unknown field rejected by `deny_unknown_fields`, malformed YAML.
     Parse { path: PathBuf, message: String },
+
+    /// `schema_version` is set to a value the loader doesn't support.
+    /// Currently only `1` is recognised; future versions land with
+    /// dedicated migration paths, not a permissive accept.
+    UnsupportedSchemaVersion {
+        path: PathBuf,
+        label: String,
+        version: u32,
+    },
 
     /// `attaches_to` referenced a node kind outside the closed set
     /// `{paragraph, definition, session, annotation, list_item, verbatim}`.
@@ -56,6 +69,15 @@ pub enum SchemaError {
         value: String,
     },
 
+    /// An `EnumValue` was declared with an empty `name`. The empty
+    /// string isn't a useful identifier and almost always indicates a
+    /// schema typo (`- name:` with no value).
+    EmptyEnumValueName {
+        path: PathBuf,
+        label: String,
+        param: String,
+    },
+
     /// `verbatim_label: true` was set on a label that can't legally appear
     /// as a verbatim block closing — typically because it contains
     /// whitespace or the verbatim-marker sequence `::`.
@@ -73,6 +95,17 @@ pub enum SchemaError {
     /// `handler.transport: subprocess` declared without a non-empty
     /// `command` array — the subprocess transport has nothing to spawn.
     EmptySubprocessCommand { path: PathBuf, label: String },
+
+    /// `handler.transport` is a value the loader doesn't understand.
+    /// `HandlerTransport` is `#[non_exhaustive]` upstream; reaching this
+    /// branch means a future variant slipped past serde without being
+    /// taught to the validator. Surfacing it as an error rather than a
+    /// silent accept keeps lockstep with `lex-extension`.
+    UnsupportedTransport {
+        path: PathBuf,
+        label: String,
+        transport: String,
+    },
 }
 
 impl std::fmt::Display for SchemaError {
@@ -84,6 +117,15 @@ impl std::fmt::Display for SchemaError {
             SchemaError::Parse { path, message } => {
                 write!(f, "{}: schema parse error: {message}", path.display())
             }
+            SchemaError::UnsupportedSchemaVersion {
+                path,
+                label,
+                version,
+            } => write!(
+                f,
+                "{}: schema for `{label}` declares schema_version: {version} (this loader supports only version 1)",
+                path.display()
+            ),
             SchemaError::UnknownNodeKind { path, label, kind } => write!(
                 f,
                 "{}: schema for `{label}` lists unknown node kind `{kind}` in attaches_to (allowed: paragraph, definition, session, annotation, list_item, verbatim)",
@@ -104,6 +146,11 @@ impl std::fmt::Display for SchemaError {
                 "{}: schema for `{label}` lists duplicate enum value `{value}` on param `{param}`",
                 path.display()
             ),
+            SchemaError::EmptyEnumValueName { path, label, param } => write!(
+                f,
+                "{}: schema for `{label}` has an empty enum value name on param `{param}`",
+                path.display()
+            ),
             SchemaError::InvalidVerbatimLabel {
                 path,
                 label,
@@ -121,6 +168,15 @@ impl std::fmt::Display for SchemaError {
             SchemaError::EmptySubprocessCommand { path, label } => write!(
                 f,
                 "{}: schema for `{label}` declares transport: subprocess but provides an empty command array",
+                path.display()
+            ),
+            SchemaError::UnsupportedTransport {
+                path,
+                label,
+                transport,
+            } => write!(
+                f,
+                "{}: schema for `{label}` declares unsupported transport `{transport}`",
                 path.display()
             ),
         }
@@ -167,16 +223,24 @@ impl SchemaLoader {
             path: path.to_path_buf(),
             source,
         })?;
-        let mut yaml_paths: Vec<PathBuf> = entries
-            .filter_map(|entry| entry.ok())
-            .map(|e| e.path())
-            .filter(|p| {
-                p.is_file()
-                    && p.extension().and_then(|s| s.to_str()).is_some_and(|ext| {
-                        ext.eq_ignore_ascii_case("yaml") || ext.eq_ignore_ascii_case("yml")
-                    })
-            })
-            .collect();
+        // Per-entry errors (permission denied, transient FS hiccup) are
+        // propagated rather than silently filtered: an incomplete schema
+        // set is worse than a hard failure with a precise message.
+        let mut yaml_paths: Vec<PathBuf> = Vec::new();
+        for entry in entries {
+            let entry = entry.map_err(|source| SchemaError::Io {
+                path: path.to_path_buf(),
+                source,
+            })?;
+            let p = entry.path();
+            if p.is_file()
+                && p.extension().and_then(|s| s.to_str()).is_some_and(|ext| {
+                    ext.eq_ignore_ascii_case("yaml") || ext.eq_ignore_ascii_case("yml")
+                })
+            {
+                yaml_paths.push(p);
+            }
+        }
         yaml_paths.sort();
 
         let mut schemas = Vec::with_capacity(yaml_paths.len());
@@ -186,6 +250,11 @@ impl SchemaLoader {
         Ok(schemas)
     }
 }
+
+/// Schema-format versions this loader recognises. Currently only `1`.
+/// New versions land with explicit migration paths, not a permissive
+/// accept.
+const SUPPORTED_SCHEMA_VERSIONS: &[u32] = &[1];
 
 /// Allowed values of `attaches_to`. Closed set per *Extending Lex* §13.2.
 const ALLOWED_NODE_KINDS: &[&str] = &[
@@ -198,7 +267,17 @@ const ALLOWED_NODE_KINDS: &[&str] = &[
 ];
 
 fn validate(schema: &Schema, path: &Path) -> Result<(), SchemaError> {
-    // Params: enum-typed values are non-empty and unique.
+    // schema_version: only the recognised versions are accepted.
+    if !SUPPORTED_SCHEMA_VERSIONS.contains(&schema.schema_version) {
+        return Err(SchemaError::UnsupportedSchemaVersion {
+            path: path.to_path_buf(),
+            label: schema.label.clone(),
+            version: schema.schema_version,
+        });
+    }
+
+    // Params: enum-typed values are non-empty, individual names are
+    // non-empty, and all names are unique within the param.
     for (name, spec) in &schema.params {
         if spec.ty == ParamType::Enum {
             if spec.values.is_empty() {
@@ -210,6 +289,13 @@ fn validate(schema: &Schema, path: &Path) -> Result<(), SchemaError> {
             }
             let mut seen = std::collections::HashSet::with_capacity(spec.values.len());
             for v in &spec.values {
+                if v.name.is_empty() {
+                    return Err(SchemaError::EmptyEnumValueName {
+                        path: path.to_path_buf(),
+                        label: schema.label.clone(),
+                        param: name.clone(),
+                    });
+                }
                 if !seen.insert(v.name.as_str()) {
                     return Err(SchemaError::DuplicateEnumValue {
                         path: path.to_path_buf(),
@@ -264,9 +350,18 @@ fn validate(schema: &Schema, path: &Path) -> Result<(), SchemaError> {
             }
             HandlerTransport::Native => {}
             // HandlerTransport is #[non_exhaustive] for forward-compat
-            // across lex-extension major versions. Future variants land
-            // with their own validator branches.
-            _ => {}
+            // across lex-extension major versions. Reject unknown
+            // variants explicitly: a future variant slipping through
+            // serde without being taught to the validator would
+            // otherwise be silently accepted, which contradicts the
+            // strict-by-default loader contract.
+            other => {
+                return Err(SchemaError::UnsupportedTransport {
+                    path: path.to_path_buf(),
+                    label: schema.label.clone(),
+                    transport: format!("{other:?}").to_lowercase(),
+                });
+            }
         }
     }
 
@@ -488,6 +583,55 @@ params:
                 assert_eq!(label, "ns.x");
             }
             other => panic!("expected EmptyEnumValues, got: {other}"),
+        }
+    }
+
+    #[test]
+    fn empty_enum_value_name_rejected() {
+        let dir = TempDir::new().unwrap();
+        let path = write_yaml(
+            &dir,
+            "empty_name.yaml",
+            r#"
+schema_version: 1
+label: ns.x
+params:
+  role:
+    type: enum
+    values:
+      - name: ""
+"#,
+        );
+        let err = SchemaLoader::load_file(&path).unwrap_err();
+        match err {
+            SchemaError::EmptyEnumValueName { param, label, .. } => {
+                assert_eq!(param, "role");
+                assert_eq!(label, "ns.x");
+            }
+            other => panic!("expected EmptyEnumValueName, got: {other}"),
+        }
+    }
+
+    #[test]
+    fn unsupported_schema_version_rejected() {
+        // schema_version: 2 deserialises fine but the validator
+        // refuses it because this loader only recognises version 1.
+        let dir = TempDir::new().unwrap();
+        let path = write_yaml(
+            &dir,
+            "v2.yaml",
+            r#"
+schema_version: 2
+label: ns.x
+"#,
+        );
+        let err = SchemaLoader::load_file(&path).unwrap_err();
+        match err {
+            SchemaError::UnsupportedSchemaVersion { version, label, .. } => {
+                assert_eq!(version, 2);
+                assert_eq!(label, "ns.x");
+            }
+            other => panic!("expected UnsupportedSchemaVersion, got: {other}"),
         }
     }
 
