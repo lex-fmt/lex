@@ -9,11 +9,29 @@ repository = "https://github.com/lex-fmt/lex"
 keywords = ["lex", "extension"]
 categories = ["text-processing"]
 
+[features]
+# subprocess: enable the JSON-RPC-over-stdio subprocess transport (PR 5).
+# Drags `tokio` into the dep graph; gated so `lex-core` (native built-ins
+# only) stays lean. CLI/LSP consumers opt in.
+default = ["subprocess"]
+subprocess = ["dep:tokio"]
+
 [dependencies]
 lex-extension = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 serde_yaml = { workspace = true }
+tokio = { workspace = true, optional = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
 tempfile = { workspace = true }
+
+# Subprocess test fixture: a single binary with several behavioural modes
+# (echo, slow, crash, malformed, version-mismatch). Built only when the
+# subprocess feature is on so the fixture isn't compiled into native-only
+# consumers (`cargo install lex-core`).
+[[bin]]
+name = "lex-extension-host-fixture-handler"
+path = "tests/fixtures/fixture_handler.rs"
+required-features = ["subprocess"]
