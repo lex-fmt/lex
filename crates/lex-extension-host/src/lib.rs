@@ -1,10 +1,17 @@
-//! Internal runtime for the Lex extension system.
+//! Runtime for the Lex extension system.
 //!
-//! This crate is *not* published. It hosts the registry, schema loader,
-//! namespace URI resolver, transport adapters (subprocess, future WASM), and
-//! trust gate that turn a set of [`lex_extension::Schema`]s plus
-//! [`lex_extension::LexHandler`] implementations into a dispatch fabric the
-//! `lexd` CLI, `lex-lsp` server, and Rust embedders all share.
+//! This crate hosts the registry, schema loader, namespace URI resolver,
+//! transport adapters (subprocess, future WASM), and trust gate that turn
+//! a set of [`lex_extension::Schema`]s plus [`lex_extension::LexHandler`]
+//! implementations into a dispatch fabric the `lexd` CLI, `lex-lsp`
+//! server, `lex-core` (for built-in `lex.*` resolvers), and Rust
+//! embedders all share.
+//!
+//! Pre-1.0 the public API surface is unstable per Cargo convention. The
+//! crate is published so that downstream crates in the lex toolchain —
+//! especially `lex-core`, which carries the `lex.include` resolver as
+//! the first built-in `LexHandler` — can depend on it. Handler authors
+//! should depend on `lex-extension`, not this crate.
 //!
 //! What's in this crate today (PR 2 of the extension-system rollout):
 //!
