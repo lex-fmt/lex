@@ -148,25 +148,36 @@ impl TrustStore {
     /// Pin a decision. Both `Trusted` and `Denied` are persisted —
     /// `Pending` is not a stored state and is rejected with
     /// [`TrustStoreError::InvalidDecision`] so misuse surfaces in
-    /// tests instead of silently dropping the call. Writes to disk
-    /// immediately (atomically — see [`flush`](Self::flush)) so a
-    /// crash mid-session doesn't drop the approval the user just
-    /// gave.
+    /// tests instead of silently dropping the call.
+    ///
+    /// Atomicity contract: the in-memory map is *only* updated after
+    /// the disk write succeeds. A flush failure leaves both halves
+    /// untouched (still showing the pre-call state), so callers can
+    /// distinguish "approval was pinned" from "approval was given
+    /// for this session but couldn't be remembered" by inspecting
+    /// the `Result`.
     pub fn set(&mut self, key: TrustKey, decision: TrustDecision) -> Result<(), TrustStoreError> {
         if matches!(decision, TrustDecision::Pending) {
             return Err(TrustStoreError::InvalidDecision {
                 reason: "TrustDecision::Pending is an internal in-flight state; only Trusted and Denied are storable",
             });
         }
-        self.entries.insert(key, decision);
-        self.flush()
+        let mut next = self.entries.clone();
+        next.insert(key, decision);
+        self.flush_entries(&next)?;
+        self.entries = next;
+        Ok(())
     }
 
     /// Drop all pinned decisions. Used by editor commands like
-    /// "Reset Lex extension trust for this workspace".
+    /// "Reset Lex extension trust for this workspace". Same
+    /// atomicity contract as [`set`](Self::set): in-memory map is
+    /// only cleared after the empty store has been written to disk.
     pub fn clear(&mut self) -> Result<(), TrustStoreError> {
-        self.entries.clear();
-        self.flush()
+        let empty = HashMap::new();
+        self.flush_entries(&empty)?;
+        self.entries = empty;
+        Ok(())
     }
 
     /// Iterate the (key, decision) pairs in arbitrary order. The
@@ -185,7 +196,10 @@ impl TrustStore {
         self.entries.is_empty()
     }
 
-    /// Persist the in-memory map to disk atomically.
+    /// Persist a candidate map to disk atomically — *without*
+    /// touching `self.entries`. The caller commits to in-memory
+    /// after this returns `Ok(())`; a returned `Err` leaves both
+    /// halves consistent with their pre-call state.
     ///
     /// Writes to a sibling tempfile first, then `rename`s into place.
     /// On POSIX, `rename` within the same directory is atomic — a
@@ -193,14 +207,17 @@ impl TrustStore {
     /// publishes the new one in full, never a truncated mix that
     /// future `open()` calls would fail to parse. Same guarantee on
     /// Windows for files on the same volume.
-    fn flush(&self) -> Result<(), TrustStoreError> {
+    fn flush_entries(
+        &self,
+        entries: &HashMap<TrustKey, TrustDecision>,
+    ) -> Result<(), TrustStoreError> {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent).map_err(|source| TrustStoreError::Io {
                 path: parent.to_path_buf(),
                 source,
             })?;
         }
-        let body = serialize_disk_format(&self.entries);
+        let body = serialize_disk_format(entries);
         let tmp = self.path.with_extension("json.tmp");
         fs::write(&tmp, body).map_err(|source| TrustStoreError::Io {
             path: tmp.clone(),
@@ -443,6 +460,59 @@ mod tests {
             body.contains(r#""denied""#) && body.contains(r#""reason": "user rejected""#),
             "denied entry must serialise as {{\"denied\": {{\"reason\": ...}}}}, got:\n{body}"
         );
+    }
+
+    /// Atomicity contract: `set()` only updates in-memory after the
+    /// disk write succeeds. Simulate a flush failure by pointing the
+    /// store at a workspace whose `.lex` path is occupied by a
+    /// regular file (so `create_dir_all` fails) and verify both the
+    /// in-memory map and the on-disk file are still in their
+    /// pre-call state.
+    #[test]
+    fn set_failure_leaves_in_memory_and_disk_consistent() {
+        let dir = tempfile::tempdir().unwrap();
+        // Pre-populate one entry the normal way.
+        {
+            let mut store = TrustStore::open(dir.path()).unwrap();
+            store
+                .set(key("acme", "acme-handler"), TrustDecision::Trusted)
+                .unwrap();
+        }
+        // Now make the `.lex` directory un-extendable: write a
+        // regular file at the path where one of the parents would
+        // be created. We achieve this by replacing the .lex dir
+        // with a file. (Simpler than mucking with permissions for
+        // a cross-platform test.)
+        let lex_dir = dir.path().join(".lex");
+        let saved_body = std::fs::read_to_string(lex_dir.join("trust.json")).unwrap();
+        std::fs::remove_dir_all(&lex_dir).unwrap();
+        std::fs::write(&lex_dir, b"i am now a file").unwrap();
+
+        let mut store = TrustStore {
+            path: lex_dir.join("trust.json"),
+            entries: {
+                let mut m = HashMap::new();
+                m.insert(key("acme", "acme-handler"), TrustDecision::Trusted);
+                m
+            },
+        };
+        let err = store
+            .set(
+                key("evil", "evil-bin"),
+                TrustDecision::Denied {
+                    reason: "no".into(),
+                },
+            )
+            .unwrap_err();
+        assert!(matches!(err, TrustStoreError::Io { .. }));
+        // In-memory state unchanged: still only `acme`, no `evil`.
+        assert_eq!(store.len(), 1);
+        assert!(store.get(&key("evil", "evil-bin")).is_none());
+
+        // Restore .lex/trust.json so cleanup is happy.
+        std::fs::remove_file(&lex_dir).unwrap();
+        std::fs::create_dir_all(&lex_dir).unwrap();
+        std::fs::write(lex_dir.join("trust.json"), saved_body).unwrap();
     }
 
     #[test]

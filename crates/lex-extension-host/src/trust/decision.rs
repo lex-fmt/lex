@@ -254,24 +254,21 @@ impl TrustGate {
                     // subsequent session).
                     TrustDecision::Pending => None,
                 };
-                if let Some(decision) = to_store {
-                    if let Err(e) = self.store.set(key, decision) {
+                if let Some(decision_to_store) = to_store {
+                    if let Err(e) = self.store.set(key, decision_to_store) {
                         // Persist failed — most often a read-only
-                        // workspace. Surface as Denied so the user
-                        // sees *why* and isn't silently re-prompted
-                        // every session with no explanation. The
-                        // prompt's verdict still applies for *this*
-                        // session: if the user said yes, they get
-                        // the handler now and re-prompt next time.
-                        // If they said no, they stay denied either
-                        // way. Either way the diagnostic carries
-                        // the storage failure so it's actionable.
-                        eprintln!("[lex-extension-host] trust store persist failed: {e}");
-                        return TrustDecision::Denied {
-                            reason: format!(
-                                "could not persist trust decision for `{namespace}`: {e}. Approval will not be remembered next session."
-                            ),
-                        };
+                        // workspace. The store's atomicity contract
+                        // guarantees in-memory matches disk, so the
+                        // pin really wasn't recorded. We honor the
+                        // prompt's verdict for *this* session
+                        // (returning `decision` below) and log the
+                        // failure so the user can see why their
+                        // approval isn't sticking. Next session
+                        // they'll be prompted again with the same
+                        // diagnostic visible.
+                        eprintln!(
+                            "[lex-extension-host] trust store persist failed for `{namespace}`: {e}; approval applies for this session only"
+                        );
                     }
                 }
                 match decision {
