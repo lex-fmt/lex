@@ -732,6 +732,39 @@ fn include_inside_definition_with_sessions_is_policy_error() {
     }
 }
 
+/// Regression test for the validation-bypass: a `lex.include` inside
+/// a Definition that pulls in a *fan-out* file (one whose own
+/// content is benign) which itself includes a file containing a
+/// top-level Session. The outer splice's *initial* shape is
+/// Session-free (just the inner include annotation), so a pre-PR-3d-
+/// fixup validation that ran *before* recursion would have let the
+/// nested Session sneak into the Definition. Validation must run
+/// after recursion has expanded the nested include and mutated the
+/// splice list.
+#[test]
+fn include_inside_definition_with_indirect_session_still_errors() {
+    let result = fixture(
+        "Glossary:\n    Intro.\n\n    :: lex.include src=\"indirect.lex\" ::\n",
+        &[
+            (
+                "/repo/indirect.lex",
+                ":: lex.include src=\"chapter.lex\" ::\n",
+            ),
+            ("/repo/chapter.lex", "1. Chapter\n\n    Body.\n"),
+        ],
+    );
+    let err = assert_err_kind!(result, IncludeError::ContainerPolicy { .. });
+    if let IncludeError::ContainerPolicy {
+        container,
+        violation,
+        ..
+    } = err
+    {
+        assert_eq!(container, "Definition");
+        assert_eq!(violation, "Sessions");
+    }
+}
+
 #[test]
 fn include_inside_annotation_body_with_sessions_is_policy_error() {
     let result = fixture(

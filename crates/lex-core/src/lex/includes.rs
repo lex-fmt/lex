@@ -686,20 +686,14 @@ fn resolve_one_invocation(
     // Decode the wire payload into typed lex-core ContentItems.
     let mut splice_items = decode_wire_to_items(&wire_node, label, &annotation.location)?;
 
-    // Container-policy validation: enforce no-Sessions inside
-    // `GeneralContainer` (Definition / Annotation body / ListItem).
-    // Reuses the legacy `validate_against_kind` semantics — the splice
-    // content is what's checked, regardless of which handler produced it.
+    // Recurse into the spliced subtree FIRST so nested resolve-hooked
+    // annotations are processed before the splice lands. Validation
+    // must wait until *after* this step: a nested invocation can
+    // splice in content (e.g. a top-level `Session` from a chained
+    // `lex.include`) that wasn't in the handler's original output,
+    // and the final shape is what has to satisfy the parent
+    // container's policy.
     let included_path = key.origin.clone().unwrap_or_default();
-    validate_against_kind(
-        &splice_items,
-        parent_kind,
-        &annotation.location,
-        &included_path,
-    )?;
-
-    // Recurse into the spliced subtree so nested resolve-hooked
-    // annotations are processed before the splice lands.
     state.chain.push(key);
     let saved_depth = state.depth;
     state.depth = saved_depth + 1;
@@ -707,6 +701,17 @@ fn resolve_one_invocation(
     state.depth = saved_depth;
     state.chain.pop();
     recurse_result?;
+
+    // Container-policy validation: enforce no-Sessions inside
+    // `GeneralContainer` (Definition / Annotation body / ListItem).
+    // Runs against the post-recursion splice list so nested
+    // expansions can't smuggle disallowed shapes past the check.
+    validate_against_kind(
+        &splice_items,
+        parent_kind,
+        &annotation.location,
+        &included_path,
+    )?;
 
     Ok(splice_items)
 }
