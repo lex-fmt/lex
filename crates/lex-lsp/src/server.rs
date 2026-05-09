@@ -1636,32 +1636,44 @@ fn include_preview_markdown(src: &str, target: &Path, target_source: &str) -> St
 }
 
 fn to_lsp_diagnostic(diag: AnalysisDiagnostic) -> Diagnostic {
-    let severity = match diag.kind {
-        DiagnosticKind::MissingFootnoteDefinition => {
-            tower_lsp::lsp_types::DiagnosticSeverity::ERROR
-        }
-        DiagnosticKind::UnusedFootnoteDefinition => {
-            tower_lsp::lsp_types::DiagnosticSeverity::WARNING
-        }
-        DiagnosticKind::TableInconsistentColumns => {
-            tower_lsp::lsp_types::DiagnosticSeverity::WARNING
+    use lex_analysis::diagnostics::{DiagnosticSeverity as AS, SchemaValidationKind};
+    let severity = match diag.severity {
+        AS::Error => tower_lsp::lsp_types::DiagnosticSeverity::ERROR,
+        AS::Warning => tower_lsp::lsp_types::DiagnosticSeverity::WARNING,
+        AS::Info => tower_lsp::lsp_types::DiagnosticSeverity::INFORMATION,
+        AS::Hint => tower_lsp::lsp_types::DiagnosticSeverity::HINT,
+    };
+
+    let code = match &diag.kind {
+        DiagnosticKind::MissingFootnoteDefinition => "missing-footnote".to_string(),
+        DiagnosticKind::UnusedFootnoteDefinition => "unused-footnote".to_string(),
+        DiagnosticKind::TableInconsistentColumns => "table-inconsistent-columns".to_string(),
+        DiagnosticKind::SchemaValidation(kind) => match kind {
+            SchemaValidationKind::UnknownLabel => "schema.unknown-label".into(),
+            SchemaValidationKind::MissingParam => "schema.missing-param".into(),
+            SchemaValidationKind::ParamTypeMismatch => "schema.param-type-mismatch".into(),
+            SchemaValidationKind::BadAttachment => "schema.bad-attachment".into(),
+            SchemaValidationKind::BodyShapeMismatch => "schema.body-shape-mismatch".into(),
+        },
+        // Handler-emitted diagnostics carry their own code; if none was
+        // supplied use a stable fallback so editors that filter by code
+        // still see something predictable.
+        DiagnosticKind::Handler { code, .. } => {
+            code.clone().unwrap_or_else(|| "handler.diagnostic".into())
         }
     };
 
-    let code = match diag.kind {
-        DiagnosticKind::MissingFootnoteDefinition => "missing-footnote",
-        DiagnosticKind::UnusedFootnoteDefinition => "unused-footnote",
-        DiagnosticKind::TableInconsistentColumns => "table-inconsistent-columns",
+    let source = match &diag.kind {
+        DiagnosticKind::Handler { namespace, .. } => format!("lex:{namespace}"),
+        _ => "lex".to_string(),
     };
 
     Diagnostic {
         range: to_lsp_range(&diag.range),
         severity: Some(severity),
-        code: Some(tower_lsp::lsp_types::NumberOrString::String(
-            code.to_string(),
-        )),
+        code: Some(tower_lsp::lsp_types::NumberOrString::String(code)),
         code_description: None,
-        source: Some("lex".to_string()),
+        source: Some(source),
         message: diag.message,
         related_information: None,
         tags: None,

@@ -55,6 +55,7 @@ pub mod document_symbols;
 pub mod folding_ranges;
 pub mod go_to_definition;
 pub mod hover;
+pub mod label_dispatch;
 pub mod references;
 pub mod semantic_tokens;
 pub mod spellcheck;
