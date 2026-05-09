@@ -7,9 +7,256 @@
 use confique::Config;
 use lex_babel::formats::lex::formatting_rules::FormattingRules;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::path::Path;
 
 /// Canonical config file name used by the CLI and LSP.
 pub const CONFIG_FILE_NAME: &str = ".lex.toml";
+
+// ─────────────────────────── Labels (extension namespaces) ───────────────────────────
+
+/// `[labels]` block in `.lex.toml` — declarations of extension
+/// namespaces the workspace owner wants the host to load.
+///
+/// Loaded outside the main `LexConfig` confique chain because the
+/// shape is a free-form map keyed by namespace name, not a
+/// fixed-field struct. See [`load_labels_from_toml`].
+///
+/// ```toml
+/// [labels]
+/// acme = { tap = "acme" }                                       # tap shorthand
+/// foolco = "gitlab:foolco/lex-labels#main"                      # bare URI
+/// custom = { uri = "github:org/repo", rev = "v1", subdir = "labels/" }
+/// ```
+///
+/// The reserved namespace name `lex` is rejected at load time —
+/// `lex.*` is owned by the core and ships compiled-in.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct LabelsConfig {
+    /// Namespace name → spec. Order is sorted (BTreeMap) for
+    /// deterministic loading and stable diagnostics.
+    pub namespaces: BTreeMap<String, NamespaceSpec>,
+}
+
+/// One namespace declaration. Three on-disk shapes parse into the
+/// same logical record:
+///
+/// - `acme = "github:acme/lex-labels"` — bare URI string.
+/// - `acme = { tap = "acme" }` — tap shorthand, expands to
+///   `github:acme/lex-labels`.
+/// - `acme = { uri = "...", rev = "...", subdir = "..." }` — full
+///   table form.
+///
+/// `tap` and `uri` are mutually exclusive on the table form;
+/// having both is a load-time error (see [`NamespaceSpec::validate`]).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum NamespaceSpec {
+    /// Bare URI string form.
+    Uri(String),
+    /// Table form. One of `tap` / `uri` must be set; both is an
+    /// error.
+    Table(NamespaceTable),
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NamespaceTable {
+    /// Tap-prefix shorthand. `tap = "acme"` expands to
+    /// `github:acme/lex-labels`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tap: Option<String>,
+    /// Explicit URI (`github:`, `gitlab:`, `https:`, `path:`,
+    /// `git+ssh:`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uri: Option<String>,
+    /// Branch / tag / SHA pin. Mutable refs (branches) honour the
+    /// resolver's 24-hour cache TTL; tags and SHAs are cached
+    /// indefinitely.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rev: Option<String>,
+    /// Subdirectory inside the resolved repo containing the schema
+    /// files. Defaults to repo root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subdir: Option<String>,
+}
+
+impl NamespaceSpec {
+    /// Resolve the spec into a single canonical URI string. Tap
+    /// shorthand expands to `github:<tap>/lex-labels`; the table
+    /// form's `rev` and `subdir` are appended via fragment + query
+    /// (`uri#rev?subdir=...`) so the resolver can parse them
+    /// uniformly.
+    pub fn canonical_uri(&self) -> Result<String, LabelsConfigError> {
+        match self {
+            NamespaceSpec::Uri(s) => Ok(s.clone()),
+            NamespaceSpec::Table(t) => {
+                t.validate()?;
+                let base = match (&t.tap, &t.uri) {
+                    (Some(tap), None) => format!("github:{tap}/lex-labels"),
+                    (None, Some(uri)) => uri.clone(),
+                    (Some(_), Some(_)) => {
+                        return Err(LabelsConfigError::TapAndUri);
+                    }
+                    (None, None) => {
+                        return Err(LabelsConfigError::EmptyTable);
+                    }
+                };
+                let mut out = base;
+                if let Some(rev) = &t.rev {
+                    if out.contains('#') {
+                        // Both the URI and the table have a rev. The
+                        // tap shorthand can't reach this branch (it
+                        // never sets a fragment), so this is the
+                        // user-with-explicit-uri case where they wrote
+                        // `uri = "github:org/repo#main", rev = "v1"`.
+                        // Either is meaningful but together is
+                        // ambiguous — surface as an error rather than
+                        // silently drop one.
+                        return Err(LabelsConfigError::RevWithExplicitFragment {
+                            uri: out,
+                            rev: rev.clone(),
+                        });
+                    }
+                    out.push('#');
+                    out.push_str(rev);
+                }
+                if let Some(subdir) = &t.subdir {
+                    out.push_str(if out.contains('?') { "&" } else { "?" });
+                    out.push_str("subdir=");
+                    out.push_str(subdir);
+                }
+                Ok(out)
+            }
+        }
+    }
+}
+
+impl NamespaceTable {
+    /// Validate mutual-exclusion + non-emptiness. Surfaces as a
+    /// load-time error so a bad `lex.toml` fails fast with a clear
+    /// message, not at first dispatch.
+    pub fn validate(&self) -> Result<(), LabelsConfigError> {
+        match (&self.tap, &self.uri) {
+            (Some(_), Some(_)) => Err(LabelsConfigError::TapAndUri),
+            (None, None) => Err(LabelsConfigError::EmptyTable),
+            _ => Ok(()),
+        }
+    }
+}
+
+/// Errors emitted by [`load_labels_from_toml`] and
+/// [`NamespaceSpec::canonical_uri`].
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum LabelsConfigError {
+    /// Reading the toml file failed.
+    Io {
+        path: std::path::PathBuf,
+        source: std::io::Error,
+    },
+    /// The toml body did not parse.
+    Parse {
+        path: std::path::PathBuf,
+        message: String,
+    },
+    /// `[labels]` declared the reserved `lex` namespace. The `lex.*`
+    /// label space is owned by the core and ships compiled-in;
+    /// re-declaring it would silently shadow core built-ins.
+    ReservedNamespace,
+    /// Table form had both `tap` and `uri` set. They're mutually
+    /// exclusive — pick one.
+    TapAndUri,
+    /// Table form had neither `tap` nor `uri` set.
+    EmptyTable,
+    /// Both the explicit `uri` (with a `#fragment`) and a `rev`
+    /// field are set. Either is meaningful but together they're
+    /// ambiguous — pick one.
+    RevWithExplicitFragment { uri: String, rev: String },
+}
+
+impl std::fmt::Display for LabelsConfigError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LabelsConfigError::Io { path, source } => {
+                write!(f, "{}: io error reading labels config: {source}", path.display())
+            }
+            LabelsConfigError::Parse { path, message } => {
+                write!(f, "{}: labels config parse error: {message}", path.display())
+            }
+            LabelsConfigError::ReservedNamespace => f.write_str(
+                "namespace `lex` is reserved for core-defined labels and cannot be declared in [labels]",
+            ),
+            LabelsConfigError::TapAndUri => {
+                f.write_str("namespace spec sets both `tap` and `uri`; they are mutually exclusive")
+            }
+            LabelsConfigError::EmptyTable => f.write_str(
+                "namespace spec table needs one of `tap` or `uri` set",
+            ),
+            LabelsConfigError::RevWithExplicitFragment { uri, rev } => write!(
+                f,
+                "namespace spec sets both `rev = {rev:?}` and an explicit `#fragment` in uri `{uri}`; pick one"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for LabelsConfigError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            LabelsConfigError::Io { source, .. } => Some(source),
+            _ => None,
+        }
+    }
+}
+
+/// Load the `[labels]` block from a `.lex.toml` at `path`. Returns
+/// an empty config if the file exists but has no `[labels]` block;
+/// `Io::NotFound` is propagated to the caller (the CLI usually
+/// treats it as "no labels configured" and continues).
+///
+/// Validates the reserved-key rule (`lex` is forbidden) and each
+/// spec's table-form invariants. Bad config fails the load instead
+/// of letting it surface at dispatch time.
+pub fn load_labels_from_toml(path: impl AsRef<Path>) -> Result<LabelsConfig, LabelsConfigError> {
+    let path = path.as_ref();
+    let body = std::fs::read_to_string(path).map_err(|source| LabelsConfigError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+
+    // We only read the `[labels]` table; the rest of the file is
+    // confique's territory. A `toml::Value` parse + manual lookup
+    // keeps us from reaching for a separate top-level struct.
+    let root: toml::Value =
+        body.parse()
+            .map_err(|err: toml::de::Error| LabelsConfigError::Parse {
+                path: path.to_path_buf(),
+                message: err.to_string(),
+            })?;
+    let Some(labels_value) = root.get("labels") else {
+        return Ok(LabelsConfig::default());
+    };
+    let mut config: LabelsConfig =
+        labels_value
+            .clone()
+            .try_into()
+            .map_err(|err: toml::de::Error| LabelsConfigError::Parse {
+                path: path.to_path_buf(),
+                message: err.to_string(),
+            })?;
+
+    if config.namespaces.contains_key("lex") {
+        return Err(LabelsConfigError::ReservedNamespace);
+    }
+    for spec in config.namespaces.values_mut() {
+        if let NamespaceSpec::Table(t) = spec {
+            t.validate()?;
+        }
+    }
+    Ok(config)
+}
 
 /// Top-level configuration consumed by Lex applications.
 #[derive(Debug, Clone, Config, Serialize, Deserialize)]
@@ -29,6 +276,18 @@ pub struct LexConfig {
     /// Include-resolution options.
     #[config(nested)]
     pub includes: IncludesConfig,
+    /// Extension-namespace declarations. The map shape is
+    /// free-form (each key is a namespace name; the value is a
+    /// `NamespaceSpec`), so the field is a leaf rather than a
+    /// nested confique struct — confique sees an opaque
+    /// `BTreeMap<String, NamespaceSpec>`. The `lexd labels`
+    /// subcommand and the boot helper read individual entries via
+    /// [`load_labels_from_toml`] for richer error messages
+    /// (reserved-namespace check, table-form validation, …).
+    /// Declaring the field here is what makes clapfig's strict
+    /// unknown-keys check accept `[labels]` blocks in `.lex.toml`.
+    #[config(default = {})]
+    pub labels: BTreeMap<String, NamespaceSpec>,
 }
 
 /// Formatting-related configuration groups.
@@ -231,6 +490,131 @@ mod tests {
         assert_eq!(config.formatting.rules.session_blank_lines_before, 1);
         assert!(config.inspect.ast.show_line_numbers);
         assert_eq!(config.convert.pdf.size, PdfPageSize::LexEd);
+    }
+
+    #[test]
+    fn labels_config_bare_uri_parses() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".lex.toml");
+        std::fs::write(
+            &path,
+            r#"
+[labels]
+foolco = "gitlab:foolco/lex-labels#main"
+"#,
+        )
+        .unwrap();
+        let labels = load_labels_from_toml(&path).expect("loads");
+        let spec = labels.namespaces.get("foolco").unwrap();
+        assert_eq!(
+            spec.canonical_uri().unwrap(),
+            "gitlab:foolco/lex-labels#main"
+        );
+    }
+
+    #[test]
+    fn labels_config_tap_shorthand_expands() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".lex.toml");
+        std::fs::write(
+            &path,
+            r#"
+[labels]
+acme = { tap = "acme" }
+"#,
+        )
+        .unwrap();
+        let labels = load_labels_from_toml(&path).unwrap();
+        assert_eq!(
+            labels
+                .namespaces
+                .get("acme")
+                .unwrap()
+                .canonical_uri()
+                .unwrap(),
+            "github:acme/lex-labels"
+        );
+    }
+
+    #[test]
+    fn labels_config_expanded_table_with_rev_and_subdir() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".lex.toml");
+        std::fs::write(
+            &path,
+            r#"
+[labels]
+custom = { uri = "github:org/repo", rev = "v1", subdir = "labels/" }
+"#,
+        )
+        .unwrap();
+        let labels = load_labels_from_toml(&path).unwrap();
+        let uri = labels
+            .namespaces
+            .get("custom")
+            .unwrap()
+            .canonical_uri()
+            .unwrap();
+        assert!(uri.starts_with("github:org/repo"));
+        assert!(uri.contains("v1"));
+        assert!(uri.contains("subdir=labels/"));
+    }
+
+    #[test]
+    fn labels_config_reserved_lex_namespace_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".lex.toml");
+        std::fs::write(
+            &path,
+            r#"
+[labels]
+lex = "github:fake/lex-labels"
+"#,
+        )
+        .unwrap();
+        let err = load_labels_from_toml(&path).unwrap_err();
+        assert!(matches!(err, LabelsConfigError::ReservedNamespace));
+    }
+
+    #[test]
+    fn labels_config_tap_and_uri_together_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".lex.toml");
+        std::fs::write(
+            &path,
+            r#"
+[labels]
+acme = { tap = "acme", uri = "github:other/repo" }
+"#,
+        )
+        .unwrap();
+        let err = load_labels_from_toml(&path).unwrap_err();
+        assert!(matches!(err, LabelsConfigError::TapAndUri));
+    }
+
+    #[test]
+    fn labels_config_empty_table_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".lex.toml");
+        std::fs::write(
+            &path,
+            r#"
+[labels]
+acme = { rev = "v1" }
+"#,
+        )
+        .unwrap();
+        let err = load_labels_from_toml(&path).unwrap_err();
+        assert!(matches!(err, LabelsConfigError::EmptyTable));
+    }
+
+    #[test]
+    fn labels_config_missing_block_yields_empty_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".lex.toml");
+        std::fs::write(&path, "# no labels block\n").unwrap();
+        let labels = load_labels_from_toml(&path).unwrap();
+        assert!(labels.namespaces.is_empty());
     }
 
     #[test]
