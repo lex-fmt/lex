@@ -15,7 +15,7 @@ use lex_core::lex::ast::{
     Annotation, ContentItem, Document, Range as CoreRange, Session, Verbatim,
 };
 use lex_core::lex::wire::to_wire_node;
-use lex_extension::wire::{Range as WireRange, WireNode};
+use lex_extension::wire::{HostNodeKind, Range as WireRange, WireNode};
 use lex_extension::{schema::Schema, AnnotationBody, LabelCtx, NodeRef};
 use lex_extension_host::Registry;
 
@@ -33,16 +33,17 @@ pub fn dispatch_labels(
     if registry.namespace_count() == 0 {
         return;
     }
-    walk_session(&document.root, "session", registry, diagnostics);
-    // Document-level annotations attach to the document root.
+    // Document-level annotations are parsed before the body, so they
+    // come first in the diagnostic stream too.
     for annotation in document.annotations() {
-        visit_annotation(annotation, "document", registry, diagnostics);
+        visit_annotation(annotation, HostNodeKind::Document, registry, diagnostics);
     }
+    walk_session(&document.root, HostNodeKind::Session, registry, diagnostics);
 }
 
 fn walk_session(
     session: &Session,
-    self_kind: &str,
+    self_kind: HostNodeKind,
     registry: &Registry,
     diagnostics: &mut Vec<AnalysisDiagnostic>,
 ) {
@@ -50,47 +51,44 @@ fn walk_session(
         visit_annotation(annotation, self_kind, registry, diagnostics);
     }
     for child in session.children.iter() {
-        // Nested sessions get attached_to: "session" regardless of
-        // their parent's kind. The previous version threaded the
-        // parent kind into the recursion, which mis-attributed
-        // session-attached annotations as "definition" / "list_item"
-        // for nested sessions.
-        visit_content(child, "session", registry, diagnostics);
+        visit_content(child, HostNodeKind::Session, registry, diagnostics);
     }
 }
 
 fn visit_content(
     item: &ContentItem,
-    parent_kind: &str,
+    parent_kind: HostNodeKind,
     registry: &Registry,
     diagnostics: &mut Vec<AnalysisDiagnostic>,
 ) {
     match item {
         ContentItem::Paragraph(p) => {
             for ann in p.annotations() {
-                visit_annotation(ann, "paragraph", registry, diagnostics);
+                visit_annotation(ann, HostNodeKind::Paragraph, registry, diagnostics);
             }
         }
-        ContentItem::Session(s) => walk_session(s, parent_kind, registry, diagnostics),
+        ContentItem::Session(s) => walk_session(s, HostNodeKind::Session, registry, diagnostics),
         ContentItem::Definition(def) => {
             for ann in def.annotations() {
-                visit_annotation(ann, "definition", registry, diagnostics);
+                visit_annotation(ann, HostNodeKind::Definition, registry, diagnostics);
             }
             for child in def.children.iter() {
-                visit_content(child, "definition", registry, diagnostics);
+                visit_content(child, HostNodeKind::Definition, registry, diagnostics);
             }
         }
         ContentItem::List(list) => {
+            // List-level annotations attach to the list itself, NOT
+            // to its items.
             for ann in list.annotations() {
-                visit_annotation(ann, "list_item", registry, diagnostics);
+                visit_annotation(ann, HostNodeKind::List, registry, diagnostics);
             }
             for entry in &list.items {
                 if let ContentItem::ListItem(li) = entry {
                     for ann in li.annotations() {
-                        visit_annotation(ann, "list_item", registry, diagnostics);
+                        visit_annotation(ann, HostNodeKind::ListItem, registry, diagnostics);
                     }
                     for child in li.children.iter() {
-                        visit_content(child, "list_item", registry, diagnostics);
+                        visit_content(child, HostNodeKind::ListItem, registry, diagnostics);
                     }
                 }
             }
@@ -101,12 +99,12 @@ fn visit_content(
         ContentItem::VerbatimBlock(v) => {
             visit_verbatim(v, registry, diagnostics);
             for ann in v.annotations() {
-                visit_annotation(ann, "verbatim", registry, diagnostics);
+                visit_annotation(ann, HostNodeKind::Verbatim, registry, diagnostics);
             }
         }
         ContentItem::Table(t) => {
             for ann in t.annotations() {
-                visit_annotation(ann, "annotation", registry, diagnostics);
+                visit_annotation(ann, HostNodeKind::Table, registry, diagnostics);
             }
         }
         _ => {}
@@ -115,7 +113,7 @@ fn visit_content(
 
 fn visit_annotation(
     annotation: &Annotation,
-    attached_to: &str,
+    attached_to: HostNodeKind,
     registry: &Registry,
     diagnostics: &mut Vec<AnalysisDiagnostic>,
 ) {
@@ -292,20 +290,21 @@ fn visit_verbatim(v: &Verbatim, registry: &Registry, diagnostics: &mut Vec<Analy
 fn pre_validate(
     schema: &Schema,
     ctx: &LabelCtx,
-    attached_to: &str,
+    attached_to: HostNodeKind,
     range: &CoreRange,
 ) -> Option<AnalysisDiagnostic> {
     use lex_extension::schema::{BodyKind, BodyPresence};
 
     // 5. attaches_to (cheaper than param walks; do first).
-    if !schema.attaches_to.is_empty() && !schema.attaches_to.iter().any(|kind| kind == attached_to)
+    let attached_str = attached_to.as_str();
+    if !schema.attaches_to.is_empty() && !schema.attaches_to.iter().any(|kind| kind == attached_str)
     {
         return Some(AnalysisDiagnostic {
             range: range.clone(),
             severity: DiagnosticSeverity::Error,
             kind: DiagnosticKind::SchemaValidation(SchemaValidationKind::BadAttachment),
             message: format!(
-                "label `{}` is not permitted on `{attached_to}` (attaches_to: {})",
+                "label `{}` is not permitted on `{attached_str}` (attaches_to: {})",
                 schema.label,
                 schema.attaches_to.join(", ")
             ),
@@ -733,6 +732,41 @@ mod tests {
                 DiagnosticKind::SchemaValidation(SchemaValidationKind::BadAttachment)
             )),
             "expected at least one BadAttachment diag, got: {diags:?}"
+        );
+    }
+
+    /// Regression for the kinds-misalignment bug: a schema that
+    /// attaches to `document` should match a top-level annotation,
+    /// not get a BadAttachment diagnostic. Prior to the
+    /// `HostNodeKind` unification the loader rejected `document`
+    /// schemas outright; with the fix the loader accepts them and
+    /// the walker emits `HostNodeKind::Document` for top-level
+    /// annotations, so the two sides agree.
+    #[test]
+    fn document_level_annotation_matches_document_attaches_to() {
+        let s = schema(
+            "acme.docmeta",
+            vec!["document"],
+            HookSet {
+                validate: true,
+                ..HookSet::default()
+            },
+        );
+        let registry = Registry::new();
+        registry
+            .register_namespace("acme", vec![s], Box::new(EchoValidate))
+            .unwrap();
+        // Top-level annotation, parsed as a document-level one.
+        let doc = parse(":: acme.docmeta ::\n");
+        let mut diags = Vec::new();
+        dispatch_labels(&doc, &registry, &mut diags);
+        // Expect handler-emitted diagnostic (no BadAttachment).
+        assert!(
+            !diags.iter().any(|d| matches!(
+                d.kind,
+                DiagnosticKind::SchemaValidation(SchemaValidationKind::BadAttachment)
+            )),
+            "document-level annotation should match attaches_to: [document], got: {diags:?}"
         );
     }
 }
