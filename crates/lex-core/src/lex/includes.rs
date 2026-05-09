@@ -856,7 +856,7 @@ fn handler_error_to_include_error(
 ) -> IncludeError {
     use crate::lex::builtins::include::{
         CODE_ABSOLUTE_PATH, CODE_IO, CODE_MISSING_SRC, CODE_NOT_FOUND, CODE_OUTSIDE_ROOT,
-        CODE_TOO_LARGE,
+        CODE_PARSE_FAILED, CODE_TOO_LARGE,
     };
 
     match err {
@@ -901,6 +901,12 @@ fn handler_error_to_include_error(
             CODE_MISSING_SRC => IncludeError::MissingSrc {
                 include_site: include_site.clone(),
             },
+            CODE_PARSE_FAILED => IncludeError::ParseFailed {
+                path: data_str(data, "path")
+                    .map(PathBuf::from)
+                    .unwrap_or_default(),
+                message: data_str(data, "message").unwrap_or_else(|| message.clone()),
+            },
             other => IncludeError::HandlerFailed {
                 include_site: include_site.clone(),
                 label: label.to_string(),
@@ -908,22 +914,12 @@ fn handler_error_to_include_error(
                 message: message.clone(),
             },
         },
-        HandlerError::Internal { message } => {
-            // Built-in lex.include flags parse failures with the
-            // distinctive `parse of `<path>` failed: <msg>` prefix.
-            // Recover the path so existing tests that match
-            // `IncludeError::ParseFailed` keep working.
-            if let Some((path, msg)) = parse_internal_parse_failure(message) {
-                IncludeError::ParseFailed { path, message: msg }
-            } else {
-                IncludeError::HandlerFailed {
-                    include_site: include_site.clone(),
-                    label: label.to_string(),
-                    code: "handler.internal".into(),
-                    message: message.clone(),
-                }
-            }
-        }
+        HandlerError::Internal { message } => IncludeError::HandlerFailed {
+            include_site: include_site.clone(),
+            label: label.to_string(),
+            code: "handler.internal".into(),
+            message: message.clone(),
+        },
         HandlerError::Unsupported { detail } => IncludeError::HandlerFailed {
             include_site: include_site.clone(),
             label: label.to_string(),
@@ -939,18 +935,6 @@ fn data_str(data: &Option<serde_json::Value>, key: &str) -> Option<String> {
 
 fn data_u64(data: &Option<serde_json::Value>, key: &str) -> Option<u64> {
     data.as_ref()?.get(key)?.as_u64()
-}
-
-/// Recover `(path, message)` from a parse-failure `Internal` message
-/// shaped `parse of `<path>` failed: <msg>`. Returns `None` if the
-/// message doesn't match — the caller then falls back to a generic
-/// `HandlerFailed`.
-fn parse_internal_parse_failure(message: &str) -> Option<(PathBuf, String)> {
-    let rest = message.strip_prefix("parse of `")?;
-    let close_idx = rest.find("` failed: ")?;
-    let path = PathBuf::from(&rest[..close_idx]);
-    let msg = rest[close_idx + "` failed: ".len()..].to_string();
-    Some((path, msg))
 }
 
 #[allow(clippy::ptr_arg)]
