@@ -2,7 +2,7 @@
 //!
 //! Each test spawns the in-tree `lex-extension-host-fixture-handler`
 //! binary in one of its modes (echo, slow, crash, malformed,
-//! version-mismatch) and exercises one corner of the
+//! version-mismatch, bigecho) and exercises one corner of the
 //! `SubprocessHandler` contract through the public `LexHandler` trait.
 //!
 //! The fixture binary is declared as a `[[bin]]` of `lex-extension-host`

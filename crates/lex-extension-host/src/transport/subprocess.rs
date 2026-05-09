@@ -65,8 +65,12 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_millis(2000);
 /// is a one-shot at spawn time.
 const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Grace period to let a handler exit after we send `shutdown` before we
-/// SIGTERM it.
+/// Grace period to let a handler exit after we send the `shutdown`
+/// notification. After this elapses we let the writer task finish,
+/// drop the runtime, and rely on `kill_on_drop(true)` on the
+/// `tokio::process::Child` to SIGKILL the process. (The previous doc
+/// claimed an explicit SIGTERM step; the implementation has always
+/// relied on `kill_on_drop` for the kill phase.)
 const SHUTDOWN_GRACE: Duration = Duration::from_millis(500);
 
 /// Workspace + cache context used to expand `${WORKSPACE_ROOT}`,
@@ -365,6 +369,12 @@ impl SubprocessHandler {
 
     /// Send a JSON-RPC request and block (up to `self.timeout`) on the
     /// reply.
+    ///
+    /// Callers are responsible for checking `self.implements` first when
+    /// the trait method has a "no result" default. `call()` itself does
+    /// not second-guess: short-circuiting here would surface as a
+    /// spurious `Unsupported` diagnostic for hooks like `on_hover` whose
+    /// natural default is `Ok(None)`.
     fn call(
         &self,
         method: &'static str,
@@ -372,13 +382,6 @@ impl SubprocessHandler {
     ) -> Result<serde_json::Value, HandlerError> {
         if self.disabled.load(Ordering::SeqCst) {
             return Err(HandlerError::internal("subprocess handler disabled"));
-        }
-        // Skip the round-trip if the handler said it doesn't implement
-        // this method.
-        if !self.implements.is_empty() && !self.implements.contains(method) {
-            return Err(HandlerError::unsupported(format!(
-                "handler did not advertise `{method}` in its `implements` array"
-            )));
         }
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let (tx, rx) = std::sync::mpsc::channel();
@@ -474,15 +477,25 @@ fn handler_error_from_jsonrpc(err: JsonRpcError) -> HandlerError {
 
 // ────────────────────────── LexHandler bridge ──────────────────────────
 
+impl SubprocessHandler {
+    /// True when the handler advertised this method in its
+    /// `implements` array, OR it advertised an empty array (treat as
+    /// "didn't tell us — try and see"). False short-circuits the
+    /// trait method to its identity default — `Ok(None)` /
+    /// `Ok(Vec::new())` / `()` — so unimplemented hooks don't
+    /// surface as `Unsupported` diagnostics, matching the trait's
+    /// own default semantics for native handlers.
+    fn advertised(&self, method: &str) -> bool {
+        self.implements.is_empty() || self.implements.contains(method)
+    }
+}
+
 impl LexHandler for SubprocessHandler {
     fn on_label(&self, ctx: &LabelCtx) {
         // Wire spec §4.1: on_label is a JSON-RPC notification — no `id`,
         // no response. Send via the Notify command so the worker writes
         // the frame and moves on without registering a pending entry.
-        if self.disabled.load(Ordering::SeqCst) {
-            return;
-        }
-        if !self.implements.is_empty() && !self.implements.contains("on_label") {
+        if self.disabled.load(Ordering::SeqCst) || !self.advertised("on_label") {
             return;
         }
         let _ = self.cmd_tx.send(WorkerCmd::Notify {
@@ -492,6 +505,9 @@ impl LexHandler for SubprocessHandler {
     }
 
     fn on_validate(&self, ctx: &LabelCtx) -> Result<Vec<Diagnostic>, HandlerError> {
+        if !self.advertised("on_validate") {
+            return Ok(Vec::new());
+        }
         #[derive(Deserialize)]
         struct ValidateResult {
             #[serde(default)]
@@ -504,6 +520,9 @@ impl LexHandler for SubprocessHandler {
     }
 
     fn on_resolve(&self, ctx: &LabelCtx) -> Result<Option<WireNode>, HandlerError> {
+        if !self.advertised("on_resolve") {
+            return Ok(None);
+        }
         #[derive(Deserialize)]
         struct ResolveResult {
             #[serde(default)]
@@ -516,6 +535,9 @@ impl LexHandler for SubprocessHandler {
     }
 
     fn on_render(&self, ctx: &LabelCtx, format: Format) -> Result<Option<RenderOut>, HandlerError> {
+        if !self.advertised("on_render") {
+            return Ok(None);
+        }
         #[derive(Deserialize)]
         struct RenderResult {
             #[serde(default)]
@@ -542,6 +564,9 @@ impl LexHandler for SubprocessHandler {
     }
 
     fn on_hover(&self, ctx: &LabelCtx) -> Result<Option<Hover>, HandlerError> {
+        if !self.advertised("on_hover") {
+            return Ok(None);
+        }
         #[derive(Deserialize)]
         struct HoverResult {
             #[serde(default)]
@@ -554,6 +579,9 @@ impl LexHandler for SubprocessHandler {
     }
 
     fn on_completion(&self, ctx: &LabelCtx) -> Result<Vec<Completion>, HandlerError> {
+        if !self.advertised("on_completion") {
+            return Ok(Vec::new());
+        }
         #[derive(Deserialize)]
         struct CompletionResult {
             #[serde(default)]
@@ -569,6 +597,9 @@ impl LexHandler for SubprocessHandler {
     }
 
     fn on_code_action(&self, ctx: &LabelCtx) -> Result<Vec<CodeAction>, HandlerError> {
+        if !self.advertised("on_code_action") {
+            return Ok(Vec::new());
+        }
         #[derive(Deserialize)]
         struct CodeActionResult {
             #[serde(default)]
@@ -680,7 +711,7 @@ async fn worker_main(
         mut reader,
     } = io;
     let (write_tx, mut write_rx) = mpsc::unbounded_channel::<Vec<u8>>();
-    let writer_handle = tokio::spawn(async move {
+    let mut writer_handle = tokio::spawn(async move {
         while let Some(bytes) = write_rx.recv().await {
             if stdin.write_all(&bytes).await.is_err() {
                 break;
@@ -794,8 +825,10 @@ async fn worker_main(
 
     // Graceful shutdown ladder: send `shutdown` notification through
     // the writer task, then drop `write_tx` so the writer drains and
-    // closes stdin. SIGKILL via `kill_on_drop(true)` when `child`
-    // falls out of scope.
+    // closes stdin. If the writer is wedged (handler stopped reading
+    // stdin), abort it explicitly so it can't keep the runtime alive
+    // past `SHUTDOWN_GRACE`. SIGKILL via `kill_on_drop(true)` when
+    // `child` falls out of scope.
     let shutdown = OutgoingNotification {
         jsonrpc: "2.0",
         method: "shutdown",
@@ -805,7 +838,12 @@ async fn worker_main(
         &serde_json::to_value(&shutdown).expect("OutgoingNotification"),
     ));
     drop(write_tx);
-    let _ = tokio::time::timeout(SHUTDOWN_GRACE, writer_handle).await;
+    if tokio::time::timeout(SHUTDOWN_GRACE, &mut writer_handle)
+        .await
+        .is_err()
+    {
+        writer_handle.abort();
+    }
     let _ = tokio::time::timeout(SHUTDOWN_GRACE, child.wait()).await;
 
     fail_all_pending(&mut pending, "subprocess handler shutting down");
