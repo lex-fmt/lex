@@ -32,7 +32,7 @@ use serde_json::Value;
 
 use super::error::FromWireError;
 use super::inline::text_content_from_wire;
-use super::range::range_from_wire;
+use super::range::{range_from_wire, range_from_wire_with_origin};
 
 /// Convert a `WireNode::Document` into a list of lex-core
 /// `ContentItem`s — one per child. The `WireNode::Document` wrapper
@@ -56,10 +56,16 @@ pub fn from_wire_subtree(nodes: &[WireNode]) -> Result<Vec<ContentItem>, FromWir
 
 fn convert_one(node: &WireNode) -> Result<ContentItem, FromWireError> {
     match node {
-        WireNode::Paragraph { range, inlines, .. } => {
-            Ok(ContentItem::Paragraph(paragraph_from_wire(range, inlines)))
-        }
-        WireNode::Blank { range, .. } => {
+        WireNode::Paragraph {
+            range,
+            origin,
+            inlines,
+        } => Ok(ContentItem::Paragraph(paragraph_from_wire(
+            range,
+            origin.as_deref(),
+            inlines,
+        ))),
+        WireNode::Blank { range, origin } => {
             // Reconstruct the blank-line count from the range when
             // possible: an N-line blank group spans N lines, so
             // `end.line - start.line` (clamped to >= 1) recovers the
@@ -69,55 +75,68 @@ fn convert_one(node: &WireNode) -> Result<ContentItem, FromWireError> {
             let span_lines = range.end.line().saturating_sub(range.start.line());
             let count = (span_lines as usize).max(1);
             let mut blg = BlankLineGroup::new(count, Vec::new());
-            blg.location = range_from_wire(range);
+            blg.location = range_from_wire_with_origin(range, origin.as_deref());
             Ok(ContentItem::BlankLineGroup(blg))
         }
         WireNode::Annotation {
             range,
+            origin,
             label,
             params,
             body,
-            ..
         } => Ok(ContentItem::Annotation(annotation_from_wire(
-            range, label, params, body,
+            range,
+            origin.as_deref(),
+            label,
+            params,
+            body,
         )?)),
         WireNode::Session {
             range,
+            origin,
             title,
             marker,
             children,
-            ..
         } => Ok(ContentItem::Session(session_from_wire(
-            range, title, marker, children,
+            range,
+            origin.as_deref(),
+            title,
+            marker,
+            children,
         )?)),
         WireNode::Definition {
             range,
+            origin,
             subject,
             children,
-            ..
         } => Ok(ContentItem::Definition(definition_from_wire(
-            range, subject, children,
+            range,
+            origin.as_deref(),
+            subject,
+            children,
         )?)),
         WireNode::List {
             range,
+            origin,
             marker_style,
             items,
-            ..
         } => Ok(ContentItem::List(list_from_wire(
             range,
+            origin.as_deref(),
             marker_style,
             items,
         )?)),
         WireNode::Table {
             range,
+            origin,
             caption,
             header_rows,
             align,
             rows,
             footnotes,
-            ..
         } => Ok(ContentItem::Table(Box::new(table_from_wire(
             range,
+            origin.as_deref(),
             caption,
             *header_rows,
             align,
@@ -126,14 +145,20 @@ fn convert_one(node: &WireNode) -> Result<ContentItem, FromWireError> {
         )?))),
         WireNode::Verbatim {
             range,
+            origin,
             label,
             params,
             body_text,
             subject,
             mode,
-            ..
         } => Ok(verbatim_from_wire(
-            range, label, params, body_text, subject, mode,
+            range,
+            origin.as_deref(),
+            label,
+            params,
+            body_text,
+            subject,
+            mode,
         )?),
         // WireNode is `#[non_exhaustive]` — future kinds surface here.
         _ => Err(FromWireError::UnsupportedKind {
@@ -144,9 +169,10 @@ fn convert_one(node: &WireNode) -> Result<ContentItem, FromWireError> {
 
 fn paragraph_from_wire(
     range: &lex_extension::wire::Range,
+    origin: Option<&str>,
     inlines: &[lex_extension::wire::WireInline],
 ) -> Paragraph {
-    let location = range_from_wire(range);
+    let location = range_from_wire_with_origin(range, origin);
     // Round-trip the wire inlines back into a single source string,
     // then split on `\n` to reconstruct multiple TextLines. The
     // forward codec inserts an explicit `\n` Text inline between
@@ -181,6 +207,7 @@ fn paragraph_from_wire(
 
 fn annotation_from_wire(
     range: &lex_extension::wire::Range,
+    origin: Option<&str>,
     label: &str,
     params: &Value,
     body: &Value,
@@ -191,7 +218,7 @@ fn annotation_from_wire(
 
     let children = annotation_body_from_json(body)?;
     let mut a = CoreAnnotation::from_data(data, Vec::new());
-    a.location = range_from_wire(range);
+    a.location = range_from_wire_with_origin(range, origin);
     if !children.is_empty() {
         for child in children {
             a.children.as_mut_vec().push(child);
@@ -202,6 +229,7 @@ fn annotation_from_wire(
 
 fn session_from_wire(
     range: &lex_extension::wire::Range,
+    origin: Option<&str>,
     title: &str,
     marker: &Option<String>,
     children: &[WireNode],
@@ -209,7 +237,7 @@ fn session_from_wire(
     let title_tc = TextContent::from_string(title.to_string(), None);
     let typed_children = wire_children_to_session_content(children)?;
     let mut s = Session::new(title_tc, typed_children);
-    s.location = range_from_wire(range);
+    s.location = range_from_wire_with_origin(range, origin);
     s.marker = marker
         .as_deref()
         .and_then(|m| SequenceMarker::parse(m, None));
@@ -218,18 +246,20 @@ fn session_from_wire(
 
 fn definition_from_wire(
     range: &lex_extension::wire::Range,
+    origin: Option<&str>,
     subject: &str,
     children: &[WireNode],
 ) -> Result<Definition, FromWireError> {
     let subject_tc = TextContent::from_string(subject.to_string(), None);
     let typed_children = wire_children_to_content_elements(children)?;
     let mut d = Definition::new(subject_tc, typed_children);
-    d.location = range_from_wire(range);
+    d.location = range_from_wire_with_origin(range, origin);
     Ok(d)
 }
 
 fn list_from_wire(
     range: &lex_extension::wire::Range,
+    origin: Option<&str>,
     marker_style: &str,
     items: &[WireListItem],
 ) -> Result<List, FromWireError> {
@@ -240,7 +270,7 @@ fn list_from_wire(
         .map(|(index, item)| list_item_from_wire(item, marker_style, index))
         .collect::<Result<Vec<_>, _>>()?;
     let mut l = List::new(list_items);
-    l.location = range_from_wire(range);
+    l.location = range_from_wire_with_origin(range, origin);
     l.marker = marker;
     Ok(l)
 }
@@ -326,6 +356,7 @@ fn roman_numeral(mut n: usize) -> String {
 
 fn table_from_wire(
     range: &lex_extension::wire::Range,
+    origin: Option<&str>,
     caption: &str,
     header_rows: u32,
     align: &str,
@@ -357,7 +388,7 @@ fn table_from_wire(
     }
     let subject = TextContent::from_string(caption.to_string(), None);
     let mut t = Table::new(subject, header_vec, body_vec, VerbatimBlockMode::Inflow);
-    t.location = range_from_wire(range);
+    t.location = range_from_wire_with_origin(range, origin);
     if !footnotes.is_empty() {
         let footnote_items: Vec<ListItem> = footnotes
             .iter()
@@ -389,6 +420,7 @@ fn table_cell_from_wire(
 
 fn verbatim_from_wire(
     range: &lex_extension::wire::Range,
+    origin: Option<&str>,
     label: &str,
     params: &Value,
     body_text: &str,
@@ -413,7 +445,7 @@ fn verbatim_from_wire(
         // `verbatim_line_standalone_to_wire` in the forward codec.
         let mut vl =
             VerbatimLine::from_text_content(TextContent::from_string(body_text.to_string(), None));
-        vl.location = range_from_wire(range);
+        vl.location = range_from_wire_with_origin(range, origin);
         return Ok(ContentItem::VerbatimLine(vl));
     }
 
@@ -438,7 +470,7 @@ fn verbatim_from_wire(
     };
     let block_mode = parse_verbatim_mode(mode);
     let mut v = Verbatim::new(subject_tc, typed_lines, closing_data, block_mode);
-    v.location = range_from_wire(range);
+    v.location = range_from_wire_with_origin(range, origin);
     Ok(ContentItem::VerbatimBlock(Box::new(v)))
 }
 

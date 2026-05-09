@@ -21,8 +21,11 @@
 use super::*;
 use crate::lex::ast::elements::content_item::ContentItem;
 use crate::lex::ast::Document;
+use crate::lex::builtins;
+use lex_extension_host::registry::Registry;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 // ============================================================================
 // Fixture builder
@@ -59,14 +62,65 @@ fn fixture_at(
     for (p, s) in files {
         loader.insert(*p, *s);
     }
-    let config = ResolveConfig::with_root(PathBuf::from(TEST_ROOT));
+    resolve_with_loader(main_path, main_source, loader, TEST_ROOT)
+}
+
+/// Bridge helper: build a `Registry` with the lex.* built-ins
+/// registered against `loader`, then call the new
+/// `resolve_from_source`. Lets the existing test bodies keep their
+/// `MemoryLoader` plumbing — every test routes through this helper
+/// instead of reaching for `Registry` itself.
+fn resolve_with_loader(
+    main_path: &str,
+    main_source: &str,
+    loader: MemoryLoader,
+    root: &str,
+) -> Result<Tree, IncludeError> {
+    let config = ResolveConfig::with_root(PathBuf::from(root));
+    let registry = Registry::new();
+    builtins::register_into(&registry, Arc::new(loader), config.clone())
+        .expect("register_into never fails for a fresh registry with no other namespaces");
     let doc = resolve_from_source(
         main_source,
         Some(PathBuf::from(main_path)),
         &config,
-        &loader,
+        &registry,
     )?;
     Ok(Tree { doc })
+}
+
+/// Lower-level bridge: configure a registry with the supplied `loader` +
+/// `config` and run the resolve pass. Used by tests that need a
+/// non-default `ResolveConfig` (e.g., custom `max_depth` or
+/// `max_total_includes`) so they can keep constructing `MemoryLoader`s
+/// without touching the registry themselves.
+fn resolve_with_config(
+    main_path: &str,
+    main_source: &str,
+    loader: MemoryLoader,
+    config: ResolveConfig,
+) -> Result<Document, IncludeError> {
+    resolve_with_arc_loader(main_path, main_source, Arc::new(loader), config)
+}
+
+/// Most-general bridge: takes an `Arc<dyn Loader + Send + Sync>` so
+/// tests with a custom `Loader` impl (case-fold simulators, mock
+/// I/O-error loaders, etc.) can route through the same registry path.
+fn resolve_with_arc_loader(
+    main_path: &str,
+    main_source: &str,
+    loader: Arc<dyn Loader + Send + Sync>,
+    config: ResolveConfig,
+) -> Result<Document, IncludeError> {
+    let registry = Registry::new();
+    builtins::register_into(&registry, loader, config.clone())
+        .expect("register_into never fails for a fresh registry");
+    resolve_from_source(
+        main_source,
+        Some(PathBuf::from(main_path)),
+        &config,
+        &registry,
+    )
 }
 
 // ============================================================================
@@ -967,18 +1021,27 @@ fn depth_limit_triggers_at_configured_threshold() {
         max_depth: 3,
         max_total_includes: ResolveConfig::DEFAULT_MAX_TOTAL_INCLUDES,
     };
-    let result = resolve_from_source(
+    let result = resolve_with_config(
+        DEFAULT_MAIN_PATH,
         ":: lex.include src=\"a.lex\" ::\n",
-        Some(PathBuf::from(DEFAULT_MAIN_PATH)),
-        &config,
-        &loader,
+        loader,
+        config,
     );
     let err = assert_err_kind!(result, IncludeError::DepthExceeded { .. });
     if let IncludeError::DepthExceeded { limit, chain, .. } = err {
         assert_eq!(limit, 3);
-        // The chain at failure shows the path TO the offending include site:
-        // entry → a → b → c (depth=3, about to push d which would exceed).
-        assert_eq!(chain.len(), 4);
+        // The chain at failure reflects the invocation sites traversed
+        // *to reach* the offending check, not the files loaded at each
+        // step. With max_depth = 3, we descend through entry's
+        // invocation (loads a.lex), a.lex's invocation (loads b.lex),
+        // b.lex's invocation (loads c.lex), then check c.lex's
+        // invocation (which would load d.lex) — that check fires
+        // before its key is pushed, so the chain has 3 keys (entry,
+        // a, b). The pre-PR-3d resolver tracked loaded-file paths and
+        // had 4 entries here; (label, origin) keying drops the
+        // currently-walked file because its key isn't on the stack
+        // yet at the moment the check fires.
+        assert_eq!(chain.len(), 3);
     }
 }
 
@@ -995,11 +1058,11 @@ fn depth_limit_at_exact_max_is_allowed() {
         max_depth: 2,
         max_total_includes: ResolveConfig::DEFAULT_MAX_TOTAL_INCLUDES,
     };
-    let doc = resolve_from_source(
+    let doc = resolve_with_config(
+        DEFAULT_MAIN_PATH,
         ":: lex.include src=\"a.lex\" ::\n",
-        Some(PathBuf::from(DEFAULT_MAIN_PATH)),
-        &config,
-        &loader,
+        loader,
+        config,
     )
     .expect("exact-max chain should succeed");
     let tree = Tree { doc };
@@ -1060,15 +1123,15 @@ fn cycle_back_to_unnormalized_entry_path_still_detected() {
     let mut loader = MemoryLoader::new();
     loader.insert("/repo/main.lex", ":: lex.include src=\"a.lex\" ::\n");
     loader.insert("/repo/a.lex", ":: lex.include src=\"main.lex\" ::\n");
-    let config = ResolveConfig::with_root(PathBuf::from(TEST_ROOT));
-    // Entry path written with a non-normalized form (`./main.lex`) — the
-    // resolver must normalize it to `/repo/main.lex` before chain
-    // comparisons, so the loop-back from a.lex catches the cycle.
-    let result = resolve_from_source(
+    // Entry path written with a non-normalized form (`./main.lex`).
+    // The cycle key is the (label, origin, position) of each
+    // invocation site; loop-back from a.lex re-invokes the entry's
+    // include site, which must match.
+    let result = resolve_with_loader(
+        "/repo/./main.lex",
         ":: lex.include src=\"a.lex\" ::\n",
-        Some(PathBuf::from("/repo/./main.lex")),
-        &config,
-        &loader,
+        loader,
+        TEST_ROOT,
     );
     assert_err_kind!(result, IncludeError::Cycle { .. });
 }
@@ -1207,11 +1270,13 @@ fn find_annotation_by_label_in_origin_handles_none_origin() {
     let mut loader = MemoryLoader::new();
     loader.insert("/repo/main.lex", ":: 1 :: Top-level note.\n\nA para.\n");
     let config = ResolveConfig::with_root(PathBuf::from(TEST_ROOT));
+    let registry = Registry::new();
+    builtins::register_into(&registry, Arc::new(loader), config.clone()).unwrap();
     let doc = resolve_from_source(
         ":: 1 :: Top-level note.\n\nA para.\n",
         None, // no source_path → entry annotations have origin = None
         &config,
-        &loader,
+        &registry,
     )
     .unwrap();
     assert!(doc.find_annotation_by_label_in_origin("1", None).is_some());
@@ -1552,12 +1617,7 @@ fn cycle_detection_uses_canonical_path_from_loader() {
 
     let cfg = ResolveConfig::with_root(PathBuf::from("/repo"));
     let entry = "1. Top\n\n    :: lex.include src=\"A.lex\" ::\n";
-    let result = resolve_from_source(
-        entry,
-        Some(PathBuf::from("/repo/main.lex")),
-        &cfg,
-        &CaseFoldLoader,
-    );
+    let result = resolve_with_arc_loader("/repo/main.lex", entry, Arc::new(CaseFoldLoader), cfg);
 
     // Without canonical-path cycle detection this would be DepthExceeded;
     // with the v0.10.2 fix it's caught as a Cycle on the second visit.
@@ -1590,12 +1650,7 @@ fn total_includes_limit_caps_breadth() {
         max_depth: ResolveConfig::DEFAULT_MAX_DEPTH,
         max_total_includes: 3,
     };
-    let result = resolve_from_source(
-        host,
-        Some(PathBuf::from(DEFAULT_MAIN_PATH)),
-        &config,
-        &loader,
-    );
+    let result = resolve_with_config(DEFAULT_MAIN_PATH, host, loader, config);
     match result.expect_err("breadth past total limit must error") {
         IncludeError::TotalIncludesExceeded { limit, .. } => {
             assert_eq!(limit, 3, "error reports the configured limit");
@@ -1620,12 +1675,7 @@ fn total_includes_limit_only_counts_successful_loads() {
         max_depth: 8,
         max_total_includes: 5,
     };
-    let result = resolve_from_source(
-        host,
-        Some(PathBuf::from(DEFAULT_MAIN_PATH)),
-        &config,
-        &loader,
-    );
+    let result = resolve_with_config(DEFAULT_MAIN_PATH, host, loader, config);
     // Should fail with NotFound, not TotalIncludesExceeded.
     match result.expect_err("missing include must surface NotFound") {
         IncludeError::NotFound { .. } => {}
@@ -1687,12 +1737,8 @@ fn file_too_large_carries_include_site() {
     }
     let cfg = ResolveConfig::with_root(PathBuf::from("/repo"));
     let entry = ":: lex.include src=\"big.lex\" ::\n";
-    let result = resolve_from_source(
-        entry,
-        Some(PathBuf::from("/repo/main.lex")),
-        &cfg,
-        &AlwaysTooLargeLoader,
-    );
+    let result =
+        resolve_with_arc_loader("/repo/main.lex", entry, Arc::new(AlwaysTooLargeLoader), cfg);
     match result.expect_err("too-large include must error") {
         IncludeError::FileTooLarge {
             include_site,
@@ -1723,11 +1769,11 @@ fn root_absolute_leading_slash_still_works() {
     loader.insert("/repo/leaf.lex", "Body.\n");
     loader.insert("/repo/main.lex", ":: lex.include src=\"/leaf.lex\" ::\n");
     let cfg = ResolveConfig::with_root(PathBuf::from("/repo"));
-    let _doc = resolve_from_source(
+    let _doc = resolve_with_config(
+        "/repo/main.lex",
         ":: lex.include src=\"/leaf.lex\" ::\n",
-        Some(PathBuf::from("/repo/main.lex")),
-        &cfg,
-        &loader,
+        loader,
+        cfg,
     )
     .expect("root-absolute (leading /) include must still resolve");
 }
@@ -1740,11 +1786,11 @@ fn root_absolute_leading_slash_still_works() {
 fn windows_absolute_path_is_rejected_up_front() {
     let cfg = ResolveConfig::with_root(PathBuf::from("C:\\repo"));
     let loader = MemoryLoader::new();
-    let result = resolve_from_source(
+    let result = resolve_with_config(
+        "C:\\repo\\main.lex",
         ":: lex.include src=\"C:\\\\secret.txt\" ::\n",
-        Some(PathBuf::from("C:\\repo\\main.lex")),
-        &cfg,
-        &loader,
+        loader,
+        cfg,
     );
     match result.expect_err("Windows-absolute src must be rejected") {
         IncludeError::AbsolutePath { path } => {
@@ -1767,4 +1813,286 @@ fn absolute_path_error_message_is_actionable() {
         s.contains("relative") && s.contains("root-absolute"),
         "points the user at the two spec-allowed shapes; got: {s}"
     );
+}
+
+// ============================================================================
+// PR 3d: registry-mediated dispatch (the new generic resolve path)
+// ============================================================================
+
+mod registry_dispatch {
+    use super::*;
+    use lex_extension::handler::{HandlerError, LexHandler};
+    use lex_extension::schema::{BodyKind, BodyPresence, BodyShape, Capabilities, HookSet, Schema};
+    use lex_extension::wire::{LabelCtx, Position, Range as WireRange, WireInline, WireNode};
+    use std::collections::BTreeMap;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// Schema helper: a third-party namespace `acme` with one
+    /// resolve-hooked label `acme.expand`.
+    fn acme_expand_schema() -> Schema {
+        Schema {
+            schema_version: 1,
+            label: "acme.expand".into(),
+            description: Some("Test namespace".into()),
+            params: BTreeMap::new(),
+            attaches_to: vec!["annotation".into()],
+            body: BodyShape {
+                kind: BodyKind::None,
+                presence: BodyPresence::Optional,
+                description: None,
+            },
+            verbatim_label: false,
+            capabilities: Capabilities::default(),
+            hooks: HookSet {
+                resolve: true,
+                ..HookSet::default()
+            },
+            handler: None,
+        }
+    }
+
+    /// Run the resolve pass against a registry the test itself
+    /// configured. Bypasses `register_into` for `lex.*` so tests can
+    /// install only their mock namespace.
+    fn resolve_with_registry(
+        main_path: &str,
+        main_source: &str,
+        registry: Registry,
+    ) -> Result<Document, IncludeError> {
+        let config = ResolveConfig::with_root(PathBuf::from(TEST_ROOT));
+        resolve_from_source(
+            main_source,
+            Some(PathBuf::from(main_path)),
+            &config,
+            &registry,
+        )
+    }
+
+    /// Mock handler that returns a fixed paragraph wrapped in a
+    /// WireNode::Document. Verifies the registry dispatches to a
+    /// non-`lex.*` namespace through the same code path as the
+    /// built-in.
+    #[test]
+    fn third_party_namespace_dispatches_through_same_pass() {
+        struct ExpandHandler;
+        impl LexHandler for ExpandHandler {
+            fn on_resolve(&self, _ctx: &LabelCtx) -> Result<Option<WireNode>, HandlerError> {
+                Ok(Some(WireNode::Document {
+                    range: WireRange::new(Position::new(0, 0), Position::new(1, 0)),
+                    origin: None,
+                    children: vec![WireNode::Paragraph {
+                        range: WireRange::new(Position::new(0, 0), Position::new(0, 12)),
+                        origin: None,
+                        inlines: vec![WireInline::Text {
+                            text: "expanded by acme".into(),
+                        }],
+                    }],
+                }))
+            }
+        }
+
+        let registry = Registry::new();
+        registry
+            .register_namespace("acme", vec![acme_expand_schema()], Box::new(ExpandHandler))
+            .expect("register acme");
+
+        let doc = resolve_with_registry("/repo/main.lex", ":: acme.expand ::\n", registry)
+            .expect("resolve via third-party handler");
+        let tree = Tree { doc };
+        let texts = tree.root_paragraph_texts();
+        assert!(
+            texts.iter().any(|t| t == "expanded by acme"),
+            "spliced content from third-party handler must reach the merged tree, got {texts:?}"
+        );
+    }
+
+    /// Same-origin recursion: the handler returns content containing
+    /// another invocation at the *same source position* as the
+    /// original. The cycle key `(label, origin, position)` matches
+    /// on the second visit, surfacing `IncludeError::Cycle`.
+    #[test]
+    fn same_origin_recursion_caught_immediately_as_cycle() {
+        struct LoopHandler;
+        impl LexHandler for LoopHandler {
+            fn on_resolve(&self, _ctx: &LabelCtx) -> Result<Option<WireNode>, HandlerError> {
+                // Return content containing an `acme.expand` annotation
+                // at line 0, column 0 — same as the original
+                // invocation site, so the cycle detector matches on
+                // the second visit.
+                Ok(Some(WireNode::Document {
+                    range: WireRange::new(Position::new(0, 0), Position::new(1, 0)),
+                    origin: Some("/repo/main.lex".into()),
+                    children: vec![WireNode::Annotation {
+                        range: WireRange::new(Position::new(0, 0), Position::new(0, 17)),
+                        origin: Some("/repo/main.lex".into()),
+                        label: "acme.expand".into(),
+                        params: serde_json::json!({}),
+                        body: serde_json::Value::Null,
+                    }],
+                }))
+            }
+        }
+
+        let registry = Registry::new();
+        registry
+            .register_namespace("acme", vec![acme_expand_schema()], Box::new(LoopHandler))
+            .expect("register acme");
+
+        let result = resolve_with_registry("/repo/main.lex", ":: acme.expand ::\n", registry);
+        match result {
+            Err(IncludeError::Cycle { .. }) => {}
+            other => panic!("same-origin recursion must surface as Cycle, got {other:?}"),
+        }
+    }
+
+    /// Varying-origin recursion: the handler returns content at a
+    /// fresh source position each iteration, so the cycle key never
+    /// matches. Termination is delegated to the depth backstop.
+    #[test]
+    fn varying_origin_recursion_terminates_at_depth_backstop() {
+        struct VaryingHandler {
+            iter: AtomicUsize,
+        }
+        impl LexHandler for VaryingHandler {
+            fn on_resolve(&self, _ctx: &LabelCtx) -> Result<Option<WireNode>, HandlerError> {
+                // Each call invents a never-before-seen invocation site
+                // (line N, monotonically increasing). The cycle key
+                // never matches because position is always unique.
+                let n = self.iter.fetch_add(1, Ordering::SeqCst) as u32;
+                let line = n + 1;
+                let synthetic_origin = format!("/repo/synth-{n}.lex");
+                Ok(Some(WireNode::Document {
+                    range: WireRange::new(Position::new(line, 0), Position::new(line + 1, 0)),
+                    origin: Some(synthetic_origin.clone()),
+                    children: vec![WireNode::Annotation {
+                        range: WireRange::new(Position::new(line, 0), Position::new(line, 17)),
+                        origin: Some(synthetic_origin),
+                        label: "acme.expand".into(),
+                        params: serde_json::json!({}),
+                        body: serde_json::Value::Null,
+                    }],
+                }))
+            }
+        }
+
+        let registry = Registry::new();
+        registry
+            .register_namespace(
+                "acme",
+                vec![acme_expand_schema()],
+                Box::new(VaryingHandler {
+                    iter: AtomicUsize::new(0),
+                }),
+            )
+            .expect("register acme");
+
+        // Use the default config so the depth backstop fires through
+        // ResolveConfig::DEFAULT_MAX_DEPTH (8); this is always
+        // <= KERNEL_DEPTH_BACKSTOP (32), so the configurable limit
+        // wins. Either way the chain terminates.
+        let result = resolve_with_registry("/repo/main.lex", ":: acme.expand ::\n", registry);
+        match result {
+            Err(IncludeError::DepthExceeded { limit, .. }) => {
+                assert!(
+                    limit <= crate::lex::includes::KERNEL_DEPTH_BACKSTOP,
+                    "depth limit must be bounded by the kernel backstop"
+                );
+            }
+            other => {
+                panic!("varying-position recursion must surface as DepthExceeded, got {other:?}")
+            }
+        }
+    }
+
+    /// Origin tracking: a paragraph spliced via the registry must
+    /// carry the origin path the handler stamped on its wire output,
+    /// not the host file's. This is what file-reference resolution
+    /// and footnote-scoping rely on.
+    #[test]
+    fn spliced_node_origin_path_round_trips() {
+        struct OriginHandler;
+        impl LexHandler for OriginHandler {
+            fn on_resolve(&self, _ctx: &LabelCtx) -> Result<Option<WireNode>, HandlerError> {
+                Ok(Some(WireNode::Document {
+                    range: WireRange::new(Position::new(0, 0), Position::new(1, 0)),
+                    origin: Some("/repo/synthetic.lex".into()),
+                    children: vec![WireNode::Paragraph {
+                        range: WireRange::new(Position::new(0, 0), Position::new(0, 5)),
+                        origin: Some("/repo/synthetic.lex".into()),
+                        inlines: vec![WireInline::Text {
+                            text: "hello".into(),
+                        }],
+                    }],
+                }))
+            }
+        }
+
+        let registry = Registry::new();
+        registry
+            .register_namespace("acme", vec![acme_expand_schema()], Box::new(OriginHandler))
+            .expect("register acme");
+
+        let doc = resolve_with_registry("/repo/main.lex", ":: acme.expand ::\n", registry)
+            .expect("resolve");
+
+        // Find the spliced paragraph and verify its origin_path.
+        let mut found_synthetic_origin = false;
+        for item in doc.root.children.iter() {
+            if let ContentItem::Paragraph(p) = item {
+                if p.lines.iter().any(|li| match li {
+                    ContentItem::TextLine(l) => l.content.as_string() == "hello",
+                    _ => false,
+                }) {
+                    let origin = p
+                        .location
+                        .origin_path
+                        .as_ref()
+                        .map(|pb| pb.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    assert_eq!(
+                        origin, "/repo/synthetic.lex",
+                        "spliced paragraph must carry handler-stamped origin"
+                    );
+                    found_synthetic_origin = true;
+                }
+            }
+        }
+        assert!(
+            found_synthetic_origin,
+            "spliced paragraph from handler must reach the merged tree"
+        );
+    }
+
+    /// A handler returning `Ok(None)` leaves the original annotation
+    /// in place — the registry's "nothing to splice" contract. After
+    /// the post-pass `AttachAnnotations` runs, the annotation may be
+    /// reattached as metadata on a neighbouring node rather than
+    /// surviving as a standalone child; the test checks the annotation
+    /// is still present *somewhere* in the merged tree.
+    #[test]
+    fn handler_returning_none_leaves_annotation_in_place() {
+        struct NoOp;
+        impl LexHandler for NoOp {}
+        let registry = Registry::new();
+        registry
+            .register_namespace("acme", vec![acme_expand_schema()], Box::new(NoOp))
+            .expect("register");
+
+        // Pair the annotation with a paragraph so AttachAnnotations
+        // has somewhere unambiguous to land it. (A standalone-only
+        // annotation can disappear when there's no attachment target;
+        // that's not what this test is probing.)
+        let doc = resolve_with_registry(
+            "/repo/main.lex",
+            ":: acme.expand ::\n\nA paragraph.\n",
+            registry,
+        )
+        .expect("resolve");
+        let tree = Tree { doc };
+        let labels = tree.all_attached_annotation_labels();
+        assert!(
+            labels.iter().any(|l| l == "acme.expand"),
+            "Ok(None) handler must leave the annotation in the tree, got {labels:?}"
+        );
+    }
 }

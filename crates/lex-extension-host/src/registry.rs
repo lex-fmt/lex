@@ -240,6 +240,25 @@ impl Registry {
         }
     }
 
+    /// Dispatch [`LexHandler::on_resolve`] and return the raw
+    /// [`HandlerError`] on failure rather than the cooked
+    /// [`Diagnostic`].
+    ///
+    /// The resolve pass uses this so it can preserve full error
+    /// fidelity — specifically, the numeric `code` on
+    /// `HandlerError::Custom` that `dispatch_resolve` collapses into
+    /// the generic `"handler.custom"` diagnostic code. Panics in the
+    /// handler are still caught and folded into a synthetic
+    /// `HandlerError::Internal` (so the namespace stays disabled
+    /// for the rest of the session, matching `dispatch_resolve`).
+    pub fn dispatch_resolve_raw(&self, ctx: &LabelCtx) -> Result<Option<WireNode>, HandlerError> {
+        match self.dispatch_raw(ctx, |h| h.on_resolve(ctx)) {
+            Ok(Some(node)) => Ok(node),
+            Ok(None) => Ok(None),
+            Err(err) => Err(err),
+        }
+    }
+
     /// Dispatch [`LexHandler::on_render`].
     pub fn dispatch_render(
         &self,
@@ -321,6 +340,55 @@ impl Registry {
             Err(_panic) => {
                 self.disable_namespace(&namespace, ctx);
                 Err(panic_diagnostic(&namespace, ctx.node.range))
+            }
+        }
+    }
+
+    /// Like [`Self::dispatch`] but surfaces the original
+    /// [`HandlerError`] instead of the cooked diagnostic. Used by the
+    /// resolve pass so it can preserve `Custom { code, .. }` codes
+    /// when mapping handler errors back to typed error variants.
+    ///
+    /// A panic inside the handler is folded into a synthetic
+    /// `HandlerError::Internal` carrying a panic-specific message,
+    /// and the namespace is disabled — same disable-once root
+    /// diagnostic behaviour as `dispatch`. Panics surface as
+    /// `Internal` rather than via a dedicated variant because
+    /// `HandlerError` does not have a `Panic` variant.
+    fn dispatch_raw<R>(
+        &self,
+        ctx: &LabelCtx,
+        f: impl FnOnce(&dyn LexHandler) -> Result<R, HandlerError>,
+    ) -> Result<Option<R>, HandlerError> {
+        let namespace = {
+            let inner = self.inner.read().expect("registry poisoned");
+            let ns_name = match inner.label_to_namespace.get(&ctx.label) {
+                Some(n) => n.clone(),
+                None => return Ok(None),
+            };
+            match inner.namespaces.get(&ns_name) {
+                Some(n) if n.healthy => ns_name,
+                _ => return Ok(None),
+            }
+        };
+
+        let result = {
+            let inner = self.inner.read().expect("registry poisoned");
+            let ns = inner
+                .namespaces
+                .get(&namespace)
+                .expect("namespace existed when checked");
+            catch_unwind(AssertUnwindSafe(|| f(ns.handler.as_ref())))
+        };
+
+        match result {
+            Ok(Ok(value)) => Ok(Some(value)),
+            Ok(Err(handler_err)) => Err(handler_err),
+            Err(_panic) => {
+                self.disable_namespace(&namespace, ctx);
+                Err(HandlerError::internal(format!(
+                    "extension namespace `{namespace}` panicked while handling this label and has been disabled for the rest of the session"
+                )))
             }
         }
     }

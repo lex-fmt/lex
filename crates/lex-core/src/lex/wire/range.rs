@@ -3,7 +3,13 @@
 //! Forward path: drops `span` (byte offsets) and `origin_path`
 //! (`origin_path` is lifted to the wire node's `origin` field by the
 //! caller). Reverse path reconstructs `span = 0..0` since byte offsets
-//! are advisory in spliced content.
+//! are advisory in spliced content; when callers thread the wire
+//! `origin` string through [`range_from_wire_with_origin`], the
+//! `origin_path` round-trips back into `Range.origin_path` so spliced
+//! nodes carry the correct origin downstream.
+
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::lex::ast::range::{Position as CorePosition, Range as CoreRange};
 use lex_extension::wire::{Position as WirePosition, Range as WireRange};
@@ -40,6 +46,20 @@ pub(crate) fn range_from_wire(r: &WireRange) -> CoreRange {
         position_from_wire(&r.start),
         position_from_wire(&r.end),
     )
+}
+
+/// Like [`range_from_wire`] but also restores `origin_path` from the
+/// wire `origin` string. Use this when the parent context carries an
+/// origin (e.g., the resolve pass spliciing the result of a
+/// `dispatch_resolve` call) so spliced nodes downstream can locate
+/// their authoring file for things like file-reference resolution
+/// and footnote scoping.
+pub(crate) fn range_from_wire_with_origin(r: &WireRange, origin: Option<&str>) -> CoreRange {
+    let mut range = range_from_wire(r);
+    if let Some(s) = origin {
+        range.origin_path = Some(Arc::new(PathBuf::from(s)));
+    }
+    range
 }
 
 /// Lift a lex-core `Range`'s `origin_path` to the wire `origin` string.

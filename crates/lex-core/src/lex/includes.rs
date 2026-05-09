@@ -44,14 +44,23 @@
 //! For tests, lex-core itself ships [`MemoryLoader`] gated behind the
 //! `test-support` cargo feature. It is not intended for production use.
 
+// `IncludeError` carries diagnostic context (paths, source ranges,
+// handler messages) on every variant; the `result_large_err` lint
+// would have us box the whole error or split it into a thinner shape
+// just to satisfy the size heuristic. The enum is already part of
+// the public API and the error path is rare; suppress the lint for
+// this module rather than churn the public surface.
+#![allow(clippy::result_large_err)]
+
 use crate::lex::assembling::AttachAnnotations;
 use crate::lex::ast::elements::container::GeneralContainer;
 use crate::lex::ast::elements::content_item::ContentItem;
-use crate::lex::ast::elements::paragraph::Paragraph;
 use crate::lex::ast::elements::session::Session;
 use crate::lex::ast::range::Range;
 use crate::lex::ast::Document;
 use crate::lex::transforms::Runnable;
+use lex_extension::handler::HandlerError;
+use lex_extension_host::registry::Registry;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -256,6 +265,18 @@ pub enum IncludeError {
     LoaderIo { path: PathBuf, message: String },
     /// `lex.include` annotation was missing the mandatory `src=` parameter.
     MissingSrc { include_site: Range },
+    /// A registered handler returned an error the pass could not map
+    /// onto a more specific variant — typically a third-party
+    /// namespace's resolve hook surfacing an internal failure, or an
+    /// unrecognised handler-defined code from `lex.*` built-ins. The
+    /// `code` is the string identifier the registry attaches to the
+    /// diagnostic (`"handler.internal"`, `"handler.custom"`, …).
+    HandlerFailed {
+        include_site: Range,
+        label: String,
+        code: String,
+        message: String,
+    },
 }
 
 impl std::fmt::Display for IncludeError {
@@ -331,6 +352,12 @@ impl std::fmt::Display for IncludeError {
             IncludeError::MissingSrc { .. } => {
                 write!(f, "lex.include annotation missing required src= parameter")
             }
+            IncludeError::HandlerFailed {
+                label,
+                code,
+                message,
+                ..
+            } => write!(f, "extension handler `{label}` failed ({code}): {message}"),
         }
     }
 }
@@ -371,45 +398,60 @@ impl ContainerKind {
     }
 }
 
-/// Resolve `:: lex.include ::` annotations starting from `source`, recursively.
+/// Hard cap on resolution depth, applied even when the
+/// configurable [`ResolveConfig::max_depth`] is set higher. Bounds
+/// adversarial varying-position recursion (a handler that returns
+/// content with a different invocation site each iteration so the
+/// cycle key never matches) so the resolver always terminates.
+pub const KERNEL_DEPTH_BACKSTOP: usize = 32;
+
+/// Resolve every `hooks.resolve = true` labelled annotation starting
+/// from `source`, dispatching through `registry`, and recursively
+/// processing the spliced content.
 ///
-/// `source_path` identifies the entry-point file. It is used to (a) resolve
-/// relative include paths against the entry file's directory, (b) stamp
-/// `Range.origin_path` on every node so downstream code (file-ref resolution,
-/// diagnostics, LSP goto) can report locations against the authoring file,
-/// and (c) seed the cycle-detection chain so an include cycle that loops
-/// back to the entry is caught. When `None`, relative paths resolve against
-/// `config.root`, origin stamping is skipped on the entry, and the chain
-/// starts empty.
+/// `source_path` identifies the entry-point file. It is used to
+/// (a) stamp `Range.origin_path` on every node so downstream code
+/// (file-ref resolution, diagnostics, LSP goto) can report locations
+/// against the authoring file, and (b) provide the host directory
+/// the built-in `lex.include` handler resolves relative `src=` paths
+/// against (via `LabelCtx.node.origin`). When `None`, origin stamping
+/// is skipped on the entry and the handler resolves relative paths
+/// against `config.root`.
+///
+/// # Generic dispatch
+///
+/// Every label whose schema declares `hooks.resolve = true` flows
+/// through the same path: build a [`LabelCtx`] from the annotation,
+/// call [`Registry::dispatch_resolve_raw`], decode the returned
+/// [`WireNode`] back into typed [`ContentItem`]s via
+/// [`crate::lex::wire::from_wire_node`], and splice in place. The
+/// built-in `lex.include` handler is registered the same way as any
+/// third-party namespace.
 ///
 /// # Pre/post-attachment
 ///
-/// Internally this re-parses each source (entry + every loaded file) *without*
-/// annotation attachment so `lex.include` annotations are visible as standalone
-/// children where the splice can replace them in-place. After all splices,
-/// [`AttachAnnotations`] runs once on the merged tree, which lands the include
-/// annotation on the first spliced node by the standard "attach to next
-/// sibling" rule. This matches the textual paste mental model from the proposal.
+/// Internally this re-parses the entry source *without* annotation
+/// attachment so labelled annotations stay visible as standalone
+/// children. The handler does its own `parse_no_attach` for loaded
+/// content. After all splices, [`AttachAnnotations`] runs once on
+/// the merged tree.
 ///
-/// # Recursion
+/// # Recursion + cycle detection
 ///
-/// Each loaded file is fully resolved (its own includes replaced) *before*
-/// being spliced into the host. The recursion uses each file's own directory
-/// as `host_dir`, so a relative path inside an included file resolves from
-/// that file's location — not the entry's. An active-chain stack of
-/// canonicalized paths gates against cycles; the depth counter gates against
-/// pathological nesting (default 8, configurable via [`ResolveConfig::max_depth`]).
+/// Cycle detection keys on `(label, origin_path, start_position)` of
+/// the invocation site. A handler that returns content containing
+/// another invocation at the same source position is caught
+/// immediately. A handler that varies the invocation position each
+/// iteration terminates at `min(config.max_depth, KERNEL_DEPTH_BACKSTOP)`
+/// with `IncludeError::DepthExceeded`. The total-includes counter
+/// caps adversarial fan-out independent of depth.
 pub fn resolve_from_source(
     source: &str,
     source_path: Option<PathBuf>,
     config: &ResolveConfig,
-    loader: &dyn Loader,
+    registry: &Registry,
 ) -> Result<Document, IncludeError> {
     let entry_origin = source_path.as_ref().map(|p| Arc::new(p.clone()));
-    let host_dir = source_path
-        .as_ref()
-        .and_then(|p| p.parent().map(Path::to_path_buf))
-        .unwrap_or_else(|| config.root.clone());
 
     let mut doc = parse_no_attach(source).map_err(|message| IncludeError::ParseFailed {
         path: source_path.clone().unwrap_or_default(),
@@ -420,24 +462,16 @@ pub fn resolve_from_source(
         stamp_doc(&mut doc, origin);
     }
 
-    // Seed the chain with the lexically-normalized entry path (when known)
-    // so an include that loops back to the entry is detected as a cycle.
-    // Normalization here is essential — `target_path` values produced by
-    // `resolve_path` are also lexically normalized, so an unnormalized
-    // entry would never compare equal to its normalized self.
-    let mut chain: Vec<PathBuf> = source_path
-        .as_ref()
-        .map(|p| vec![lexical_normalize(p)])
-        .unwrap_or_default();
+    let mut chain: Vec<ResolveKey> = Vec::new();
     let mut state = ResolverState {
         config,
-        loader,
+        registry,
         chain: &mut chain,
         depth: 0,
         total_resolved: 0,
     };
 
-    splice_in_session_container(doc.root.children.as_mut_vec(), &host_dir, &mut state)?;
+    splice_in_session_container(doc.root.children.as_mut_vec(), &mut state)?;
 
     let doc = AttachAnnotations::new()
         .run(doc)
@@ -453,88 +487,117 @@ pub fn resolve_from_source(
 // Splicing
 // ============================================================================
 
+/// One frame on the resolve-pass cycle stack. Two invocations at the
+/// same `(label, origin, start)` position are a cycle, regardless of
+/// what parameters either invocation uses — a handler that varies
+/// params per call (random IDs, timestamps) cannot defeat the
+/// detector by changing param values.
+#[derive(Debug, Clone, PartialEq)]
+struct ResolveKey {
+    label: String,
+    /// `Range.origin_path` of the annotation — the file the
+    /// invocation was authored in. `None` when stamping was skipped
+    /// (e.g., entry source loaded from a string with no path).
+    origin: Option<PathBuf>,
+    start: crate::lex::ast::range::Position,
+}
+
+impl ResolveKey {
+    fn from_annotation(a: &crate::lex::ast::elements::annotation::Annotation) -> Self {
+        Self {
+            label: a.data.label.value.clone(),
+            origin: a.location.origin_path.as_ref().map(|p| (**p).clone()),
+            start: a.location.start,
+        }
+    }
+}
+
 /// Per-resolution state threaded through the recursive walker. Keeps the
 /// signatures of the splice/process functions short and ensures
 /// `chain`/`depth` are updated in lock-step (push/pop, +1/back-out) at
-/// each include site.
+/// each invocation.
 struct ResolverState<'a> {
     config: &'a ResolveConfig,
-    loader: &'a dyn Loader,
-    /// Active resolution stack: lexically-normalized absolute paths
-    /// currently being resolved. Pushed when we begin loading a file and
-    /// popped when its tree is fully resolved. A push that finds the
-    /// path already on the stack is a cycle.
-    ///
-    /// Normalization (not filesystem canonicalization) is what's used
-    /// here: the resolver never touches `std::fs`, so symlink resolution
-    /// is out. Two paths that lexically refer to the same file (after
-    /// `.`/`..` collapse) compare equal; two paths reaching the same
-    /// inode via different routes do not. For real-FS use cases this is
-    /// fine because `FsLoader` will canonicalize on load before the
-    /// chain comparison sees the path.
-    chain: &'a mut Vec<PathBuf>,
-    /// Number of include hops from the entry point. Each recursion into a
-    /// loaded file increments by 1. Hitting `config.max_depth` is an error.
+    registry: &'a Registry,
+    /// Active resolution stack of `(label, origin, position)` keys.
+    /// Pushed when we begin dispatching for an invocation and popped
+    /// when its splice subtree is fully resolved. A push that finds
+    /// the same key already on the stack is a cycle.
+    chain: &'a mut Vec<ResolveKey>,
+    /// Number of dispatch hops from the entry point. Each recursion
+    /// increments by 1. Hitting `config.max_depth` or the
+    /// [`KERNEL_DEPTH_BACKSTOP`] (whichever is lower) is an error.
     depth: usize,
-    /// Total includes resolved across the entire walk (depth × breadth).
-    /// Incremented on every successful load. Hitting
-    /// `config.max_total_includes` aborts with `TotalIncludesExceeded` —
-    /// caps adversarial fan-out that `max_depth` alone wouldn't catch.
+    /// Total invocations resolved across the entire walk
+    /// (depth × breadth). Incremented on every successful dispatch.
+    /// Hitting `config.max_total_includes` aborts with
+    /// `TotalIncludesExceeded`.
     total_resolved: usize,
 }
 
 fn splice_in_session_container(
     children: &mut Vec<ContentItem>,
-    host_dir: &Path,
     state: &mut ResolverState<'_>,
 ) -> Result<(), IncludeError> {
     // Post-order: recurse into nested containers first, splice this
-    // container's includes second. The recurse step walks the *original*
-    // tree; the splice step inserts already-fully-resolved content
-    // (recursion happens inside `process_includes`), which is therefore
-    // never re-walked.
-    recurse_into_children(children, host_dir, state)?;
-    process_includes(children, host_dir, state, ContainerKind::Session)
+    // container's invocations second. Recursion happens inside
+    // `process_resolves` for any spliced subtree, so that subtree
+    // is never re-walked at the parent level.
+    recurse_into_children(children, state)?;
+    process_resolves(children, state, ContainerKind::Session)
 }
 
 fn splice_in_general_container(
     container: &mut GeneralContainer,
-    host_dir: &Path,
     state: &mut ResolverState<'_>,
     kind: ContainerKind,
 ) -> Result<(), IncludeError> {
-    recurse_into_children(container.as_mut_vec(), host_dir, state)?;
-    process_includes(container.as_mut_vec(), host_dir, state, kind)
+    recurse_into_children(container.as_mut_vec(), state)?;
+    process_resolves(container.as_mut_vec(), state, kind)
 }
 
+/// Walk the children of a container, dispatch every annotation whose
+/// schema declares `hooks.resolve = true` through the registry, and
+/// splice the returned content in place of the annotation. Recurses
+/// into the spliced content so nested invocations resolve too.
 // Allow &mut Vec because `splice` needs Vec-specific operations.
 #[allow(clippy::ptr_arg)]
-fn process_includes(
+fn process_resolves(
     children: &mut Vec<ContentItem>,
-    host_dir: &Path,
     state: &mut ResolverState<'_>,
     kind: ContainerKind,
 ) -> Result<(), IncludeError> {
-    // Collect indices of standalone include annotations in this container.
-    let include_indices: Vec<usize> = children
+    // Collect indices of annotations whose schema has hooks.resolve.
+    let resolve_indices: Vec<usize> = children
         .iter()
         .enumerate()
         .filter_map(|(i, item)| match item {
-            ContentItem::Annotation(a) if a.is_include() => Some(i),
+            ContentItem::Annotation(a) => {
+                let label = &a.data.label.value;
+                if state
+                    .registry
+                    .schema_for(label)
+                    .map(|s| s.hooks.resolve)
+                    .unwrap_or(false)
+                {
+                    Some(i)
+                } else {
+                    None
+                }
+            }
             _ => None,
         })
         .collect();
 
-    // Process in reverse order so earlier indices stay valid.
-    for i in include_indices.into_iter().rev() {
+    for i in resolve_indices.into_iter().rev() {
         let annotation = match &children[i] {
             ContentItem::Annotation(a) => a.clone(),
-            _ => unreachable!("index came from include filter"),
+            _ => unreachable!("index came from resolve filter"),
         };
 
-        let splice_items = resolve_one_include(&annotation, host_dir, state, kind)?;
+        let splice_items = resolve_one_invocation(&annotation, state, kind)?;
 
-        // Replace the include annotation with the splice content.
+        // Replace the annotation with `[annotation, ...splice_items]`.
         // The annotation itself stays in the children list immediately
         // before the splice, so the post-resolution AttachAnnotations
         // pass moves it onto the first spliced node by the standard
@@ -548,42 +611,49 @@ fn process_includes(
     Ok(())
 }
 
-/// Resolve a single include annotation: path → load → parse → recurse →
-/// stamp → policy-check → splice list.
-///
-/// The recursion happens *here*: after parsing the loaded file, we walk
-/// its tree with the loaded file's own directory as `host_dir`, with the
-/// loaded file pushed onto `state.chain` and `state.depth` bumped by 1.
-/// When this call returns, the splice list is fully resolved and ready to
-/// be inserted into the host container.
-fn resolve_one_include(
+/// Dispatch a single resolve-hooked annotation through the registry,
+/// decode the returned `WireNode` back into typed children, then
+/// recursively walk the splice items so nested invocations resolve
+/// before the splice is placed into the parent container.
+fn resolve_one_invocation(
     annotation: &crate::lex::ast::elements::annotation::Annotation,
-    host_dir: &Path,
     state: &mut ResolverState<'_>,
     parent_kind: ContainerKind,
 ) -> Result<Vec<ContentItem>, IncludeError> {
-    let src = annotation
-        .include_src()
-        .ok_or_else(|| IncludeError::MissingSrc {
-            include_site: annotation.location.clone(),
-        })?;
+    let label = &annotation.data.label.value;
+    let key = ResolveKey::from_annotation(annotation);
 
-    let target_path = resolve_path(&src, host_dir, &state.config.root)?;
-
-    // Depth check before any FS access. A site sitting exactly at
-    // `max_depth` is fine; one that would push us *past* it is the
-    // failure case.
-    if state.depth >= state.config.max_depth {
-        return Err(IncludeError::DepthExceeded {
+    // Cycle check on (label, origin, start) of the invocation site.
+    if state.chain.contains(&key) {
+        return Err(IncludeError::Cycle {
             include_site: annotation.location.clone(),
-            limit: state.config.max_depth,
-            chain: state.chain.clone(),
+            path: key.origin.clone().unwrap_or_default(),
+            chain: state
+                .chain
+                .iter()
+                .map(|k| k.origin.clone().unwrap_or_default())
+                .collect(),
         });
     }
 
-    // Total-count check before loading. Caps fan-out — a doc with
-    // 100k top-level includes would blow past max_total_includes long
-    // before max_depth would catch anything.
+    // Depth check — both the user-facing config and the hard kernel
+    // backstop. Whichever fires first wins; both surface as
+    // DepthExceeded since the user-facing message reflects the
+    // configured limit.
+    let effective_depth_limit = state.config.max_depth.min(KERNEL_DEPTH_BACKSTOP);
+    if state.depth >= effective_depth_limit {
+        return Err(IncludeError::DepthExceeded {
+            include_site: annotation.location.clone(),
+            limit: effective_depth_limit,
+            chain: state
+                .chain
+                .iter()
+                .map(|k| k.origin.clone().unwrap_or_default())
+                .collect(),
+        });
+    }
+
+    // Total-count check before dispatch.
     if state.total_resolved >= state.config.max_total_includes {
         return Err(IncludeError::TotalIncludesExceeded {
             include_site: annotation.location.clone(),
@@ -591,114 +661,285 @@ fn resolve_one_include(
         });
     }
 
-    // Load via the injected loader. The loader returns the source plus
-    // a *canonical* identity for the resource — for FsLoader that's
-    // post-`fs::canonicalize` (symlinks resolved, case-folded on
-    // case-insensitive FS); for MemoryLoader it's the lookup key. We
-    // use the canonical path for cycle detection so a symlink loop or
-    // a case-folded re-include is caught here rather than slipping
-    // through to `max_depth`.
-    let LoadedFile {
-        source: target_source,
-        canonical_path,
-    } = state.loader.load(&target_path).map_err(|e| match e {
-        LoadError::NotFound { path } => IncludeError::NotFound {
-            include_site: annotation.location.clone(),
-            path,
-        },
-        LoadError::OutsideRoot { path, root } => IncludeError::RootEscape { path, root },
-        LoadError::TooLarge { path, size, limit } => IncludeError::FileTooLarge {
-            include_site: annotation.location.clone(),
-            path,
-            size,
-            limit,
-        },
-        LoadError::Io { path, message } => IncludeError::LoaderIo { path, message },
-    })?;
+    let ctx = build_label_ctx(annotation);
+
+    let wire_node = match state.registry.dispatch_resolve_raw(&ctx) {
+        Ok(Some(node)) => node,
+        Ok(None) => {
+            // Handler returned "nothing to splice" — leave the
+            // annotation in place. (Built-in lex.include never returns
+            // None; this is reachable only via third-party handlers
+            // that opt out of resolving a particular invocation.)
+            return Ok(Vec::new());
+        }
+        Err(handler_err) => {
+            return Err(handler_error_to_include_error(
+                &handler_err,
+                label,
+                &annotation.location,
+            ));
+        }
+    };
+
     state.total_resolved += 1;
 
-    // Cycle check uses the canonical path so symlink/case-fold cycles
-    // are caught even though `target_path` (which we used for the load
-    // request) was just lexically resolved.
-    if state.chain.iter().any(|p| p == &canonical_path) {
-        return Err(IncludeError::Cycle {
-            include_site: annotation.location.clone(),
-            path: canonical_path,
-            chain: state.chain.clone(),
-        });
-    }
+    // Decode the wire payload into typed lex-core ContentItems.
+    let mut splice_items = decode_wire_to_items(&wire_node, &annotation.location)?;
 
-    let mut included =
-        parse_no_attach(&target_source).map_err(|message| IncludeError::ParseFailed {
-            path: canonical_path.clone(),
-            message,
-        })?;
-
-    let target_origin = Arc::new(canonical_path.clone());
-    stamp_doc(&mut included, &target_origin);
-
-    // Recursively resolve includes inside the loaded file. The host_dir
-    // for that walk is the loaded file's own canonical parent; the
-    // chain gains the canonical path and depth bumps by 1 — both are
-    // popped/restored on the way back so siblings see the same state.
-    let included_dir = canonical_path
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| state.config.root.clone());
-
-    state.chain.push(canonical_path.clone());
-    let saved_depth = state.depth;
-    state.depth = saved_depth + 1;
-    let recurse_result =
-        splice_in_session_container(included.root.children.as_mut_vec(), &included_dir, state);
-    state.depth = saved_depth;
-    state.chain.pop();
-    recurse_result?;
-
-    let splice_items = prepare_splice_list(included);
+    // Container-policy validation: enforce no-Sessions inside
+    // `GeneralContainer` (Definition / Annotation body / ListItem).
+    // Reuses the legacy `validate_against_kind` semantics — the splice
+    // content is what's checked, regardless of which handler produced it.
+    let included_path = key.origin.clone().unwrap_or_default();
     validate_against_kind(
         &splice_items,
         parent_kind,
         &annotation.location,
-        &canonical_path,
+        &included_path,
     )?;
 
+    // Recurse into the spliced subtree so nested resolve-hooked
+    // annotations are processed before the splice lands.
+    state.chain.push(key);
+    let saved_depth = state.depth;
+    state.depth = saved_depth + 1;
+    let recurse_result = splice_in_session_container(&mut splice_items, state);
+    state.depth = saved_depth;
+    state.chain.pop();
+    recurse_result?;
+
     Ok(splice_items)
+}
+
+/// Build a [`LabelCtx`] from a lex-core [`Annotation`]. The body is
+/// derived from the annotation's children (parsed-Lex form), the
+/// params from `Annotation::data::parameters`, and the host node info
+/// from `Annotation::location`.
+fn build_label_ctx(
+    a: &crate::lex::ast::elements::annotation::Annotation,
+) -> lex_extension::wire::LabelCtx {
+    use crate::lex::wire::to_wire_node;
+    use lex_extension::wire::{AnnotationBody, LabelCtx, NodeRef};
+
+    let label = a.data.label.value.clone();
+    let params = {
+        // Pass *semantic* parameter values to handlers (quotes
+        // stripped, escape sequences resolved). Handlers consume
+        // params as JSON values, where there is no "quoted string"
+        // vs "unquoted token" distinction; only the decoded value
+        // is meaningful. The codec's `parameters_to_json` (used by
+        // `annotation_to_wire` for round-tripping annotation
+        // *content*) keeps the raw form to preserve source — the
+        // two paths intentionally differ.
+        let mut obj = serde_json::Map::with_capacity(a.data.parameters.len());
+        for p in &a.data.parameters {
+            obj.insert(p.key.clone(), serde_json::Value::String(p.unquoted_value()));
+        }
+        serde_json::Value::Object(obj)
+    };
+    let body = if a.children.is_empty() {
+        AnnotationBody::None
+    } else {
+        let wire_children: Vec<lex_extension::wire::WireNode> =
+            a.children.iter().map(to_wire_node).collect();
+        AnnotationBody::Lex {
+            children: wire_children,
+        }
+    };
+    let range = lex_extension::wire::Range::new(
+        lex_extension::wire::Position::new(
+            u32::try_from(a.location.start.line).unwrap_or(u32::MAX),
+            u32::try_from(a.location.start.column).unwrap_or(u32::MAX),
+        ),
+        lex_extension::wire::Position::new(
+            u32::try_from(a.location.end.line).unwrap_or(u32::MAX),
+            u32::try_from(a.location.end.column).unwrap_or(u32::MAX),
+        ),
+    );
+    let origin = a
+        .location
+        .origin_path
+        .as_ref()
+        .map(|p| p.to_string_lossy().into_owned());
+    LabelCtx {
+        label,
+        params,
+        body,
+        node: NodeRef {
+            kind: "annotation".into(),
+            range,
+            origin,
+        },
+    }
+}
+
+/// Convert a handler-returned [`WireNode`] back into a list of
+/// [`ContentItem`]s ready for splicing. `WireNode::Document` is
+/// unwrapped (its children become the splice list); any other root
+/// shape is wrapped as a single-item list.
+fn decode_wire_to_items(
+    wire: &lex_extension::wire::WireNode,
+    include_site: &Range,
+) -> Result<Vec<ContentItem>, IncludeError> {
+    use crate::lex::wire::from_wire_node;
+
+    from_wire_node(wire).map_err(|e| IncludeError::HandlerFailed {
+        include_site: include_site.clone(),
+        label: "lex.include".into(),
+        code: "wire.decode".into(),
+        message: format!("decoding handler-returned wire payload failed: {e}"),
+    })
+}
+
+/// Map a [`HandlerError`] returned by the registry into the most
+/// specific [`IncludeError`] variant available. Codes in the
+/// `-32001..=-32005` range emitted by [`crate::lex::builtins::LexIncludeHandler`]
+/// translate back to their corresponding pre-extension-system
+/// variants so existing CLI/LSP error rendering and the integration
+/// test suite keep working unchanged. Unknown codes (third-party
+/// namespaces, future built-ins) surface as `HandlerFailed`.
+fn handler_error_to_include_error(
+    err: &HandlerError,
+    label: &str,
+    include_site: &Range,
+) -> IncludeError {
+    use crate::lex::builtins::include::{
+        CODE_ABSOLUTE_PATH, CODE_IO, CODE_MISSING_SRC, CODE_NOT_FOUND, CODE_OUTSIDE_ROOT,
+        CODE_TOO_LARGE,
+    };
+
+    match err {
+        HandlerError::Custom {
+            code,
+            message,
+            data,
+        } => match *code {
+            CODE_NOT_FOUND => IncludeError::NotFound {
+                include_site: include_site.clone(),
+                path: data_str(data, "path")
+                    .map(PathBuf::from)
+                    .unwrap_or_default(),
+            },
+            CODE_OUTSIDE_ROOT => IncludeError::RootEscape {
+                path: data_str(data, "path")
+                    .map(PathBuf::from)
+                    .unwrap_or_default(),
+                root: data_str(data, "root")
+                    .map(PathBuf::from)
+                    .unwrap_or_default(),
+            },
+            CODE_TOO_LARGE => IncludeError::FileTooLarge {
+                include_site: include_site.clone(),
+                path: data_str(data, "path")
+                    .map(PathBuf::from)
+                    .unwrap_or_default(),
+                size: data_u64(data, "size").unwrap_or(0),
+                limit: data_u64(data, "limit").unwrap_or(0),
+            },
+            CODE_ABSOLUTE_PATH => IncludeError::AbsolutePath {
+                path: data_str(data, "path")
+                    .map(PathBuf::from)
+                    .unwrap_or_default(),
+            },
+            CODE_IO => IncludeError::LoaderIo {
+                path: data_str(data, "path")
+                    .map(PathBuf::from)
+                    .unwrap_or_default(),
+                message: message.clone(),
+            },
+            CODE_MISSING_SRC => IncludeError::MissingSrc {
+                include_site: include_site.clone(),
+            },
+            other => IncludeError::HandlerFailed {
+                include_site: include_site.clone(),
+                label: label.to_string(),
+                code: format!("handler.custom({other})"),
+                message: message.clone(),
+            },
+        },
+        HandlerError::Internal { message } => {
+            // Built-in lex.include flags parse failures with the
+            // distinctive `parse of `<path>` failed: <msg>` prefix.
+            // Recover the path so existing tests that match
+            // `IncludeError::ParseFailed` keep working.
+            if let Some((path, msg)) = parse_internal_parse_failure(message) {
+                IncludeError::ParseFailed { path, message: msg }
+            } else {
+                IncludeError::HandlerFailed {
+                    include_site: include_site.clone(),
+                    label: label.to_string(),
+                    code: "handler.internal".into(),
+                    message: message.clone(),
+                }
+            }
+        }
+        HandlerError::Unsupported { detail } => IncludeError::HandlerFailed {
+            include_site: include_site.clone(),
+            label: label.to_string(),
+            code: "handler.unsupported".into(),
+            message: detail.clone(),
+        },
+    }
+}
+
+fn data_str(data: &Option<serde_json::Value>, key: &str) -> Option<String> {
+    data.as_ref()?.get(key)?.as_str().map(str::to_string)
+}
+
+fn data_u64(data: &Option<serde_json::Value>, key: &str) -> Option<u64> {
+    data.as_ref()?.get(key)?.as_u64()
+}
+
+/// Recover `(path, message)` from a parse-failure `Internal` message
+/// shaped `parse of `<path>` failed: <msg>`. Returns `None` if the
+/// message doesn't match — the caller then falls back to a generic
+/// `HandlerFailed`.
+fn parse_internal_parse_failure(message: &str) -> Option<(PathBuf, String)> {
+    let rest = message.strip_prefix("parse of `")?;
+    let close_idx = rest.find("` failed: ")?;
+    let path = PathBuf::from(&rest[..close_idx]);
+    let msg = rest[close_idx + "` failed: ".len()..].to_string();
+    Some((path, msg))
 }
 
 #[allow(clippy::ptr_arg)]
 fn recurse_into_children(
     children: &mut Vec<ContentItem>,
-    host_dir: &Path,
     state: &mut ResolverState<'_>,
 ) -> Result<(), IncludeError> {
     for item in children.iter_mut() {
         match item {
             ContentItem::Session(s) => {
-                splice_in_session_container(s.children.as_mut_vec(), host_dir, state)?;
+                splice_in_session_container(s.children.as_mut_vec(), state)?;
             }
             ContentItem::Definition(d) => {
-                splice_in_general_container(
-                    &mut d.children,
-                    host_dir,
-                    state,
-                    ContainerKind::Definition,
-                )?;
+                splice_in_general_container(&mut d.children, state, ContainerKind::Definition)?;
             }
-            ContentItem::Annotation(a) if !a.is_include() => {
-                splice_in_general_container(
-                    &mut a.children,
-                    host_dir,
-                    state,
-                    ContainerKind::AnnotationBody,
-                )?;
+            ContentItem::Annotation(a) => {
+                // Skip the body of annotations whose schema declares
+                // `hooks.resolve = true` — those are dispatched at the
+                // parent level by `process_resolves`, and walking
+                // their bodies here would trip the resolve again on
+                // the same invocation. Other annotations recurse
+                // normally so their nested bodies get processed.
+                let is_resolve_hooked = state
+                    .registry
+                    .schema_for(&a.data.label.value)
+                    .map(|s| s.hooks.resolve)
+                    .unwrap_or(false);
+                if !is_resolve_hooked {
+                    splice_in_general_container(
+                        &mut a.children,
+                        state,
+                        ContainerKind::AnnotationBody,
+                    )?;
+                }
             }
             ContentItem::List(l) => {
                 for li in l.items.as_mut_vec().iter_mut() {
                     if let ContentItem::ListItem(item) = li {
                         splice_in_general_container(
                             &mut item.children,
-                            host_dir,
                             state,
                             ContainerKind::ListItem,
                         )?;
@@ -709,31 +950,6 @@ fn recurse_into_children(
         }
     }
     Ok(())
-}
-
-fn prepare_splice_list(mut included: Document) -> Vec<ContentItem> {
-    let mut items: Vec<ContentItem> = Vec::new();
-
-    // Document title → Paragraph, prepended.
-    // Equivalent to what a textual paste would parse (an unindented line
-    // becomes a paragraph in the host's context). Per the revised
-    // spec §5.2 this is "do nothing" semantics — converting matches what
-    // the parser would do if the included source were inlined and reparsed.
-    if let Some(title) = included.title {
-        let location = title.location.clone();
-        let para = Paragraph::from_line(title.as_str().to_string()).at(location);
-        items.push(ContentItem::Paragraph(para));
-    }
-
-    // Document-level annotations → regular annotations, prepended.
-    for ann in included.annotations {
-        items.push(ContentItem::Annotation(ann));
-    }
-
-    // Body of the included document.
-    items.append(included.root.children.as_mut_vec());
-
-    items
 }
 
 fn validate_against_kind(

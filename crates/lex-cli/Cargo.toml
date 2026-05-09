@@ -22,6 +22,7 @@ lex-core = { workspace = true }
 lex-analysis = { workspace = true }
 lex-babel = { workspace = true, features = ["native-export"] }
 lex-config = { workspace = true }
+lex-extension-host = { workspace = true }
 clapfig = { workspace = true }
 clap = { workspace = true }
 serde_json = { workspace = true }
