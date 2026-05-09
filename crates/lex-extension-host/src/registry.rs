@@ -208,6 +208,12 @@ impl Registry {
     }
 
     /// Dispatch [`LexHandler::on_label`].
+    ///
+    /// `on_label` is a notification — the trait method returns `()`, so
+    /// the handler has no way to surface an error. The closure passed to
+    /// [`Self::dispatch`] therefore always returns `Ok(())`; only panics
+    /// can fail this path, and `dispatch` catches them and disables the
+    /// namespace through the same machinery as the other hooks.
     pub fn dispatch_label(&self, ctx: &LabelCtx) {
         let _ = self.dispatch(ctx, |h| {
             h.on_label(ctx);
@@ -593,5 +599,70 @@ mod tests {
         // the public API.
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<Registry>();
+    }
+
+    /// Runtime concurrency stress: 10 threads dispatch concurrently against
+    /// a shared registry whose only handler always panics. The locking
+    /// design must:
+    ///
+    /// - never deadlock (`thread.join` returns within a bounded time),
+    /// - disable the namespace exactly once (no double-decrement of
+    ///   health, no duplicate root diagnostics),
+    /// - still produce a per-call panic diagnostic for every thread that
+    ///   reaches the handler before disable lands.
+    #[test]
+    fn concurrent_dispatch_survives_panics_safely() {
+        struct AlwaysPanics;
+        impl LexHandler for AlwaysPanics {
+            fn on_validate(&self, _ctx: &LabelCtx) -> Result<Vec<Diagnostic>, HandlerError> {
+                panic!("intentional concurrency-test panic");
+            }
+        }
+
+        let r = std::sync::Arc::new(Registry::new());
+        r.register_namespace("acme", vec![schema("acme.task")], Box::new(AlwaysPanics))
+            .unwrap();
+
+        // Suppress the noisy per-panic backtrace output for this test only;
+        // the catch_unwind path still observes the panics correctly.
+        let original_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+
+        let mut handles = Vec::with_capacity(10);
+        for _ in 0..10 {
+            let r = r.clone();
+            handles.push(std::thread::spawn(move || {
+                r.dispatch_validate(&ctx("acme.task"))
+            }));
+        }
+        let per_thread_diagnostics: Vec<_> =
+            handles.into_iter().map(|h| h.join().unwrap()).collect();
+
+        std::panic::set_hook(original_hook);
+
+        // The namespace is disabled exactly once — exactly one root
+        // diagnostic, regardless of how many threads raced through the
+        // panic path.
+        assert!(!r.is_namespace_healthy("acme"));
+        let root = r.take_root_diagnostics();
+        assert_eq!(
+            root.len(),
+            1,
+            "namespace disable should fire exactly once under concurrent panics"
+        );
+
+        // At least the first thread to reach the handler (before disable
+        // lands) emits a per-call panic diagnostic. After disable, threads
+        // short-circuit with an empty result. We don't assert an exact
+        // count — racing on the disable transition makes that timing-
+        // dependent — but at least one must have made it through.
+        let panicking_threads = per_thread_diagnostics
+            .iter()
+            .filter(|d| !d.is_empty())
+            .count();
+        assert!(
+            panicking_threads >= 1,
+            "at least one thread should have observed the panic before namespace was disabled"
+        );
     }
 }
