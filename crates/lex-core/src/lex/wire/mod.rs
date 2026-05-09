@@ -49,6 +49,15 @@
 //!   string for the whole table; lex-core tracks alignment per cell.
 //!   Forward picks the first non-`None` cell alignment; reverse
 //!   applies that alignment to every cell.
+//! - **Tables with block-content cells** — `WireTableCell` only
+//!   carries inline content; lex-core's `TableCell.children` (block
+//!   content inside a cell, e.g. nested lists) has no slot in the
+//!   wire form. Rather than silently drop that content, the forward
+//!   codec emits a `lex.internal.unsupported.table_block_cells`
+//!   placeholder; the reverse codec rejects it with
+//!   `FromWireError::UnsupportedKind`. Future codec work that
+//!   introduces an escape-hatch encoding for these tables (e.g.,
+//!   `body_text` carrying the raw source) can lift this restriction.
 //! - **`TextContent`** uses the parsed-inline path
 //!   ([`TextContent::inline_nodes`]) when available, producing
 //!   matching `WireInline` variants; otherwise emits the raw source

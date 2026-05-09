@@ -191,6 +191,25 @@ fn list_item_standalone_to_wire(li: &ListItem) -> WireNode {
 }
 
 fn table_to_wire(t: &Table) -> WireNode {
+    // The wire table format only carries inline content per cell;
+    // there is no slot for `TableCell.children` (block-level content
+    // inside a cell, populated by the parser when a cell contains a
+    // list / definition / nested table). Emitting a `WireNode::Table`
+    // for a table with block-content cells would silently drop that
+    // content, so we surface those as a structural placeholder
+    // instead. The reverse codec recognises the
+    // `lex.internal.unsupported.*` prefix and rejects with
+    // `FromWireError::UnsupportedKind`, making the loss visible.
+    if t.cell_children_iter().next().is_some() {
+        return WireNode::Verbatim {
+            range: range_to_wire(&t.location),
+            origin: origin_string(&t.location),
+            label: "lex.internal.unsupported.table_block_cells".into(),
+            params: Value::Object(Map::new()),
+            body_text: String::new(),
+        };
+    }
+
     let header_rows = u32::try_from(t.header_rows.len()).unwrap_or(u32::MAX);
     let align = table_align_summary(t);
     let rows = t
@@ -216,15 +235,15 @@ fn table_to_wire(t: &Table) -> WireNode {
 }
 
 fn table_cell_to_wire(cell: &TableCell) -> WireTableCell {
-    let inlines = if cell.has_block_content() {
-        // Inlines of a cell that has block-level children are best
-        // reconstructed from the cell's own text content.
-        text_content_to_wire(&cell.content)
-    } else {
-        text_content_to_wire(&cell.content)
-    };
+    // Cells reaching here have already passed the block-content
+    // guard in `table_to_wire`, so `cell.children` is empty by
+    // construction.
+    debug_assert!(
+        !cell.has_block_content(),
+        "table_to_wire must short-circuit block-content cells before reaching table_cell_to_wire"
+    );
     WireTableCell {
-        inlines,
+        inlines: text_content_to_wire(&cell.content),
         colspan: u32::try_from(cell.colspan).unwrap_or(1),
         rowspan: u32::try_from(cell.rowspan).unwrap_or(1),
     }

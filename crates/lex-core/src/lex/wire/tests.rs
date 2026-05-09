@@ -510,6 +510,55 @@ fn standalone_verbatim_line_round_trips_via_empty_label() {
 }
 
 #[test]
+fn table_with_block_content_cells_surfaces_as_unsupported_kind() {
+    // Tables with block-level cell children have no representation
+    // in the wire format (`WireTableCell` only carries inlines), so
+    // the forward codec must emit an unsupported-kind placeholder
+    // rather than silently lose the cell children. The reverse codec
+    // surfaces the placeholder as `FromWireError::UnsupportedKind`.
+    use super::error::FromWireError;
+    use crate::lex::ast::elements::list::{List, ListItem};
+    use crate::lex::ast::elements::table::{Table, TableCell, TableRow};
+    use crate::lex::ast::elements::typed_content::ContentElement;
+    use crate::lex::ast::elements::verbatim::VerbatimBlockMode;
+
+    // Build a table with one body cell whose children contain a
+    // nested list.
+    let nested_list = List::new(vec![
+        ListItem::new("-".into(), "alpha".into()),
+        ListItem::new("-".into(), "beta".into()),
+    ]);
+    let block_cell = TableCell::new(TextContent::from_string("see list".into(), None))
+        .with_children(vec![ContentElement::List(nested_list)]);
+    let plain_cell = TableCell::new(TextContent::from_string("inline".into(), None));
+    let row = TableRow::new(vec![block_cell, plain_cell]);
+    let t = Table::new(
+        TextContent::from_string("Caption".into(), None),
+        Vec::new(),
+        vec![row],
+        VerbatimBlockMode::Inflow,
+    );
+
+    let item = ContentItem::Table(Box::new(t));
+    let wire = to_wire_node(&item);
+    // Forward emits the placeholder, not a Table.
+    if let WireNode::Verbatim { ref label, .. } = wire {
+        assert_eq!(label, "lex.internal.unsupported.table_block_cells");
+    } else {
+        panic!("expected unsupported-kind placeholder, got {wire:?}");
+    }
+    // Reverse rejects the placeholder.
+    let result = from_wire_node(&json_round_trip(&wire));
+    assert!(
+        matches!(
+            result,
+            Err(FromWireError::UnsupportedKind { ref kind }) if kind == "table_block_cells"
+        ),
+        "expected UnsupportedKind, got {result:?}"
+    );
+}
+
+#[test]
 fn table_round_trips_caption_and_rows() {
     use crate::lex::ast::elements::table::{Table, TableCell, TableRow};
     use crate::lex::ast::elements::verbatim::VerbatimBlockMode;
@@ -608,6 +657,9 @@ fn document_with_session_paragraph_blank_round_trips() {
 /// representation-only details (see module docs); the bar here is
 /// that real-world include payloads survive a full round trip without
 /// content drops.
+///
+/// Fails loudly if a listed fixture is missing — silent skipping
+/// would let the test pass while exercising zero coverage.
 #[test]
 fn corpus_round_trips_without_unsupported_kinds() {
     use super::to_wire::to_wire_document;
@@ -616,18 +668,19 @@ fn corpus_round_trips_without_unsupported_kinds() {
 
     let fixtures = [
         "comms/specs/elements/paragraph.docs/paragraph-01-flat-oneline.lex",
-        "comms/specs/elements/list.docs/list-01-flat-plain.lex",
-        "comms/specs/elements/session.docs/session-01-flat.lex",
-        "comms/specs/elements/definition.docs/definition-01-flat.lex",
+        "comms/specs/elements/list.docs/list-01-flat-simple-dash.lex",
+        "comms/specs/elements/session.docs/session-01-flat-simple.lex",
+        "comms/specs/elements/definition.docs/definition-01-flat-simple.lex",
     ];
 
+    let mut exercised = 0usize;
     for fixture in fixtures {
         let path = workspace_path(fixture);
-        if !path.exists() {
-            // Skip fixtures whose paths we can't locate (corpus
-            // versions drift); the test still asserts on the others.
-            continue;
-        }
+        assert!(
+            path.exists(),
+            "corpus fixture missing: {fixture} (resolved to {})",
+            path.display()
+        );
         let doc = DocumentLoader::from_path(&path)
             .unwrap_or_else(|e| panic!("could not load {fixture}: {e}"))
             .parse()
@@ -643,5 +696,11 @@ fn corpus_round_trips_without_unsupported_kinds() {
             !back.is_empty() || children.is_empty(),
             "round-trip dropped content for {fixture}"
         );
+        exercised += 1;
     }
+    assert_eq!(
+        exercised,
+        fixtures.len(),
+        "corpus test must exercise every listed fixture"
+    );
 }
