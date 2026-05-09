@@ -105,10 +105,22 @@ impl NamespaceSpec {
                 };
                 let mut out = base;
                 if let Some(rev) = &t.rev {
-                    if !out.contains('#') {
-                        out.push('#');
-                        out.push_str(rev);
+                    if out.contains('#') {
+                        // Both the URI and the table have a rev. The
+                        // tap shorthand can't reach this branch (it
+                        // never sets a fragment), so this is the
+                        // user-with-explicit-uri case where they wrote
+                        // `uri = "github:org/repo#main", rev = "v1"`.
+                        // Either is meaningful but together is
+                        // ambiguous — surface as an error rather than
+                        // silently drop one.
+                        return Err(LabelsConfigError::RevWithExplicitFragment {
+                            uri: out,
+                            rev: rev.clone(),
+                        });
                     }
+                    out.push('#');
+                    out.push_str(rev);
                 }
                 if let Some(subdir) = &t.subdir {
                     out.push_str(if out.contains('?') { "&" } else { "?" });
@@ -158,6 +170,10 @@ pub enum LabelsConfigError {
     TapAndUri,
     /// Table form had neither `tap` nor `uri` set.
     EmptyTable,
+    /// Both the explicit `uri` (with a `#fragment`) and a `rev`
+    /// field are set. Either is meaningful but together they're
+    /// ambiguous — pick one.
+    RevWithExplicitFragment { uri: String, rev: String },
 }
 
 impl std::fmt::Display for LabelsConfigError {
@@ -177,6 +193,10 @@ impl std::fmt::Display for LabelsConfigError {
             }
             LabelsConfigError::EmptyTable => f.write_str(
                 "namespace spec table needs one of `tap` or `uri` set",
+            ),
+            LabelsConfigError::RevWithExplicitFragment { uri, rev } => write!(
+                f,
+                "namespace spec sets both `rev = {rev:?}` and an explicit `#fragment` in uri `{uri}`; pick one"
             ),
         }
     }

@@ -115,7 +115,7 @@ pub fn validate(doc_path: &Path, outcome: &BootOutcome) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::extension_setup::{boot_registry, ExtensionSetup, RegisteredNamespace};
+    use crate::extension_setup::{boot_registry, ExtensionSetup};
     use lex_config::LabelsConfig;
     use lex_extension_host::Surface;
 
@@ -167,17 +167,5 @@ mod tests {
         // Pointing at a path that doesn't exist surfaces as exit 2.
         let missing = workspace.path().join("does-not-exist.lex");
         assert_eq!(validate(&missing, &outcome), 2);
-    }
-
-    /// Silence "unused" warning if RegisteredNamespace's fields go
-    /// unused in test bodies above.
-    #[test]
-    fn registered_namespace_has_a_name() {
-        let r = RegisteredNamespace {
-            name: "x".into(),
-            source: NamespaceSourceKind::Builtin,
-            schema_count: 0,
-        };
-        assert_eq!(r.name, "x");
     }
 }

@@ -201,16 +201,24 @@ impl TrustStore {
     /// after this returns `Ok(())`; a returned `Err` leaves both
     /// halves consistent with their pre-call state.
     ///
-    /// Writes to a sibling tempfile first, then `rename`s into place.
-    /// On POSIX, `rename` within the same directory is atomic — a
-    /// crash mid-`flush` either leaves the old file intact or
-    /// publishes the new one in full, never a truncated mix that
-    /// future `open()` calls would fail to parse. Same guarantee on
-    /// Windows for files on the same volume.
+    /// Writes to a sibling tempfile, fsyncs the data to disk, then
+    /// `rename`s into place. The fsync is the antigravity-flagged
+    /// piece: without it, `fs::rename` can publish a metadata-only
+    /// commit while the body is still in the page cache, so a
+    /// kernel panic or power loss between rename and writeback
+    /// leaves an empty/truncated `trust.json` that future `open()`
+    /// calls fail to parse. `sync_data` forces the body to durable
+    /// storage before the rename makes it visible.
+    ///
+    /// On POSIX, the rename itself is atomic at the filesystem
+    /// namespace layer — same on Windows for files on the same
+    /// volume.
     fn flush_entries(
         &self,
         entries: &HashMap<TrustKey, TrustDecision>,
     ) -> Result<(), TrustStoreError> {
+        use std::io::Write;
+
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent).map_err(|source| TrustStoreError::Io {
                 path: parent.to_path_buf(),
@@ -219,10 +227,27 @@ impl TrustStore {
         }
         let body = serialize_disk_format(entries);
         let tmp = self.path.with_extension("json.tmp");
-        fs::write(&tmp, body).map_err(|source| TrustStoreError::Io {
+        let mut tmp_file = fs::File::create(&tmp).map_err(|source| TrustStoreError::Io {
             path: tmp.clone(),
             source,
         })?;
+        tmp_file
+            .write_all(body.as_bytes())
+            .map_err(|source| TrustStoreError::Io {
+                path: tmp.clone(),
+                source,
+            })?;
+        // Force the body to durable storage before the rename
+        // publishes it. `sync_data` is enough — we don't need to
+        // sync metadata of the tempfile itself.
+        tmp_file.sync_data().map_err(|source| TrustStoreError::Io {
+            path: tmp.clone(),
+            source,
+        })?;
+        // Drop the file handle before rename to avoid Windows
+        // sharing-violation issues; the inner `Drop` flushes the
+        // OS buffer (on top of the explicit `sync_data`).
+        drop(tmp_file);
         fs::rename(&tmp, &self.path).map_err(|source| {
             // Tempfile is left behind; the next flush will overwrite
             // it. Returning the rename error gives the caller the

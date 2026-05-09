@@ -34,7 +34,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use lex_config::{LabelsConfig, NamespaceSpec};
+use lex_config::LabelsConfig;
+use lex_core::lex::builtins;
+use lex_core::lex::includes::{FsLoader, ResolveConfig};
 use lex_extension::schema::Schema;
 use lex_extension_host::{
     detect_ci_environment, resolve_namespace, Registry, RegistryError, ResolveError, SchemaError,
@@ -97,17 +99,25 @@ pub fn boot_registry(setup: ExtensionSetup<'_>) -> BootOutcome {
     let mut diagnostics = Vec::new();
 
     // Built-ins: lex.* namespace (currently `lex.include`). The
-    // helper in `lex_core::lex::builtins::register_into` handles
-    // this; we keep its setup local to lex-cli's existing code path
-    // and mirror the registration shape here without re-doing it
-    // (the bundled built-ins are wired by the includes-resolver
-    // hook, not here, so this entry exists for `lexd labels list`
-    // visibility only).
-    registered.push(RegisteredNamespace {
-        name: "lex".into(),
-        source: NamespaceSourceKind::Builtin,
-        schema_count: 1,
-    });
+    // boot helper actually performs the registration so that
+    // `lexd labels list` reports the truth and the registry handed
+    // back to the caller has the built-in handlers wired. Loader +
+    // ResolveConfig are pointed at the workspace root so
+    // `lex.include` resolves relative paths the same way `lexd
+    // convert` and `lexd inspect` do.
+    let resolve_config = ResolveConfig::with_root(setup.workspace_root.to_path_buf());
+    let loader = FsLoader::new(setup.workspace_root.to_path_buf());
+    match builtins::register_into(&registry, Arc::new(loader), resolve_config) {
+        Ok(()) => registered.push(RegisteredNamespace {
+            name: "lex".into(),
+            source: NamespaceSourceKind::Builtin,
+            schema_count: 1,
+        }),
+        Err(e) => diagnostics.push(BootDiagnostic {
+            namespace: Some("lex".into()),
+            message: format!("failed to register lex.* built-ins: {e}"),
+        }),
+    }
 
     // [labels] block — resolved through the URI resolver.
     for (name, spec) in &setup.labels_config.namespaces {
@@ -146,7 +156,6 @@ pub fn boot_registry(setup: ExtensionSetup<'_>) -> BootOutcome {
                 message: format!("namespace resolve failed: {e}"),
             }),
         }
-        let _ = NamespaceSpec::Uri(uri); // silence unused-warning if spec evolves
     }
 
     // --ext-schema flags — local schema directories, no resolver.
@@ -187,16 +196,23 @@ pub fn boot_registry(setup: ExtensionSetup<'_>) -> BootOutcome {
         }
     });
     let store = TrustStore::open(setup.workspace_root).unwrap_or_else(|e| {
+        // Fall back to a per-process tempdir under `std::env::temp_dir()`.
+        // The PID suffix keeps unrelated runs from sharing trust
+        // decisions through `/tmp/.lex/trust.json` (which the previous
+        // fallback did — accidentally persistent and shared). With a
+        // PID-keyed path the decisions persist within this run but
+        // can't be re-read by the next session.
+        let fallback_dir = std::env::temp_dir()
+            .join(format!("lexd-trust-fallback-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&fallback_dir);
         diagnostics.push(BootDiagnostic {
             namespace: None,
             message: format!(
-                "trust store open failed: {e}; trust decisions will not be persisted this session"
+                "trust store open failed at workspace root: {e}; falling back to per-process temp dir `{}` — decisions persist for this run only",
+                fallback_dir.display()
             ),
         });
-        // Fall back to a tempdir-backed store so the gate still
-        // works in-memory for this session.
-        let tmp = std::env::temp_dir();
-        TrustStore::open(&tmp).expect("temp dir is writable")
+        TrustStore::open(&fallback_dir).expect("temp dir writable")
     });
     let trust_gate = TrustGate::new(
         surface,
@@ -299,7 +315,7 @@ impl lex_extension::LexHandler for NoopHandler {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lex_config::NamespaceTable;
+    use lex_config::{NamespaceSpec, NamespaceTable};
     use std::collections::BTreeMap;
 
     fn write_schema(dir: &Path, label: &str) {

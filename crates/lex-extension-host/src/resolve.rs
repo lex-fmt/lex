@@ -66,6 +66,13 @@ pub enum ResolveError {
         path: PathBuf,
         source: std::io::Error,
     },
+    /// A `path:` URI carried a `#` fragment or `?` query — those
+    /// are remote-only knobs (the resolver uses them on
+    /// `github:`/`gitlab:`/etc. for `rev` and `subdir`). Rejecting
+    /// instead of stripping silently surfaces typos like
+    /// `path:dir#main` (where the user almost certainly meant a
+    /// remote URI).
+    PathUriHasFragmentOrQuery { uri: String },
 }
 
 impl std::fmt::Display for ResolveError {
@@ -92,6 +99,10 @@ impl std::fmt::Display for ResolveError {
             ResolveError::Io { path, source } => {
                 write!(f, "{}: namespace resolve io error: {source}", path.display())
             }
+            ResolveError::PathUriHasFragmentOrQuery { uri } => write!(
+                f,
+                "namespace URI `{uri}` is a `path:` scheme but carries `#` or `?` — those are remote-only knobs. Drop the fragment/query, or switch to a remote scheme that supports them."
+            ),
         }
     }
 }
@@ -138,28 +149,40 @@ fn resolve_path(
     uri: &str,
     workspace_root: &Path,
 ) -> Result<ResolvedNamespace, ResolveError> {
-    // Strip any URI fragment / query — `path:` doesn't honour `#rev`
-    // or `?subdir=`, those are remote-only knobs. Surfacing as a
-    // silent ignore would be confusing; instead we keep them in the
-    // raw URI for diagnostics but the disk path is just the bare
-    // value.
-    let bare = rest
-        .split_once('#')
-        .map(|(p, _)| p)
-        .unwrap_or(rest)
-        .split_once('?')
-        .map(|(p, _)| p)
-        .unwrap_or(rest.split_once('#').map(|(p, _)| p).unwrap_or(rest));
-    let candidate = if std::path::Path::new(bare).is_absolute() {
-        PathBuf::from(bare)
+    // `path:` URIs don't honour `#rev` or `?subdir=` — those are
+    // remote-only knobs. Reject them explicitly rather than silently
+    // strip; a user who wrote `path:dir#rev` either misunderstands
+    // the scheme or has a typo, and either case is better surfaced
+    // as an error than as a quiet ignore.
+    if rest.contains('#') || rest.contains('?') {
+        return Err(ResolveError::PathUriHasFragmentOrQuery {
+            uri: uri.to_string(),
+        });
+    }
+    let candidate = if std::path::Path::new(rest).is_absolute() {
+        PathBuf::from(rest)
     } else {
-        workspace_root.join(bare)
+        workspace_root.join(rest)
     };
     // Lexical-only root-escape check — same invariant as the
     // includes resolver. We don't canonicalise (symlinks are the
-    // loader's problem) but we do reject `../`-walks past the root.
-    let normalized = lexically_normalize(&candidate);
-    let normalized_root = lexically_normalize(workspace_root);
+    // loader's problem) but we reject `../`-walks past the root.
+    //
+    // `lexically_normalize` returns `None` when normalisation would
+    // pop past an empty buffer — that's the case we care about.
+    // The previous version silently swallowed those `..`, so
+    // `../../etc/passwd` collapsed to `etc/passwd`, and an
+    // equally-empty normalised root made the `starts_with` check
+    // pass — a directory-traversal bypass when workspace_root was
+    // relative or shorter than the escape depth. Returning `None`
+    // surfaces the escape attempt as a typed error.
+    let normalized = lexically_normalize(&candidate).ok_or_else(|| ResolveError::RootEscape {
+        path: candidate.clone(),
+    })?;
+    let normalized_root =
+        lexically_normalize(workspace_root).ok_or_else(|| ResolveError::RootEscape {
+            path: candidate.clone(),
+        })?;
     if !normalized.starts_with(&normalized_root) {
         return Err(ResolveError::RootEscape { path: candidate });
     }
@@ -185,19 +208,27 @@ fn resolve_path(
 }
 
 /// Lexical normalisation: collapse `.` and `..` components without
-/// touching the filesystem. Same logic the include resolver uses.
-fn lexically_normalize(path: &Path) -> PathBuf {
+/// touching the filesystem. Returns `None` when a `..` would pop
+/// past an empty buffer — that case is the antigravity-flagged
+/// directory-traversal bypass: a naive `pop` no-op makes
+/// `../../etc/passwd` collapse to `etc/passwd`, and an equally-
+/// emptied normalised root then trivially passes
+/// `starts_with`. Returning `None` lets callers treat that as a
+/// typed root-escape error.
+fn lexically_normalize(path: &Path) -> Option<PathBuf> {
     let mut out = PathBuf::new();
     for c in path.components() {
         match c {
             std::path::Component::CurDir => {}
             std::path::Component::ParentDir => {
-                out.pop();
+                if !out.pop() {
+                    return None;
+                }
             }
             other => out.push(other.as_os_str()),
         }
     }
-    out
+    Some(out)
 }
 
 #[cfg(test)]
@@ -241,6 +272,39 @@ mod tests {
         let workspace = tempfile::tempdir().unwrap();
         let err = resolve_namespace("path:../../../etc/passwd", workspace.path()).unwrap_err();
         assert!(matches!(err, ResolveError::RootEscape { .. }));
+    }
+
+    /// Antigravity-flagged directory-traversal bypass: when the
+    /// `workspace_root` resolves to a relative path (e.g., `.`),
+    /// the previous `lexically_normalize` silently swallowed `..`
+    /// components on an empty buffer. So `../../etc/passwd`
+    /// collapsed to `etc/passwd`, and an equally-empty normalised
+    /// root made the `starts_with(root)` check pass — a security
+    /// hole letting a malicious `lex.toml` reach arbitrary
+    /// filesystem locations. The fix makes `lexically_normalize`
+    /// return `None` on underflow; the caller surfaces that as
+    /// `ResolveError::RootEscape`.
+    #[test]
+    fn relative_workspace_does_not_let_dotdot_escape() {
+        let relative = std::path::Path::new(".");
+        let err = resolve_namespace("path:../../../etc/passwd", relative).unwrap_err();
+        assert!(
+            matches!(err, ResolveError::RootEscape { .. }),
+            "expected RootEscape, got: {err}"
+        );
+    }
+
+    #[test]
+    fn lexically_normalize_returns_none_on_underflow() {
+        // Direct unit test on the normaliser so the bypass can't
+        // re-emerge if someone changes the caller's check.
+        assert!(lexically_normalize(std::path::Path::new("../foo")).is_none());
+        assert!(lexically_normalize(std::path::Path::new("../../etc")).is_none());
+        // Non-escaping paths still normalise.
+        assert_eq!(
+            lexically_normalize(std::path::Path::new("a/./b/../c")),
+            Some(PathBuf::from("a/c"))
+        );
     }
 
     #[test]

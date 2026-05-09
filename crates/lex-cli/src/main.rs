@@ -569,7 +569,13 @@ fn main() {
 /// Dispatch `lexd labels {list,validate}`. Returns the exit code
 /// to propagate.
 fn handle_labels_command(top: &ArgMatches, sub: &ArgMatches) -> i32 {
-    let workspace = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    // Walk ancestors looking for `.lex.toml`, matching the behaviour
+    // of every other lexd subcommand (config, convert, inspect…).
+    // Without this, running `lexd labels list` from a subdirectory
+    // would miss the workspace's `[labels]` block and report only
+    // the `--ext-schema` flags.
+    let workspace = find_nearest_lex_toml_dir(&cwd).unwrap_or_else(|| cwd.clone());
     let labels_path = workspace.join(CONFIG_FILE_NAME);
     let labels_config = match lex_config::load_labels_from_toml(&labels_path) {
         Ok(c) => c,
