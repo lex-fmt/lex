@@ -2,21 +2,32 @@
 //!
 //! Fallible — wire input may be malformed (handler returned an unknown
 //! kind, missing required field, etc.). Recognised variants produce
-//! lex-core [`ContentItem`]s; unrecognised or partially-supported
-//! shapes return [`FromWireError::UnsupportedKind`].
+//! lex-core [`ContentItem`]s; unrecognised shapes return
+//! [`FromWireError::UnsupportedKind`].
 //!
-//! Coverage matches `to_wire.rs`: this commit handles `Document`,
-//! `Paragraph`, `Annotation`, and `Blank`. Follow-up commits on the
-//! same PR extend to the remaining shapes.
+//! The reverse path mirrors [`super::to_wire`]: every `WireNode` variant
+//! emitted by the forward codec has a defined inverse, so a forward+
+//! reverse round trip on a parser-produced AST yields a structurally
+//! equivalent tree (modulo the documented losses listed in the module-
+//! level docs).
 
 use crate::lex::ast::elements::annotation::Annotation as CoreAnnotation;
 use crate::lex::ast::elements::blank_line_group::BlankLineGroup;
 use crate::lex::ast::elements::content_item::ContentItem;
 use crate::lex::ast::elements::data::Data;
+use crate::lex::ast::elements::definition::Definition;
 use crate::lex::ast::elements::label::Label;
+use crate::lex::ast::elements::list::{List, ListItem};
 use crate::lex::ast::elements::paragraph::{Paragraph, TextLine};
 use crate::lex::ast::elements::parameter::Parameter;
-use lex_extension::wire::WireNode;
+use crate::lex::ast::elements::sequence_marker::SequenceMarker;
+use crate::lex::ast::elements::session::Session;
+use crate::lex::ast::elements::table::{Table, TableCell, TableCellAlignment, TableRow};
+use crate::lex::ast::elements::typed_content::{ContentElement, SessionContent, VerbatimContent};
+use crate::lex::ast::elements::verbatim::{Verbatim, VerbatimBlockMode};
+use crate::lex::ast::elements::verbatim_line::VerbatimLine;
+use crate::lex::ast::TextContent;
+use lex_extension::wire::{WireFootnote, WireListItem, WireNode, WireRow, WireTableCell};
 use serde_json::Value;
 
 use super::error::FromWireError;
@@ -70,28 +81,63 @@ fn convert_one(node: &WireNode) -> Result<ContentItem, FromWireError> {
         } => Ok(ContentItem::Annotation(annotation_from_wire(
             range, label, params, body,
         )?)),
-        WireNode::Verbatim { label, .. } if label.starts_with("lex.internal.unsupported.") => {
-            // Forward codec emitted this for an as-yet-unwired variant;
-            // surface the gap rather than silently dropping content.
-            Err(FromWireError::UnsupportedKind {
-                kind: label
-                    .strip_prefix("lex.internal.unsupported.")
-                    .unwrap_or(label.as_str())
-                    .to_string(),
-            })
-        }
-        // Variants not yet wired in the reverse direction.
-        WireNode::Document { .. }
-        | WireNode::Session { .. }
-        | WireNode::Definition { .. }
-        | WireNode::List { .. }
-        | WireNode::Verbatim { .. }
-        | WireNode::Table { .. } => Err(FromWireError::UnsupportedKind {
-            kind: kind_name(node).into(),
-        }),
+        WireNode::Session {
+            range,
+            title,
+            marker,
+            children,
+            ..
+        } => Ok(ContentItem::Session(session_from_wire(
+            range, title, marker, children,
+        )?)),
+        WireNode::Definition {
+            range,
+            subject,
+            children,
+            ..
+        } => Ok(ContentItem::Definition(definition_from_wire(
+            range, subject, children,
+        )?)),
+        WireNode::List {
+            range,
+            marker_style,
+            items,
+            ..
+        } => Ok(ContentItem::List(list_from_wire(
+            range,
+            marker_style,
+            items,
+        )?)),
+        WireNode::Table {
+            range,
+            caption,
+            header_rows,
+            align,
+            rows,
+            footnotes,
+            ..
+        } => Ok(ContentItem::Table(Box::new(table_from_wire(
+            range,
+            caption,
+            *header_rows,
+            align,
+            rows,
+            footnotes,
+        )?))),
+        WireNode::Verbatim {
+            range,
+            label,
+            params,
+            body_text,
+            subject,
+            mode,
+            ..
+        } => Ok(verbatim_from_wire(
+            range, label, params, body_text, subject, mode,
+        )?),
         // WireNode is `#[non_exhaustive]` — future kinds surface here.
         _ => Err(FromWireError::UnsupportedKind {
-            kind: "unknown".into(),
+            kind: kind_name(node).into(),
         }),
     }
 }
@@ -116,7 +162,7 @@ fn paragraph_from_wire(
     let lines: Vec<ContentItem> = line_strings
         .into_iter()
         .map(|line_str| {
-            ContentItem::TextLine(TextLine::new(crate::lex::ast::TextContent::from_string(
+            ContentItem::TextLine(TextLine::new(TextContent::from_string(
                 line_str.to_string(),
                 None,
             )))
@@ -124,7 +170,7 @@ fn paragraph_from_wire(
         .collect();
     let mut p = if lines.is_empty() {
         Paragraph::new(vec![ContentItem::TextLine(TextLine::new(
-            crate::lex::ast::TextContent::empty(),
+            TextContent::empty(),
         ))])
     } else {
         Paragraph::new(lines)
@@ -146,16 +192,265 @@ fn annotation_from_wire(
     let children = annotation_body_from_json(body)?;
     let mut a = CoreAnnotation::from_data(data, Vec::new());
     a.location = range_from_wire(range);
-    // Re-attach children via the container's typed setter.
     if !children.is_empty() {
-        // GeneralContainer stores ContentItems; ContentElement is the
-        // typed projection used by from_data. Splicing through the
-        // raw container preserves whatever shapes the wire delivered.
         for child in children {
             a.children.as_mut_vec().push(child);
         }
     }
     Ok(a)
+}
+
+fn session_from_wire(
+    range: &lex_extension::wire::Range,
+    title: &str,
+    marker: &Option<String>,
+    children: &[WireNode],
+) -> Result<Session, FromWireError> {
+    let title_tc = TextContent::from_string(title.to_string(), None);
+    let typed_children = wire_children_to_session_content(children)?;
+    let mut s = Session::new(title_tc, typed_children);
+    s.location = range_from_wire(range);
+    s.marker = marker
+        .as_deref()
+        .and_then(|m| SequenceMarker::parse(m, None));
+    Ok(s)
+}
+
+fn definition_from_wire(
+    range: &lex_extension::wire::Range,
+    subject: &str,
+    children: &[WireNode],
+) -> Result<Definition, FromWireError> {
+    let subject_tc = TextContent::from_string(subject.to_string(), None);
+    let typed_children = wire_children_to_content_elements(children)?;
+    let mut d = Definition::new(subject_tc, typed_children);
+    d.location = range_from_wire(range);
+    Ok(d)
+}
+
+fn list_from_wire(
+    range: &lex_extension::wire::Range,
+    marker_style: &str,
+    items: &[WireListItem],
+) -> Result<List, FromWireError> {
+    let marker = synthetic_marker_for_style(marker_style);
+    let list_items = items
+        .iter()
+        .enumerate()
+        .map(|(index, item)| list_item_from_wire(item, marker_style, index))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut l = List::new(list_items);
+    l.location = range_from_wire(range);
+    l.marker = marker;
+    Ok(l)
+}
+
+fn list_item_from_wire(
+    item: &WireListItem,
+    marker_style: &str,
+    index: usize,
+) -> Result<ListItem, FromWireError> {
+    let combined = text_content_from_wire(&item.inlines);
+    let raw = combined.as_string();
+    let text_lines: Vec<TextContent> = if raw.is_empty() {
+        vec![TextContent::empty()]
+    } else {
+        raw.split('\n')
+            .map(|s| TextContent::from_string(s.to_string(), None))
+            .collect()
+    };
+    let marker_text = synthetic_marker_text(marker_style, index);
+    let typed_children = wire_children_to_content_elements(&item.children)?;
+    let mut li = ListItem::with_text_content(
+        TextContent::from_string(marker_text, None),
+        text_lines
+            .first()
+            .cloned()
+            .unwrap_or_else(TextContent::empty),
+        typed_children,
+    );
+    if text_lines.len() > 1 {
+        li.text = text_lines;
+    }
+    li.location = range_from_wire(&item.range);
+    Ok(li)
+}
+
+fn synthetic_marker_text(marker_style: &str, index: usize) -> String {
+    match marker_style {
+        "dash" => "-".into(),
+        "numerical" => format!("{}.", index + 1),
+        // Compute the modulo on `usize` first so lists with more than
+        // 256 items don't wrap before the cast — `index as u8` would
+        // truncate at index=256, mis-numbering everything past.
+        "alphabetical" => format!("{}.", char::from(b'a' + ((index % 26) as u8))),
+        "roman" => format!("{}.", roman_numeral(index + 1)),
+        _ => "-".into(),
+    }
+}
+
+fn synthetic_marker_for_style(marker_style: &str) -> Option<SequenceMarker> {
+    let probe = synthetic_marker_text(marker_style, 0);
+    SequenceMarker::parse(&probe, None)
+}
+
+fn roman_numeral(mut n: usize) -> String {
+    const TABLE: &[(usize, &str)] = &[
+        (1000, "M"),
+        (900, "CM"),
+        (500, "D"),
+        (400, "CD"),
+        (100, "C"),
+        (90, "XC"),
+        (50, "L"),
+        (40, "XL"),
+        (10, "X"),
+        (9, "IX"),
+        (5, "V"),
+        (4, "IV"),
+        (1, "I"),
+    ];
+    let mut out = String::new();
+    for (value, sym) in TABLE {
+        while n >= *value {
+            out.push_str(sym);
+            n -= *value;
+        }
+    }
+    if out.is_empty() {
+        "I".into()
+    } else {
+        out
+    }
+}
+
+fn table_from_wire(
+    range: &lex_extension::wire::Range,
+    caption: &str,
+    header_rows: u32,
+    align: &str,
+    rows: &[WireRow],
+    footnotes: &[WireFootnote],
+) -> Result<Table, FromWireError> {
+    let alignment = match align {
+        "left" => TableCellAlignment::Left,
+        "center" => TableCellAlignment::Center,
+        "right" => TableCellAlignment::Right,
+        _ => TableCellAlignment::None,
+    };
+    let header_count = header_rows as usize;
+    let mut header_vec = Vec::with_capacity(header_count.min(rows.len()));
+    let mut body_vec = Vec::with_capacity(rows.len().saturating_sub(header_count));
+    for (i, row) in rows.iter().enumerate() {
+        let is_header = i < header_count;
+        let cells = row
+            .cells
+            .iter()
+            .map(|c| table_cell_from_wire(c, alignment, is_header))
+            .collect();
+        let table_row = TableRow::new(cells);
+        if is_header {
+            header_vec.push(table_row);
+        } else {
+            body_vec.push(table_row);
+        }
+    }
+    let subject = TextContent::from_string(caption.to_string(), None);
+    let mut t = Table::new(subject, header_vec, body_vec, VerbatimBlockMode::Inflow);
+    t.location = range_from_wire(range);
+    if !footnotes.is_empty() {
+        let footnote_items: Vec<ListItem> = footnotes
+            .iter()
+            .map(|f| {
+                let combined = text_content_from_wire(&f.inlines);
+                ListItem::with_text_content(
+                    TextContent::from_string(f.marker.clone(), None),
+                    combined,
+                    Vec::new(),
+                )
+            })
+            .collect();
+        t.footnotes = Some(Box::new(List::new(footnote_items)));
+    }
+    Ok(t)
+}
+
+fn table_cell_from_wire(
+    cell: &WireTableCell,
+    align: TableCellAlignment,
+    header: bool,
+) -> TableCell {
+    let content = text_content_from_wire(&cell.inlines);
+    TableCell::new(content)
+        .with_span(cell.colspan as usize, cell.rowspan as usize)
+        .with_align(align)
+        .with_header(header)
+}
+
+fn verbatim_from_wire(
+    range: &lex_extension::wire::Range,
+    label: &str,
+    params: &Value,
+    body_text: &str,
+    subject: &str,
+    mode: &str,
+) -> Result<ContentItem, FromWireError> {
+    if label == "lex.internal.unsupported.unknown" {
+        return Err(FromWireError::UnsupportedKind {
+            kind: "unknown".into(),
+        });
+    }
+    if let Some(stripped) = label.strip_prefix("lex.internal.unsupported.") {
+        // Forward codec emitted this for an as-yet-unwired variant;
+        // surface the gap rather than silently dropping content.
+        return Err(FromWireError::UnsupportedKind {
+            kind: stripped.to_string(),
+        });
+    }
+
+    if label.is_empty() {
+        // Standalone VerbatimLine round-trip — see
+        // `verbatim_line_standalone_to_wire` in the forward codec.
+        let mut vl =
+            VerbatimLine::from_text_content(TextContent::from_string(body_text.to_string(), None));
+        vl.location = range_from_wire(range);
+        return Ok(ContentItem::VerbatimLine(vl));
+    }
+
+    let parameters = parameters_from_json(params)?;
+    let closing_data = Data::new(Label::new(label.to_string()), parameters);
+    let typed_lines: Vec<VerbatimContent> = if body_text.is_empty() {
+        Vec::new()
+    } else {
+        body_text
+            .split('\n')
+            .map(|line| {
+                VerbatimContent::VerbatimLine(VerbatimLine::from_text_content(
+                    TextContent::from_string(line.to_string(), None),
+                ))
+            })
+            .collect()
+    };
+    let subject_tc = if subject.is_empty() {
+        TextContent::empty()
+    } else {
+        TextContent::from_string(subject.to_string(), None)
+    };
+    let block_mode = parse_verbatim_mode(mode);
+    let mut v = Verbatim::new(subject_tc, typed_lines, closing_data, block_mode);
+    v.location = range_from_wire(range);
+    Ok(ContentItem::VerbatimBlock(Box::new(v)))
+}
+
+/// Map the wire `mode` string back to a [`VerbatimBlockMode`].
+/// Unknown values fall back to `Inflow` — the documented default
+/// matching the parser's behaviour for ambiguous mode classification.
+fn parse_verbatim_mode(mode: &str) -> VerbatimBlockMode {
+    match mode {
+        "fullwidth" => VerbatimBlockMode::Fullwidth,
+        // "inflow" or anything unrecognised
+        _ => VerbatimBlockMode::Inflow,
+    }
 }
 
 fn parameters_from_json(params: &Value) -> Result<Vec<Parameter>, FromWireError> {
@@ -195,10 +490,7 @@ fn annotation_body_from_json(body: &Value) -> Result<Vec<ContentItem>, FromWireE
             // represents this as a single Paragraph child (matching
             // `extract_annotation_single_content` in the parser). We
             // mirror that here so content isn't silently dropped.
-            let line = TextLine::new(crate::lex::ast::TextContent::from_string(
-                text.clone(),
-                None,
-            ));
+            let line = TextLine::new(TextContent::from_string(text.clone(), None));
             let para = Paragraph::new(vec![ContentItem::TextLine(line)]);
             Ok(vec![ContentItem::Paragraph(para)])
         }
@@ -222,6 +514,28 @@ fn annotation_body_from_json(body: &Value) -> Result<Vec<ContentItem>, FromWireE
             detail: "expected null, string, or object".into(),
         }),
     }
+}
+
+fn wire_children_to_session_content(
+    children: &[WireNode],
+) -> Result<Vec<SessionContent>, FromWireError> {
+    let items = from_wire_subtree(children)?;
+    Ok(items.into_iter().map(SessionContent::from).collect())
+}
+
+fn wire_children_to_content_elements(
+    children: &[WireNode],
+) -> Result<Vec<ContentElement>, FromWireError> {
+    let items = from_wire_subtree(children)?;
+    items
+        .into_iter()
+        .map(|item| {
+            ContentElement::try_from(item).map_err(|e| FromWireError::MalformedField {
+                field: "children",
+                detail: e.to_string(),
+            })
+        })
+        .collect()
 }
 
 fn kind_name(node: &WireNode) -> &'static str {

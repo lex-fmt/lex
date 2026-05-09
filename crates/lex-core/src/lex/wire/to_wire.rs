@@ -1,20 +1,32 @@
 //! Forward codec: lex-core internal AST → `lex_extension::WireNode`.
 //!
-//! Total over the AST shapes a parsed lex document can produce. Build-up
-//! is incremental: this commit covers the simpler block shapes
-//! (`Document`, `Paragraph`, `Annotation`, `BlankLineGroup`); follow-up
-//! commits on the same PR extend coverage to `Session`, `Definition`,
-//! `List`, `Table`, and `Verbatim`. Variants not yet wired return
-//! [`unsupported_node`] which produces a structural placeholder rather
-//! than panicking; the placeholder round-trips through the reverse
-//! codec to surface the gap as a [`crate::lex::wire::FromWireError`].
+//! Total over the AST shapes a parsed lex document can produce. Every
+//! [`ContentItem`] variant is wired through to a structured [`WireNode`];
+//! variants that have no direct slot in the wire form are mapped to the
+//! closest equivalent (standalone `TextLine` becomes a single-line
+//! [`WireNode::Paragraph`]; `VerbatimLine` outside a block becomes a
+//! [`WireNode::Verbatim`] with an empty label) so that the reverse codec
+//! can reconstruct a structurally equivalent AST.
+//!
+//! See the module-level docs in [`super`] for the documented losses
+//! (annotation slots on inline nodes, document-level title/annotations,
+//! verbatim multi-group bodies, byte-offset spans).
 
 use crate::lex::ast::elements::annotation::Annotation;
 use crate::lex::ast::elements::blank_line_group::BlankLineGroup;
 use crate::lex::ast::elements::content_item::ContentItem;
-use crate::lex::ast::elements::paragraph::Paragraph;
+use crate::lex::ast::elements::definition::Definition;
+use crate::lex::ast::elements::list::{List, ListItem};
+use crate::lex::ast::elements::paragraph::{Paragraph, TextLine};
+use crate::lex::ast::elements::sequence_marker::DecorationStyle;
+use crate::lex::ast::elements::session::Session;
+use crate::lex::ast::elements::table::{Table, TableCell, TableCellAlignment};
+use crate::lex::ast::elements::verbatim::Verbatim;
+use crate::lex::ast::elements::verbatim_line::VerbatimLine;
 use crate::lex::ast::Document;
-use lex_extension::wire::WireNode;
+use lex_extension::wire::{
+    WireFootnote, WireInline, WireListItem, WireNode, WireRow, WireTableCell,
+};
 use serde_json::{Map, Value};
 
 use super::inline::text_content_to_wire;
@@ -41,26 +53,19 @@ pub fn to_wire_document(doc: &Document) -> WireNode {
 }
 
 /// Convert a single `ContentItem` to a `WireNode`.
-///
-/// Variants not yet implemented produce an `Unknown`-shaped placeholder
-/// (see [`unsupported_node`]); the reverse codec surfaces these as
-/// [`super::FromWireError::UnsupportedKind`] so the gap is visible to
-/// callers.
 pub fn to_wire_node(item: &ContentItem) -> WireNode {
     match item {
         ContentItem::Paragraph(p) => paragraph_to_wire(p),
         ContentItem::BlankLineGroup(blg) => blank_to_wire(blg),
         ContentItem::Annotation(a) => annotation_to_wire(a),
-
-        // Coverage built up in follow-up commits.
-        ContentItem::Session(_)
-        | ContentItem::Definition(_)
-        | ContentItem::List(_)
-        | ContentItem::ListItem(_)
-        | ContentItem::TextLine(_)
-        | ContentItem::VerbatimBlock(_)
-        | ContentItem::Table(_)
-        | ContentItem::VerbatimLine(_) => unsupported_node(item),
+        ContentItem::Session(s) => session_to_wire(s),
+        ContentItem::Definition(d) => definition_to_wire(d),
+        ContentItem::List(l) => list_to_wire(l),
+        ContentItem::ListItem(li) => list_item_standalone_to_wire(li),
+        ContentItem::Table(t) => table_to_wire(t),
+        ContentItem::VerbatimBlock(v) => verbatim_to_wire(v),
+        ContentItem::VerbatimLine(vl) => verbatim_line_standalone_to_wire(vl),
+        ContentItem::TextLine(tl) => text_line_standalone_to_wire(tl),
     }
 }
 
@@ -74,7 +79,7 @@ fn paragraph_to_wire(p: &Paragraph) -> WireNode {
     for line_item in &p.lines {
         if let ContentItem::TextLine(line) = line_item {
             if !first_line {
-                inlines.push(lex_extension::wire::WireInline::Text { text: "\n".into() });
+                inlines.push(WireInline::Text { text: "\n".into() });
             }
             inlines.extend(text_content_to_wire(&line.content));
             first_line = false;
@@ -107,6 +112,239 @@ fn annotation_to_wire(a: &Annotation) -> WireNode {
     }
 }
 
+fn session_to_wire(s: &Session) -> WireNode {
+    let children = s.children.iter().map(to_wire_node).collect::<Vec<_>>();
+    WireNode::Session {
+        range: range_to_wire(&s.location),
+        origin: origin_string(&s.location),
+        title: s.title_text().to_string(),
+        marker: s.marker.as_ref().map(|m| m.as_str().to_string()),
+        children,
+    }
+}
+
+fn definition_to_wire(d: &Definition) -> WireNode {
+    let children = d.children.iter().map(to_wire_node).collect::<Vec<_>>();
+    WireNode::Definition {
+        range: range_to_wire(&d.location),
+        origin: origin_string(&d.location),
+        subject: d.subject.as_string().to_string(),
+        children,
+    }
+}
+
+fn list_to_wire(l: &List) -> WireNode {
+    let marker_style = l
+        .marker
+        .as_ref()
+        .map(|m| decoration_style_name(m.style))
+        .unwrap_or("dash")
+        .to_string();
+    let items = l
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            ContentItem::ListItem(li) => Some(list_item_to_wire(li)),
+            _ => None,
+        })
+        .collect();
+    WireNode::List {
+        range: range_to_wire(&l.location),
+        origin: origin_string(&l.location),
+        marker_style,
+        items,
+    }
+}
+
+fn list_item_to_wire(li: &ListItem) -> WireListItem {
+    // Concatenate every TextContent in `text` into a single inline run,
+    // interleaving `\n` separators between continuation lines so a
+    // multi-line list-item body round-trips. The reverse codec splits
+    // the joined run back into its components.
+    let mut inlines = Vec::new();
+    for (i, tc) in li.text.iter().enumerate() {
+        if i > 0 {
+            inlines.push(WireInline::Text { text: "\n".into() });
+        }
+        inlines.extend(text_content_to_wire(tc));
+    }
+    let children = li.children.iter().map(to_wire_node).collect();
+    WireListItem {
+        range: range_to_wire(&li.location),
+        inlines,
+        children,
+    }
+}
+
+/// Wire form for a `ListItem` that appears outside a `List` (which the
+/// parser does not produce, but the codec must still handle to stay
+/// total). Wraps the item as a singleton list with a default marker so
+/// the reverse codec produces a valid `List` rather than a malformed
+/// node.
+fn list_item_standalone_to_wire(li: &ListItem) -> WireNode {
+    WireNode::List {
+        range: range_to_wire(&li.location),
+        origin: origin_string(&li.location),
+        marker_style: "dash".into(),
+        items: vec![list_item_to_wire(li)],
+    }
+}
+
+fn table_to_wire(t: &Table) -> WireNode {
+    // The wire table format only carries inline content per cell;
+    // there is no slot for `TableCell.children` (block-level content
+    // inside a cell, populated by the parser when a cell contains a
+    // list / definition / nested table). Emitting a `WireNode::Table`
+    // for a table with block-content cells would silently drop that
+    // content, so we surface those as a structural placeholder
+    // instead. The reverse codec recognises the
+    // `lex.internal.unsupported.*` prefix and rejects with
+    // `FromWireError::UnsupportedKind`, making the loss visible.
+    if t.cell_children_iter().next().is_some() {
+        return WireNode::Verbatim {
+            range: range_to_wire(&t.location),
+            origin: origin_string(&t.location),
+            label: "lex.internal.unsupported.table_block_cells".into(),
+            params: Value::Object(Map::new()),
+            body_text: String::new(),
+            subject: String::new(),
+            mode: "inflow".into(),
+        };
+    }
+
+    let header_rows = u32::try_from(t.header_rows.len()).unwrap_or(u32::MAX);
+    let align = table_align_summary(t);
+    let rows = t
+        .all_rows()
+        .map(|row| WireRow {
+            cells: row.cells.iter().map(table_cell_to_wire).collect(),
+        })
+        .collect();
+    let footnotes = t
+        .footnotes
+        .as_deref()
+        .map(table_footnotes_to_wire)
+        .unwrap_or_default();
+    WireNode::Table {
+        range: range_to_wire(&t.location),
+        origin: origin_string(&t.location),
+        caption: t.subject.as_string().to_string(),
+        header_rows,
+        align,
+        rows,
+        footnotes,
+    }
+}
+
+fn table_cell_to_wire(cell: &TableCell) -> WireTableCell {
+    // Cells reaching here have already passed the block-content
+    // guard in `table_to_wire`, so `cell.children` is empty by
+    // construction.
+    debug_assert!(
+        !cell.has_block_content(),
+        "table_to_wire must short-circuit block-content cells before reaching table_cell_to_wire"
+    );
+    WireTableCell {
+        inlines: text_content_to_wire(&cell.content),
+        colspan: u32::try_from(cell.colspan).unwrap_or(1),
+        rowspan: u32::try_from(cell.rowspan).unwrap_or(1),
+    }
+}
+
+/// Summarise a table's per-cell alignment into a single string. Wire
+/// tables carry one alignment per table; lex-core tracks alignment per
+/// cell. We pick the alignment of the first non-`None` *body* cell —
+/// header cells are skipped because their alignment is often a
+/// styling artefact (centered headers over left-aligned columns) and
+/// would mislead the reverse codec, which applies the chosen
+/// alignment to every cell in the table. Returns the empty string
+/// when no body alignment is set anywhere.
+fn table_align_summary(t: &Table) -> String {
+    for row in &t.body_rows {
+        for cell in &row.cells {
+            match cell.align {
+                TableCellAlignment::Left => return "left".into(),
+                TableCellAlignment::Center => return "center".into(),
+                TableCellAlignment::Right => return "right".into(),
+                TableCellAlignment::None => {}
+            }
+        }
+    }
+    String::new()
+}
+
+fn table_footnotes_to_wire(footnotes: &List) -> Vec<WireFootnote> {
+    footnotes
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            ContentItem::ListItem(li) => Some(WireFootnote {
+                marker: li.marker.as_string().to_string(),
+                inlines: li
+                    .text
+                    .first()
+                    .map(text_content_to_wire)
+                    .unwrap_or_default(),
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
+fn verbatim_to_wire(v: &Verbatim) -> WireNode {
+    let label = v.closing_data.label.value.clone();
+    let params = parameters_to_json(&v.closing_data.parameters);
+    // Body is the first group's content lines joined by `\n`. Multi-
+    // group verbatims collapse to their first group in the wire form;
+    // the documented loss is acceptable for the current codec
+    // consumer (lex.include never returns multi-group verbatims).
+    let body_text = v
+        .children
+        .iter()
+        .filter_map(|item| match item {
+            ContentItem::VerbatimLine(vl) => Some(vl.content.as_string().to_string()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    WireNode::Verbatim {
+        range: range_to_wire(&v.location),
+        origin: origin_string(&v.location),
+        label,
+        params,
+        body_text,
+        subject: v.subject.as_string().to_string(),
+        mode: verbatim_mode_name(v.mode).to_string(),
+    }
+}
+
+/// Wire form for a `VerbatimLine` that appears outside a verbatim
+/// block. Wraps it as a single-line `Verbatim` carrying an empty label
+/// — the reverse codec recognises the empty label and reconstructs a
+/// `VerbatimLine`.
+fn verbatim_line_standalone_to_wire(vl: &VerbatimLine) -> WireNode {
+    WireNode::Verbatim {
+        range: range_to_wire(&vl.location),
+        origin: origin_string(&vl.location),
+        label: String::new(),
+        params: Value::Object(Map::new()),
+        body_text: vl.content.as_string().to_string(),
+        subject: String::new(),
+        mode: "inflow".into(),
+    }
+}
+
+/// Wire form for a `TextLine` that appears outside a `Paragraph`. The
+/// parser doesn't produce this directly, but `to_wire_node` must stay
+/// total, so we wrap it as a single-line paragraph.
+fn text_line_standalone_to_wire(tl: &TextLine) -> WireNode {
+    WireNode::Paragraph {
+        range: range_to_wire(&tl.location),
+        origin: origin_string(&tl.location),
+        inlines: text_content_to_wire(&tl.content),
+    }
+}
+
 fn parameters_to_json(params: &[crate::lex::ast::elements::parameter::Parameter]) -> Value {
     let mut obj = Map::with_capacity(params.len());
     for p in params {
@@ -130,50 +368,21 @@ fn annotation_body_to_json(a: &Annotation) -> Value {
     Value::Object(obj)
 }
 
-/// Placeholder for ContentItem variants not yet wired through the
-/// codec. Emits a `Verbatim` carrying the lex-core node-type name and
-/// no body — the reverse codec (which checks for `lex.internal`-prefix
-/// labels) surfaces this as `FromWireError::UnsupportedKind`.
-///
-/// This keeps the forward codec total without panicking, so partial
-/// coverage doesn't break callers that incidentally encounter an
-/// unsupported shape during testing.
-fn unsupported_node(item: &ContentItem) -> WireNode {
-    let location = match item {
-        ContentItem::Session(s) => &s.location,
-        ContentItem::Definition(d) => &d.location,
-        ContentItem::List(l) => &l.location,
-        ContentItem::ListItem(li) => &li.location,
-        ContentItem::TextLine(tl) => &tl.location,
-        ContentItem::VerbatimBlock(v) => &v.location,
-        ContentItem::Table(t) => &t.location,
-        ContentItem::VerbatimLine(vl) => &vl.location,
-        // The other arms are wired through the direct path; reaching
-        // this branch via them would be a programmer error.
-        _ => unreachable!("unsupported_node only used for unwired variants"),
-    };
-    let kind_name = item_node_type(item);
-    WireNode::Verbatim {
-        range: range_to_wire(location),
-        origin: origin_string(location),
-        label: format!("lex.internal.unsupported.{kind_name}"),
-        params: Value::Object(Map::new()),
-        body_text: String::new(),
+fn decoration_style_name(style: DecorationStyle) -> &'static str {
+    match style {
+        DecorationStyle::Plain => "dash",
+        DecorationStyle::Numerical => "numerical",
+        DecorationStyle::Alphabetical => "alphabetical",
+        DecorationStyle::Roman => "roman",
     }
 }
 
-fn item_node_type(item: &ContentItem) -> &'static str {
-    match item {
-        ContentItem::Paragraph(_) => "paragraph",
-        ContentItem::Session(_) => "session",
-        ContentItem::List(_) => "list",
-        ContentItem::ListItem(_) => "list_item",
-        ContentItem::TextLine(_) => "text_line",
-        ContentItem::Definition(_) => "definition",
-        ContentItem::Annotation(_) => "annotation",
-        ContentItem::VerbatimBlock(_) => "verbatim_block",
-        ContentItem::Table(_) => "table",
-        ContentItem::VerbatimLine(_) => "verbatim_line",
-        ContentItem::BlankLineGroup(_) => "blank",
+fn verbatim_mode_name(
+    mode: crate::lex::ast::elements::verbatim::VerbatimBlockMode,
+) -> &'static str {
+    use crate::lex::ast::elements::verbatim::VerbatimBlockMode;
+    match mode {
+        VerbatimBlockMode::Inflow => "inflow",
+        VerbatimBlockMode::Fullwidth => "fullwidth",
     }
 }

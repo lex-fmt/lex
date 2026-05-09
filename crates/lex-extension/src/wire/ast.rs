@@ -76,6 +76,19 @@ pub enum WireNode {
         label: String,
         params: serde_json::Value,
         body_text: String,
+        /// The verbatim block's subject (the lead-in line, e.g.
+        /// `Code:`). Empty string for verbatim blocks that have no
+        /// subject (or for the placeholder shape used to flag
+        /// unsupported variants).
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        subject: String,
+        /// Rendering mode: `"inflow"` (content indented relative to
+        /// subject) or `"fullwidth"` (content at column 2). Defaults
+        /// to `"inflow"` on deserialise — matching the parser's
+        /// default mode — when the field is absent from the wire
+        /// payload.
+        #[serde(default = "default_verbatim_mode")]
+        mode: String,
     },
     Table {
         range: Range,
@@ -136,6 +149,10 @@ pub struct WireTableCell {
 
 fn one() -> u32 {
     1
+}
+
+fn default_verbatim_mode() -> String {
+    "inflow".to_string()
 }
 
 /// One footnote attached to a table.
@@ -221,10 +238,38 @@ mod tests {
             label: "rust".into(),
             params: serde_json::json!({}),
             body_text: "fn main() {}".into(),
+            subject: "Code:".into(),
+            mode: "inflow".into(),
         };
         let s = serde_json::to_string(&v).unwrap();
         let back: WireNode = serde_json::from_str(&s).unwrap();
         assert_eq!(back, v);
+    }
+
+    #[test]
+    fn verbatim_mode_field_defaults_to_inflow_on_deserialise() {
+        // A wire payload missing `mode` should round-trip as
+        // "inflow" — the documented default for older producers
+        // that don't emit the field.
+        let payload = r#"{
+            "kind":"verbatim",
+            "range":{"start":[0,0],"end":[4,0]},
+            "label":"rust",
+            "params":{},
+            "body_text":"x"
+        }"#;
+        let v: WireNode = serde_json::from_str(payload).unwrap();
+        match v {
+            WireNode::Verbatim {
+                ref mode,
+                ref subject,
+                ..
+            } => {
+                assert_eq!(mode, "inflow");
+                assert_eq!(subject, "");
+            }
+            _ => panic!("expected Verbatim"),
+        }
     }
 
     #[test]

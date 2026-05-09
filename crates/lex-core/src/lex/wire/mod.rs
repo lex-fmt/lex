@@ -28,24 +28,62 @@
 //!   `Table`, etc. — none of the wire `WireNode` variants carry an
 //!   `annotations` field, so attached annotations are dropped in the
 //!   forward direction. (Standalone `ContentItem::Annotation` nodes
-//!   *are* round-tripped fully via `WireNode::Annotation`.)
+//!   *are* round-tripped fully via `WireNode::Annotation`.) The
+//!   `LexIncludeHandler` mitigates this for include splicing by
+//!   promoting `Document.annotations` to leading root children
+//!   *before* the codec runs, matching the legacy
+//!   `prepare_splice_list` behaviour.
 //! - **Document-level metadata** — `Document.title` and
-//!   `Document.annotations` are dropped: the forward codec returns a
-//!   `WireNode::Document` whose `children` are the root session's
-//!   children, and only those.
+//!   `Document.annotations` are dropped by the codec itself. The
+//!   `LexIncludeHandler` re-applies the legacy `prepare_splice_list`
+//!   transformation in front of the codec so these surface as
+//!   leading children of the wire `Document`.
 //! - **Marker structure** on sessions and lists — the wire format
 //!   stringifies the marker (`"1.1."`, `"(a)"`); the parser
 //!   reconstructs the typed marker on the next parse.
+//! - **List-item per-item markers** — list-item markers are derived
+//!   from the parent list's `marker_style` plus item index in the
+//!   reverse direction; the original raw marker text on each item is
+//!   not preserved.
+//! - **Verbatim multi-group bodies** — a multi-group verbatim block
+//!   collapses to its first group in the forward direction; the
+//!   additional groups are dropped. `lex.include` never returns
+//!   multi-group verbatims, so this loss is invisible to the current
+//!   codec consumer.
+//! - **Table per-cell alignment** — wire tables carry one alignment
+//!   string for the whole table; lex-core tracks alignment per cell.
+//!   Forward picks the first non-`None` *body* cell's alignment
+//!   (header-row alignment is skipped because it is often a styling
+//!   artefact); reverse applies that alignment to every cell.
+//! - **Tables with block-content cells** — `WireTableCell` only
+//!   carries inline content; lex-core's `TableCell.children` (block
+//!   content inside a cell, e.g. nested lists) has no slot in the
+//!   wire form. Rather than silently drop that content, the forward
+//!   codec emits a `lex.internal.unsupported.table_block_cells`
+//!   placeholder; the reverse codec rejects it with
+//!   `FromWireError::UnsupportedKind`. Future codec work that
+//!   introduces an escape-hatch encoding for these tables (e.g.,
+//!   `body_text` carrying the raw source) can lift this restriction.
 //! - **`TextContent`** uses the parsed-inline path
-//!   ([`TextContent::inline_nodes`]) when available (Phase 2),
-//!   producing matching `WireInline` variants; otherwise emits the
-//!   raw source as a single `WireInline::Text`. Reverse codec
-//!   re-serialises through a `.lex` source-form string that the
-//!   parser re-interprets identically.
+//!   ([`TextContent::inline_nodes`]) when available, producing
+//!   matching `WireInline` variants; otherwise emits the raw source
+//!   as a single `WireInline::Text`. Reverse codec re-serialises
+//!   through a `.lex` source-form string that the parser
+//!   re-interprets identically.
 //!
-//! For the consumer that matters today (`LexIncludeHandler` in PR 3c),
-//! these losses are invisible: the spliced content renders to the same
-//! `.lex` source as the original.
+//! Verbatim `subject` and `mode` (`Inflow` / `Fullwidth`) **are**
+//! preserved end-to-end: `WireNode::Verbatim` carries dedicated
+//! `subject` and `mode` fields that the forward codec populates and
+//! the reverse codec applies during reconstruction.
+//!
+//! For the consumer that matters today (`LexIncludeHandler`), the
+//! remaining losses do not change observable include output: the
+//! handler's `prepare_splice_list`-equivalent normalisation covers
+//! the document-level losses, table-with-block-cells surfaces as a
+//! visible `UnsupportedKind` rather than silent drop, and the
+//! representation-only losses (spans, marker structure, per-cell
+//! alignment) re-derive identically when the spliced content is
+//! re-formatted to `.lex` source.
 //!
 //! # Versioning
 //!
