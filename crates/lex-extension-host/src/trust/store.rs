@@ -21,11 +21,16 @@
 //!     {
 //!       "namespace": "evil",
 //!       "command_string": "evil-binary",
-//!       "decision": {"denied": "user rejected"}
+//!       "decision": {"denied": {"reason": "user rejected"}}
 //!     }
 //!   ]
 //! }
 //! ```
+//!
+//! The denied form uses serde's default externally-tagged
+//! representation: outer key is the variant name (`denied`),
+//! inner object holds the named field(s) (`reason`). Trusted has no
+//! payload so it's a bare string.
 //!
 //! `version: 1` is the schema-format version. Future changes that
 //! aren't backwards-readable bump it and the loader returns
@@ -57,6 +62,11 @@ pub enum TrustStoreError {
     /// which version was unexpected so the user can either upgrade
     /// the host or delete the file.
     UnsupportedVersion { path: PathBuf, version: u32 },
+    /// Caller tried to persist a [`TrustDecision::Pending`] entry.
+    /// `Pending` is an internal in-flight state; only `Trusted` and
+    /// `Denied` are storable. Surfacing this as a typed error rather
+    /// than silently dropping makes the bug visible to tests.
+    InvalidDecision { reason: &'static str },
 }
 
 impl std::fmt::Display for TrustStoreError {
@@ -73,6 +83,9 @@ impl std::fmt::Display for TrustStoreError {
                 "{}: trust store version {version} is newer than this host supports (1)",
                 path.display()
             ),
+            TrustStoreError::InvalidDecision { reason } => {
+                write!(f, "trust store: invalid decision: {reason}")
+            }
         }
     }
 }
@@ -133,13 +146,17 @@ impl TrustStore {
     }
 
     /// Pin a decision. Both `Trusted` and `Denied` are persisted —
-    /// `Pending` is not a stored state. Writes to disk immediately
-    /// so a crash in the middle of a session doesn't drop the
-    /// approval the user just gave.
+    /// `Pending` is not a stored state and is rejected with
+    /// [`TrustStoreError::InvalidDecision`] so misuse surfaces in
+    /// tests instead of silently dropping the call. Writes to disk
+    /// immediately (atomically — see [`flush`](Self::flush)) so a
+    /// crash mid-session doesn't drop the approval the user just
+    /// gave.
     pub fn set(&mut self, key: TrustKey, decision: TrustDecision) -> Result<(), TrustStoreError> {
-        // Reject Pending — it's a programmer error to persist.
         if matches!(decision, TrustDecision::Pending) {
-            return Ok(());
+            return Err(TrustStoreError::InvalidDecision {
+                reason: "TrustDecision::Pending is an internal in-flight state; only Trusted and Denied are storable",
+            });
         }
         self.entries.insert(key, decision);
         self.flush()
@@ -168,6 +185,14 @@ impl TrustStore {
         self.entries.is_empty()
     }
 
+    /// Persist the in-memory map to disk atomically.
+    ///
+    /// Writes to a sibling tempfile first, then `rename`s into place.
+    /// On POSIX, `rename` within the same directory is atomic — a
+    /// crash mid-`flush` either leaves the old file intact or
+    /// publishes the new one in full, never a truncated mix that
+    /// future `open()` calls would fail to parse. Same guarantee on
+    /// Windows for files on the same volume.
     fn flush(&self) -> Result<(), TrustStoreError> {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent).map_err(|source| TrustStoreError::Io {
@@ -175,10 +200,20 @@ impl TrustStore {
                 source,
             })?;
         }
-        let body = serialise_disk_format(&self.entries);
-        fs::write(&self.path, body).map_err(|source| TrustStoreError::Io {
-            path: self.path.clone(),
+        let body = serialize_disk_format(&self.entries);
+        let tmp = self.path.with_extension("json.tmp");
+        fs::write(&tmp, body).map_err(|source| TrustStoreError::Io {
+            path: tmp.clone(),
             source,
+        })?;
+        fs::rename(&tmp, &self.path).map_err(|source| {
+            // Tempfile is left behind; the next flush will overwrite
+            // it. Returning the rename error gives the caller the
+            // original failure context.
+            TrustStoreError::Io {
+                path: self.path.clone(),
+                source,
+            }
         })
     }
 }
@@ -236,7 +271,7 @@ fn parse_disk_format(
     Ok(out)
 }
 
-fn serialise_disk_format(entries: &HashMap<TrustKey, TrustDecision>) -> String {
+fn serialize_disk_format(entries: &HashMap<TrustKey, TrustDecision>) -> String {
     let mut on_disk: Vec<OnDiskEntry> = entries
         .iter()
         .filter_map(|(k, v)| {
@@ -316,12 +351,13 @@ mod tests {
     }
 
     #[test]
-    fn pending_is_not_persisted() {
+    fn pending_returns_invalid_decision_error_and_does_not_persist() {
         let dir = tempfile::tempdir().unwrap();
         let mut store = TrustStore::open(dir.path()).unwrap();
-        store
+        let err = store
             .set(key("acme", "acme-handler"), TrustDecision::Pending)
-            .unwrap();
+            .unwrap_err();
+        assert!(matches!(err, TrustStoreError::InvalidDecision { .. }));
         assert!(store.is_empty());
         // And the file shouldn't carry it back either.
         let store = TrustStore::open(dir.path()).unwrap();
@@ -357,6 +393,56 @@ mod tests {
         let mut seen: Vec<String> = store.iter().map(|(k, _)| k.namespace.clone()).collect();
         seen.sort();
         assert_eq!(seen, vec!["a", "b"]);
+    }
+
+    /// Atomic flush leaves no `.tmp` sibling once `set` returns —
+    /// `rename` consumes the tempfile. A crash *between* tempfile
+    /// write and rename would leave it behind, but the store would
+    /// still be readable from the original file.
+    #[test]
+    fn atomic_flush_leaves_no_tempfile_after_set() {
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let mut store = TrustStore::open(dir.path()).unwrap();
+            store.set(key("acme", "x"), TrustDecision::Trusted).unwrap();
+        }
+        let lex_dir = dir.path().join(".lex");
+        let mut entries: Vec<String> = std::fs::read_dir(&lex_dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        entries.sort();
+        assert_eq!(
+            entries,
+            vec!["trust.json".to_string()],
+            "tempfile must be renamed away, leaving only the canonical file"
+        );
+    }
+
+    /// On-disk JSON for a `Denied` entry uses serde's externally-tagged
+    /// representation: `{"denied": {"reason": "..."}}` — not the bare
+    /// `{"denied": "..."}` an early version of the doc claimed.
+    /// Locking this in so a future change that flips the
+    /// representation is a breaking-change ringer.
+    #[test]
+    fn denied_disk_format_matches_documented_shape() {
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let mut store = TrustStore::open(dir.path()).unwrap();
+            store
+                .set(
+                    key("evil", "evil-bin"),
+                    TrustDecision::Denied {
+                        reason: "user rejected".into(),
+                    },
+                )
+                .unwrap();
+        }
+        let body = std::fs::read_to_string(dir.path().join(".lex/trust.json")).unwrap();
+        assert!(
+            body.contains(r#""denied""#) && body.contains(r#""reason": "user rejected""#),
+            "denied entry must serialise as {{\"denied\": {{\"reason\": ...}}}}, got:\n{body}"
+        );
     }
 
     #[test]
