@@ -117,7 +117,13 @@ fn session_to_wire(s: &Session) -> WireNode {
     WireNode::Session {
         range: range_to_wire(&s.location),
         origin: origin_string(&s.location),
-        title: s.title_text().to_string(),
+        // `full_title()` matches what the parser stores in
+        // `Session.title` — the title string as authored, including
+        // any leading marker. The wire `marker` field is a parallel
+        // channel for handlers that want the structured marker
+        // without re-parsing the title; the reverse codec pairs them
+        // up identically.
+        title: s.full_title().to_string(),
         marker: s.marker.as_ref().map(|m| m.as_str().to_string()),
         children,
     }

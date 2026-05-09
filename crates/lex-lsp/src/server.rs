@@ -28,8 +28,10 @@ use lex_config::{LexConfig, CONFIG_FILE_NAME};
 use lex_core::lex::ast::links::{DocumentLink as AstDocumentLink, LinkType};
 use lex_core::lex::ast::range::SourceLocation;
 use lex_core::lex::ast::{Document, Position as AstPosition, Range as AstRange};
+use lex_core::lex::builtins as lex_builtins;
 use lex_core::lex::includes::{resolve_from_source, FsLoader, IncludeError, ResolveConfig};
 use lex_core::lex::parsing;
+use lex_extension_host::registry::Registry;
 use serde_json::{json, Value};
 use tokio::sync::RwLock;
 use tower_lsp::async_trait;
@@ -370,8 +372,16 @@ where
             max_total_includes,
         };
         let loader = FsLoader::new(inc_root).with_max_file_size(max_file_size);
+        let registry = Registry::new();
+        if let Err(e) = lex_builtins::register_into(
+            &registry,
+            std::sync::Arc::new(loader),
+            resolve_config.clone(),
+        ) {
+            return vec![registry_setup_diagnostic(&e.to_string())];
+        }
 
-        match resolve_from_source(text, Some(path), &resolve_config, &loader) {
+        match resolve_from_source(text, Some(path), &resolve_config, &registry) {
             Ok(_doc) => {
                 // Resolution succeeded. We *don't* store the merged
                 // tree — see fn-level docstring. The resolver was run
@@ -1542,6 +1552,11 @@ fn include_error_to_diagnostic(err: &IncludeError) -> Diagnostic {
             "include-file-too-large",
             err.to_string(),
         ),
+        IncludeError::HandlerFailed { include_site, .. } => (
+            to_lsp_range(include_site),
+            "include-handler-failed",
+            err.to_string(),
+        ),
     };
     Diagnostic {
         range,
@@ -1552,6 +1567,28 @@ fn include_error_to_diagnostic(err: &IncludeError) -> Diagnostic {
         code_description: None,
         source: Some("lex".to_string()),
         message,
+        related_information: None,
+        tags: None,
+        data: None,
+    }
+}
+
+/// Synthesize a document-head diagnostic when registry registration
+/// fails (e.g., another path of the LSP already registered the `lex`
+/// namespace and we collided). This should never happen in practice
+/// — we build a fresh `Registry` per resolve call — but the path is
+/// here so a future regression surfaces an editor diagnostic rather
+/// than a silent panic.
+fn registry_setup_diagnostic(message: &str) -> Diagnostic {
+    Diagnostic {
+        range: head_range(),
+        severity: Some(tower_lsp::lsp_types::DiagnosticSeverity::ERROR),
+        code: Some(tower_lsp::lsp_types::NumberOrString::String(
+            "include-registry-setup".to_string(),
+        )),
+        code_description: None,
+        source: Some("lex".to_string()),
+        message: format!("could not configure include resolver: {message}"),
         related_information: None,
         tags: None,
         data: None,

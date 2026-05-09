@@ -55,6 +55,9 @@ pub const CODE_TOO_LARGE: i32 = -32003;
 pub const CODE_ABSOLUTE_PATH: i32 = -32004;
 /// Error code: underlying I/O error during load.
 pub const CODE_IO: i32 = -32005;
+/// Error code: `parse_no_attach` rejected the loaded source.
+/// Carries `data: { "path": <canonical_path>, "message": <parser msg> }`.
+pub const CODE_PARSE_FAILED: i32 = -32006;
 
 /// Function-pointer type for the parse step. Tests can substitute a
 /// stub via [`LexIncludeHandler::with_parse_fn`] to deterministically
@@ -141,11 +144,13 @@ impl LexHandler for LexIncludeHandler {
         // function is injectable so tests can deterministically
         // exercise the parse-error mapping; production uses
         // `parse_no_attach`.
-        let mut included = (self.parse_fn)(&source).map_err(|message| {
-            HandlerError::internal(format!(
-                "parse of `{}` failed: {message}",
-                canonical_path.display()
-            ))
+        let mut included = (self.parse_fn)(&source).map_err(|message| HandlerError::Custom {
+            code: CODE_PARSE_FAILED,
+            message: format!("parse of `{}` failed: {message}", canonical_path.display()),
+            data: Some(serde_json::json!({
+                "path": canonical_path.display().to_string(),
+                "message": message,
+            })),
         })?;
 
         // Stamp every node's `Range.origin_path` with the loaded file's
@@ -487,16 +492,18 @@ mod tests {
     }
 
     #[test]
-    fn parse_failure_maps_to_internal_error() {
+    fn parse_failure_maps_to_custom_parse_failed() {
         // Deterministic test of the parse-failure → HandlerError
         // mapping. The lex parser is permissive — most malformed
         // inputs parse to *something* — so finding a fixture that
         // reliably trips `parse_no_attach` is brittle. Instead we
         // inject a stub parser that always returns `Err` (via
         // `LexIncludeHandler::with_parse_fn`) and assert the handler
-        // maps that error onto `HandlerError::Internal` with the
-        // offending path and underlying parser message both present
-        // in the diagnostic.
+        // maps that error onto `HandlerError::Custom` with
+        // `code = CODE_PARSE_FAILED` and a structured `data`
+        // payload carrying the canonical path and underlying parser
+        // message — the resolve pass destructures these fields to
+        // reconstruct `IncludeError::ParseFailed`.
         fn always_fails(_source: &str) -> Result<crate::lex::ast::Document, String> {
             Err("synthetic parser failure".into())
         }
@@ -510,19 +517,23 @@ mod tests {
         );
         let ctx = make_ctx("broken.lex", Some("/root/host.lex"));
         let err = handler.on_resolve(&ctx).expect_err("must error");
-        assert!(
-            matches!(err, HandlerError::Internal { .. }),
-            "parse failures must map to HandlerError::Internal, got {err:?}"
-        );
-        let message = err.to_string();
-        assert!(
-            message.contains("/root/broken.lex"),
-            "internal error message must include the offending path: {message}"
-        );
-        assert!(
-            message.contains("synthetic parser failure"),
-            "internal error message must include the underlying parser message: {message}"
-        );
+        match err {
+            HandlerError::Custom { code, data, .. } => {
+                assert_eq!(code, CODE_PARSE_FAILED);
+                let data = data.expect("parse-failure data must be attached");
+                assert_eq!(
+                    data["path"].as_str().expect("path field"),
+                    "/root/broken.lex",
+                    "data.path must carry the canonical path"
+                );
+                assert_eq!(
+                    data["message"].as_str().expect("message field"),
+                    "synthetic parser failure",
+                    "data.message must carry the underlying parser message"
+                );
+            }
+            other => panic!("expected Custom CODE_PARSE_FAILED, got {other:?}"),
+        }
     }
 
     #[test]

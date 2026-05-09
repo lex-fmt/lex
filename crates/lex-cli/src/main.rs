@@ -33,11 +33,14 @@ use lex_babel::{
 };
 use lex_config::{LexConfig, PdfPageSize, CONFIG_FILE_NAME};
 use lex_core::lex::ast::{find_node_path_at_position, Position};
+use lex_core::lex::builtins;
 use lex_core::lex::includes::{resolve_from_source, FsLoader, ResolveConfig};
+use lex_extension_host::registry::Registry;
 use std::collections::HashMap;
 use std::fs;
 use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 fn build_cli() -> Command {
     Command::new("lexd")
@@ -756,8 +759,15 @@ fn expand_includes_to_source(source: &str, entry_path: &str, inc: &IncludeOption
         max_total_includes: inc.max_total_includes,
     };
     let loader = FsLoader::new(root).with_max_file_size(inc.max_file_size);
+    let registry = Registry::new();
+    builtins::register_into(&registry, Arc::new(loader), resolve_config.clone()).unwrap_or_else(
+        |e| {
+            eprintln!("Failed to register lex.* built-ins: {e}");
+            std::process::exit(1);
+        },
+    );
     let doc =
-        resolve_from_source(source, Some(entry), &resolve_config, &loader).unwrap_or_else(|e| {
+        resolve_from_source(source, Some(entry), &resolve_config, &registry).unwrap_or_else(|e| {
             eprintln!("Include resolution error: {e}");
             std::process::exit(1);
         });
@@ -810,7 +820,13 @@ fn handle_convert_command(
             max_total_includes: inc.max_total_includes,
         };
         let loader = FsLoader::new(root).with_max_file_size(inc.max_file_size);
-        resolve_from_source(&source, Some(entry), &resolve_config, &loader).unwrap_or_else(|e| {
+        let registry = Registry::new();
+        builtins::register_into(&registry, Arc::new(loader), resolve_config.clone())
+            .unwrap_or_else(|e| {
+                eprintln!("Failed to register lex.* built-ins: {e}");
+                std::process::exit(1);
+            });
+        resolve_from_source(&source, Some(entry), &resolve_config, &registry).unwrap_or_else(|e| {
             eprintln!("Include resolution error: {e}");
             std::process::exit(1);
         })
