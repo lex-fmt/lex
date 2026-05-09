@@ -230,6 +230,10 @@ impl SchemaLoader {
         // Per-entry errors (permission denied, transient FS hiccup) are
         // propagated rather than silently filtered: an incomplete schema
         // set is worse than a hard failure with a precise message.
+        // We use `entry.file_type()?` rather than `path.is_file()` —
+        // the latter swallows metadata errors as `false`, which would
+        // silently skip e.g. EACCES files instead of failing the load
+        // with a precise path.
         let mut yaml_paths: Vec<PathBuf> = Vec::new();
         for entry in entries {
             let entry = entry.map_err(|source| SchemaError::Io {
@@ -237,7 +241,11 @@ impl SchemaLoader {
                 source,
             })?;
             let p = entry.path();
-            if p.is_file()
+            let file_type = entry.file_type().map_err(|source| SchemaError::Io {
+                path: p.clone(),
+                source,
+            })?;
+            if file_type.is_file()
                 && p.extension().and_then(|s| s.to_str()).is_some_and(|ext| {
                     ext.eq_ignore_ascii_case("yaml") || ext.eq_ignore_ascii_case("yml")
                 })
