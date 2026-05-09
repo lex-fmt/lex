@@ -117,6 +117,7 @@ pub mod format;
 pub mod formats;
 pub mod publish;
 pub mod registry;
+pub mod render_dispatch;
 pub mod templates;
 pub mod transforms;
 

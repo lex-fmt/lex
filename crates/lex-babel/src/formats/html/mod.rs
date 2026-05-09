@@ -115,7 +115,10 @@ use crate::format::Format;
 use lex_core::lex::ast::Document;
 use std::fs;
 
-pub use serializer::HtmlOptions;
+pub use serializer::{
+    serialize_to_html, serialize_to_html_with_options, serialize_to_html_with_registry,
+    HtmlExportOutcome, HtmlOptions,
+};
 
 /// Returns the default baseline CSS used for HTML export.
 ///

@@ -46,6 +46,46 @@ pub fn serialize_to_html(doc: &Document, theme: HtmlTheme) -> Result<String, For
     serialize_to_html_with_options(doc, HtmlOptions::new(theme))
 }
 
+/// Serialize with an extension-system [`Registry`] in scope: every
+/// labelled annotation / verbatim whose schema declares
+/// `hooks.render: ["html"]` is dispatched to its handler. Handler
+/// diagnostics (errors, format-shape mismatches, namespace disabled)
+/// surface in the returned [`HtmlExportOutcome::diagnostics`].
+///
+/// **Status (PR 8):** dispatch + diagnostic surface are wired up; the
+/// actual splice of handler-rendered HTML into the output stream
+/// awaits the IR-events integration in a follow-up (the HTML
+/// serializer collapses all annotations into a synthetic
+/// `frontmatter` block, so there's no per-annotation comment to
+/// post-process). Today this entry point produces the same default
+/// HTML as [`serialize_to_html_with_options`], with the additional
+/// guarantee that handlers' on_render hooks have been invoked and
+/// their diagnostics collected.
+pub fn serialize_to_html_with_registry(
+    doc: &Document,
+    options: HtmlOptions,
+    registry: &lex_extension_host::Registry,
+) -> Result<HtmlExportOutcome, FormatError> {
+    let plan = crate::render_dispatch::dispatch_render(doc, registry, "html");
+    let html = serialize_to_html_with_options(doc, options)?;
+    let mut diagnostics = plan
+        .nodes
+        .iter()
+        .filter_map(|n| n.diagnostic.clone())
+        .collect::<Vec<_>>();
+    diagnostics.extend(plan.root_diagnostics);
+    Ok(HtmlExportOutcome { html, diagnostics })
+}
+
+/// Result of [`serialize_to_html_with_registry`]: the rendered HTML
+/// plus any handler-emitted diagnostic messages (renderer errors,
+/// format-shape mismatches, namespace disabled).
+#[derive(Debug, Clone, PartialEq)]
+pub struct HtmlExportOutcome {
+    pub html: String,
+    pub diagnostics: Vec<String>,
+}
+
 /// Serialize a Lex document to HTML with full options
 pub fn serialize_to_html_with_options(
     doc: &Document,

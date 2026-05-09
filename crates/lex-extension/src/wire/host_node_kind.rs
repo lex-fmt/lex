@@ -10,11 +10,11 @@
 //!   `lex-babel`): each labelled node is reported with one of these
 //!   names as its `attached_to` kind.
 //!
-//! Adoption lands in those crates' own PRs (the loader integration
-//! is in this PR; `lex-analysis::label_dispatch` lands on #540;
-//! `lex-babel::render_dispatch` on #541). Once all three merge, the
-//! kind list lives only here — the duplicated allowed-set arrays in
-//! the original implementations are removed in lockstep.
+//! Adoption lands in those crates' own PRs (the loader in #538;
+//! `lex-babel::render_dispatch` in this PR; `lex-analysis::label_dispatch`
+//! in #540). Once all three merge, the kind list lives only here —
+//! the duplicated allowed-set arrays in the original implementations
+//! are removed in lockstep.
 //!
 //! Keeping the list in one place prevents the consumers from
 //! drifting. A variant present in the walker but missing from the
