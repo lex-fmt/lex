@@ -651,7 +651,10 @@ async fn worker_main(
         reader: FrameReader::new(stdout),
     };
 
-    // Initialize handshake.
+    // Initialize handshake. Runs synchronously on this task because
+    // it's a single small request/response with a known bounded
+    // payload — the deadlock concern only applies once the dispatch
+    // loop is intermixing reads and writes.
     let init_result = match do_initialize(&mut io, &init_params).await {
         Ok(r) => r,
         Err(e) => {
@@ -664,9 +667,32 @@ async fn worker_main(
     };
     let _ = init_tx.send(Ok(init_result));
 
+    // Decouple stdin writes from the select! loop so a full pipe
+    // can never block our stdout reader. This is the deadlock fix
+    // pointed out in review of #539: writing inline inside the
+    // select!'s `cmd` branch made it possible for a handler that
+    // emits a large response (filling its stdout pipe) to block
+    // forever, because the host was simultaneously blocking on its
+    // own stdin write and not reading the handler's stdout. Both
+    // paths now run concurrently in their own tasks.
+    let HandlerIo {
+        mut stdin,
+        mut reader,
+    } = io;
+    let (write_tx, mut write_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+    let writer_handle = tokio::spawn(async move {
+        while let Some(bytes) = write_rx.recv().await {
+            if stdin.write_all(&bytes).await.is_err() {
+                break;
+            }
+        }
+        let _ = stdin.shutdown().await;
+    });
+
     // Main dispatch loop. Ids are allocated by the sync side so the
     // sync-side timeout path can match its CancelPending command to a
-    // specific entry.
+    // specific entry. Outgoing frames are handed to the writer task
+    // via `write_tx` — this branch never `await`s an actual write.
     let mut pending: HashMap<u64, PendingReply> = HashMap::new();
 
     loop {
@@ -681,10 +707,14 @@ async fn worker_main(
                             params,
                         };
                         let bytes = encode_frame(&serde_json::to_value(&req).expect("OutgoingRequest"));
-                        if let Err(e) = io.stdin.write_all(&bytes).await {
+                        if write_tx.send(bytes).is_err() {
+                            // Writer task is gone — its stdin write
+                            // failed (child died or pipe closed).
+                            // Surface the failure and bail; the
+                            // reader will catch the matching EOF.
                             let _ = reply.send(Err(JsonRpcError {
                                 code: codes::INTERNAL,
-                                message: format!("write request: {e}"),
+                                message: "subprocess writer task ended".into(),
                                 data: None,
                             }));
                             disabled.store(true, Ordering::SeqCst);
@@ -701,10 +731,7 @@ async fn worker_main(
                         let bytes = encode_frame(
                             &serde_json::to_value(&note).expect("OutgoingNotification"),
                         );
-                        if io.stdin.write_all(&bytes).await.is_err() {
-                            // Stdin closed — child is gone. Disable
-                            // and bail; pending requests will fail on
-                            // the read side.
+                        if write_tx.send(bytes).is_err() {
                             disabled.store(true, Ordering::SeqCst);
                             break;
                         }
@@ -722,7 +749,7 @@ async fn worker_main(
                     }
                 }
             }
-            frame = io.reader.read_frame() => {
+            frame = reader.read_frame() => {
                 match frame {
                     Ok(IncomingFrame::Response { id, result, error, .. }) => {
                         if let Some(pending_reply) = pending.remove(&id) {
@@ -765,23 +792,21 @@ async fn worker_main(
         }
     }
 
-    // Graceful shutdown ladder: send `shutdown` notification, give the
-    // handler a beat, then SIGTERM, then SIGKILL on Drop.
+    // Graceful shutdown ladder: send `shutdown` notification through
+    // the writer task, then drop `write_tx` so the writer drains and
+    // closes stdin. SIGKILL via `kill_on_drop(true)` when `child`
+    // falls out of scope.
     let shutdown = OutgoingNotification {
         jsonrpc: "2.0",
         method: "shutdown",
         params: serde_json::Value::Null,
     };
-    let _ = io
-        .stdin
-        .write_all(&encode_frame(
-            &serde_json::to_value(&shutdown).expect("OutgoingNotification"),
-        ))
-        .await;
-    let _ = io.stdin.shutdown().await;
+    let _ = write_tx.send(encode_frame(
+        &serde_json::to_value(&shutdown).expect("OutgoingNotification"),
+    ));
+    drop(write_tx);
+    let _ = tokio::time::timeout(SHUTDOWN_GRACE, writer_handle).await;
     let _ = tokio::time::timeout(SHUTDOWN_GRACE, child.wait()).await;
-    // `kill_on_drop(true)` covers the SIGKILL ladder when `child` falls
-    // out of scope here.
 
     fail_all_pending(&mut pending, "subprocess handler shutting down");
 }

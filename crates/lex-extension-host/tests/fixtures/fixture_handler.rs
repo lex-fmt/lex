@@ -20,6 +20,10 @@
 //!                             on stdout, then close
 //!   version-mismatch --version <N>
 //!                           — initialize with wire_version: N (default 99)
+//!   bigecho --bytes <N>     — like echo, but pad each on_validate response
+//!                             with N bytes of filler. Used to overrun the
+//!                             OS stdout pipe buffer so deadlock regressions
+//!                             in the host's read/write interleaving show up.
 //!
 //! All modes write LSP-framed JSON-RPC on stdout and read it from stdin,
 //! matching the `lex-extension-host::transport::subprocess` framing.
@@ -51,6 +55,12 @@ fn main() -> ExitCode {
             let v = parse_arg_u64(&args, "--version").unwrap_or(99) as u32;
             run(Mode::VersionMismatch { version: v })
         }
+        "bigecho" => {
+            let bytes = parse_arg_u64(&args, "--bytes").unwrap_or(256 * 1024) as usize;
+            run(Mode::BigEcho {
+                padding_bytes: bytes,
+            })
+        }
         other => {
             eprintln!("unknown fixture mode: {other}");
             ExitCode::from(2)
@@ -65,6 +75,7 @@ enum Mode {
     Crash { on_method: String },
     Malformed,
     VersionMismatch { version: u32 },
+    BigEcho { padding_bytes: usize },
 }
 
 fn run(mode: Mode) -> ExitCode {
@@ -124,7 +135,14 @@ fn run(mode: Mode) -> ExitCode {
                     let _ = stdout.flush();
                     return ExitCode::SUCCESS;
                 }
-                json!({ "diagnostics": diagnostics_for(&frame) })
+                if let Mode::BigEcho { padding_bytes } = &mode {
+                    json!({
+                        "diagnostics": diagnostics_for(&frame),
+                        "_padding": "x".repeat(*padding_bytes),
+                    })
+                } else {
+                    json!({ "diagnostics": diagnostics_for(&frame) })
+                }
             }
             "on_resolve" => json!({ "replacement": resolve_for(&frame) }),
             "on_render" => json!({ "output": render_for(&frame) }),

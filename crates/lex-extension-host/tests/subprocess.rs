@@ -304,6 +304,37 @@ fn known_env_vars_expand_in_command() {
     assert_eq!(diags.len(), 1);
 }
 
+/// Regression test for the IPC pipe deadlock identified in review of
+/// the original PR. If the worker writes inline inside its `select!`
+/// loop, a handler that emits a response large enough to fill the
+/// kernel stdout pipe buffer would block waiting for the host to
+/// drain it — while the host blocked waiting for its own stdin write
+/// to complete. Both processes would hang forever.
+///
+/// The fix decouples writes onto a dedicated tokio task, so the
+/// reader branch of the select! is never starved. To exercise it,
+/// the `bigecho` fixture mode pads each `on_validate` response with
+/// 256 KiB of filler — well past Linux's typical 64 KiB pipe buffer.
+/// We then issue 4 sequential calls in tight succession, which
+/// without the fix would deadlock once a single in-flight response
+/// stalls the writer.
+#[test]
+fn large_response_does_not_deadlock_writer() {
+    let h = SubprocessHandler::spawn(
+        &spec(&["bigecho", "--bytes", "262144"], Some(5000)),
+        "fixture",
+        &["fixture.label".into()],
+        Capabilities::default(),
+        "test",
+        &SpawnEnv::default(),
+    )
+    .expect("spawn bigecho");
+    for _ in 0..4 {
+        let diags = h.on_validate(&ctx("fixture.label")).expect("ok");
+        assert_eq!(diags.len(), 1);
+    }
+}
+
 #[test]
 fn drop_shuts_down_child_cleanly() {
     // Spawn → drop → child should be gone within a reasonable time.
