@@ -684,7 +684,7 @@ fn resolve_one_invocation(
     state.total_resolved += 1;
 
     // Decode the wire payload into typed lex-core ContentItems.
-    let mut splice_items = decode_wire_to_items(&wire_node, &annotation.location)?;
+    let mut splice_items = decode_wire_to_items(&wire_node, label, &annotation.location)?;
 
     // Container-policy validation: enforce no-Sessions inside
     // `GeneralContainer` (Definition / Annotation body / ListItem).
@@ -777,15 +777,23 @@ fn build_label_ctx(
 /// [`ContentItem`]s ready for splicing. `WireNode::Document` is
 /// unwrapped (its children become the splice list); any other root
 /// shape is wrapped as a single-item list.
+///
+/// `invocation_label` is the label whose handler produced `wire` —
+/// threaded through so wire-decode failures are attributed to the
+/// real namespace rather than a hardcoded `lex.include`. A
+/// third-party `acme.expand` handler that returns malformed wire
+/// will surface as `IncludeError::HandlerFailed { label:
+/// "acme.expand", .. }`.
 fn decode_wire_to_items(
     wire: &lex_extension::wire::WireNode,
+    invocation_label: &str,
     include_site: &Range,
 ) -> Result<Vec<ContentItem>, IncludeError> {
     use crate::lex::wire::from_wire_node;
 
     from_wire_node(wire).map_err(|e| IncludeError::HandlerFailed {
         include_site: include_site.clone(),
-        label: "lex.include".into(),
+        label: invocation_label.to_string(),
         code: "wire.decode".into(),
         message: format!("decoding handler-returned wire payload failed: {e}"),
     })

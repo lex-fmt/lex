@@ -32,7 +32,7 @@ use serde_json::Value;
 
 use super::error::FromWireError;
 use super::inline::text_content_from_wire;
-use super::range::{range_from_wire, range_from_wire_with_origin};
+use super::range::range_from_wire_with_origin;
 
 /// Convert a `WireNode::Document` into a list of lex-core
 /// `ContentItem`s — one per child. The `WireNode::Document` wrapper
@@ -264,10 +264,17 @@ fn list_from_wire(
     items: &[WireListItem],
 ) -> Result<List, FromWireError> {
     let marker = synthetic_marker_for_style(marker_style);
+    // `WireListItem` has no `origin` slot of its own. List items in
+    // a parsed lex source share the parent list's authoring file —
+    // they can't span files within a single list — so we inherit the
+    // parent's `origin` for each decoded item. Without this, spliced
+    // list items would lose `origin_path` after a wire round-trip,
+    // breaking origin-aware tooling (file-reference resolution,
+    // scoped footnote lookup) that runs over the merged tree.
     let list_items = items
         .iter()
         .enumerate()
-        .map(|(index, item)| list_item_from_wire(item, marker_style, index))
+        .map(|(index, item)| list_item_from_wire(item, marker_style, index, origin))
         .collect::<Result<Vec<_>, _>>()?;
     let mut l = List::new(list_items);
     l.location = range_from_wire_with_origin(range, origin);
@@ -279,6 +286,7 @@ fn list_item_from_wire(
     item: &WireListItem,
     marker_style: &str,
     index: usize,
+    parent_origin: Option<&str>,
 ) -> Result<ListItem, FromWireError> {
     let combined = text_content_from_wire(&item.inlines);
     let raw = combined.as_string();
@@ -302,7 +310,7 @@ fn list_item_from_wire(
     if text_lines.len() > 1 {
         li.text = text_lines;
     }
-    li.location = range_from_wire(&item.range);
+    li.location = range_from_wire_with_origin(&item.range, parent_origin);
     Ok(li)
 }
 

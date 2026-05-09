@@ -7,6 +7,7 @@
 //! `origin` string through [`range_from_wire_with_origin`], the
 //! `origin_path` round-trips back into `Range.origin_path` so spliced
 //! nodes carry the correct origin downstream.
+//!
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -50,7 +51,7 @@ pub(crate) fn range_from_wire(r: &WireRange) -> CoreRange {
 
 /// Like [`range_from_wire`] but also restores `origin_path` from the
 /// wire `origin` string. Use this when the parent context carries an
-/// origin (e.g., the resolve pass spliciing the result of a
+/// origin (e.g., the resolve pass splicing the result of a
 /// `dispatch_resolve` call) so spliced nodes downstream can locate
 /// their authoring file for things like file-reference resolution
 /// and footnote scoping.
