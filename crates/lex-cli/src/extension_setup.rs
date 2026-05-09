@@ -15,21 +15,31 @@
 //! / trust-gate denials but doesn't fail the boot — a single bad
 //! namespace shouldn't prevent the rest of the host from working.
 //!
+//! ## Subprocess instantiation
+//!
+//! Schemas declaring `handler: { transport: subprocess, command: [...] }`
+//! are routed through the trust gate. On `Trusted`, the boot helper
+//! calls `SubprocessHandler::spawn(...)` and registers the live
+//! handler. On `Denied`, the namespace registers schema-only
+//! (`NoopHandler`) so analysis-pass pre-validation still catches
+//! typos, but `on_validate` / `on_render` etc. return the trait
+//! defaults; the user-facing diagnostic explains why (`use
+//! --enable-handlers in CLI mode` / `prompt declined` / etc.).
+//!
+//! v1 invariant: every schema in a namespace either declares the
+//! same `handler` block or declares none. Mixed handler specs
+//! across labels in a namespace are surfaced as a diagnostic and
+//! treated as schema-only.
+//!
 //! ## What's NOT here
 //!
-//! - Trust-gate-driven subprocess spawning. The boot helper records
-//!   trust decisions but doesn't actually instantiate
-//!   `SubprocessHandler`s yet — that would couple the boot with the
-//!   subprocess feature, and consumers (lex-cli, lex-lsp, future
-//!   lexed) want the shape of the boot independent of which
-//!   transports they enable. Subprocess spawning sits in a thin
-//!   adapter layer above this module; for now the boot registers
-//!   schema-only namespaces (no handler), which surfaces in
-//!   diagnostics and the `lexd labels list` output but doesn't run
-//!   render/validate hooks.
 //! - Network resolvers (github:/gitlab:/https:/git+ssh:). Those
 //!   live in the resolver and return `Unimplemented`; this boot
 //!   surfaces the error and continues.
+//! - Third-party `transport: native` handlers. Only the bundled
+//!   `lex.*` built-ins use the native transport in v1; user-provided
+//!   native handlers would need an in-process registration path
+//!   the boot doesn't expose.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -37,10 +47,13 @@ use std::sync::Arc;
 use lex_config::LabelsConfig;
 use lex_core::lex::builtins;
 use lex_core::lex::includes::{FsLoader, ResolveConfig};
-use lex_extension::schema::Schema;
+use lex_extension::schema::{HandlerSpec, HandlerTransport, Schema};
+use lex_extension::LexHandler;
+use lex_extension_host::transport::{SpawnEnv, SubprocessHandler};
 use lex_extension_host::{
-    detect_ci_environment, resolve_namespace, Registry, RegistryError, ResolveError, SchemaError,
-    SchemaLoader, Surface, TrustGate, TrustPromptContext, TrustPromptHandler, TrustStore,
+    detect_ci_environment, resolve_namespace, Capability, Registry, RegistryError, ResolveError,
+    SchemaError, SchemaLoader, Source, Surface, Transport, TrustDecision, TrustGate,
+    TrustPromptContext, TrustPromptHandler, TrustStore,
 };
 
 /// Inputs the boot helper needs from the CLI layer.
@@ -98,13 +111,52 @@ pub fn boot_registry(setup: ExtensionSetup<'_>) -> BootOutcome {
     let mut registered = Vec::new();
     let mut diagnostics = Vec::new();
 
-    // Built-ins: lex.* namespace (currently `lex.include`). The
-    // boot helper actually performs the registration so that
-    // `lexd labels list` reports the truth and the registry handed
-    // back to the caller has the built-in handlers wired. Loader +
-    // ResolveConfig are pointed at the workspace root so
-    // `lex.include` resolves relative paths the same way `lexd
-    // convert` and `lexd inspect` do.
+    // Trust gate is built up-front so per-namespace registration
+    // can consult it when deciding whether to spawn a real
+    // SubprocessHandler vs fall back to NoopHandler. The previous
+    // design left registration as schema-only (NoopHandler always)
+    // and constructed the gate after; correct trust-gated dispatch
+    // for subprocess transports needs the gate alive during
+    // registration.
+    let surface = setup.surface_override.unwrap_or_else(|| {
+        if detect_ci_environment(|name| std::env::var(name).ok()) {
+            Surface::Ci
+        } else {
+            Surface::CliOneShot
+        }
+    });
+    let store = TrustStore::open(setup.workspace_root).unwrap_or_else(|e| {
+        // Fall back to a per-process tempdir under `std::env::temp_dir()`.
+        // The PID suffix keeps unrelated runs from sharing trust
+        // decisions through `/tmp/.lex/trust.json` (which the previous
+        // fallback did — accidentally persistent and shared). With a
+        // PID-keyed path the decisions persist within this run but
+        // can't be re-read by the next session.
+        let fallback_dir = std::env::temp_dir()
+            .join(format!("lexd-trust-fallback-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&fallback_dir);
+        diagnostics.push(BootDiagnostic {
+            namespace: None,
+            message: format!(
+                "trust store open failed at workspace root: {e}; falling back to per-process temp dir `{}` — decisions persist for this run only",
+                fallback_dir.display()
+            ),
+        });
+        TrustStore::open(&fallback_dir).expect("temp dir writable")
+    });
+    let mut trust_gate = TrustGate::new(
+        surface,
+        setup.enable_handlers,
+        store,
+        Box::new(CliPromptHandler),
+    );
+
+    // Built-ins: lex.* namespace (currently `lex.include`). Native
+    // transport, trusted by linkage — gate consultation is a no-op
+    // for native handlers, so the registration goes through
+    // directly. Loader + ResolveConfig are pointed at the workspace
+    // root so `lex.include` resolves relative paths the same way
+    // `lexd convert` and `lexd inspect` do.
     let resolve_config = ResolveConfig::with_root(setup.workspace_root.to_path_buf());
     let loader = FsLoader::new(setup.workspace_root.to_path_buf());
     match builtins::register_into(&registry, Arc::new(loader), resolve_config) {
@@ -132,17 +184,28 @@ pub fn boot_registry(setup: ExtensionSetup<'_>) -> BootOutcome {
             }
         };
         match resolve_namespace(&uri, setup.workspace_root) {
-            Ok(resolved) => match register_schema_dir(&mut registry, name, &resolved.schema_dir) {
-                Ok(count) => registered.push(RegisteredNamespace {
-                    name: name.clone(),
-                    source: NamespaceSourceKind::LexToml { uri: uri.clone() },
-                    schema_count: count,
-                }),
-                Err(e) => diagnostics.push(BootDiagnostic {
-                    namespace: Some(name.clone()),
-                    message: format!("failed to register schemas: {e}"),
-                }),
-            },
+            Ok(resolved) => {
+                let source = Source::LexTomlNamespace { name: name.clone() };
+                match register_schema_dir(
+                    &mut registry,
+                    &mut trust_gate,
+                    name,
+                    &resolved.schema_dir,
+                    &source,
+                    setup.workspace_root,
+                    &mut diagnostics,
+                ) {
+                    Ok(count) => registered.push(RegisteredNamespace {
+                        name: name.clone(),
+                        source: NamespaceSourceKind::LexToml { uri: uri.clone() },
+                        schema_count: count,
+                    }),
+                    Err(e) => diagnostics.push(BootDiagnostic {
+                        namespace: Some(name.clone()),
+                        message: format!("failed to register schemas: {e}"),
+                    }),
+                }
+            }
             Err(ResolveError::Unimplemented { .. }) => {
                 diagnostics.push(BootDiagnostic {
                     namespace: Some(name.clone()),
@@ -175,7 +238,16 @@ pub fn boot_registry(setup: ExtensionSetup<'_>) -> BootOutcome {
                 continue;
             }
         };
-        match register_schema_dir(&mut registry, &namespace, &dir) {
+        let source = Source::LocalFile { path: path.clone() };
+        match register_schema_dir(
+            &mut registry,
+            &mut trust_gate,
+            &namespace,
+            &dir,
+            &source,
+            setup.workspace_root,
+            &mut diagnostics,
+        ) {
             Ok(count) => registered.push(RegisteredNamespace {
                 name: namespace,
                 source: NamespaceSourceKind::ExtSchemaFlag { path: path.clone() },
@@ -187,39 +259,6 @@ pub fn boot_registry(setup: ExtensionSetup<'_>) -> BootOutcome {
             }),
         }
     }
-
-    let surface = setup.surface_override.unwrap_or_else(|| {
-        if detect_ci_environment(|name| std::env::var(name).ok()) {
-            Surface::Ci
-        } else {
-            Surface::CliOneShot
-        }
-    });
-    let store = TrustStore::open(setup.workspace_root).unwrap_or_else(|e| {
-        // Fall back to a per-process tempdir under `std::env::temp_dir()`.
-        // The PID suffix keeps unrelated runs from sharing trust
-        // decisions through `/tmp/.lex/trust.json` (which the previous
-        // fallback did — accidentally persistent and shared). With a
-        // PID-keyed path the decisions persist within this run but
-        // can't be re-read by the next session.
-        let fallback_dir = std::env::temp_dir()
-            .join(format!("lexd-trust-fallback-{}", std::process::id()));
-        let _ = std::fs::create_dir_all(&fallback_dir);
-        diagnostics.push(BootDiagnostic {
-            namespace: None,
-            message: format!(
-                "trust store open failed at workspace root: {e}; falling back to per-process temp dir `{}` — decisions persist for this run only",
-                fallback_dir.display()
-            ),
-        });
-        TrustStore::open(&fallback_dir).expect("temp dir writable")
-    });
-    let trust_gate = TrustGate::new(
-        surface,
-        setup.enable_handlers,
-        store,
-        Box::new(CliPromptHandler),
-    );
 
     BootOutcome {
         registry: Arc::new(registry),
@@ -259,12 +298,38 @@ fn infer_namespace_from_dir(dir: &Path) -> Result<String, String> {
         })
 }
 
-/// Load every YAML schema in `dir` and register them under
-/// `namespace`. Returns the count for `lexd labels list` output.
+/// Load every YAML schema in `dir`, decide which handler to back
+/// the namespace with (subprocess via the trust gate, or schema-
+/// only `NoopHandler`), and register everything under `namespace`.
+/// Returns the schema count for `lexd labels list` output.
+///
+/// Handler selection:
+///
+/// - If no schema in the namespace declares a `handler` block,
+///   register a `NoopHandler`. Pre-validation still runs, but
+///   hook events return the trait defaults.
+/// - If schemas declare *different* handler specs, surface a
+///   diagnostic and fall back to `NoopHandler`. v1 assumes one
+///   binary serves the whole namespace.
+/// - If the unique handler spec is `transport: subprocess`,
+///   consult the trust gate. On `Trusted`, spawn the binary and
+///   register the live `SubprocessHandler`. On `Denied`, surface
+///   the gate's reason and register `NoopHandler` (so schema
+///   pre-validation still catches typos).
+/// - `transport: native` is rejected with a "third-party native
+///   handlers are not supported in v1" diagnostic — only bundled
+///   `lex.*` built-ins use the native transport, and they go
+///   through `builtins::register_into` not this path.
+/// - `transport: wasm` is rejected by the schema loader before it
+///   reaches us; defensive.
 fn register_schema_dir(
     registry: &mut Registry,
+    trust_gate: &mut TrustGate,
     namespace: &str,
     dir: &Path,
+    source: &Source,
+    workspace_root: &Path,
+    diagnostics: &mut Vec<BootDiagnostic>,
 ) -> Result<usize, RegisterError> {
     let schemas: Vec<Schema> =
         SchemaLoader::load_dir(dir).map_err(|e| RegisterError::Schema(Box::new(e)))?;
@@ -272,17 +337,179 @@ fn register_schema_dir(
         return Err(RegisterError::EmptyDir(dir.to_path_buf()));
     }
     let count = schemas.len();
-    // Schema-only registration (no handler): the dispatcher in
-    // analysis/render will see the schemas in `dispatch_*` calls
-    // for pre-validation, but `on_validate` / `on_render` etc. are
-    // no-ops because there's no handler. The follow-up that wires
-    // subprocess transports will replace this with a real handler
-    // pulled from the schema's `handler.command`.
-    let stub: Box<dyn lex_extension::LexHandler> = Box::new(NoopHandler);
+    let handler = build_handler(
+        &schemas,
+        namespace,
+        source,
+        workspace_root,
+        trust_gate,
+        diagnostics,
+    );
     registry
-        .register_namespace(namespace, schemas, stub)
+        .register_namespace(namespace, schemas, handler)
         .map_err(RegisterError::Registry)?;
     Ok(count)
+}
+
+/// Decide which `LexHandler` to back a namespace with. Side-effect:
+/// pushes a diagnostic onto `diagnostics` for any non-trusted /
+/// non-spawnable case before returning the fallback `NoopHandler`.
+fn build_handler(
+    schemas: &[Schema],
+    namespace: &str,
+    source: &Source,
+    workspace_root: &Path,
+    trust_gate: &mut TrustGate,
+    diagnostics: &mut Vec<BootDiagnostic>,
+) -> Box<dyn LexHandler> {
+    let contract = match find_namespace_contract(schemas, namespace) {
+        Ok(c) => c,
+        Err(msg) => {
+            diagnostics.push(BootDiagnostic {
+                namespace: Some(namespace.into()),
+                message: msg,
+            });
+            return Box::new(NoopHandler);
+        }
+    };
+    let handler_spec = match contract.handler {
+        Some(spec) => spec,
+        None => return Box::new(NoopHandler),
+    };
+
+    match handler_spec.transport {
+        HandlerTransport::Subprocess => {}
+        HandlerTransport::Native => {
+            diagnostics.push(BootDiagnostic {
+                namespace: Some(namespace.into()),
+                message: format!(
+                    "namespace `{namespace}` declares transport: native — third-party native handlers are not supported in v1; only bundled lex.* built-ins use the native transport"
+                ),
+            });
+            return Box::new(NoopHandler);
+        }
+        HandlerTransport::Wasm => {
+            // Schema loader rejects WASM upstream; reaching this
+            // branch is defensive.
+            diagnostics.push(BootDiagnostic {
+                namespace: Some(namespace.into()),
+                message: format!("namespace `{namespace}`: WASM transport is deferred for v1"),
+            });
+            return Box::new(NoopHandler);
+        }
+        // HandlerTransport is #[non_exhaustive]; future variants
+        // conservatively register schema-only with a diagnostic.
+        _ => {
+            diagnostics.push(BootDiagnostic {
+                namespace: Some(namespace.into()),
+                message: format!(
+                    "namespace `{namespace}` declares an unrecognised transport; registering schema-only"
+                ),
+            });
+            return Box::new(NoopHandler);
+        }
+    }
+
+    // Subprocess transport — consult the trust gate.
+    let command_string = handler_spec.command.join(" ");
+    let capability = Capability::from_schema(contract.capabilities);
+    let transport = Transport::from_schema(handler_spec.transport);
+    let decision = trust_gate.evaluate(source, transport, capability, namespace, &command_string);
+    match decision {
+        TrustDecision::Trusted => {}
+        TrustDecision::Denied { reason } => {
+            diagnostics.push(BootDiagnostic {
+                namespace: Some(namespace.into()),
+                message: reason,
+            });
+            return Box::new(NoopHandler);
+        }
+        TrustDecision::Pending => {
+            // Defensive — the CLI prompt callback always resolves to
+            // Trusted/Denied. Pending here is a programmer error.
+            diagnostics.push(BootDiagnostic {
+                namespace: Some(namespace.into()),
+                message: format!(
+                    "trust gate returned Pending for `{namespace}` — this should not happen at the CLI surface"
+                ),
+            });
+            return Box::new(NoopHandler);
+        }
+    }
+
+    // Trusted — spawn the binary.
+    let labels: Vec<String> = schemas.iter().map(|s| s.label.clone()).collect();
+    let env = SpawnEnv {
+        workspace_root: Some(workspace_root.display().to_string()),
+        lex_cache: None,
+        handler_config: None,
+    };
+    match SubprocessHandler::spawn(
+        handler_spec,
+        namespace,
+        &labels,
+        contract.capabilities,
+        env!("CARGO_PKG_VERSION"),
+        &env,
+    ) {
+        Ok(h) => Box::new(h),
+        Err(e) => {
+            diagnostics.push(BootDiagnostic {
+                namespace: Some(namespace.into()),
+                message: format!(
+                    "trusted but failed to spawn `{namespace}` handler ({command_string}): {e}"
+                ),
+            });
+            Box::new(NoopHandler)
+        }
+    }
+}
+
+/// One namespace's handler + capability contract, validated as
+/// uniform across all the namespace's schemas.
+///
+/// v1 invariant (called out in the issue scope and now enforced
+/// here): within a namespace, every schema must agree on its
+/// `handler` block AND its `capabilities` block. Mixed `handler`
+/// (some schemas declare it, others don't, or differ in shape)
+/// or mixed `capabilities` (different `fs`/`net` declarations
+/// across labels) are misconfiguration and surface as a diagnostic.
+struct NamespaceContract<'a> {
+    handler: Option<&'a HandlerSpec>,
+    capabilities: lex_extension::schema::Capabilities,
+}
+
+/// Validate that every schema in `schemas` agrees on its `handler`
+/// and `capabilities` blocks, then return the consensus.
+fn find_namespace_contract<'a>(
+    schemas: &'a [Schema],
+    namespace: &str,
+) -> Result<NamespaceContract<'a>, String> {
+    debug_assert!(!schemas.is_empty(), "caller must pass a non-empty slice");
+    let first = &schemas[0];
+    let first_handler = first.handler.as_ref();
+    let first_caps = first.capabilities;
+
+    for (idx, s) in schemas.iter().enumerate().skip(1) {
+        if s.handler.as_ref() != first_handler {
+            return Err(format!(
+                "namespace `{namespace}` has schemas declaring inconsistent `handler` blocks (label `{}` differs from `{}`); v1 requires every schema in a namespace to declare the same handler — or all of them to declare none",
+                s.label, schemas[0].label
+            ));
+        }
+        if s.capabilities != first_caps {
+            return Err(format!(
+                "namespace `{namespace}` has schemas declaring inconsistent `capabilities` blocks (label `{}` differs from `{}`); v1 requires uniform capabilities per namespace",
+                s.label, schemas[0].label
+            ));
+        }
+        let _ = idx;
+    }
+
+    Ok(NamespaceContract {
+        handler: first_handler,
+        capabilities: first_caps,
+    })
 }
 
 #[derive(Debug)]
@@ -323,6 +550,28 @@ mod tests {
         std::fs::write(
             dir.join(format!("{}.yaml", label.replace('.', "_"))),
             format!("schema_version: 1\nlabel: {label}\n"),
+        )
+        .unwrap();
+    }
+
+    /// Schema with a subprocess handler block. Used to drive the
+    /// trust-gate instantiation paths.
+    fn write_schema_with_subprocess_handler(dir: &Path, label: &str, command: &[&str]) {
+        std::fs::create_dir_all(dir).unwrap();
+        let cmd_yaml = command
+            .iter()
+            .map(|c| format!("\"{c}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        std::fs::write(
+            dir.join(format!("{}.yaml", label.replace('.', "_"))),
+            format!(
+                "schema_version: 1\n\
+                 label: {label}\n\
+                 handler:\n  \
+                 transport: subprocess\n  \
+                 command: [{cmd_yaml}]\n"
+            ),
         )
         .unwrap();
     }
@@ -426,6 +675,174 @@ mod tests {
             acme.source,
             NamespaceSourceKind::ExtSchemaFlag { .. }
         ));
+    }
+
+    /// Subprocess handler + CLI surface + no `--enable-handlers`:
+    /// trust gate denies, namespace registers schema-only with a
+    /// diagnostic naming `--enable-handlers`.
+    #[test]
+    fn subprocess_handler_without_enable_flag_is_denied_and_schema_only() {
+        let workspace = tempfile::tempdir().unwrap();
+        let acme_dir = workspace.path().join("acme");
+        write_schema_with_subprocess_handler(&acme_dir, "acme.task", &["acme-handler"]);
+
+        let labels = LabelsConfig::default();
+        let outcome = boot_registry(ExtensionSetup {
+            workspace_root: workspace.path(),
+            labels_config: &labels,
+            ext_schemas: &[acme_dir.clone()],
+            enable_handlers: false,
+            surface_override: Some(Surface::CliOneShot),
+        });
+        // Namespace IS registered (so pre-validation still works
+        // when analysing documents), but with a diagnostic.
+        assert!(outcome.registered.iter().any(|r| r.name == "acme"));
+        assert!(
+            outcome
+                .diagnostics
+                .iter()
+                .any(|d| d.namespace.as_deref() == Some("acme")
+                    && d.message.contains("--enable-handlers")),
+            "expected --enable-handlers diagnostic, got: {:?}",
+            outcome.diagnostics
+        );
+    }
+
+    /// Subprocess handler + CLI + `--enable-handlers`: the trust
+    /// gate trusts the namespace and `SubprocessHandler::spawn` is
+    /// called. The test points the schema at a non-existent path
+    /// — `spawn` then fails at `Command::spawn` with a clear "no
+    /// such file" error, surfaced as a `trusted but failed to spawn`
+    /// diagnostic. Verifying the diagnostic exists is what proves
+    /// the trust gate let the request through; without that pass,
+    /// we'd see the `--enable-handlers` denial instead.
+    #[test]
+    fn subprocess_handler_with_enable_flag_attempts_spawn() {
+        let workspace = tempfile::tempdir().unwrap();
+        let acme_dir = workspace.path().join("acme");
+        write_schema_with_subprocess_handler(
+            &acme_dir,
+            "acme.task",
+            &["/this/binary/does/not/exist"],
+        );
+
+        let labels = LabelsConfig::default();
+        let outcome = boot_registry(ExtensionSetup {
+            workspace_root: workspace.path(),
+            labels_config: &labels,
+            ext_schemas: &[acme_dir.clone()],
+            enable_handlers: true,
+            surface_override: Some(Surface::CliOneShot),
+        });
+        // Namespace registered (schema-only fallback after spawn
+        // failure). Diagnostic mentions "failed to spawn" — proving
+        // the trust gate let the request through and the spawn
+        // attempt actually fired.
+        assert!(outcome.registered.iter().any(|r| r.name == "acme"));
+        assert!(
+            outcome
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains("failed to spawn")),
+            "expected spawn-failure diagnostic, got: {:?}",
+            outcome.diagnostics
+        );
+    }
+
+    /// Mixed handler specs across schemas in one namespace is
+    /// rejected with a clear diagnostic. v1 requires one handler
+    /// per namespace.
+    #[test]
+    fn mixed_handler_specs_in_one_namespace_emit_diagnostic() {
+        let workspace = tempfile::tempdir().unwrap();
+        let acme_dir = workspace.path().join("acme");
+        write_schema_with_subprocess_handler(&acme_dir, "acme.task", &["acme-v1"]);
+        write_schema_with_subprocess_handler(&acme_dir, "acme.note", &["acme-v2"]);
+
+        let labels = LabelsConfig::default();
+        let outcome = boot_registry(ExtensionSetup {
+            workspace_root: workspace.path(),
+            labels_config: &labels,
+            ext_schemas: &[acme_dir],
+            enable_handlers: true,
+            surface_override: Some(Surface::CliOneShot),
+        });
+        assert!(
+            outcome
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains("inconsistent `handler` blocks")),
+            "expected mixed-handler diagnostic, got: {:?}",
+            outcome.diagnostics
+        );
+    }
+
+    /// Partial handler declaration — some schemas in the namespace
+    /// declare a `handler` block, others don't — also surfaces as
+    /// "inconsistent handler blocks". v1 requires the declaration
+    /// to be uniform: all-have or all-don't.
+    #[test]
+    fn partial_handler_declaration_in_one_namespace_emits_diagnostic() {
+        let workspace = tempfile::tempdir().unwrap();
+        let acme_dir = workspace.path().join("acme");
+        // task has a handler, note does not.
+        write_schema_with_subprocess_handler(&acme_dir, "acme.task", &["acme-bin"]);
+        write_schema(&acme_dir, "acme.note");
+
+        let labels = LabelsConfig::default();
+        let outcome = boot_registry(ExtensionSetup {
+            workspace_root: workspace.path(),
+            labels_config: &labels,
+            ext_schemas: &[acme_dir],
+            enable_handlers: true,
+            surface_override: Some(Surface::CliOneShot),
+        });
+        assert!(
+            outcome
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains("inconsistent `handler` blocks")),
+            "expected partial-handler diagnostic, got: {:?}",
+            outcome.diagnostics
+        );
+    }
+
+    /// Mixed `capabilities` blocks across schemas in one namespace
+    /// is also a misconfiguration — capabilities feed the trust gate
+    /// and the spawn handshake, both of which need a single
+    /// authoritative answer per namespace.
+    #[test]
+    fn mixed_capabilities_in_one_namespace_emit_diagnostic() {
+        let workspace = tempfile::tempdir().unwrap();
+        let acme_dir = workspace.path().join("acme");
+        std::fs::create_dir_all(&acme_dir).unwrap();
+        std::fs::write(
+            acme_dir.join("task.yaml"),
+            "schema_version: 1\nlabel: acme.task\ncapabilities: { fs: true, net: false }\n",
+        )
+        .unwrap();
+        std::fs::write(
+            acme_dir.join("note.yaml"),
+            "schema_version: 1\nlabel: acme.note\ncapabilities: { fs: false, net: true }\n",
+        )
+        .unwrap();
+
+        let labels = LabelsConfig::default();
+        let outcome = boot_registry(ExtensionSetup {
+            workspace_root: workspace.path(),
+            labels_config: &labels,
+            ext_schemas: &[acme_dir],
+            enable_handlers: false,
+            surface_override: Some(Surface::CliOneShot),
+        });
+        assert!(
+            outcome
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains("inconsistent `capabilities`")),
+            "expected mixed-capabilities diagnostic, got: {:?}",
+            outcome.diagnostics
+        );
     }
 
     #[test]
