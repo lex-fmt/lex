@@ -1,7 +1,7 @@
 use crate::inline::{extract_references, PositionedReference};
 use lex_core::lex::ast::traits::AstNode;
 use lex_core::lex::ast::{
-    Annotation, ContentItem, Definition, Document, Position, Session, TextContent,
+    Annotation, ContentItem, Definition, Document, Position, Session, TextContent, Verbatim,
 };
 
 /// Visits every text content node in the document, invoking the callback for each.
@@ -253,6 +253,65 @@ pub fn find_annotation_at_position(document: &Document, position: Position) -> O
 
 pub fn find_session_at_position(document: &Document, position: Position) -> Option<&Session> {
     find_session_in_branch(&document.root, position, true)
+}
+
+/// Locate a verbatim block whose source range contains `position`. Walks
+/// the document tree under both the root session and any document-level
+/// annotations. Used by extension dispatch to identify the labelled
+/// verbatim under the cursor for hover / completion / code-action
+/// requests.
+pub fn find_verbatim_at_position(document: &Document, position: Position) -> Option<&Verbatim> {
+    for annotation in document.annotations() {
+        if let Some(found) = find_verbatim_in_items(annotation.children.iter(), position) {
+            return Some(found);
+        }
+    }
+    find_verbatim_in_session(&document.root, position)
+}
+
+fn find_verbatim_in_session(session: &Session, position: Position) -> Option<&Verbatim> {
+    find_verbatim_in_items(session.children.iter(), position)
+}
+
+fn find_verbatim_in_items<'a, I>(items: I, position: Position) -> Option<&'a Verbatim>
+where
+    I: IntoIterator<Item = &'a ContentItem>,
+{
+    for item in items {
+        match item {
+            ContentItem::VerbatimBlock(v) => {
+                if v.location.contains(position) {
+                    return Some(v);
+                }
+            }
+            ContentItem::Session(s) => {
+                if let Some(found) = find_verbatim_in_session(s, position) {
+                    return Some(found);
+                }
+            }
+            ContentItem::Definition(d) => {
+                if let Some(found) = find_verbatim_in_items(d.children.iter(), position) {
+                    return Some(found);
+                }
+            }
+            ContentItem::List(list) => {
+                for entry in &list.items {
+                    if let ContentItem::ListItem(li) = entry {
+                        if let Some(found) = find_verbatim_in_items(li.children.iter(), position) {
+                            return Some(found);
+                        }
+                    }
+                }
+            }
+            ContentItem::Annotation(a) => {
+                if let Some(found) = find_verbatim_in_items(a.children.iter(), position) {
+                    return Some(found);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 pub fn find_sessions_by_identifier<'a>(
