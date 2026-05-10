@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-05-10
+
+
 ### Added
 
 - `lexd-lsp` trust prompt: subprocess handlers that haven't been
@@ -58,7 +61,6 @@
   that builds a `RenderPlan` of `(label, output, diagnostic)` triples
   for the format-specific serializer to splice. Sister module to
   `lex-analysis::label_dispatch` (validate hooks).
-
 ## [0.10.6] - 2026-05-07
 
 

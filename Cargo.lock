@@ -989,7 +989,7 @@ checksum = "09edd9e8b54e49e587e4f6295a7d29c3ea94d469cb40ab8ca70b288248a81db2"
 
 [[package]]
 name = "lex-analysis"
-version = "0.10.6"
+version = "0.11.0"
 dependencies = [
  "ignore",
  "lex-core",
@@ -1003,7 +1003,7 @@ dependencies = [
 
 [[package]]
 name = "lex-babel"
-version = "0.10.6"
+version = "0.11.0"
 dependencies = [
  "comrak",
  "html5ever",
@@ -1026,7 +1026,7 @@ dependencies = [
 
 [[package]]
 name = "lex-config"
-version = "0.10.6"
+version = "0.11.0"
 dependencies = [
  "clapfig",
  "confique",
@@ -1038,7 +1038,7 @@ dependencies = [
 
 [[package]]
 name = "lex-core"
-version = "0.10.6"
+version = "0.11.0"
 dependencies = [
  "insta",
  "lex-extension",
@@ -1057,7 +1057,7 @@ dependencies = [
 
 [[package]]
 name = "lex-engine"
-version = "0.1.0"
+version = "0.11.0"
 dependencies = [
  "lex-config",
  "lex-core",
@@ -1068,7 +1068,7 @@ dependencies = [
 
 [[package]]
 name = "lex-extension"
-version = "0.1.0"
+version = "0.11.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1076,7 +1076,7 @@ dependencies = [
 
 [[package]]
 name = "lex-extension-host"
-version = "0.1.0"
+version = "0.11.0"
 dependencies = [
  "lex-extension",
  "serde",
@@ -1088,7 +1088,7 @@ dependencies = [
 
 [[package]]
 name = "lex-lsp-core"
-version = "0.10.6"
+version = "0.11.0"
 dependencies = [
  "lex-analysis",
  "lex-babel",
@@ -1100,7 +1100,7 @@ dependencies = [
 
 [[package]]
 name = "lex-wasm"
-version = "0.10.6"
+version = "0.11.0"
 dependencies = [
  "console_error_panic_hook",
  "js-sys",
@@ -1119,7 +1119,7 @@ dependencies = [
 
 [[package]]
 name = "lexd"
-version = "0.10.6"
+version = "0.11.0"
 dependencies = [
  "assert_cmd",
  "clap",
@@ -1139,7 +1139,7 @@ dependencies = [
 
 [[package]]
 name = "lexd-lsp"
-version = "0.10.6"
+version = "0.11.0"
 dependencies = [
  "clapfig",
  "lex-analysis",

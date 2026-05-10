@@ -1,6 +1,6 @@
 [package]
 name = "lex-engine"
-version = "0.1.0"
+version = "0.11.0"
 edition = "2021"
 authors = ["lex contributors"]
 description = "Boot helper + extension setup glue for lex hosts (lexd CLI, lexd-lsp). The future home of Engine::builder() for embedders."
