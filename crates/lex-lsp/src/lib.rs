@@ -165,7 +165,9 @@
 //!         Starts the language server on stdin/stdout for editor integration.
 //!
 
+pub mod extension_dispatch;
 pub mod features;
 pub mod server;
+pub mod trust_prompt;
 
 pub use server::LexLanguageServer;

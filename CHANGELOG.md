@@ -4,6 +4,47 @@
 
 ### Added
 
+- `lexd-lsp` trust prompt: subprocess handlers that haven't been
+  pinned in `<workspace>/.lex/trust.json` now forward a
+  `lex/trustRequest` LSP custom request to the editor. The editor
+  (vscode / nvim / lexed in the coordinated γ release) renders an
+  editor-native prompt and replies; the response feeds the trust gate
+  and pins the decision for subsequent sessions. Sync→async bridge
+  runs on the boot's `spawn_blocking` thread via
+  `tokio::runtime::Handle::block_on` — the runtime keeps serving
+  other LSP requests while the prompt is open. Boot is serialized
+  with a `tokio::sync::Mutex` so a burst of LSP requests on file
+  open (semantic tokens + hover + folding + …) produces exactly one
+  boot, not N parallel boots with N parallel trust prompts. Boot
+  diagnostics (resolver failures, denied namespaces, schema errors)
+  are surfaced to the editor as `window/showMessage` notifications
+  so users can see why a configured extension isn't working. Replaces
+  10a's `LspDeferTrustPrompt` stub. Part of the γ phase of the
+  extension system (lex-fmt/lex#516).
+- New `lex-engine` crate: lifts the extension boot helper out of `lex-cli`
+  so both `lexd` and `lexd-lsp` can share a single
+  `boot_registry(ExtensionSetup { ... }) -> BootOutcome` entry point.
+  `ExtensionSetup` now takes a `Box<dyn TrustPromptHandler>` so each host
+  installs a prompt that fits its UX (CLI denies with a
+  `--enable-handlers` rationale; LSP forwards a `lex/trustRequest` to
+  the editor). Future home of the public `Engine::builder()` facade
+  for embedders (PR 11). Part of the γ phase of the extension system
+  (lex-fmt/lex#516).
+- `lexd-lsp` extension dispatch: `textDocument/hover`,
+  `textDocument/completion`, and `textDocument/codeAction` requests now
+  consult the registered extension namespaces' handlers in addition to
+  the existing built-in providers. Hover takes precedence over the
+  built-in when a registered handler returns content; completion + code
+  actions are additive. Combined with the trust-prompt forwarding
+  (above), this is the full LSP surface for third-party namespaces:
+  trust untrusted handlers via `lex/trustRequest`, dispatch hooks via
+  the registry, and fall through to built-ins when no namespace
+  matches. The per-editor UI for `lex/trustRequest` lands in
+  coordinated vscode/nvim/lexed releases.
+- `lex-analysis::utils::find_verbatim_at_position`: locates a verbatim
+  block whose source range contains the cursor position. Mirror of
+  the existing `find_annotation_at_position`; used by extension
+  dispatch to identify labelled verbatim blocks under the cursor.
 - `lex-babel`: new `serialize_to_html_with_registry(doc, options, &Registry)`
   entry point and `HtmlExportOutcome { html, diagnostics }` result type.
   Walks the AST, dispatches `on_render` for every labelled annotation /

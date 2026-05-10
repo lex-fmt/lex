@@ -21,7 +21,9 @@ lex-core = { workspace = true }
 lex-analysis = { workspace = true }
 lex-babel = { workspace = true }
 lex-config = { workspace = true }
+lex-extension = { workspace = true }
 lex-extension-host = { workspace = true }
+lex-engine = { workspace = true }
 lex-lsp-core = { workspace = true }
 clapfig = { workspace = true }
 tower-lsp = "0.20"
@@ -34,3 +36,4 @@ serde_json = { workspace = true }
 lex-analysis = { workspace = true, features = ["test-support"] }
 tempfile = { workspace = true }
 proptest = { workspace = true }
+serde_yaml = { workspace = true }

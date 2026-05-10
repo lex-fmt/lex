@@ -4,6 +4,11 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crate::extension_dispatch::{
+    dispatch_code_action as ext_dispatch_code_action,
+    dispatch_completion as ext_dispatch_completion, dispatch_hover as ext_dispatch_hover,
+    LspExtensionState,
+};
 use crate::features::commands::{self, execute_command};
 use crate::features::document_links::collect_document_links;
 use crate::features::document_symbols::{collect_document_symbols, LexDocumentSymbol};
@@ -24,7 +29,7 @@ use lex_babel::formats::lex::formatting_rules::FormattingRules;
 use lex_babel::templates::{
     build_asset_snippet, build_verbatim_snippet, AssetSnippetRequest, VerbatimSnippetRequest,
 };
-use lex_config::{LexConfig, CONFIG_FILE_NAME};
+use lex_config::{LabelsConfig, LexConfig, CONFIG_FILE_NAME};
 use lex_core::lex::ast::links::{DocumentLink as AstDocumentLink, LinkType};
 use lex_core::lex::ast::range::SourceLocation;
 use lex_core::lex::ast::{Document, Position as AstPosition, Range as AstRange};
@@ -58,7 +63,9 @@ use tower_lsp::lsp_types::Diagnostic;
 use tower_lsp::lsp_types::MessageType;
 
 #[async_trait]
-pub trait LspClient: Send + Sync + Clone + 'static {
+pub trait LspClient:
+    crate::trust_prompt::LspTrustRequester + Send + Sync + Clone + 'static
+{
     async fn publish_diagnostics(&self, uri: Url, diags: Vec<Diagnostic>, version: Option<i32>);
     async fn show_message(&self, typ: MessageType, message: String);
 }
@@ -261,11 +268,27 @@ fn semantic_tokens_legend() -> SemanticTokensLegend {
 }
 
 pub struct LexLanguageServer<C = Client, P = DefaultFeatureProvider> {
-    _client: C,
+    client: C,
     documents: DocumentStore,
     features: Arc<P>,
     workspace_roots: RwLock<Vec<PathBuf>>,
     config: RwLock<LexConfig>,
+    /// Extension registry + boot diagnostics, lazily populated on first
+    /// extension-aware request (hover/completion/code_action). Held for
+    /// the lifetime of the workspace; rebuilt when workspace folders
+    /// change. `None` when the LSP is running outside any workspace
+    /// (e.g. a single untitled buffer) — extension dispatch is a no-op
+    /// in that case, and built-in providers handle every request.
+    extension: RwLock<Option<Arc<LspExtensionState>>>,
+    /// Serializes concurrent calls to [`Self::extension_state`] so the
+    /// first request to land at boot does the work and every other
+    /// request waits for that single boot to finish — instead of all
+    /// of them racing into `spawn_blocking` and producing N parallel
+    /// schema reads, N parallel subprocess spawns, and N parallel
+    /// `lex/trustRequest` prompts to the editor. Naturally happens
+    /// when N requests arrive on file-open (semantic tokens + hover +
+    /// document symbols + folding + …).
+    extension_init: tokio::sync::Mutex<()>,
 }
 
 impl LexLanguageServer<Client, DefaultFeatureProvider> {
@@ -282,12 +305,135 @@ where
     pub fn with_features(client: C, features: Arc<P>) -> Self {
         let config = load_config(None);
         Self {
-            _client: client,
+            client,
             documents: DocumentStore::default(),
             features,
             workspace_roots: RwLock::new(Vec::new()),
             config: RwLock::new(config),
+            extension: RwLock::new(None),
+            extension_init: tokio::sync::Mutex::new(()),
         }
+    }
+
+    /// Lazily boot the extension registry against the current workspace
+    /// root + config. Idempotent: once built, returns the cached state.
+    /// Returns `None` when no workspace is set (e.g. single-file mode);
+    /// extension dispatch is a no-op without a workspace anchor.
+    ///
+    /// Concurrency: the first request to land on a fresh workspace
+    /// takes the `extension_init` mutex and runs the boot; every
+    /// other concurrent request blocks on the mutex, then re-checks
+    /// the cache and reuses what the first one produced. Without
+    /// this serialization, an open-file event that fires several
+    /// providers at once (hover, completion, semantic tokens, folding,
+    /// document-symbols, …) would launch N parallel boots, with N
+    /// concurrent reads of the schema directory, N concurrent
+    /// subprocess spawns, and N `lex/trustRequest` prompts to the
+    /// editor. The mutex keeps the observable side effects to one
+    /// prompt and one set of spawns.
+    async fn extension_state(&self) -> Option<Arc<LspExtensionState>> {
+        // Fast path: already booted, no lock needed.
+        if let Some(s) = self.extension.read().await.clone() {
+            return Some(s);
+        }
+
+        // Slow path: serialize boot. Hold the init lock for the whole
+        // boot so the second-arriving request waits for the first.
+        let _guard = self.extension_init.lock().await;
+
+        // Re-check after acquiring the init lock — another task may
+        // have completed boot while we were waiting on the mutex.
+        if let Some(s) = self.extension.read().await.clone() {
+            return Some(s);
+        }
+
+        let workspace_root = {
+            let roots = self.workspace_roots.read().await;
+            roots.first().cloned()?
+        };
+        let labels_config = LabelsConfig {
+            namespaces: self.config.read().await.labels.clone(),
+        };
+
+        // boot_registry does synchronous filesystem IO (schema load,
+        // trust store open) and may attempt to spawn subprocess
+        // handlers — a few hundred milliseconds in the worst case. Run
+        // it on the blocking thread pool so the tokio runtime keeps
+        // serving other LSP requests while boot runs.
+        //
+        // The trust prompt handler bridges sync→async via
+        // `Handle::block_on` — safe because we're on a blocking-pool
+        // thread, not a runtime worker.
+        let workspace_root_owned = workspace_root.clone();
+        let trust_requester = std::sync::Arc::new(self.client.clone());
+        let runtime_handle = tokio::runtime::Handle::current();
+        let outcome = match tokio::task::spawn_blocking(move || {
+            lex_engine::boot_registry(lex_engine::ExtensionSetup {
+                workspace_root: workspace_root_owned.as_path(),
+                labels_config: &labels_config,
+                // The LSP server has no `--ext-schema` flag; only
+                // `[labels]` entries from `lex.toml` register schemas
+                // in this surface.
+                ext_schemas: &[],
+                // `enable_handlers` is irrelevant on the Lsp surface —
+                // that flag is the CLI shortcut for the trust-prompt
+                // path. The LSP consults the trust store + prompt
+                // handler directly.
+                enable_handlers: false,
+                surface_override: Some(lex_extension_host::Surface::LspSession),
+                // Forwards `lex/trustRequest` to the editor and awaits
+                // the user's decision. Already-pinned decisions in
+                // `<workspace>/.lex/trust.json` short-circuit before
+                // the prompt fires.
+                trust_prompt: Box::new(crate::trust_prompt::LspPromptHandler::new(
+                    trust_requester,
+                    runtime_handle,
+                )),
+                // Reports `lexd-lsp`'s version to subprocess handlers
+                // in their initialize handshake — what handlers expect
+                // to see, not the `lex-engine` boot crate's version.
+                host_version: env!("CARGO_PKG_VERSION"),
+            })
+        })
+        .await
+        {
+            Ok(outcome) => outcome,
+            Err(_) => {
+                // Blocking task panicked or was cancelled. Skip
+                // extension boot for this session; the next request
+                // will retry.
+                return None;
+            }
+        };
+
+        // Surface boot diagnostics to the editor before we cache the
+        // state. Per-namespace failures (resolver errors, denied
+        // subprocess handlers, schema load problems) are stored on
+        // the outcome but the user has no way to see them otherwise
+        // — pre-validation diagnostics are attached to documents,
+        // but boot diagnostics aren't. `window/showMessage` is the
+        // right surface for one-shot status that's not tied to a
+        // specific document range.
+        for diag in &outcome.diagnostics {
+            let prefix = match &diag.namespace {
+                Some(ns) => format!("lex extension `{ns}`: "),
+                None => "lex extensions: ".to_string(),
+            };
+            self.client
+                .show_message(MessageType::WARNING, format!("{prefix}{}", diag.message))
+                .await;
+        }
+
+        let state = Arc::new(LspExtensionState::from(outcome));
+        *self.extension.write().await = Some(state.clone());
+        Some(state)
+    }
+
+    /// Discard the cached extension registry. Called when workspace
+    /// folders change so the next request picks up the new root +
+    /// config.
+    async fn invalidate_extension_state(&self) {
+        *self.extension.write().await = None;
     }
 
     async fn parse_and_store(&self, uri: Url, text: String) {
@@ -306,7 +452,7 @@ where
             diagnostics.extend(analysis_diags.into_iter().map(to_lsp_diagnostic));
         }
 
-        self._client
+        self.client
             .publish_diagnostics(uri, diagnostics, None)
             .await;
     }
@@ -996,6 +1142,10 @@ where
         let roots = self.workspace_roots.read().await;
         let root = roots.first().map(|p| p.as_path());
         *self.config.write().await = load_config(root);
+
+        // Workspace shape changed — drop the cached extension registry
+        // so the next request rebuilds it against the new root + config.
+        self.invalidate_extension_state().await;
     }
 
     async fn shutdown(&self) -> Result<()> {
@@ -1014,6 +1164,10 @@ where
             let root = roots.first().map(|p| p.as_path());
             *self.config.write().await = load_config(root);
         }
+
+        // Config changed — `[labels]` may have grown / shrunk; drop the
+        // cached extension registry so the next request rebuilds it.
+        self.invalidate_extension_state().await;
 
         // Re-check all documents with new settings
         let uris: Vec<Url> = self
@@ -1084,6 +1238,19 @@ where
             // — author can peek the chapter without navigating away.
             if let Some(hover) = self.hover_for_include(uri, &document, position).await {
                 return Ok(Some(hover));
+            }
+
+            // Extension dispatch: ask any registered third-party
+            // namespace's handler for hover content at this position.
+            // Takes precedence over the built-in hover when it returns
+            // Some — the handler authored the label, it knows the most
+            // about what to show.
+            if let Some(state) = self.extension_state().await {
+                if let Some(hover) =
+                    ext_dispatch_hover(&document, position, state.registry.as_ref())
+                {
+                    return Ok(Some(hover));
+                }
             }
 
             if let Some(result) = self.features.hover(&document, position) {
@@ -1231,8 +1398,21 @@ where
                 workspace.as_ref(),
                 trigger_char,
             );
-            let items: Vec<CompletionItem> =
+            let mut items: Vec<CompletionItem> =
                 candidates.iter().map(to_lsp_completion_item).collect();
+
+            // Extension dispatch: append handler-supplied completions.
+            // Additive — the built-in items still appear so the user
+            // doesn't lose access to footnote/reference/snippet
+            // completions when an extension is loaded.
+            if let Some(state) = self.extension_state().await {
+                items.extend(ext_dispatch_completion(
+                    &document,
+                    position,
+                    state.registry.as_ref(),
+                ));
+            }
+
             Ok(Some(CompletionResponse::Array(items)))
         } else {
             Ok(None)
@@ -1242,7 +1422,8 @@ where
     async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
         let mut actions = Vec::new();
 
-        if let Some(entry) = self.documents.get(&params.text_document.uri).await {
+        let document_uri = params.text_document.uri.clone();
+        if let Some(entry) = self.documents.get(&document_uri).await {
             let lex_actions = crate::features::available_actions::compute_actions(
                 &entry.document,
                 &entry.text,
@@ -1252,6 +1433,25 @@ where
                 actions.push(tower_lsp::lsp_types::CodeActionOrCommand::CodeAction(
                     action,
                 ));
+            }
+
+            // Extension dispatch: append handler-supplied code actions
+            // for the labelled node under the request's selection. The
+            // request's range start is the position we use to locate
+            // the labelled node — `compute_actions` already operates
+            // off the same anchor.
+            if let Some(state) = self.extension_state().await {
+                let start = from_lsp_position(params.range.start);
+                for action in ext_dispatch_code_action(
+                    &entry.document,
+                    start,
+                    &document_uri,
+                    state.registry.as_ref(),
+                ) {
+                    actions.push(tower_lsp::lsp_types::CodeActionOrCommand::CodeAction(
+                        action,
+                    ));
+                }
             }
         }
 
@@ -1706,6 +1906,21 @@ mod tests {
     impl LspClient for NoopClient {
         async fn publish_diagnostics(&self, _: Url, _: Vec<Diagnostic>, _: Option<i32>) {}
         async fn show_message(&self, _: MessageType, _: String) {}
+    }
+    #[async_trait]
+    impl crate::trust_prompt::LspTrustRequester for NoopClient {
+        async fn send_trust_request(
+            &self,
+            _: crate::trust_prompt::TrustRequestParams,
+        ) -> tower_lsp::jsonrpc::Result<crate::trust_prompt::TrustResponse> {
+            // Tests don't exercise the trust prompt path; deny so a
+            // boot path that does reach the prompt has predictable
+            // behavior.
+            Ok(crate::trust_prompt::TrustResponse {
+                decision: "denied".into(),
+                reason: Some("test client".into()),
+            })
+        }
     }
 
     #[derive(Default)]
@@ -2541,6 +2756,20 @@ mod tests {
             self.last_diagnostics.lock().unwrap().push((uri, diags));
         }
         async fn show_message(&self, _: MessageType, _: String) {}
+    }
+    #[async_trait]
+    impl crate::trust_prompt::LspTrustRequester for CapturingClient {
+        async fn send_trust_request(
+            &self,
+            _: crate::trust_prompt::TrustRequestParams,
+        ) -> tower_lsp::jsonrpc::Result<crate::trust_prompt::TrustResponse> {
+            // Tests run with no `[labels]` block; the prompt path is
+            // not exercised.
+            Ok(crate::trust_prompt::TrustResponse {
+                decision: "denied".into(),
+                reason: Some("test client".into()),
+            })
+        }
     }
 
     impl CapturingClient {
