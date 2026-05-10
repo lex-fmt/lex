@@ -13,7 +13,8 @@
 //!   `None`),
 //! - a [`TrustPromptHandler`] specific to the host (CLI prompts deny with
 //!   a message about `--enable-handlers`; LSP forwards a `lex/trustRequest`
-//!   notification; embedders inject whatever fits their UX),
+//!   custom request to the editor and awaits the user's reply; embedders
+//!   inject whatever fits their UX),
 //!
 //! returns a fully-populated [`Registry`] with the bundled `lex.*`
 //! built-ins plus every namespace declared in `[labels]` plus every
@@ -79,9 +80,9 @@ pub struct ExtensionSetup<'a> {
     pub surface_override: Option<Surface>,
     /// Host-supplied trust prompt. The CLI installs a prompt that denies
     /// with a `--enable-handlers` rationale; the LSP installs one that
-    /// forwards a `lex/trustRequest` notification to the editor;
-    /// embedders inject whatever fits their UX (or an "auto-deny" stub
-    /// for batch / non-interactive use).
+    /// forwards a `lex/trustRequest` custom request to the editor and
+    /// awaits the user's reply; embedders inject whatever fits their
+    /// UX (or an "auto-deny" stub for batch / non-interactive use).
     pub trust_prompt: Box<dyn TrustPromptHandler>,
     /// Host crate version (typically `env!("CARGO_PKG_VERSION")`)
     /// reported to subprocess handlers in their `initialize`
@@ -175,8 +176,31 @@ pub fn boot_registry(setup: ExtensionSetup<'_>) -> BootOutcome {
     // directly. Loader + ResolveConfig are pointed at the workspace
     // root so `lex.include` resolves relative paths the same way
     // `lexd convert` and `lexd inspect` do.
-    let resolve_config = ResolveConfig::with_root(setup.workspace_root.to_path_buf());
-    let loader = FsLoader::new(setup.workspace_root.to_path_buf());
+    //
+    // ResolveConfig.root must be canonical (absolute, symlinks
+    // resolved): the include resolver's root-escape prefix check
+    // compares paths byte-for-byte, and a relative or unnormalized
+    // workspace root would weaken the check on macOS where
+    // `/var → /private/var` symlinks every fresh tempdir. Fall back
+    // to the as-supplied path with a diagnostic if canonicalize
+    // fails — the resolver will still work for absolute include
+    // paths and we don't want a non-canonical workspace to fail
+    // boot entirely.
+    let resolve_root = match setup.workspace_root.canonicalize() {
+        Ok(p) => p,
+        Err(e) => {
+            diagnostics.push(BootDiagnostic {
+                namespace: None,
+                message: format!(
+                    "could not canonicalize workspace root `{}`: {e}; include root-escape checks may be weakened",
+                    setup.workspace_root.display()
+                ),
+            });
+            setup.workspace_root.to_path_buf()
+        }
+    };
+    let resolve_config = ResolveConfig::with_root(resolve_root.clone());
+    let loader = FsLoader::new(resolve_root);
     match builtins::register_into(&registry, Arc::new(loader), resolve_config) {
         Ok(()) => registered.push(RegisteredNamespace {
             name: "lex".into(),

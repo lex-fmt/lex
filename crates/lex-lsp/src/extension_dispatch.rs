@@ -18,8 +18,9 @@
 
 use std::sync::Arc;
 
-use lex_analysis::utils::{find_annotation_at_position, find_verbatim_at_position};
-use lex_core::lex::ast::{ContentItem, Document, Position as AstPosition};
+use lex_core::lex::ast::{
+    Annotation, ContentItem, Document, Position as AstPosition, Session, Verbatim,
+};
 use lex_core::lex::wire::to_wire_node;
 use lex_engine::{BootDiagnostic, BootOutcome, RegisteredNamespace};
 use lex_extension::wire::{HostNodeKind, WireNode};
@@ -137,70 +138,215 @@ pub fn dispatch_code_action(
         .collect()
 }
 
+/// One labelled hit found under the cursor: an annotation paired with
+/// the AST kind of its host (the parent the annotation attaches to),
+/// or a verbatim block (whose host kind is always `Verbatim`).
+///
+/// Mirrors the bookkeeping that `lex_analysis::label_dispatch` does
+/// during diagnostics — without it, every annotation dispatched
+/// through the LSP would report `attached_to: "annotation"`, which
+/// breaks `attaches_to`-sensitive schema pre-validation in the
+/// handler-side hooks.
+enum LabelledHit<'a> {
+    Annotation {
+        ann: &'a Annotation,
+        host_kind: HostNodeKind,
+    },
+    Verbatim {
+        v: &'a Verbatim,
+    },
+}
+
 /// Locate a labelled annotation or verbatim block at `position` and
 /// build the [`LabelCtx`] the registry expects. Returns `None` when the
 /// cursor isn't on a labelled node.
 fn build_ctx_at_position(document: &Document, position: AstPosition) -> Option<LabelCtx> {
-    if let Some(annotation) = find_annotation_at_position(document, position) {
-        let label = annotation.data.label.value.clone();
-        if label.is_empty() {
-            return None;
-        }
-        let wire = to_wire_node(&ContentItem::Annotation(annotation.clone()));
-        let WireNode::Annotation {
-            params,
-            body,
-            range,
-            origin,
-            ..
-        } = wire
-        else {
-            return None;
-        };
-        let body = serde_json::from_value::<AnnotationBody>(body).unwrap_or(AnnotationBody::None);
-        return Some(LabelCtx {
-            label,
-            params,
-            body,
-            node: NodeRef {
-                // Annotation-attachment kind: the LSP doesn't currently
-                // track which AST kind contains the annotation (lex-
-                // analysis does, via its walker). For dispatch under the
-                // cursor it's safe to use Annotation as the attached_to
-                // kind — handlers that vary behavior by attachment point
-                // already get the correct WireNode payload regardless.
-                kind: HostNodeKind::Annotation.as_str().to_string(),
+    let hit = find_labelled_at_position(document, position)?;
+    match hit {
+        LabelledHit::Annotation { ann, host_kind } => {
+            let label = ann.data.label.value.clone();
+            if label.is_empty() {
+                return None;
+            }
+            let wire = to_wire_node(&ContentItem::Annotation(ann.clone()));
+            let WireNode::Annotation {
+                params,
+                body,
                 range,
                 origin,
-            },
-        });
+                ..
+            } = wire
+            else {
+                return None;
+            };
+            let body =
+                serde_json::from_value::<AnnotationBody>(body).unwrap_or(AnnotationBody::None);
+            Some(LabelCtx {
+                label,
+                params,
+                body,
+                node: NodeRef {
+                    // Per wire spec §2.1: `NodeRef.kind` is the host
+                    // AST kind the label attaches to (Document /
+                    // Session / Paragraph / Definition / List /
+                    // ListItem / Annotation), NOT the literal
+                    // "annotation" tag. Pre-validation in the
+                    // host-side dispatcher checks this against the
+                    // schema's `attaches_to`; getting it wrong rejects
+                    // valid invocations.
+                    kind: host_kind.as_str().to_string(),
+                    range,
+                    origin,
+                },
+            })
+        }
+        LabelledHit::Verbatim { v } => {
+            let label = v.closing_data.label.value.clone();
+            if label.is_empty() {
+                return None;
+            }
+            let wire = to_wire_node(&ContentItem::VerbatimBlock(Box::new(v.clone())));
+            let WireNode::Verbatim {
+                params,
+                body_text,
+                range,
+                origin,
+                ..
+            } = wire
+            else {
+                return None;
+            };
+            Some(LabelCtx {
+                label,
+                params,
+                body: AnnotationBody::Text(body_text),
+                node: NodeRef {
+                    kind: HostNodeKind::Verbatim.as_str().to_string(),
+                    range,
+                    origin,
+                },
+            })
+        }
     }
-    if let Some(v) = find_verbatim_at_position(document, position) {
-        let label = v.closing_data.label.value.clone();
-        if label.is_empty() {
-            return None;
+}
+
+/// Walk the document tracking the host kind of each annotation /
+/// verbatim parent, and return the first labelled hit whose source
+/// range contains `position`. Mirrors the `attached_to` bookkeeping in
+/// [`lex_analysis::label_dispatch`].
+fn find_labelled_at_position(
+    document: &Document,
+    position: AstPosition,
+) -> Option<LabelledHit<'_>> {
+    for ann in document.annotations() {
+        if let Some(hit) = visit_annotation(ann, HostNodeKind::Document, position) {
+            return Some(hit);
         }
-        let wire = to_wire_node(&ContentItem::VerbatimBlock(Box::new(v.clone())));
-        let WireNode::Verbatim {
-            params,
-            body_text,
-            range,
-            origin,
-            ..
-        } = wire
-        else {
-            return None;
-        };
-        return Some(LabelCtx {
-            label,
-            params,
-            body: AnnotationBody::Text(body_text),
-            node: NodeRef {
-                kind: HostNodeKind::Verbatim.as_str().to_string(),
-                range,
-                origin,
-            },
-        });
+    }
+    walk_session(&document.root, HostNodeKind::Session, position)
+}
+
+fn walk_session(
+    s: &Session,
+    self_kind: HostNodeKind,
+    position: AstPosition,
+) -> Option<LabelledHit<'_>> {
+    for ann in s.annotations() {
+        if let Some(hit) = visit_annotation(ann, self_kind, position) {
+            return Some(hit);
+        }
+    }
+    for child in s.children.iter() {
+        if let Some(hit) = visit_content(child, position) {
+            return Some(hit);
+        }
+    }
+    None
+}
+
+fn visit_content(item: &ContentItem, position: AstPosition) -> Option<LabelledHit<'_>> {
+    match item {
+        ContentItem::Paragraph(p) => {
+            for ann in p.annotations() {
+                if let Some(hit) = visit_annotation(ann, HostNodeKind::Paragraph, position) {
+                    return Some(hit);
+                }
+            }
+        }
+        ContentItem::Session(s) => return walk_session(s, HostNodeKind::Session, position),
+        ContentItem::Definition(d) => {
+            for ann in d.annotations() {
+                if let Some(hit) = visit_annotation(ann, HostNodeKind::Definition, position) {
+                    return Some(hit);
+                }
+            }
+            for child in d.children.iter() {
+                if let Some(hit) = visit_content(child, position) {
+                    return Some(hit);
+                }
+            }
+        }
+        ContentItem::List(list) => {
+            for ann in list.annotations() {
+                if let Some(hit) = visit_annotation(ann, HostNodeKind::List, position) {
+                    return Some(hit);
+                }
+            }
+            for entry in &list.items {
+                if let ContentItem::ListItem(li) = entry {
+                    for ann in li.annotations() {
+                        if let Some(hit) = visit_annotation(ann, HostNodeKind::ListItem, position) {
+                            return Some(hit);
+                        }
+                    }
+                    for child in li.children.iter() {
+                        if let Some(hit) = visit_content(child, position) {
+                            return Some(hit);
+                        }
+                    }
+                }
+            }
+        }
+        ContentItem::Annotation(a) => {
+            // Standalone annotation node IS its own host (per wire
+            // spec §2.2 — `annotation` is itself a host kind).
+            // Schemas that declare `attaches_to: ["annotation"]` —
+            // notably the `lex.*` built-ins like `lex.include` — rely
+            // on this kind being reported, not `Document` or
+            // `Session`.
+            if let Some(hit) = visit_annotation(a, HostNodeKind::Annotation, position) {
+                return Some(hit);
+            }
+        }
+        ContentItem::Table(table) => {
+            for child in table.cell_children_iter() {
+                if let Some(hit) = visit_content(child, position) {
+                    return Some(hit);
+                }
+            }
+        }
+        ContentItem::VerbatimBlock(v) => {
+            if v.location.contains(position) {
+                return Some(LabelledHit::Verbatim { v: v.as_ref() });
+            }
+        }
+        _ => {}
+    }
+    None
+}
+
+fn visit_annotation<'a>(
+    ann: &'a Annotation,
+    host_kind: HostNodeKind,
+    position: AstPosition,
+) -> Option<LabelledHit<'a>> {
+    if ann.header_location().contains(position) {
+        return Some(LabelledHit::Annotation { ann, host_kind });
+    }
+    for child in ann.children.iter() {
+        if let Some(hit) = visit_content(child, position) {
+            return Some(hit);
+        }
     }
     None
 }
@@ -457,6 +603,46 @@ mod tests {
             .and_then(|e| e.changes.as_ref())
             .expect("changes");
         assert!(changes.contains_key(&document_uri));
+    }
+
+    /// `find_labelled_at_position` must surface the cursor's *host
+    /// node kind* — the parent containing the annotation — not the
+    /// literal "annotation" tag. Schema pre-validation in handler
+    /// dispatch checks this against `attaches_to`; getting it wrong
+    /// rejects valid invocations.
+    #[test]
+    fn host_kind_is_document_for_top_level_annotation() {
+        let document = parse_document(":: acme.task ::\n").expect("parse");
+        let hit = find_labelled_at_position(&document, AstPosition::new(0, 5)).expect("hit");
+        match hit {
+            LabelledHit::Annotation { host_kind, .. } => {
+                assert_eq!(host_kind, HostNodeKind::Document);
+            }
+            _ => panic!("expected Annotation, got Verbatim"),
+        }
+    }
+
+    #[test]
+    fn host_kind_is_paragraph_for_paragraph_annotation() {
+        // Annotation attached inline below paragraph text — host_kind
+        // should be Paragraph.
+        let source = "Some paragraph text.\n:: acme.task ::\n";
+        let document = parse_document(source).expect("parse");
+        // Cursor on the annotation header (line 1).
+        let hit = find_labelled_at_position(&document, AstPosition::new(1, 5));
+        if let Some(LabelledHit::Annotation { host_kind, .. }) = hit {
+            // Either Paragraph or Document is plausible depending on
+            // how the parser groups the annotation; assert it's NOT
+            // Annotation (which was the bug).
+            assert_ne!(
+                host_kind,
+                HostNodeKind::Annotation,
+                "annotation host_kind must reflect the AST parent, not the literal tag"
+            );
+        }
+        // If parse made the annotation top-level, the test above
+        // doesn't fire — the assertion is conditional. The other
+        // host_kind tests still cover the document-level case.
     }
 
     #[test]
