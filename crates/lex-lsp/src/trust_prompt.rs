@@ -149,12 +149,22 @@ fn params_from_ctx(ctx: &TrustPromptContext) -> TrustRequestParams {
     }
 }
 
+/// Maximum time we wait for the editor to reply to a `lex/trustRequest`.
+///
+/// Tradeoff: long enough that a distracted user has time to read the
+/// prompt and decide; short enough that a buggy or quietly-dismissed
+/// extension can't pin the boot indefinitely. 60s is the "send a
+/// message in Slack and come back" budget — past this, treating it as
+/// denied is safer than hanging the boot.
+const PROMPT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// [`TrustPromptHandler`] implementation that forwards to an LSP
 /// client. Sync→async bridge runs on the boot's blocking thread via
 /// [`tokio::runtime::Handle::block_on`].
 pub struct LspPromptHandler<R: LspTrustRequester> {
     requester: std::sync::Arc<R>,
     runtime_handle: tokio::runtime::Handle,
+    timeout: std::time::Duration,
 }
 
 impl<R: LspTrustRequester> LspPromptHandler<R> {
@@ -162,6 +172,22 @@ impl<R: LspTrustRequester> LspPromptHandler<R> {
         Self {
             requester,
             runtime_handle,
+            timeout: PROMPT_TIMEOUT,
+        }
+    }
+
+    /// Construct with a custom timeout. Tests use this to drive the
+    /// timeout-as-denied path without waiting 60 seconds.
+    #[cfg(test)]
+    pub fn with_timeout(
+        requester: std::sync::Arc<R>,
+        runtime_handle: tokio::runtime::Handle,
+        timeout: std::time::Duration,
+    ) -> Self {
+        Self {
+            requester,
+            runtime_handle,
+            timeout,
         }
     }
 }
@@ -170,15 +196,21 @@ impl<R: LspTrustRequester> TrustPromptHandler for LspPromptHandler<R> {
     fn prompt(&self, ctx: &TrustPromptContext) -> TrustDecision {
         let params = params_from_ctx(ctx);
         let requester = std::sync::Arc::clone(&self.requester);
+        let timeout = self.timeout;
         // We're called from a `spawn_blocking` thread (the boot path
         // wraps `boot_registry`), so `block_on` is safe — it parks
         // this blocking-pool thread, not the async runtime's worker
         // threads.
-        let response = self
-            .runtime_handle
-            .block_on(async move { requester.send_trust_request(params).await });
+        //
+        // Wrap the request in `tokio::time::timeout` so a buggy
+        // extension or a prompt the user dismisses without a reply
+        // can't hang the boot indefinitely. On timeout we deny with a
+        // diagnostic, matching the other failure modes.
+        let response = self.runtime_handle.block_on(async move {
+            tokio::time::timeout(timeout, requester.send_trust_request(params)).await
+        });
         match response {
-            Ok(resp) => match resp.decision.as_str() {
+            Ok(Ok(resp)) => match resp.decision.as_str() {
                 "trusted" => TrustDecision::Trusted,
                 _ => {
                     // Anything other than "trusted" — including unknown
@@ -194,10 +226,17 @@ impl<R: LspTrustRequester> TrustPromptHandler for LspPromptHandler<R> {
                     }
                 }
             },
-            Err(e) => TrustDecision::Denied {
+            Ok(Err(e)) => TrustDecision::Denied {
                 reason: format!(
                     "subprocess handler `{}` denied: trust request to editor failed ({e})",
                     ctx.namespace
+                ),
+            },
+            Err(_elapsed) => TrustDecision::Denied {
+                reason: format!(
+                    "subprocess handler `{}` denied: trust request to editor timed out after {}s",
+                    ctx.namespace,
+                    timeout.as_secs()
                 ),
             },
         }
@@ -372,7 +411,49 @@ mod tests {
         assert!(matches!(decision, TrustDecision::Denied { .. }));
     }
 
-    /// Editor-side error (timeout, disconnect, etc.) → denied with a
+    /// Requester that never resolves — simulates a buggy editor that
+    /// receives the request and never replies. The handler must
+    /// time out and treat that as denied so the boot doesn't hang.
+    struct StuckRequester;
+
+    #[async_trait]
+    impl LspTrustRequester for StuckRequester {
+        async fn send_trust_request(&self, _: TrustRequestParams) -> JsonRpcResult<TrustResponse> {
+            // Never resolves on its own; the prompt's tokio::time::timeout
+            // is the only way out.
+            std::future::pending().await
+        }
+    }
+
+    /// Buggy / non-responsive editor → timeout fires → denied with a
+    /// "timed out" diagnostic. Critical: a stuck prompt must NOT pin
+    /// the boot indefinitely.
+    #[test]
+    fn prompt_handler_times_out_when_editor_never_responds() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let requester = std::sync::Arc::new(StuckRequester);
+        let handler = LspPromptHandler::with_timeout(
+            std::sync::Arc::clone(&requester),
+            rt.handle().clone(),
+            std::time::Duration::from_millis(50),
+        );
+        let decision = rt.block_on(async {
+            tokio::task::spawn_blocking(move || handler.prompt(&ctx()))
+                .await
+                .unwrap()
+        });
+        match decision {
+            TrustDecision::Denied { reason } => {
+                assert!(
+                    reason.contains("timed out"),
+                    "expected 'timed out' diagnostic, got: {reason}"
+                );
+            }
+            other => panic!("expected Denied (timeout), got {other:?}"),
+        }
+    }
+
+    /// Editor-side error (transport, disconnect, etc.) → denied with a
     /// "trust request failed" diagnostic. Doesn't crash the boot.
     #[test]
     fn prompt_handler_surfaces_request_error_as_denied() {

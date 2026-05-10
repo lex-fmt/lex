@@ -29,11 +29,12 @@
   consult the registered extension namespaces' handlers in addition to
   the existing built-in providers. Hover takes precedence over the
   built-in when a registered handler returns content; completion + code
-  actions are additive. Subprocess handlers register schema-only in the
-  LSP today (editor-side trust prompt UI lands in a follow-up);
-  pre-validation, hover, completion, and code actions all keep working
-  through the schema-only path for any namespace the user has already
-  trusted via `lexd labels`.
+  actions are additive. Combined with the trust-prompt forwarding
+  (above), this is the full LSP surface for third-party namespaces:
+  trust untrusted handlers via `lex/trustRequest`, dispatch hooks via
+  the registry, and fall through to built-ins when no namespace
+  matches. The per-editor UI for `lex/trustRequest` lands in
+  coordinated vscode/nvim/lexed releases.
 - `lex-analysis::utils::find_verbatim_at_position`: locates a verbatim
   block whose source range contains the cursor position. Mirror of
   the existing `find_annotation_at_position`; used by extension
