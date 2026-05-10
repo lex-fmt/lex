@@ -29,8 +29,12 @@ jobs:
       # (not the other way around — CLAUDE.md was stale on this), so
       # lex-babel must publish before lex-config. lex-lsp-core depends on
       # lex-core + lex-babel and is depended on by lexd-lsp, so it sits
-      # between them. lex-wasm has publish = false and isn't in the list.
-      crates: lex-extension,lex-extension-host,lex-core,lex-babel,lex-config,lex-analysis,lex-lsp-core,lexd-lsp,lexd
+      # between them. lex-engine bundles the boot helper for hosts —
+      # depends on lex-core + lex-config + lex-extension(-host) and is
+      # depended on by both lexd-lsp and lexd, so it sits after the
+      # leaves and before the binary crates. lex-wasm has publish = false
+      # and isn't in the list.
+      crates: lex-extension,lex-extension-host,lex-core,lex-babel,lex-config,lex-analysis,lex-lsp-core,lex-engine,lexd-lsp,lexd
       # Brew formula subject. The other binary (lexd-lsp) is built and
       # signed alongside but ships as a tarball-only artifact (editor
       # extensions bundle it themselves).
