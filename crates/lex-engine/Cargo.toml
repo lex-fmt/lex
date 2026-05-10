@@ -1,0 +1,22 @@
+[package]
+name = "lex-engine"
+version = "0.1.0"
+edition = "2021"
+authors = ["lex contributors"]
+description = "Boot helper + extension setup glue for lex hosts (lexd CLI, lexd-lsp). The future home of Engine::builder() for embedders."
+license = "MIT"
+repository = "https://github.com/lex-fmt/lex"
+keywords = ["lex", "extensions", "engine"]
+categories = ["development-tools"]
+
+[lib]
+doctest = false
+
+[dependencies]
+lex-core = { workspace = true }
+lex-config = { workspace = true }
+lex-extension = { workspace = true }
+lex-extension-host = { workspace = true, features = ["subprocess"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }
