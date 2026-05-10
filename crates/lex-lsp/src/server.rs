@@ -320,23 +320,48 @@ where
         let labels_config = LabelsConfig {
             namespaces: self.config.read().await.labels.clone(),
         };
-        let outcome = lex_engine::boot_registry(lex_engine::ExtensionSetup {
-            workspace_root: workspace_root.as_path(),
-            labels_config: &labels_config,
-            // The LSP server has no `--ext-schema` flag; only `[labels]`
-            // entries from `lex.toml` register schemas in this surface.
-            ext_schemas: &[],
-            // `enable_handlers` is irrelevant on the Lsp surface — that
-            // flag is the CLI shortcut for the trust-prompt path. The
-            // LSP consults the trust store + prompt handler directly.
-            enable_handlers: false,
-            surface_override: Some(lex_extension_host::Surface::LspSession),
-            // 10a stub: deny with a CLI-trust-first rationale. PR 10b
-            // replaces this with a handler that forwards a
-            // `lex/trustRequest` notification to the editor and awaits
-            // the user's decision.
-            trust_prompt: Box::new(LspDeferTrustPrompt),
-        });
+
+        // boot_registry does synchronous filesystem IO (schema load,
+        // trust store open) and may attempt to spawn subprocess
+        // handlers — a few hundred milliseconds in the worst case. Run
+        // it on the blocking thread pool so the tokio runtime keeps
+        // serving other LSP requests while boot runs.
+        let workspace_root_owned = workspace_root.clone();
+        let outcome = match tokio::task::spawn_blocking(move || {
+            lex_engine::boot_registry(lex_engine::ExtensionSetup {
+                workspace_root: workspace_root_owned.as_path(),
+                labels_config: &labels_config,
+                // The LSP server has no `--ext-schema` flag; only
+                // `[labels]` entries from `lex.toml` register schemas
+                // in this surface.
+                ext_schemas: &[],
+                // `enable_handlers` is irrelevant on the Lsp surface —
+                // that flag is the CLI shortcut for the trust-prompt
+                // path. The LSP consults the trust store + prompt
+                // handler directly.
+                enable_handlers: false,
+                surface_override: Some(lex_extension_host::Surface::LspSession),
+                // 10a stub: deny with a CLI-trust-first rationale.
+                // PR 10b replaces this with a handler that forwards a
+                // `lex/trustRequest` notification to the editor and
+                // awaits the user's decision.
+                trust_prompt: Box::new(LspDeferTrustPrompt),
+                // Reports `lexd-lsp`'s version to subprocess handlers
+                // in their initialize handshake — what handlers expect
+                // to see, not the `lex-engine` boot crate's version.
+                host_version: env!("CARGO_PKG_VERSION"),
+            })
+        })
+        .await
+        {
+            Ok(outcome) => outcome,
+            Err(_) => {
+                // Blocking task panicked or was cancelled. Skip
+                // extension boot for this session; the next request
+                // will retry.
+                return None;
+            }
+        };
         let state = Arc::new(LspExtensionState::from(outcome));
 
         let mut slot = self.extension.write().await;

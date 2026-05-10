@@ -83,6 +83,12 @@ pub struct ExtensionSetup<'a> {
     /// embedders inject whatever fits their UX (or an "auto-deny" stub
     /// for batch / non-interactive use).
     pub trust_prompt: Box<dyn TrustPromptHandler>,
+    /// Host crate version (typically `env!("CARGO_PKG_VERSION")`)
+    /// reported to subprocess handlers in their `initialize`
+    /// handshake. The host (`lexd` / `lexd-lsp` / an embedder) supplies
+    /// its own version, *not* `lex-engine`'s — handlers expect to see
+    /// the host they're running under, not the boot helper crate.
+    pub host_version: &'a str,
 }
 
 /// One namespace that was successfully registered, surfaced for
@@ -161,6 +167,7 @@ pub fn boot_registry(setup: ExtensionSetup<'_>) -> BootOutcome {
         TrustStore::open(&fallback_dir).expect("temp dir writable")
     });
     let mut trust_gate = TrustGate::new(surface, setup.enable_handlers, store, setup.trust_prompt);
+    let host_version = setup.host_version;
 
     // Built-ins: lex.* namespace (currently `lex.include`). Native
     // transport, trusted by linkage — gate consultation is a no-op
@@ -204,6 +211,7 @@ pub fn boot_registry(setup: ExtensionSetup<'_>) -> BootOutcome {
                     &resolved.schema_dir,
                     &source,
                     setup.workspace_root,
+                    host_version,
                     &mut diagnostics,
                 ) {
                     Ok(count) => registered.push(RegisteredNamespace {
@@ -257,6 +265,7 @@ pub fn boot_registry(setup: ExtensionSetup<'_>) -> BootOutcome {
             &dir,
             &source,
             setup.workspace_root,
+            host_version,
             &mut diagnostics,
         ) {
             Ok(count) => registered.push(RegisteredNamespace {
@@ -318,6 +327,10 @@ fn infer_namespace_from_dir(dir: &Path) -> Result<String, String> {
 ///   through `builtins::register_into` not this path.
 /// - `transport: wasm` is rejected by the schema loader before it
 ///   reaches us; defensive.
+// 8-argument boot helper. Bundling the inputs into a struct just to
+// satisfy this lint adds boilerplate without simplifying anything; the
+// signature is read top-to-bottom in one site (`boot_registry`).
+#[allow(clippy::too_many_arguments)]
 fn register_schema_dir(
     registry: &mut Registry,
     trust_gate: &mut TrustGate,
@@ -325,6 +338,7 @@ fn register_schema_dir(
     dir: &Path,
     source: &Source,
     workspace_root: &Path,
+    host_version: &str,
     diagnostics: &mut Vec<BootDiagnostic>,
 ) -> Result<usize, RegisterError> {
     let schemas: Vec<Schema> =
@@ -338,6 +352,7 @@ fn register_schema_dir(
         namespace,
         source,
         workspace_root,
+        host_version,
         trust_gate,
         diagnostics,
     );
@@ -355,6 +370,7 @@ fn build_handler(
     namespace: &str,
     source: &Source,
     workspace_root: &Path,
+    host_version: &str,
     trust_gate: &mut TrustGate,
     diagnostics: &mut Vec<BootDiagnostic>,
 ) -> Box<dyn LexHandler> {
@@ -445,7 +461,7 @@ fn build_handler(
         namespace,
         &labels,
         contract.capabilities,
-        env!("CARGO_PKG_VERSION"),
+        host_version,
         &env,
     ) {
         Ok(h) => Box::new(h),
@@ -598,6 +614,7 @@ mod tests {
             enable_handlers: false,
             surface_override: Some(Surface::CliOneShot),
             trust_prompt: Box::new(DenyAllPrompt),
+            host_version: "test",
         };
         let outcome = boot_registry(setup);
         assert_eq!(outcome.registered.len(), 1);
@@ -623,6 +640,7 @@ mod tests {
             enable_handlers: false,
             surface_override: Some(Surface::CliOneShot),
             trust_prompt: Box::new(DenyAllPrompt),
+            host_version: "test",
         };
         let outcome = boot_registry(setup);
         let acme = outcome
@@ -655,6 +673,7 @@ mod tests {
             enable_handlers: false,
             surface_override: Some(Surface::CliOneShot),
             trust_prompt: Box::new(DenyAllPrompt),
+            host_version: "test",
         };
         let outcome = boot_registry(setup);
         assert_eq!(outcome.diagnostics.len(), 1);
@@ -678,6 +697,7 @@ mod tests {
             enable_handlers: false,
             surface_override: Some(Surface::CliOneShot),
             trust_prompt: Box::new(DenyAllPrompt),
+            host_version: "test",
         };
         let outcome = boot_registry(setup);
         let acme = outcome
@@ -710,6 +730,7 @@ mod tests {
             enable_handlers: false,
             surface_override: Some(Surface::LspSession),
             trust_prompt: Box::new(DenyAllPrompt),
+            host_version: "test",
         };
         let outcome = boot_registry(setup);
         // Namespace IS registered (so pre-validation still works
@@ -752,6 +773,7 @@ mod tests {
             enable_handlers: true,
             surface_override: Some(Surface::CliOneShot),
             trust_prompt: Box::new(DenyAllPrompt),
+            host_version: "test",
         });
         assert!(outcome.registered.iter().any(|r| r.name == "acme"));
         assert!(
@@ -782,6 +804,7 @@ mod tests {
             enable_handlers: true,
             surface_override: Some(Surface::CliOneShot),
             trust_prompt: Box::new(DenyAllPrompt),
+            host_version: "test",
         });
         assert!(
             outcome
@@ -811,6 +834,7 @@ mod tests {
             enable_handlers: true,
             surface_override: Some(Surface::CliOneShot),
             trust_prompt: Box::new(DenyAllPrompt),
+            host_version: "test",
         });
         assert!(
             outcome
@@ -846,6 +870,7 @@ mod tests {
             enable_handlers: false,
             surface_override: Some(Surface::CliOneShot),
             trust_prompt: Box::new(DenyAllPrompt),
+            host_version: "test",
         });
         assert!(
             outcome
@@ -871,6 +896,7 @@ mod tests {
             enable_handlers: false,
             surface_override: Some(Surface::CliOneShot),
             trust_prompt: Box::new(DenyAllPrompt),
+            host_version: "test",
         };
         let outcome = boot_registry(setup);
         assert!(outcome
@@ -890,6 +916,7 @@ mod tests {
             enable_handlers: true,
             surface_override: Some(Surface::Ci),
             trust_prompt: Box::new(DenyAllPrompt),
+            host_version: "test",
         };
         let outcome = boot_registry(setup);
         assert_eq!(outcome.trust_gate.surface(), Surface::Ci);

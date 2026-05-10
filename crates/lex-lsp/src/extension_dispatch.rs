@@ -39,9 +39,11 @@ pub struct LspExtensionState {
     /// code-action request.
     pub registry: Arc<Registry>,
     /// Boot-time diagnostics (resolver failures, denied namespaces,
-    /// schema errors). Surfaced to the client as `window/showMessage`
-    /// once at boot, then retained for `lex/diagnostics`-style
-    /// inspection in PR 10b.
+    /// schema errors). Stored on boot and currently unsurfaced; PR
+    /// 10b adds `window/showMessage` notifications for the most
+    /// important entries plus a custom request the editor can use to
+    /// display the full list.
+    #[allow(dead_code)]
     pub boot_diagnostics: Vec<BootDiagnostic>,
     /// Successfully registered namespaces. Reserved for a future
     /// "currently loaded extensions" surface.
@@ -262,11 +264,20 @@ fn translate_code_action(a: lex_extension::wire::CodeAction, document_uri: &Url)
     // request's document; edits with a `uri` apply to that file. The
     // LSP `WorkspaceEdit.changes` map keys on `Url`, so we collect
     // per-URI edit lists and assemble them at the end.
+    //
+    // Edits with a `uri` field that fails to parse are *dropped*
+    // rather than re-targeted at the request's document — silently
+    // applying changes to the wrong file would be a destructive
+    // surprise. The handler can resubmit a code action with a valid
+    // URI.
     let mut changes: std::collections::HashMap<Url, Vec<TextEdit>> =
         std::collections::HashMap::new();
     for e in a.edits {
         let target = match &e.uri {
-            Some(s) => Url::parse(s).unwrap_or_else(|_| document_uri.clone()),
+            Some(s) => match Url::parse(s) {
+                Ok(u) => u,
+                Err(_) => continue,
+            },
             None => document_uri.clone(),
         };
         changes.entry(target).or_default().push(TextEdit {
@@ -512,6 +523,40 @@ mod tests {
         assert_eq!(changes.len(), 2);
         assert!(changes.contains_key(&document_uri));
         assert!(changes.contains_key(&Url::parse(other_uri).unwrap()));
+    }
+
+    #[test]
+    fn translate_code_action_drops_edits_with_invalid_uri() {
+        let document_uri = Url::parse("file:///workspace/host.lex").unwrap();
+        let a = lex_extension::wire::CodeAction {
+            title: "Mixed".into(),
+            kind: WireCodeActionKind::Quickfix,
+            edits: vec![
+                // Valid relative-to-document edit — kept.
+                WireTextEdit {
+                    range: r(0, 0, 0, 5),
+                    new_text: "x".into(),
+                    uri: None,
+                },
+                // Garbage URI — dropped (NOT silently retargeted at
+                // the request document).
+                WireTextEdit {
+                    range: r(1, 0, 1, 5),
+                    new_text: "y".into(),
+                    uri: Some("not a url at all".into()),
+                },
+            ],
+        };
+        let out = translate_code_action(a, &document_uri);
+        let changes = out
+            .edit
+            .as_ref()
+            .and_then(|e| e.changes.as_ref())
+            .expect("changes set");
+        assert_eq!(changes.len(), 1, "garbage URI should be dropped");
+        let edits = changes.get(&document_uri).expect("document URI present");
+        assert_eq!(edits.len(), 1);
+        assert_eq!(edits[0].new_text, "x");
     }
 
     #[test]

@@ -308,6 +308,15 @@ where
                     return Some(found);
                 }
             }
+            ContentItem::Table(table) => {
+                // Tables can hold block-level children (including
+                // verbatim blocks) under each cell; walk every cell's
+                // children. `cell_children_iter` flattens rows ×
+                // cells × children for us.
+                if let Some(found) = find_verbatim_in_items(table.cell_children_iter(), position) {
+                    return Some(found);
+                }
+            }
             _ => {}
         }
     }

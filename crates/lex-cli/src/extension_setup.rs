@@ -49,6 +49,10 @@ pub fn boot_registry(setup: ExtensionSetup<'_>) -> BootOutcome {
         enable_handlers: setup.enable_handlers,
         surface_override: setup.surface_override,
         trust_prompt: Box::new(CliPromptHandler),
+        // Reports `lexd`'s version to subprocess handlers in their
+        // initialize handshake — what handlers expect to see, not the
+        // `lex-engine` boot crate's version.
+        host_version: env!("CARGO_PKG_VERSION"),
     })
 }
 
