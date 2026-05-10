@@ -4,6 +4,11 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crate::extension_dispatch::{
+    dispatch_code_action as ext_dispatch_code_action,
+    dispatch_completion as ext_dispatch_completion, dispatch_hover as ext_dispatch_hover,
+    LspExtensionState,
+};
 use crate::features::commands::{self, execute_command};
 use crate::features::document_links::collect_document_links;
 use crate::features::document_symbols::{collect_document_symbols, LexDocumentSymbol};
@@ -24,7 +29,7 @@ use lex_babel::formats::lex::formatting_rules::FormattingRules;
 use lex_babel::templates::{
     build_asset_snippet, build_verbatim_snippet, AssetSnippetRequest, VerbatimSnippetRequest,
 };
-use lex_config::{LexConfig, CONFIG_FILE_NAME};
+use lex_config::{LabelsConfig, LexConfig, CONFIG_FILE_NAME};
 use lex_core::lex::ast::links::{DocumentLink as AstDocumentLink, LinkType};
 use lex_core::lex::ast::range::SourceLocation;
 use lex_core::lex::ast::{Document, Position as AstPosition, Range as AstRange};
@@ -32,6 +37,7 @@ use lex_core::lex::builtins as lex_builtins;
 use lex_core::lex::includes::{resolve_from_source, FsLoader, IncludeError, ResolveConfig};
 use lex_core::lex::parsing;
 use lex_extension_host::registry::Registry;
+use lex_extension_host::{TrustDecision, TrustPromptContext, TrustPromptHandler};
 use serde_json::{json, Value};
 use tokio::sync::RwLock;
 use tower_lsp::async_trait;
@@ -266,6 +272,13 @@ pub struct LexLanguageServer<C = Client, P = DefaultFeatureProvider> {
     features: Arc<P>,
     workspace_roots: RwLock<Vec<PathBuf>>,
     config: RwLock<LexConfig>,
+    /// Extension registry + boot diagnostics, lazily populated on first
+    /// extension-aware request (hover/completion/code_action). Held for
+    /// the lifetime of the workspace; rebuilt when workspace folders
+    /// change. `None` when the LSP is running outside any workspace
+    /// (e.g. a single untitled buffer) — extension dispatch is a no-op
+    /// in that case, and built-in providers handle every request.
+    extension: RwLock<Option<Arc<LspExtensionState>>>,
 }
 
 impl LexLanguageServer<Client, DefaultFeatureProvider> {
@@ -287,7 +300,86 @@ where
             features,
             workspace_roots: RwLock::new(Vec::new()),
             config: RwLock::new(config),
+            extension: RwLock::new(None),
         }
+    }
+
+    /// Lazily boot the extension registry against the current workspace
+    /// root + config. Idempotent: once built, returns the cached state.
+    /// Returns `None` when no workspace is set (e.g. single-file mode);
+    /// extension dispatch is a no-op without a workspace anchor.
+    async fn extension_state(&self) -> Option<Arc<LspExtensionState>> {
+        if let Some(s) = self.extension.read().await.clone() {
+            return Some(s);
+        }
+
+        let workspace_root = {
+            let roots = self.workspace_roots.read().await;
+            roots.first().cloned()?
+        };
+        let labels_config = LabelsConfig {
+            namespaces: self.config.read().await.labels.clone(),
+        };
+
+        // boot_registry does synchronous filesystem IO (schema load,
+        // trust store open) and may attempt to spawn subprocess
+        // handlers — a few hundred milliseconds in the worst case. Run
+        // it on the blocking thread pool so the tokio runtime keeps
+        // serving other LSP requests while boot runs.
+        let workspace_root_owned = workspace_root.clone();
+        let outcome = match tokio::task::spawn_blocking(move || {
+            lex_engine::boot_registry(lex_engine::ExtensionSetup {
+                workspace_root: workspace_root_owned.as_path(),
+                labels_config: &labels_config,
+                // The LSP server has no `--ext-schema` flag; only
+                // `[labels]` entries from `lex.toml` register schemas
+                // in this surface.
+                ext_schemas: &[],
+                // `enable_handlers` is irrelevant on the Lsp surface —
+                // that flag is the CLI shortcut for the trust-prompt
+                // path. The LSP consults the trust store + prompt
+                // handler directly.
+                enable_handlers: false,
+                surface_override: Some(lex_extension_host::Surface::LspSession),
+                // 10a stub: deny with a CLI-trust-first rationale.
+                // PR 10b replaces this with a handler that forwards a
+                // `lex/trustRequest` notification to the editor and
+                // awaits the user's decision.
+                trust_prompt: Box::new(LspDeferTrustPrompt),
+                // Reports `lexd-lsp`'s version to subprocess handlers
+                // in their initialize handshake — what handlers expect
+                // to see, not the `lex-engine` boot crate's version.
+                host_version: env!("CARGO_PKG_VERSION"),
+            })
+        })
+        .await
+        {
+            Ok(outcome) => outcome,
+            Err(_) => {
+                // Blocking task panicked or was cancelled. Skip
+                // extension boot for this session; the next request
+                // will retry.
+                return None;
+            }
+        };
+        let state = Arc::new(LspExtensionState::from(outcome));
+
+        let mut slot = self.extension.write().await;
+        if slot.is_none() {
+            *slot = Some(state.clone());
+            Some(state)
+        } else {
+            // Lost the race; another task booted while we were
+            // building. Use that one.
+            slot.clone()
+        }
+    }
+
+    /// Discard the cached extension registry. Called when workspace
+    /// folders change so the next request picks up the new root +
+    /// config.
+    async fn invalidate_extension_state(&self) {
+        *self.extension.write().await = None;
     }
 
     async fn parse_and_store(&self, uri: Url, text: String) {
@@ -880,6 +972,31 @@ fn parent_directory_uri(uri: &Url) -> Url {
     base
 }
 
+/// Trust prompt installed by the LSP boot path in 10a.
+///
+/// PR 10a's scope is the dispatch wiring; the editor-side trust UI
+/// lands in PR 10b along with the comms wire spec for the
+/// `lex/trustRequest` message and the per-editor handlers in
+/// vscode/nvim/lexed. Until then, the LSP defers all trust decisions
+/// to the CLI surface: subprocess handlers that haven't already been
+/// trusted via `lexd labels` (decision persisted at
+/// `<workspace>/.lex/trust.json`) register schema-only with this
+/// rationale. Pre-validation, hover/completion/code-action dispatch,
+/// and the `lex.*` built-ins all keep working.
+struct LspDeferTrustPrompt;
+impl TrustPromptHandler for LspDeferTrustPrompt {
+    fn prompt(&self, ctx: &TrustPromptContext) -> TrustDecision {
+        TrustDecision::Denied {
+            reason: format!(
+                "subprocess handler `{}` is not yet trusted in this workspace; \
+                 trust it from the CLI first (run `lexd labels list --enable-handlers` \
+                 in this directory) — editor-side trust prompts land in a follow-up release",
+                ctx.namespace
+            ),
+        }
+    }
+}
+
 #[async_trait]
 impl<C, P> tower_lsp::LanguageServer for LexLanguageServer<C, P>
 where
@@ -996,6 +1113,10 @@ where
         let roots = self.workspace_roots.read().await;
         let root = roots.first().map(|p| p.as_path());
         *self.config.write().await = load_config(root);
+
+        // Workspace shape changed — drop the cached extension registry
+        // so the next request rebuilds it against the new root + config.
+        self.invalidate_extension_state().await;
     }
 
     async fn shutdown(&self) -> Result<()> {
@@ -1014,6 +1135,10 @@ where
             let root = roots.first().map(|p| p.as_path());
             *self.config.write().await = load_config(root);
         }
+
+        // Config changed — `[labels]` may have grown / shrunk; drop the
+        // cached extension registry so the next request rebuilds it.
+        self.invalidate_extension_state().await;
 
         // Re-check all documents with new settings
         let uris: Vec<Url> = self
@@ -1084,6 +1209,19 @@ where
             // — author can peek the chapter without navigating away.
             if let Some(hover) = self.hover_for_include(uri, &document, position).await {
                 return Ok(Some(hover));
+            }
+
+            // Extension dispatch: ask any registered third-party
+            // namespace's handler for hover content at this position.
+            // Takes precedence over the built-in hover when it returns
+            // Some — the handler authored the label, it knows the most
+            // about what to show.
+            if let Some(state) = self.extension_state().await {
+                if let Some(hover) =
+                    ext_dispatch_hover(&document, position, state.registry.as_ref())
+                {
+                    return Ok(Some(hover));
+                }
             }
 
             if let Some(result) = self.features.hover(&document, position) {
@@ -1231,8 +1369,21 @@ where
                 workspace.as_ref(),
                 trigger_char,
             );
-            let items: Vec<CompletionItem> =
+            let mut items: Vec<CompletionItem> =
                 candidates.iter().map(to_lsp_completion_item).collect();
+
+            // Extension dispatch: append handler-supplied completions.
+            // Additive — the built-in items still appear so the user
+            // doesn't lose access to footnote/reference/snippet
+            // completions when an extension is loaded.
+            if let Some(state) = self.extension_state().await {
+                items.extend(ext_dispatch_completion(
+                    &document,
+                    position,
+                    state.registry.as_ref(),
+                ));
+            }
+
             Ok(Some(CompletionResponse::Array(items)))
         } else {
             Ok(None)
@@ -1242,7 +1393,8 @@ where
     async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
         let mut actions = Vec::new();
 
-        if let Some(entry) = self.documents.get(&params.text_document.uri).await {
+        let document_uri = params.text_document.uri.clone();
+        if let Some(entry) = self.documents.get(&document_uri).await {
             let lex_actions = crate::features::available_actions::compute_actions(
                 &entry.document,
                 &entry.text,
@@ -1252,6 +1404,25 @@ where
                 actions.push(tower_lsp::lsp_types::CodeActionOrCommand::CodeAction(
                     action,
                 ));
+            }
+
+            // Extension dispatch: append handler-supplied code actions
+            // for the labelled node under the request's selection. The
+            // request's range start is the position we use to locate
+            // the labelled node — `compute_actions` already operates
+            // off the same anchor.
+            if let Some(state) = self.extension_state().await {
+                let start = from_lsp_position(params.range.start);
+                for action in ext_dispatch_code_action(
+                    &entry.document,
+                    start,
+                    &document_uri,
+                    state.registry.as_ref(),
+                ) {
+                    actions.push(tower_lsp::lsp_types::CodeActionOrCommand::CodeAction(
+                        action,
+                    ));
+                }
             }
         }
 
