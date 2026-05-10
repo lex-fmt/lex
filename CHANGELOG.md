@@ -4,15 +4,25 @@
 
 ### Added
 
+- `lexd-lsp` trust prompt: subprocess handlers that haven't been
+  pinned in `<workspace>/.lex/trust.json` now forward a
+  `lex/trustRequest` LSP custom request to the editor. The editor
+  (vscode / nvim / lexed in the coordinated γ release) renders an
+  editor-native prompt and replies; the response feeds the trust gate
+  and pins the decision for subsequent sessions. Sync→async bridge
+  runs on the boot's `spawn_blocking` thread via
+  `tokio::runtime::Handle::block_on` — the runtime keeps serving
+  other LSP requests while the prompt is open. Replaces 10a's
+  `LspDeferTrustPrompt` stub. Part of the γ phase of the extension
+  system (lex-fmt/lex#516).
 - New `lex-engine` crate: lifts the extension boot helper out of `lex-cli`
   so both `lexd` and `lexd-lsp` can share a single
   `boot_registry(ExtensionSetup { ... }) -> BootOutcome` entry point.
   `ExtensionSetup` now takes a `Box<dyn TrustPromptHandler>` so each host
   installs a prompt that fits its UX (CLI denies with a
-  `--enable-handlers` rationale; LSP defers to the CLI for now and will
-  forward `lex/trustRequest` notifications to editors in a follow-up).
-  Future home of the public `Engine::builder()` facade for embedders
-  (PR 11). Part of the γ phase of the extension system
+  `--enable-handlers` rationale; LSP forwards a `lex/trustRequest` to
+  the editor). Future home of the public `Engine::builder()` facade
+  for embedders (PR 11). Part of the γ phase of the extension system
   (lex-fmt/lex#516).
 - `lexd-lsp` extension dispatch: `textDocument/hover`,
   `textDocument/completion`, and `textDocument/codeAction` requests now

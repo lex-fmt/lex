@@ -1,4 +1,5 @@
 use lexd_lsp::server::{DefaultFeatureProvider, LspClient};
+use lexd_lsp::trust_prompt::{LspTrustRequester, TrustRequestParams, TrustResponse};
 use lexd_lsp::LexLanguageServer;
 use proptest::prelude::*;
 use std::sync::Arc;
@@ -18,6 +19,21 @@ use tower_lsp::lsp_types::Diagnostic;
 impl LspClient for MockClient {
     async fn publish_diagnostics(&self, _: Url, _: Vec<Diagnostic>, _: Option<i32>) {}
     async fn show_message(&self, _: tower_lsp::lsp_types::MessageType, _: String) {}
+}
+
+#[async_trait]
+impl LspTrustRequester for MockClient {
+    async fn send_trust_request(
+        &self,
+        _: TrustRequestParams,
+    ) -> tower_lsp::jsonrpc::Result<TrustResponse> {
+        // Proptests don't exercise the trust path; deny is the safe
+        // default that won't spawn subprocesses.
+        Ok(TrustResponse {
+            decision: "denied".into(),
+            reason: Some("proptest mock".into()),
+        })
+    }
 }
 
 proptest! {

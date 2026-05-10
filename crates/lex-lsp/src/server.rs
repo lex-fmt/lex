@@ -37,7 +37,6 @@ use lex_core::lex::builtins as lex_builtins;
 use lex_core::lex::includes::{resolve_from_source, FsLoader, IncludeError, ResolveConfig};
 use lex_core::lex::parsing;
 use lex_extension_host::registry::Registry;
-use lex_extension_host::{TrustDecision, TrustPromptContext, TrustPromptHandler};
 use serde_json::{json, Value};
 use tokio::sync::RwLock;
 use tower_lsp::async_trait;
@@ -64,7 +63,9 @@ use tower_lsp::lsp_types::Diagnostic;
 use tower_lsp::lsp_types::MessageType;
 
 #[async_trait]
-pub trait LspClient: Send + Sync + Clone + 'static {
+pub trait LspClient:
+    crate::trust_prompt::LspTrustRequester + Send + Sync + Clone + 'static
+{
     async fn publish_diagnostics(&self, uri: Url, diags: Vec<Diagnostic>, version: Option<i32>);
     async fn show_message(&self, typ: MessageType, message: String);
 }
@@ -267,7 +268,7 @@ fn semantic_tokens_legend() -> SemanticTokensLegend {
 }
 
 pub struct LexLanguageServer<C = Client, P = DefaultFeatureProvider> {
-    _client: C,
+    client: C,
     documents: DocumentStore,
     features: Arc<P>,
     workspace_roots: RwLock<Vec<PathBuf>>,
@@ -295,7 +296,7 @@ where
     pub fn with_features(client: C, features: Arc<P>) -> Self {
         let config = load_config(None);
         Self {
-            _client: client,
+            client,
             documents: DocumentStore::default(),
             features,
             workspace_roots: RwLock::new(Vec::new()),
@@ -326,7 +327,13 @@ where
         // handlers — a few hundred milliseconds in the worst case. Run
         // it on the blocking thread pool so the tokio runtime keeps
         // serving other LSP requests while boot runs.
+        //
+        // The trust prompt handler bridges sync→async via
+        // `Handle::block_on` — safe because we're on a blocking-pool
+        // thread, not a runtime worker.
         let workspace_root_owned = workspace_root.clone();
+        let trust_requester = std::sync::Arc::new(self.client.clone());
+        let runtime_handle = tokio::runtime::Handle::current();
         let outcome = match tokio::task::spawn_blocking(move || {
             lex_engine::boot_registry(lex_engine::ExtensionSetup {
                 workspace_root: workspace_root_owned.as_path(),
@@ -341,11 +348,14 @@ where
                 // handler directly.
                 enable_handlers: false,
                 surface_override: Some(lex_extension_host::Surface::LspSession),
-                // 10a stub: deny with a CLI-trust-first rationale.
-                // PR 10b replaces this with a handler that forwards a
-                // `lex/trustRequest` notification to the editor and
-                // awaits the user's decision.
-                trust_prompt: Box::new(LspDeferTrustPrompt),
+                // Forwards `lex/trustRequest` to the editor and awaits
+                // the user's decision. Already-pinned decisions in
+                // `<workspace>/.lex/trust.json` short-circuit before
+                // the prompt fires.
+                trust_prompt: Box::new(crate::trust_prompt::LspPromptHandler::new(
+                    trust_requester,
+                    runtime_handle,
+                )),
                 // Reports `lexd-lsp`'s version to subprocess handlers
                 // in their initialize handshake — what handlers expect
                 // to see, not the `lex-engine` boot crate's version.
@@ -398,7 +408,7 @@ where
             diagnostics.extend(analysis_diags.into_iter().map(to_lsp_diagnostic));
         }
 
-        self._client
+        self.client
             .publish_diagnostics(uri, diagnostics, None)
             .await;
     }
@@ -970,31 +980,6 @@ fn parent_directory_uri(uri: &Url) -> Url {
     base.set_query(None);
     base.set_fragment(None);
     base
-}
-
-/// Trust prompt installed by the LSP boot path in 10a.
-///
-/// PR 10a's scope is the dispatch wiring; the editor-side trust UI
-/// lands in PR 10b along with the comms wire spec for the
-/// `lex/trustRequest` message and the per-editor handlers in
-/// vscode/nvim/lexed. Until then, the LSP defers all trust decisions
-/// to the CLI surface: subprocess handlers that haven't already been
-/// trusted via `lexd labels` (decision persisted at
-/// `<workspace>/.lex/trust.json`) register schema-only with this
-/// rationale. Pre-validation, hover/completion/code-action dispatch,
-/// and the `lex.*` built-ins all keep working.
-struct LspDeferTrustPrompt;
-impl TrustPromptHandler for LspDeferTrustPrompt {
-    fn prompt(&self, ctx: &TrustPromptContext) -> TrustDecision {
-        TrustDecision::Denied {
-            reason: format!(
-                "subprocess handler `{}` is not yet trusted in this workspace; \
-                 trust it from the CLI first (run `lexd labels list --enable-handlers` \
-                 in this directory) — editor-side trust prompts land in a follow-up release",
-                ctx.namespace
-            ),
-        }
-    }
 }
 
 #[async_trait]
@@ -1878,6 +1863,21 @@ mod tests {
         async fn publish_diagnostics(&self, _: Url, _: Vec<Diagnostic>, _: Option<i32>) {}
         async fn show_message(&self, _: MessageType, _: String) {}
     }
+    #[async_trait]
+    impl crate::trust_prompt::LspTrustRequester for NoopClient {
+        async fn send_trust_request(
+            &self,
+            _: crate::trust_prompt::TrustRequestParams,
+        ) -> tower_lsp::jsonrpc::Result<crate::trust_prompt::TrustResponse> {
+            // Tests don't exercise the trust prompt path; deny so a
+            // boot path that does reach the prompt has predictable
+            // behavior.
+            Ok(crate::trust_prompt::TrustResponse {
+                decision: "denied".into(),
+                reason: Some("test client".into()),
+            })
+        }
+    }
 
     #[derive(Default)]
     struct MockFeatureProvider {
@@ -2712,6 +2712,20 @@ mod tests {
             self.last_diagnostics.lock().unwrap().push((uri, diags));
         }
         async fn show_message(&self, _: MessageType, _: String) {}
+    }
+    #[async_trait]
+    impl crate::trust_prompt::LspTrustRequester for CapturingClient {
+        async fn send_trust_request(
+            &self,
+            _: crate::trust_prompt::TrustRequestParams,
+        ) -> tower_lsp::jsonrpc::Result<crate::trust_prompt::TrustResponse> {
+            // Tests run with no `[labels]` block; the prompt path is
+            // not exercised.
+            Ok(crate::trust_prompt::TrustResponse {
+                decision: "denied".into(),
+                reason: Some("test client".into()),
+            })
+        }
     }
 
     impl CapturingClient {
