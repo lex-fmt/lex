@@ -280,6 +280,15 @@ pub struct LexLanguageServer<C = Client, P = DefaultFeatureProvider> {
     /// (e.g. a single untitled buffer) — extension dispatch is a no-op
     /// in that case, and built-in providers handle every request.
     extension: RwLock<Option<Arc<LspExtensionState>>>,
+    /// Serializes concurrent calls to [`Self::extension_state`] so the
+    /// first request to land at boot does the work and every other
+    /// request waits for that single boot to finish — instead of all
+    /// of them racing into `spawn_blocking` and producing N parallel
+    /// schema reads, N parallel subprocess spawns, and N parallel
+    /// `lex/trustRequest` prompts to the editor. Naturally happens
+    /// when N requests arrive on file-open (semantic tokens + hover +
+    /// document symbols + folding + …).
+    extension_init: tokio::sync::Mutex<()>,
 }
 
 impl LexLanguageServer<Client, DefaultFeatureProvider> {
@@ -302,6 +311,7 @@ where
             workspace_roots: RwLock::new(Vec::new()),
             config: RwLock::new(config),
             extension: RwLock::new(None),
+            extension_init: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -309,7 +319,30 @@ where
     /// root + config. Idempotent: once built, returns the cached state.
     /// Returns `None` when no workspace is set (e.g. single-file mode);
     /// extension dispatch is a no-op without a workspace anchor.
+    ///
+    /// Concurrency: the first request to land on a fresh workspace
+    /// takes the `extension_init` mutex and runs the boot; every
+    /// other concurrent request blocks on the mutex, then re-checks
+    /// the cache and reuses what the first one produced. Without
+    /// this serialization, an open-file event that fires several
+    /// providers at once (hover, completion, semantic tokens, folding,
+    /// document-symbols, …) would launch N parallel boots, with N
+    /// concurrent reads of the schema directory, N concurrent
+    /// subprocess spawns, and N `lex/trustRequest` prompts to the
+    /// editor. The mutex keeps the observable side effects to one
+    /// prompt and one set of spawns.
     async fn extension_state(&self) -> Option<Arc<LspExtensionState>> {
+        // Fast path: already booted, no lock needed.
+        if let Some(s) = self.extension.read().await.clone() {
+            return Some(s);
+        }
+
+        // Slow path: serialize boot. Hold the init lock for the whole
+        // boot so the second-arriving request waits for the first.
+        let _guard = self.extension_init.lock().await;
+
+        // Re-check after acquiring the init lock — another task may
+        // have completed boot while we were waiting on the mutex.
         if let Some(s) = self.extension.read().await.clone() {
             return Some(s);
         }
@@ -372,17 +405,28 @@ where
                 return None;
             }
         };
-        let state = Arc::new(LspExtensionState::from(outcome));
 
-        let mut slot = self.extension.write().await;
-        if slot.is_none() {
-            *slot = Some(state.clone());
-            Some(state)
-        } else {
-            // Lost the race; another task booted while we were
-            // building. Use that one.
-            slot.clone()
+        // Surface boot diagnostics to the editor before we cache the
+        // state. Per-namespace failures (resolver errors, denied
+        // subprocess handlers, schema load problems) are stored on
+        // the outcome but the user has no way to see them otherwise
+        // — pre-validation diagnostics are attached to documents,
+        // but boot diagnostics aren't. `window/showMessage` is the
+        // right surface for one-shot status that's not tied to a
+        // specific document range.
+        for diag in &outcome.diagnostics {
+            let prefix = match &diag.namespace {
+                Some(ns) => format!("lex extension `{ns}`: "),
+                None => "lex extensions: ".to_string(),
+            };
+            self.client
+                .show_message(MessageType::WARNING, format!("{prefix}{}", diag.message))
+                .await;
         }
+
+        let state = Arc::new(LspExtensionState::from(outcome));
+        *self.extension.write().await = Some(state.clone());
+        Some(state)
     }
 
     /// Discard the cached extension registry. Called when workspace

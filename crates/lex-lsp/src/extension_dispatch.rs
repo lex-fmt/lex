@@ -39,10 +39,10 @@ pub struct LspExtensionState {
     /// code-action request.
     pub registry: Arc<Registry>,
     /// Boot-time diagnostics (resolver failures, denied namespaces,
-    /// schema errors). Stored on boot and currently unsurfaced; PR
-    /// 10b adds `window/showMessage` notifications for the most
-    /// important entries plus a custom request the editor can use to
-    /// display the full list.
+    /// schema errors). Surfaced to the editor as
+    /// `window/showMessage` notifications immediately after boot
+    /// (see [`crate::server::LexLanguageServer::extension_state`]),
+    /// and retained here for tests / future inspection requests.
     #[allow(dead_code)]
     pub boot_diagnostics: Vec<BootDiagnostic>,
     /// Successfully registered namespaces. Reserved for a future
@@ -276,7 +276,19 @@ fn translate_code_action(a: lex_extension::wire::CodeAction, document_uri: &Url)
         let target = match &e.uri {
             Some(s) => match Url::parse(s) {
                 Ok(u) => u,
-                Err(_) => continue,
+                Err(parse_err) => {
+                    // Log to stderr so handler authors can see their
+                    // bug in the LSP's log output (vscode / nvim /
+                    // lexed all surface stderr by default). NOT
+                    // forwarded as `window/showMessage` because a
+                    // single buggy handler could spam the editor for
+                    // every code-action request — stderr is the
+                    // right level for protocol-shape errors.
+                    eprintln!(
+                        "[lexd-lsp] dropping code-action edit with invalid uri `{s}`: {parse_err}"
+                    );
+                    continue;
+                }
             },
             None => document_uri.clone(),
         };

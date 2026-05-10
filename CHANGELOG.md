@@ -12,9 +12,15 @@
   and pins the decision for subsequent sessions. Sync→async bridge
   runs on the boot's `spawn_blocking` thread via
   `tokio::runtime::Handle::block_on` — the runtime keeps serving
-  other LSP requests while the prompt is open. Replaces 10a's
-  `LspDeferTrustPrompt` stub. Part of the γ phase of the extension
-  system (lex-fmt/lex#516).
+  other LSP requests while the prompt is open. Boot is serialized
+  with a `tokio::sync::Mutex` so a burst of LSP requests on file
+  open (semantic tokens + hover + folding + …) produces exactly one
+  boot, not N parallel boots with N parallel trust prompts. Boot
+  diagnostics (resolver failures, denied namespaces, schema errors)
+  are surfaced to the editor as `window/showMessage` notifications
+  so users can see why a configured extension isn't working. Replaces
+  10a's `LspDeferTrustPrompt` stub. Part of the γ phase of the
+  extension system (lex-fmt/lex#516).
 - New `lex-engine` crate: lifts the extension boot helper out of `lex-cli`
   so both `lexd` and `lexd-lsp` can share a single
   `boot_registry(ExtensionSetup { ... }) -> BootOutcome` entry point.
