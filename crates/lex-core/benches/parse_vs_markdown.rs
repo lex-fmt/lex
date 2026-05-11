@@ -37,7 +37,11 @@ use std::path::{Path, PathBuf};
 use comrak::{Arena, ComrakOptions};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
-const GEN_SCRIPT: &str = "benches/md_corpus/prep.py";
+// Repo-root-relative path to the prep generator. The panic in `load`
+// concatenates this onto `repo_root()`, so it must reach the file from
+// the repo root — not from `CARGO_MANIFEST_DIR` (which would be
+// `crates/lex-core/`).
+const GEN_SCRIPT: &str = "crates/lex-core/benches/md_corpus/prep.py";
 
 struct Fixture {
     name: &'static str,
