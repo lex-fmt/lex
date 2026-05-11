@@ -37,7 +37,12 @@ insta = { workspace = true }
 trybuild = "1.0"
 tempfile = { workspace = true }
 criterion = "0.5"
+comrak = "0.29"
 
 [[bench]]
 name = "include_resolve"
+harness = false
+
+[[bench]]
+name = "parse_vs_markdown"
 harness = false

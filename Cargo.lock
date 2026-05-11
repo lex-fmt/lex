@@ -1152,6 +1152,7 @@ dependencies = [
 name = "lex-core"
 version = "0.11.0"
 dependencies = [
+ "comrak",
  "criterion",
  "insta",
  "lex-extension",
