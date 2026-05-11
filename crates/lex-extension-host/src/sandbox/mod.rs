@@ -64,83 +64,95 @@ pub use null::NullSandbox;
 pub trait Sandbox: Send + Sync {
     /// Apply the sandbox policy to the command. Called by the
     /// subprocess transport just before `spawn()`. Returns
-    /// [`SandboxError`] if the policy can't be installed (e.g., the
-    /// requested capability isn't enforceable on this platform).
+    /// [`SandboxError`] if a kernel-level call fails during policy
+    /// installation.
+    ///
+    /// ## Contract
+    ///
+    /// - **Do not mutate stdin / stdout / stderr.** The subprocess
+    ///   transport configures those as piped streams owned by tokio's
+    ///   reactor for the JSON-RPC bridge; replacing the descriptors
+    ///   breaks the transport. Implementations may attach Unix
+    ///   pre-exec hooks, set environment variables, modify Windows
+    ///   restricted-token attributes, etc. — anything that doesn't
+    ///   touch the standard I/O streams.
+    /// - **Don't return an error for "this capability isn't
+    ///   supported on this OS".** Communicate that via
+    ///   [`Sandbox::supports`] so the trust gate can route the
+    ///   handler to the prompt path *before* spawn. By the time
+    ///   `apply_to` is called, the trust gate has already returned
+    ///   its final decision; surfacing an unsupported-capability
+    ///   error here is a hard spawn failure, not a fall-back.
+    /// - **Only return [`SandboxError`] for genuine kernel
+    ///   failures** (seccomp install fault, sandbox profile compile
+    ///   error, etc.).
     fn apply_to(
         &self,
         cmd: &mut std::process::Command,
         caps: Capabilities,
     ) -> Result<(), SandboxError>;
 
-    /// True when this impl can enforce the declared capabilities on
-    /// the running platform. The trust gate consults this when
-    /// deciding whether a `pure` handler is eligible for auto-trust:
-    /// only `true` shifts a `Pending` decision to `Trusted` without a
+    /// True when this impl can enforce the supplied capability set
+    /// on the running platform. The trust gate consults this when
+    /// deciding whether a handler is eligible for auto-trust: only
+    /// `true` shifts a `Pending` decision to `Trusted` without a
     /// prompt.
     ///
-    /// [`NullSandbox::available`] always returns `false`. A real
-    /// impl may also return `false` for capability sets it can't
-    /// enforce (e.g., a future stricter capability not yet covered
-    /// on a particular OS).
-    fn available(&self) -> bool;
+    /// Takes the [`Capabilities`] rather than the gate's coarser
+    /// `Capability` (Pure / Full) classifier so the trait stays
+    /// forward-compatible: future granular variants (e.g.
+    /// `fs_read: true, fs_write: false`) can ask the sandbox
+    /// directly whether the running OS implementation covers them.
+    ///
+    /// [`NullSandbox::supports`] always returns `false`. Per-OS
+    /// impls return `false` for capability sets they can't enforce
+    /// even if they support others.
+    fn supports(&self, caps: Capabilities) -> bool;
 }
 
-/// Errors a [`Sandbox`] implementation can surface when applying a
-/// policy.
+/// Errors a [`Sandbox`] implementation can surface when installing a
+/// policy at spawn time. Reserved for genuine kernel failures —
+/// platform-capability mismatches are communicated through
+/// [`Sandbox::supports`] *before* the trust gate decides, not here.
 #[derive(Debug)]
-pub enum SandboxError {
-    /// The requested capability cannot be enforced on this platform.
-    /// E.g., on Windows where syscall-level restrictions don't have
-    /// a 1:1 mechanism. The caller (the trust gate) should treat
-    /// this as "fall back to prompt" rather than auto-trust.
-    Unsupported { detail: String },
-    /// An OS-level call failed during policy installation. The inner
-    /// error captures the OS-specific failure (e.g., seccomp install
-    /// failure, sandbox profile compile error).
-    Os {
-        message: String,
-        source: Option<Box<dyn Error + Send + Sync + 'static>>,
-    },
+pub struct SandboxError {
+    message: String,
+    source: Option<Box<dyn Error + Send + Sync + 'static>>,
+}
+
+impl SandboxError {
+    /// Construct a new sandbox error without a wrapped source. Use
+    /// when the OS-specific failure is already captured in
+    /// `message`.
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            source: None,
+        }
+    }
+
+    /// Construct from a message and a wrapped source error (for
+    /// preserving the original `std::io::Error` from a kernel call,
+    /// etc.).
+    pub fn with_source(
+        message: impl Into<String>,
+        source: Box<dyn Error + Send + Sync + 'static>,
+    ) -> Self {
+        Self {
+            message: message.into(),
+            source: Some(source),
+        }
+    }
 }
 
 impl fmt::Display for SandboxError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Unsupported { detail } => {
-                write!(
-                    f,
-                    "sandbox capability not supported on this platform: {detail}"
-                )
-            }
-            Self::Os { message, .. } => write!(f, "sandbox apply failed: {message}"),
-        }
+        write!(f, "sandbox apply failed: {}", self.message)
     }
 }
 
 impl Error for SandboxError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Unsupported { .. } => None,
-            Self::Os { source, .. } => source.as_ref().map(|s| s.as_ref() as &dyn Error),
-        }
-    }
-}
-
-impl SandboxError {
-    /// Convenience constructor for an [`SandboxError::Unsupported`]
-    /// error.
-    pub fn unsupported(detail: impl Into<String>) -> Self {
-        Self::Unsupported {
-            detail: detail.into(),
-        }
-    }
-
-    /// Convenience constructor for an [`SandboxError::Os`] error
-    /// without a source.
-    pub fn os(message: impl Into<String>) -> Self {
-        Self::Os {
-            message: message.into(),
-            source: None,
-        }
+        self.source.as_ref().map(|s| s.as_ref() as &dyn Error)
     }
 }

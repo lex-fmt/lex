@@ -2,9 +2,10 @@
 //! sandbox is implemented (or available) for the running platform.
 //!
 //! Behavior: [`Sandbox::apply_to`] makes no changes to the command;
-//! [`Sandbox::available`] returns `false`. This means the trust gate
-//! (when consulted in PR 12d) will keep prompting for every
-//! subprocess handler, exactly as it does today in β/γ.
+//! [`Sandbox::supports`] returns `false` for every capability set.
+//! This means the trust gate (when consulted in PR 12d) will keep
+//! prompting for every subprocess handler, exactly as it does today
+//! in β/γ.
 //!
 //! The plumbing PR (this one) installs `NullSandbox` as the default
 //! on every platform. Per-OS PRs (12a/b/c) ship concrete impls
@@ -14,7 +15,7 @@ use lex_extension::schema::Capabilities;
 
 use super::{Sandbox, SandboxError};
 
-/// No-op sandbox. Always returns "not available"; never modifies the
+/// No-op sandbox. Always reports "not supported"; never modifies the
 /// command. The default the existing [`SubprocessHandler::spawn`]
 /// passes through to [`SubprocessHandler::spawn_with_sandbox`] when
 /// the host doesn't supply a concrete impl, and the default the
@@ -34,7 +35,7 @@ impl Sandbox for NullSandbox {
         Ok(())
     }
 
-    fn available(&self) -> bool {
+    fn supports(&self, _caps: Capabilities) -> bool {
         false
     }
 }
@@ -44,9 +45,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn null_sandbox_reports_unavailable() {
+    fn null_sandbox_reports_unsupported_for_every_capability_shape() {
         let s = NullSandbox;
-        assert!(!s.available());
+        assert!(!s.supports(Capabilities::default()));
+        assert!(!s.supports(Capabilities {
+            fs: true,
+            net: false
+        }));
+        assert!(!s.supports(Capabilities {
+            fs: true,
+            net: true
+        }));
     }
 
     #[test]

@@ -336,7 +336,7 @@ impl SubprocessHandler {
             capabilities,
             lex_version,
             env,
-            Box::new(crate::sandbox::NullSandbox),
+            std::sync::Arc::new(crate::sandbox::NullSandbox),
         )
     }
 
@@ -362,7 +362,7 @@ impl SubprocessHandler {
         capabilities: lex_extension::schema::Capabilities,
         lex_version: &str,
         env: &SpawnEnv,
-        sandbox: Box<dyn crate::sandbox::Sandbox>,
+        sandbox: std::sync::Arc<dyn crate::sandbox::Sandbox>,
     ) -> Result<Self, SpawnError> {
         if spec.command.is_empty() {
             return Err(SpawnError::EmptyCommand);
@@ -703,7 +703,7 @@ fn run_worker(
     init_tx: std::sync::mpsc::Sender<Result<InitializeResult, SpawnError>>,
     cmd_rx: mpsc::UnboundedReceiver<WorkerCmd>,
     disabled: Arc<AtomicBool>,
-    sandbox: Box<dyn crate::sandbox::Sandbox>,
+    sandbox: std::sync::Arc<dyn crate::sandbox::Sandbox>,
     capabilities: lex_extension::schema::Capabilities,
 ) {
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -731,7 +731,7 @@ async fn worker_main(
     init_tx: std::sync::mpsc::Sender<Result<InitializeResult, SpawnError>>,
     mut cmd_rx: mpsc::UnboundedReceiver<WorkerCmd>,
     disabled: Arc<AtomicBool>,
-    sandbox: Box<dyn crate::sandbox::Sandbox>,
+    sandbox: std::sync::Arc<dyn crate::sandbox::Sandbox>,
     capabilities: lex_extension::schema::Capabilities,
 ) {
     // Build the Command first, hand it to the sandbox for in-place
