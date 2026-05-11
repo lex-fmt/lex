@@ -7,6 +7,8 @@
 //! explicit approval; declared `capabilities: { fs/net: false }` is
 //! ignored until PR 12 lands OS-level enforcement.
 
+use std::sync::Arc;
+
 use super::store::{TrustKey, TrustStore};
 
 /// Where the schema came from. Combined with [`Surface`] and
@@ -157,6 +159,20 @@ pub struct TrustGate {
     enable_handlers: bool,
     store: TrustStore,
     prompt: Box<dyn TrustPromptHandler>,
+    /// OS-level enforcement available to the host. With
+    /// [`crate::sandbox::NullSandbox`] (the default for PR
+    /// 12-plumbing), [`crate::sandbox::Sandbox::supports`] returns
+    /// `false` for every capability set and the post-δ pure-handler
+    /// auto-trust path is inactive — behaviour matches β/γ. PR 12d
+    /// (the matrix flip) becomes a one-line wiring change in
+    /// `lex-engine` to install the OS-appropriate impl here.
+    ///
+    /// Stored as `Arc` so the host can hand the same instance to
+    /// the gate and to [`crate::transport::SubprocessHandler::spawn_with_sandbox`]
+    /// — guaranteeing the gate's auto-trust decision is anchored on
+    /// the same sandbox that will actually enforce the policy at
+    /// spawn time.
+    sandbox: Arc<dyn crate::sandbox::Sandbox>,
 }
 
 impl TrustGate {
@@ -171,7 +187,36 @@ impl TrustGate {
             enable_handlers,
             store,
             prompt,
+            sandbox: Arc::new(crate::sandbox::NullSandbox),
         }
+    }
+
+    /// Install an OS-level sandbox for post-δ auto-trust of declared-
+    /// pure handlers. Replaces the default
+    /// [`crate::sandbox::NullSandbox`]. Today (PR 12-plumbing) the
+    /// gate consults [`crate::sandbox::Sandbox::supports`] but the
+    /// only available impls report `false`, so behaviour doesn't
+    /// change yet. PR 12a/b/c ship per-OS impls; PR 12d flips the
+    /// matrix to actually use the result.
+    ///
+    /// Takes `Arc<dyn Sandbox>` so the host can hand the same
+    /// instance to [`crate::transport::SubprocessHandler::spawn_with_sandbox`]
+    /// — guaranteeing the auto-trust decision is anchored on the
+    /// sandbox that actually enforces policy at spawn time. Without
+    /// this contract, a host could (e.g.) install a real sandbox on
+    /// the gate but forget to wire it into spawn, silently auto-
+    /// trusting pure handlers that then run unrestrained.
+    pub fn set_sandbox(&mut self, sandbox: Arc<dyn crate::sandbox::Sandbox>) {
+        self.sandbox = sandbox;
+    }
+
+    /// Borrow the sandbox installed on this gate. Mainly here for
+    /// host-side diagnostics (e.g., "this workspace would auto-
+    /// trust pure handlers" status output) and for callers that
+    /// need to pass the same instance into
+    /// [`crate::transport::SubprocessHandler::spawn_with_sandbox`].
+    pub fn sandbox(&self) -> Arc<dyn crate::sandbox::Sandbox> {
+        Arc::clone(&self.sandbox)
     }
 
     /// Surface the gate was constructed with. Useful for diagnostics
@@ -200,8 +245,8 @@ impl TrustGate {
         command_string: &str,
     ) -> TrustDecision {
         // Native handlers run by linkage. Bundled `lex.*` built-ins
-        // hit this path; PR 12 will extend it to declared-pure
-        // subprocess handlers.
+        // hit this path; PR 12d will extend it to declared-pure
+        // subprocess handlers under an enforced sandbox.
         if matches!(transport, Transport::Native) {
             return TrustDecision::Trusted;
         }
@@ -212,6 +257,37 @@ impl TrustGate {
             return TrustDecision::Denied {
                 reason: "WASM handlers are not yet supported".into(),
             };
+        }
+
+        // Post-δ pure-handler auto-trust path (the matrix flip
+        // tracked at lex#528 / PR 12d). Only fires when both:
+        //   1. the handler declared `pure` capabilities, AND
+        //   2. the installed sandbox supports enforcing that
+        //      declaration on the running platform.
+        //
+        // PR 12-plumbing wires this consultation but ships
+        // [`crate::sandbox::NullSandbox`] as the default, which
+        // reports `supports(_) == false` for every capability set.
+        // PR 12a/b/c add real per-OS impls; PR 12d switches the
+        // default install in `lex-engine` from `NullSandbox` to the
+        // OS-appropriate impl so this branch starts firing.
+        //
+        // We pass `Capabilities::default()` to `supports()` because
+        // `Capability::Pure` is exactly the
+        // `Capabilities::is_pure()` classifier — the default-shape
+        // capability set. Future granular capability variants would
+        // pass the actual schema `Capabilities` through `evaluate`
+        // and on to `supports()` here.
+        //
+        // Independent of `surface`: a pure handler under an enforced
+        // sandbox is trustworthy regardless of whether we're in CLI,
+        // CI, or LSP mode.
+        if matches!(capability, Capability::Pure)
+            && self
+                .sandbox
+                .supports(lex_extension::schema::Capabilities::default())
+        {
+            return TrustDecision::Trusted;
         }
 
         match self.surface {
@@ -655,5 +731,156 @@ mod tests {
     #[test]
     fn ci_detection_returns_false_when_no_var_set() {
         assert!(!detect_ci_environment(|_| None));
+    }
+
+    // ───────── Sandbox plumbing (lex#528, PR 12-plumbing) ─────────
+
+    /// Test sandbox impl whose `supports()` returns the configured
+    /// flag for every capability set, and `apply_to` is a no-op.
+    /// Used to drive the post-δ auto-trust path without depending
+    /// on any real OS sandbox.
+    struct FixedSupportSandbox(bool);
+    impl crate::sandbox::Sandbox for FixedSupportSandbox {
+        fn apply_to(
+            &self,
+            _cmd: &mut std::process::Command,
+            _caps: lex_extension::schema::Capabilities,
+        ) -> Result<(), crate::sandbox::SandboxError> {
+            Ok(())
+        }
+        fn supports(&self, _caps: lex_extension::schema::Capabilities) -> bool {
+            self.0
+        }
+    }
+
+    #[test]
+    fn default_gate_installs_null_sandbox_which_supports_nothing() {
+        let (gate, _dir) = gate_with_surface(
+            Surface::LspSession,
+            false,
+            TrustDecision::Denied {
+                reason: "n/a".into(),
+            },
+        );
+        // Default sandbox is NullSandbox, which reports supports(_)
+        // == false for every capability set. The post-δ auto-trust
+        // branch never fires.
+        assert!(!gate
+            .sandbox()
+            .supports(lex_extension::schema::Capabilities::default()));
+    }
+
+    #[test]
+    fn pure_handler_auto_trusts_when_sandbox_supports_pure() {
+        // PR 12d-style behavior, tested with a mock sandbox so the
+        // plumbing PR can lock in the contract before any per-OS
+        // impl ships. With sandbox.supports(default) == true and the
+        // handler declaring pure capabilities, the gate auto-trusts
+        // without consulting the prompt — regardless of surface.
+        for surface in [Surface::CliOneShot, Surface::LspSession, Surface::Ci] {
+            let (mut gate, _dir) = gate_with_surface(
+                surface,
+                false,
+                TrustDecision::Denied {
+                    reason: "prompt should not fire".into(),
+                },
+            );
+            gate.set_sandbox(Arc::new(FixedSupportSandbox(true)));
+            let d = gate.evaluate(
+                &Source::LexTomlNamespace {
+                    name: "acme".into(),
+                },
+                Transport::Subprocess,
+                Capability::Pure,
+                "acme",
+                "acme-handler",
+            );
+            assert_eq!(d, TrustDecision::Trusted, "surface={surface:?}");
+        }
+    }
+
+    #[test]
+    fn full_capability_handler_does_not_auto_trust_even_under_sandbox() {
+        // Auto-trust is reserved for `pure` declarations. A handler
+        // that declared `fs: true` or `net: true` still prompts /
+        // requires --enable-handlers, because the sandbox can only
+        // enforce what was declared.
+        let (mut gate, _dir) = gate_with_surface(
+            Surface::CliOneShot,
+            false,
+            TrustDecision::Denied {
+                reason: "n/a".into(),
+            },
+        );
+        gate.set_sandbox(Arc::new(FixedSupportSandbox(true)));
+        let d = gate.evaluate(
+            &Source::LexTomlNamespace {
+                name: "acme".into(),
+            },
+            Transport::Subprocess,
+            Capability::Full,
+            "acme",
+            "acme-handler",
+        );
+        match d {
+            TrustDecision::Denied { reason } => {
+                assert!(reason.contains("--enable-handlers"));
+            }
+            other => panic!("expected Denied (full caps still prompts), got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pure_handler_falls_back_to_prompt_when_sandbox_unsupported() {
+        // The path PR 12-plumbing ships with NullSandbox: pure
+        // handler, but the sandbox doesn't support that capability
+        // set, so behaviour matches β/γ — CLI without the flag is
+        // denied, LSP would prompt.
+        let (mut gate, _dir) = gate_with_surface(
+            Surface::CliOneShot,
+            false,
+            TrustDecision::Denied {
+                reason: "n/a".into(),
+            },
+        );
+        gate.set_sandbox(Arc::new(FixedSupportSandbox(false)));
+        let d = gate.evaluate(
+            &Source::LexTomlNamespace {
+                name: "acme".into(),
+            },
+            Transport::Subprocess,
+            Capability::Pure,
+            "acme",
+            "acme-handler",
+        );
+        match d {
+            TrustDecision::Denied { reason } => {
+                assert!(reason.contains("--enable-handlers"));
+            }
+            other => panic!("expected Denied without enforced sandbox, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sandbox_arc_is_shared_with_callers() {
+        // The Arc<dyn Sandbox> contract: the gate must hand out the
+        // SAME instance to callers (e.g., `lex-engine` wiring this
+        // through to `SubprocessHandler::spawn_with_sandbox`). If
+        // the gate and the transport were to hold separate
+        // instances, a future bug could silently auto-trust pure
+        // handlers under one config while spawning them under
+        // another.
+        let (mut gate, _dir) = gate_with_surface(
+            Surface::LspSession,
+            false,
+            TrustDecision::Denied {
+                reason: "n/a".into(),
+            },
+        );
+        let original: Arc<dyn crate::sandbox::Sandbox> = Arc::new(FixedSupportSandbox(true));
+        gate.set_sandbox(Arc::clone(&original));
+        let from_gate = gate.sandbox();
+        // Same Arc allocation — pointer identity check.
+        assert!(Arc::ptr_eq(&original, &from_gate));
     }
 }

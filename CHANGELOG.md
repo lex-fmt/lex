@@ -2,6 +2,46 @@
 
 ## [Unreleased]
 
+### Added
+
+- `lex-extension-host::sandbox`: new module hosting the `Sandbox`
+  trait (the OS-level sandbox facade), a `SandboxError` error type,
+  and a `NullSandbox` no-op default that reports
+  `supports(_) == false` for every capability set on every platform.
+  Foundation for the δ-phase trust matrix flip (lex#528): per-OS
+  sandbox implementations (12a Linux via birdcage seccomp+landlock,
+  12b macOS via birdcage sandbox-exec, 12c Windows via Job Objects
+  + restricted tokens) plug in behind this trait; the trust gate
+  consults `Sandbox::supports(caps)` to decide whether a
+  declared-pure handler can auto-trust without a prompt.
+- `SubprocessHandler::spawn_with_sandbox` companion to the existing
+  `spawn`. Takes `Arc<dyn Sandbox>` so the host can install one
+  instance and share it with `TrustGate`. The worker thread calls
+  `apply_to(&mut cmd, capabilities)` before `cmd.spawn()` so the
+  kernel enforces declared capabilities from the child's first
+  instruction. `spawn` (the existing entry point) now delegates to
+  `spawn_with_sandbox` with `NullSandbox` — no behaviour change for
+  current callers.
+- `SpawnError::Sandbox(String)` variant for policy-install failures
+  on the host side. Same handling as other spawn errors today;
+  retry-with-prompt path is future work alongside PR 12d.
+- `TrustGate::set_sandbox(Arc<dyn Sandbox>)` and
+  `TrustGate::sandbox()` accessor (returns the Arc by clone). The
+  default install is `NullSandbox`, so β/γ behaviour is preserved
+  (every subprocess prompts). When PR 12a/b/c land, `lex-engine`
+  swaps in the OS-appropriate impl and shares the same Arc across
+  the gate and the transport — guaranteeing the auto-trust decision
+  is anchored on the sandbox that actually enforces policy.
+
+### Changed
+
+- `TrustGate::evaluate` now short-circuits to `Trusted` for the
+  `(transport=Subprocess, capability=Pure)` pair when
+  `sandbox.supports(Capabilities::default())` returns `true`. With
+  `NullSandbox` (the default), this branch is inactive —
+  observable behaviour is unchanged. Tests cover both the
+  supported and unsupported paths via a mock sandbox.
+
 ## [0.11.0] - 2026-05-10
 
 

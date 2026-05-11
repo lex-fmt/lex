@@ -144,6 +144,26 @@ pub enum SpawnError {
     /// The child closed stdin/stdout before completing the
     /// `initialize` handshake.
     ChildStreamMissing,
+    /// The OS-level [`Sandbox`] couldn't install its policy on the
+    /// command (e.g., the requested capability isn't enforceable on
+    /// this platform, or a kernel call failed). The child is never
+    /// spawned in this case.
+    ///
+    /// Current handling in [`lex_engine::setup::boot_registry`]
+    /// (and any other caller treating spawn failure as terminal):
+    /// the namespace registers schema-only — pre-validation still
+    /// catches typos but no handler runs — and a `BootDiagnostic`
+    /// surfaces the reason. Same shape as other [`SpawnError`]
+    /// variants today. Future revisions (likely landing alongside
+    /// PR 12d's matrix flip) may add a retry-with-prompt path so a
+    /// sandbox install failure on a pure handler can downgrade to
+    /// the prompt-then-pin track instead of registering schema-
+    /// only on the first run; until then, sandbox failures behave
+    /// identically to other spawn failures.
+    ///
+    /// [`Sandbox`]: crate::sandbox::Sandbox
+    /// [`lex_engine::setup::boot_registry`]: https://docs.rs/lex-engine/latest/lex_engine/setup/fn.boot_registry.html
+    Sandbox(String),
     /// Initialize timed out, errored, or returned an incompatible
     /// `wire_version`.
     Initialize(InitializeError),
@@ -184,6 +204,12 @@ impl std::fmt::Display for SpawnError {
             SpawnError::Spawn(e) => write!(f, "subprocess handler: failed to spawn child: {e}"),
             SpawnError::ChildStreamMissing => {
                 f.write_str("subprocess handler: child closed stdio before initialize")
+            }
+            SpawnError::Sandbox(message) => {
+                write!(
+                    f,
+                    "subprocess handler: sandbox policy install failed: {message}"
+                )
             }
             SpawnError::Initialize(InitializeError::Timeout) => {
                 f.write_str("subprocess handler: initialize handshake timed out")
@@ -290,6 +316,11 @@ impl SubprocessHandler {
     /// report which host they're talking to). `env` provides values
     /// for the `${WORKSPACE_ROOT}` / `${LEX_CACHE}` / `${HANDLER_CONFIG}`
     /// expansions inside `spec.command`.
+    ///
+    /// The child process runs without OS-level sandboxing. To enforce
+    /// declared capabilities at the kernel level (declared-pure
+    /// handlers under post-δ trust-matrix auto-trust), use
+    /// [`Self::spawn_with_sandbox`].
     pub fn spawn(
         spec: &HandlerSpec,
         namespace: &str,
@@ -297,6 +328,41 @@ impl SubprocessHandler {
         capabilities: lex_extension::schema::Capabilities,
         lex_version: &str,
         env: &SpawnEnv,
+    ) -> Result<Self, SpawnError> {
+        Self::spawn_with_sandbox(
+            spec,
+            namespace,
+            labels,
+            capabilities,
+            lex_version,
+            env,
+            std::sync::Arc::new(crate::sandbox::NullSandbox),
+        )
+    }
+
+    /// Spawn a handler subprocess under the supplied OS-level
+    /// [`Sandbox`], then run the `initialize` handshake. The sandbox's
+    /// [`Sandbox::apply_to`] is called against the [`Command`] before
+    /// `spawn()`, so the kernel enforces the declared capability set
+    /// on the child from the first instruction.
+    ///
+    /// `sandbox` carries the per-OS enforcement mechanism (Linux
+    /// seccomp+landlock via `birdcage`, macOS sandbox-exec, Windows
+    /// Job Objects + restricted tokens). For the plumbing PR
+    /// ([lex-fmt/lex#528](https://github.com/lex-fmt/lex/issues/528))
+    /// the only available impl is [`crate::sandbox::NullSandbox`],
+    /// which behaves identically to [`Self::spawn`].
+    ///
+    /// [`Sandbox`]: crate::sandbox::Sandbox
+    /// [`Sandbox::apply_to`]: crate::sandbox::Sandbox::apply_to
+    pub fn spawn_with_sandbox(
+        spec: &HandlerSpec,
+        namespace: &str,
+        labels: &[String],
+        capabilities: lex_extension::schema::Capabilities,
+        lex_version: &str,
+        env: &SpawnEnv,
+        sandbox: std::sync::Arc<dyn crate::sandbox::Sandbox>,
     ) -> Result<Self, SpawnError> {
         if spec.command.is_empty() {
             return Err(SpawnError::EmptyCommand);
@@ -332,8 +398,18 @@ impl SubprocessHandler {
         })
         .expect("InitializeParams serialises");
 
+        let worker_sandbox = sandbox;
+        let worker_caps = capabilities;
         let worker = thread::spawn(move || {
-            run_worker(expanded, init_params, init_tx, cmd_rx, disabled_for_worker);
+            run_worker(
+                expanded,
+                init_params,
+                init_tx,
+                cmd_rx,
+                disabled_for_worker,
+                worker_sandbox,
+                worker_caps,
+            );
         });
 
         let init = init_rx
@@ -620,37 +696,61 @@ impl LexHandler for SubprocessHandler {
 /// Worker entry point. Owns a single-threaded tokio runtime, spawns the
 /// child, runs the initialize handshake, then loops dispatching
 /// commands until shutdown.
+#[allow(clippy::too_many_arguments)]
 fn run_worker(
     argv: Vec<String>,
     init_params: serde_json::Value,
     init_tx: std::sync::mpsc::Sender<Result<InitializeResult, SpawnError>>,
     cmd_rx: mpsc::UnboundedReceiver<WorkerCmd>,
     disabled: Arc<AtomicBool>,
+    sandbox: std::sync::Arc<dyn crate::sandbox::Sandbox>,
+    capabilities: lex_extension::schema::Capabilities,
 ) {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .expect("build current_thread runtime");
     runtime.block_on(async move {
-        worker_main(argv, init_params, init_tx, cmd_rx, disabled).await;
+        worker_main(
+            argv,
+            init_params,
+            init_tx,
+            cmd_rx,
+            disabled,
+            sandbox,
+            capabilities,
+        )
+        .await;
     });
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn worker_main(
     argv: Vec<String>,
     init_params: serde_json::Value,
     init_tx: std::sync::mpsc::Sender<Result<InitializeResult, SpawnError>>,
     mut cmd_rx: mpsc::UnboundedReceiver<WorkerCmd>,
     disabled: Arc<AtomicBool>,
+    sandbox: std::sync::Arc<dyn crate::sandbox::Sandbox>,
+    capabilities: lex_extension::schema::Capabilities,
 ) {
-    let mut child = match Command::new(&argv[0])
-        .args(&argv[1..])
+    // Build the Command first, hand it to the sandbox for in-place
+    // policy installation (env vars, Unix pre-exec hooks, restricted
+    // tokens on Windows), then spawn. Doing the apply_to before
+    // spawn() is the contract — once the child is alive it may have
+    // already issued syscalls we'd want to block, and most kernel
+    // sandboxes can only attach pre-exec.
+    let mut cmd = Command::new(&argv[0]);
+    cmd.args(&argv[1..])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-    {
+        .kill_on_drop(true);
+    if let Err(e) = sandbox.apply_to(cmd.as_std_mut(), capabilities) {
+        let _ = init_tx.send(Err(SpawnError::Sandbox(format!("{e}"))));
+        return;
+    }
+    let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
             let _ = init_tx.send(Err(SpawnError::Spawn(e)));
