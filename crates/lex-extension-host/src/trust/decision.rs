@@ -157,6 +157,13 @@ pub struct TrustGate {
     enable_handlers: bool,
     store: TrustStore,
     prompt: Box<dyn TrustPromptHandler>,
+    /// OS-level enforcement available to the host. With
+    /// [`crate::sandbox::NullSandbox`] (the default for PR
+    /// 12-plumbing), [`crate::sandbox::Sandbox::available`] returns
+    /// `false` and the post-δ pure-handler auto-trust path is
+    /// inactive — behaviour matches β/γ. PR 12d (the matrix flip)
+    /// becomes a one-line consult here.
+    sandbox: Box<dyn crate::sandbox::Sandbox>,
 }
 
 impl TrustGate {
@@ -171,7 +178,26 @@ impl TrustGate {
             enable_handlers,
             store,
             prompt,
+            sandbox: Box::new(crate::sandbox::NullSandbox),
         }
+    }
+
+    /// Install an OS-level sandbox for post-δ auto-trust of declared-
+    /// pure handlers. Replaces the default
+    /// [`crate::sandbox::NullSandbox`]. Today (PR 12-plumbing) the
+    /// gate consults [`crate::sandbox::Sandbox::available`] but the
+    /// only available impls report `false`, so behaviour doesn't
+    /// change yet. PR 12a/b/c ship per-OS impls; PR 12d flips the
+    /// matrix to actually use the result.
+    pub fn set_sandbox(&mut self, sandbox: Box<dyn crate::sandbox::Sandbox>) {
+        self.sandbox = sandbox;
+    }
+
+    /// Borrow the sandbox installed on this gate. Mainly here for
+    /// host-side diagnostics (e.g., "this workspace would auto-
+    /// trust pure handlers" status output).
+    pub fn sandbox(&self) -> &dyn crate::sandbox::Sandbox {
+        self.sandbox.as_ref()
     }
 
     /// Surface the gate was constructed with. Useful for diagnostics
@@ -200,8 +226,8 @@ impl TrustGate {
         command_string: &str,
     ) -> TrustDecision {
         // Native handlers run by linkage. Bundled `lex.*` built-ins
-        // hit this path; PR 12 will extend it to declared-pure
-        // subprocess handlers.
+        // hit this path; PR 12d will extend it to declared-pure
+        // subprocess handlers under an enforced sandbox.
         if matches!(transport, Transport::Native) {
             return TrustDecision::Trusted;
         }
@@ -212,6 +238,26 @@ impl TrustGate {
             return TrustDecision::Denied {
                 reason: "WASM handlers are not yet supported".into(),
             };
+        }
+
+        // Post-δ pure-handler auto-trust path (the matrix flip
+        // tracked at lex#528 / PR 12d). Only fires when both:
+        //   1. the handler declared `pure` capabilities, AND
+        //   2. an OS-level sandbox is available to enforce that
+        //      declaration on the running platform.
+        //
+        // PR 12-plumbing wires this consultation but ships
+        // [`crate::sandbox::NullSandbox`] as the default, which
+        // reports `available() == false` everywhere. PR 12a/b/c add
+        // real per-OS impls; PR 12d switches the default install in
+        // `lex-engine` from `NullSandbox` to the OS-appropriate
+        // impl so this branch starts firing.
+        //
+        // Independent of `surface`: a pure handler under an enforced
+        // sandbox is trustworthy regardless of whether we're in CLI,
+        // CI, or LSP mode.
+        if matches!(capability, Capability::Pure) && self.sandbox.available() {
+            return TrustDecision::Trusted;
         }
 
         match self.surface {
@@ -655,5 +701,129 @@ mod tests {
     #[test]
     fn ci_detection_returns_false_when_no_var_set() {
         assert!(!detect_ci_environment(|_| None));
+    }
+
+    // ───────── Sandbox plumbing (lex#528, PR 12-plumbing) ─────────
+
+    /// Test sandbox impl that reports availability per its
+    /// constructor flag and is a no-op in `apply_to`. Used to drive
+    /// the post-δ auto-trust path without depending on any real OS
+    /// sandbox.
+    struct FixedAvailabilitySandbox(bool);
+    impl crate::sandbox::Sandbox for FixedAvailabilitySandbox {
+        fn apply_to(
+            &self,
+            _cmd: &mut std::process::Command,
+            _caps: lex_extension::schema::Capabilities,
+        ) -> Result<(), crate::sandbox::SandboxError> {
+            Ok(())
+        }
+        fn available(&self) -> bool {
+            self.0
+        }
+    }
+
+    #[test]
+    fn default_gate_installs_null_sandbox_which_reports_unavailable() {
+        let (gate, _dir) = gate_with_surface(
+            Surface::LspSession,
+            false,
+            TrustDecision::Denied {
+                reason: "n/a".into(),
+            },
+        );
+        // Default sandbox is NullSandbox, which always reports
+        // unavailable. The post-δ auto-trust branch never fires.
+        assert!(!gate.sandbox().available());
+    }
+
+    #[test]
+    fn pure_handler_auto_trusts_when_sandbox_available() {
+        // PR 12d-style behavior, tested with a mock sandbox so the
+        // plumbing PR can lock in the contract before any per-OS
+        // impl ships. With sandbox.available() == true and the
+        // handler declaring pure capabilities, the gate auto-trusts
+        // without consulting the prompt — regardless of surface.
+        for surface in [Surface::CliOneShot, Surface::LspSession, Surface::Ci] {
+            let (mut gate, _dir) = gate_with_surface(
+                surface,
+                false,
+                TrustDecision::Denied {
+                    reason: "prompt should not fire".into(),
+                },
+            );
+            gate.set_sandbox(Box::new(FixedAvailabilitySandbox(true)));
+            let d = gate.evaluate(
+                &Source::LexTomlNamespace {
+                    name: "acme".into(),
+                },
+                Transport::Subprocess,
+                Capability::Pure,
+                "acme",
+                "acme-handler",
+            );
+            assert_eq!(d, TrustDecision::Trusted, "surface={surface:?}");
+        }
+    }
+
+    #[test]
+    fn full_capability_handler_does_not_auto_trust_even_under_sandbox() {
+        // Auto-trust is reserved for `pure` declarations. A handler
+        // that declared `fs: true` or `net: true` still prompts /
+        // requires --enable-handlers, because the sandbox can only
+        // enforce what was declared.
+        let (mut gate, _dir) = gate_with_surface(
+            Surface::CliOneShot,
+            false,
+            TrustDecision::Denied {
+                reason: "n/a".into(),
+            },
+        );
+        gate.set_sandbox(Box::new(FixedAvailabilitySandbox(true)));
+        let d = gate.evaluate(
+            &Source::LexTomlNamespace {
+                name: "acme".into(),
+            },
+            Transport::Subprocess,
+            Capability::Full,
+            "acme",
+            "acme-handler",
+        );
+        match d {
+            TrustDecision::Denied { reason } => {
+                assert!(reason.contains("--enable-handlers"));
+            }
+            other => panic!("expected Denied (full caps still prompts), got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pure_handler_falls_back_to_prompt_when_sandbox_unavailable() {
+        // The path PR 12-plumbing ships with NullSandbox: pure
+        // handler, but no enforced sandbox, so behaviour matches
+        // β/γ — CLI without the flag is denied, LSP would prompt.
+        let (mut gate, _dir) = gate_with_surface(
+            Surface::CliOneShot,
+            false,
+            TrustDecision::Denied {
+                reason: "n/a".into(),
+            },
+        );
+        gate.set_sandbox(Box::new(FixedAvailabilitySandbox(false)));
+        let d = gate.evaluate(
+            &Source::LexTomlNamespace {
+                name: "acme".into(),
+            },
+            Transport::Subprocess,
+            Capability::Pure,
+            "acme",
+            "acme-handler",
+        );
+        match d {
+            TrustDecision::Denied { reason } => {
+                assert!(reason.contains("--enable-handlers"));
+            }
+            other => panic!("expected Denied without enforced sandbox, got: {other:?}"),
+        }
     }
 }

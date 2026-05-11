@@ -2,6 +2,43 @@
 
 ## [Unreleased]
 
+### Added
+
+- `lex-extension-host::sandbox`: new module hosting the `Sandbox`
+  trait (the OS-level sandbox facade), a `SandboxError` error type,
+  and a `NullSandbox` no-op default that reports `available() ==
+  false` on every platform. Foundation for the δ-phase trust matrix
+  flip (lex#528): per-OS sandbox implementations (12a Linux via
+  birdcage seccomp+landlock, 12b macOS via birdcage sandbox-exec,
+  12c Windows via Job Objects + restricted tokens) plug in behind
+  this trait; the trust gate consults `Sandbox::available()` to
+  decide whether a declared-pure handler can auto-trust without a
+  prompt.
+- `SubprocessHandler::spawn_with_sandbox` companion to the existing
+  `spawn`. Threads the sandbox down to the worker thread, which
+  calls `apply_to(&mut cmd, capabilities)` before
+  `cmd.spawn()` so the kernel enforces declared capabilities from
+  the child's first instruction. `spawn` (the existing entry point)
+  now delegates to `spawn_with_sandbox` with `NullSandbox` — no
+  behaviour change for current callers.
+- `SpawnError::Sandbox(String)` variant for policy-install failures
+  on the host side. The trust gate (when post-δ auto-trust ships)
+  treats this as a fall-back-to-prompt, never a silent auto-trust.
+- `TrustGate::set_sandbox(Box<dyn Sandbox>)` and `TrustGate::sandbox()`
+  accessor. The default install is `NullSandbox`, so β/γ behaviour
+  is preserved (every subprocess prompts). When PR 12a/b/c land,
+  `lex-engine` swaps in the OS-appropriate impl and PR 12d flips
+  the matrix to consult it.
+
+### Changed
+
+- `TrustGate::evaluate` now short-circuits to `Trusted` for the
+  `(transport=Subprocess, capability=Pure)` pair when
+  `sandbox.available()` returns `true`. With `NullSandbox` (the
+  default), this branch is inactive — observable behaviour is
+  unchanged. Tests cover both the unavailable and available paths
+  via a mock sandbox.
+
 ## [0.11.0] - 2026-05-10
 
 

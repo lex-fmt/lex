@@ -27,20 +27,29 @@
 //! - [`trust::TrustGate`] — decides whether a handler is allowed to
 //!   run, per the β/γ-correct policy in the master tracking issue
 //!   (subprocess always prompts; native trusted by linkage).
+//! - [`sandbox::Sandbox`] — OS-level enforcement facade. The
+//!   plumbing-PR default is [`sandbox::NullSandbox`] (no
+//!   enforcement, `available() == false`). Per-OS implementations
+//!   land in follow-up PRs (12a Linux, 12b macOS, 12c Windows); the
+//!   trust matrix flip (PR 12d) consumes [`Sandbox::available`] to
+//!   auto-trust declared-pure handlers under enforced sandboxing.
 //!
 //! Coming in later PRs:
 //!
-//! - PR 12: OS-level sandboxing for declared-pure subprocess handlers
-//!   (the post-δ trust matrix flip).
+//! - PR 12a/b/c: per-OS sandbox enforcement.
+//! - PR 12d: trust matrix flip (auto-trust pure handlers under
+//!   enforced sandbox).
 
 pub mod registry;
 pub mod resolve;
+pub mod sandbox;
 pub mod schema;
 pub mod transport;
 pub mod trust;
 
 pub use registry::{Registry, RegistryError};
 pub use resolve::{resolve_namespace, ResolveError, ResolvedNamespace};
+pub use sandbox::{NullSandbox, Sandbox, SandboxError};
 pub use schema::{SchemaError, SchemaLoader};
 pub use trust::{
     detect_ci_environment, Capability, Source, Surface, Transport, TrustDecision, TrustGate,
