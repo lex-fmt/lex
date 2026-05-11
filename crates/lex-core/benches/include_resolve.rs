@@ -32,11 +32,32 @@ use lex_core::lex::builtins;
 use lex_core::lex::includes::{resolve_from_source, FsLoader, ResolveConfig};
 use lex_extension_host::registry::Registry;
 
+/// Path to the in-repo corpus generator. Always reported in error
+/// hints — even when `BENCH_CORPUS` points at an external directory,
+/// the generator that built that directory's fixtures (or the one the
+/// user should run if they meant to use the default) lives here.
+const GEN_PY_REL: &str = "benches/corpus/gen.py";
+
 fn corpus_root() -> PathBuf {
-    if let Ok(p) = std::env::var("BENCH_CORPUS") {
-        return PathBuf::from(p);
-    }
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("benches/corpus")
+    let raw = if let Ok(p) = std::env::var("BENCH_CORPUS") {
+        PathBuf::from(p)
+    } else {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("benches/corpus")
+    };
+    // `ResolveConfig::root` is documented as needing to be absolute and
+    // lexically normalised; an unnormalised root weakens the resolver's
+    // root-escape prefix check (see `lex/includes.rs`). Canonicalise
+    // here so the bench mirrors what the CLI/LSP do in production, and
+    // so a fat-fingered `BENCH_CORPUS=./corpus` fails fast instead of
+    // silently changing resolution semantics.
+    raw.canonicalize().unwrap_or_else(|e| {
+        panic!(
+            "could not canonicalise corpus root {}: {e}\nRun: python3 {}/{}",
+            raw.display(),
+            env!("CARGO_MANIFEST_DIR"),
+            GEN_PY_REL,
+        )
+    })
 }
 
 struct Scenario {
@@ -86,9 +107,10 @@ fn bench_resolve(c: &mut Criterion) {
         let host_path = scenario_root.join("host.lex");
         let source = std::fs::read_to_string(&host_path).unwrap_or_else(|e| {
             panic!(
-                "missing fixture {}: {e}\nRun: python3 {}/gen.py",
+                "missing fixture {}: {e}\nRun: python3 {}/{}",
                 host_path.display(),
-                root.display()
+                env!("CARGO_MANIFEST_DIR"),
+                GEN_PY_REL,
             )
         });
         let loader = Arc::new(FsLoader::new(scenario_root.clone()));
