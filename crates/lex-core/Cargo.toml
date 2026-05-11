@@ -36,3 +36,8 @@ proptest = { workspace = true }
 insta = { workspace = true }
 trybuild = "1.0"
 tempfile = { workspace = true }
+criterion = "0.5"
+
+[[bench]]
+name = "include_resolve"
+harness = false
