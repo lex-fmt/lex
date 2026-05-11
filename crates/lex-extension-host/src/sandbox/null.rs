@@ -15,10 +15,13 @@ use lex_extension::schema::Capabilities;
 use super::{Sandbox, SandboxError};
 
 /// No-op sandbox. Always returns "not available"; never modifies the
-/// command. The default installed by [`SubprocessHandler::with_sandbox`]
-/// when the host doesn't pass a concrete impl.
+/// command. The default the existing [`SubprocessHandler::spawn`]
+/// passes through to [`SubprocessHandler::spawn_with_sandbox`] when
+/// the host doesn't supply a concrete impl, and the default the
+/// [`crate::TrustGate`] installs via [`crate::TrustGate::new`].
 ///
-/// [`SubprocessHandler::with_sandbox`]: crate::transport::SubprocessHandler::with_sandbox
+/// [`SubprocessHandler::spawn`]: crate::transport::SubprocessHandler::spawn
+/// [`SubprocessHandler::spawn_with_sandbox`]: crate::transport::SubprocessHandler::spawn_with_sandbox
 #[derive(Debug, Default, Clone, Copy)]
 pub struct NullSandbox;
 

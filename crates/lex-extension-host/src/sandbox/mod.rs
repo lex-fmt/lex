@@ -27,9 +27,12 @@
 //!
 //! 1. The host constructs a [`Sandbox`] impl appropriate for the
 //!    running OS (or [`NullSandbox`] when no implementation exists).
-//! 2. [`SubprocessHandler::with_sandbox`] stores the impl on the
-//!    handler.
-//! 3. Before spawning the child process, the handler calls
+//! 2. The host passes the impl into
+//!    [`SubprocessHandler::spawn_with_sandbox`] (or installs it on
+//!    a [`crate::TrustGate`] via [`crate::TrustGate::set_sandbox`]
+//!    for the auto-trust decision); the worker thread moves it in
+//!    by value.
+//! 3. Before spawning the child process, the worker calls
 //!    [`Sandbox::apply_to`] with the declared
 //!    [`lex_extension::schema::Capabilities`]. The impl modifies the
 //!    [`std::process::Command`] in place (env vars, pre-exec hooks
@@ -41,7 +44,7 @@
 //!    preserved as long as [`NullSandbox::available`] returns
 //!    `false`.
 //!
-//! [`SubprocessHandler::with_sandbox`]: crate::transport::SubprocessHandler::with_sandbox
+//! [`SubprocessHandler::spawn_with_sandbox`]: crate::transport::SubprocessHandler::spawn_with_sandbox
 
 use std::error::Error;
 use std::fmt;

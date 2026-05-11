@@ -147,11 +147,22 @@ pub enum SpawnError {
     /// The OS-level [`Sandbox`] couldn't install its policy on the
     /// command (e.g., the requested capability isn't enforceable on
     /// this platform, or a kernel call failed). The child is never
-    /// spawned in this case — the caller (typically the trust gate)
-    /// should treat it as fall-back-to-prompt rather than
-    /// auto-trust.
+    /// spawned in this case.
+    ///
+    /// Current handling in [`lex_engine::setup::boot_registry`]
+    /// (and any other caller treating spawn failure as terminal):
+    /// the namespace registers schema-only — pre-validation still
+    /// catches typos but no handler runs — and a `BootDiagnostic`
+    /// surfaces the reason. Same shape as other [`SpawnError`]
+    /// variants today. Future revisions (likely landing alongside
+    /// PR 12d's matrix flip) may add a retry-with-prompt path so a
+    /// sandbox install failure on a pure handler can downgrade to
+    /// the prompt-then-pin track instead of registering schema-
+    /// only on the first run; until then, sandbox failures behave
+    /// identically to other spawn failures.
     ///
     /// [`Sandbox`]: crate::sandbox::Sandbox
+    /// [`lex_engine::setup::boot_registry`]: https://docs.rs/lex-engine/latest/lex_engine/setup/fn.boot_registry.html
     Sandbox(String),
     /// Initialize timed out, errored, or returned an incompatible
     /// `wire_version`.
