@@ -74,6 +74,21 @@ const FIXTURES: &[Fixture] = &[
         lex: "comms/specs/benchmark/080-gentle-introduction.lex",
         md: "crates/lex-core/benches/md_corpus/auto/080-gentle-introduction.md",
     },
+    Fixture {
+        name: "p1_10k",
+        lex: "crates/lex-core/benches/corpus/p1_10k/host.lex",
+        md: "crates/lex-core/benches/corpus/p1_10k/host.md",
+    },
+    Fixture {
+        name: "p2_100k",
+        lex: "crates/lex-core/benches/corpus/p2_100k/host.lex",
+        md: "crates/lex-core/benches/corpus/p2_100k/host.md",
+    },
+    Fixture {
+        name: "p3_1m",
+        lex: "crates/lex-core/benches/corpus/p3_1m/host.lex",
+        md: "crates/lex-core/benches/corpus/p3_1m/host.md",
+    },
 ];
 
 fn repo_root() -> PathBuf {
