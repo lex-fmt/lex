@@ -14,6 +14,12 @@
 #   rebuilds are fast across runs.
 # - No --privileged / --cap-add needed: landlock works unprivileged on
 #   kernels ≥5.13 and seccomp filter mode works with no_new_privs.
+# - Caveat: Docker Desktop on macOS uses a LinuxKit kernel that does
+#   NOT enable landlock. Enforcement tests will fail with
+#   "landlock failed: landlock not fully enforced". For the full
+#   suite locally use OrbStack, colima, Lima, or a real Linux host
+#   (these run a stock kernel with landlock). CI's `ubuntu-latest`
+#   has landlock and is the source of truth.
 # - Defaults to the host's native arch (arm64 on Apple Silicon). Set
 #   `SANDBOX_PLATFORM=linux/amd64` to validate the x86_64 path under
 #   emulation.
@@ -33,7 +39,7 @@ if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
 fi
 
 if [[ $# -eq 0 ]]; then
-    set -- cargo nextest run -p lex-extension-host sandbox::
+    set -- cargo nextest run -p lex-extension-host -E 'test(/sandbox/)'
 fi
 
 exec docker run --rm \

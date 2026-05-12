@@ -53,7 +53,13 @@ use lex_extension::schema::Capabilities;
 
 mod null;
 
+#[cfg(target_os = "linux")]
+mod linux;
+
 pub use null::NullSandbox;
+
+#[cfg(target_os = "linux")]
+pub use linux::LinuxSandbox;
 
 /// OS-level sandbox enforcement for subprocess handlers.
 ///
