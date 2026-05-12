@@ -142,11 +142,28 @@ fn install_landlock_fs_allowlist(program: &std::ffi::OsStr) -> io::Result<()> {
     let abi = ABI::V1;
     let read_access = AccessFs::from_read(abi);
 
+    // System paths a typical handler binary needs to read in order to
+    // boot:
+    //
+    // - `/lib`, `/lib64`, `/usr/lib`, `/usr/lib64` — dynamic-loader
+    //   library paths.
+    // - `/etc/ld.so.cache`, `/etc/ld.so.preload` — dynamic-loader
+    //   config.
+    // - `/proc/self` — Rust stdlib reads `/proc/self/exe` and a few
+    //   neighbours during startup.
+    // - `/usr/bin`, `/bin` — common interpreters (`node`,
+    //   `python3`, `bash`, `env`) and basic system utilities. Without
+    //   these, schemas using `command: ["node", "handler.js"]` or a
+    //   shebang script fail to `execve` even when the script itself
+    //   is allowed. The script path adjacent to an interpreter is a
+    //   separate concern tracked at lex#559.
     let mut allowed: Vec<PathBuf> = [
         "/lib",
         "/lib64",
         "/usr/lib",
         "/usr/lib64",
+        "/usr/bin",
+        "/bin",
         "/etc/ld.so.cache",
         "/etc/ld.so.preload",
         "/proc/self",
@@ -200,6 +217,14 @@ fn install_seccomp_network_deny() -> io::Result<()> {
     // tests can distinguish "blocked" from "process died unexpectedly".
     let deny = SeccompAction::Errno(libc::EPERM as u32);
 
+    // `SYS_socket` is the primary gate — a process that can't create
+    // an IP socket can't do networking regardless of which other
+    // syscalls are reachable. The rest are defense-in-depth for the
+    // case where a socket fd is inherited from the parent (not part
+    // of our spawn path today, but cheap to defend against).
+    // `sendmmsg`/`recvmmsg` are the multi-message variants of
+    // `sendmsg`/`recvmsg` and need to be listed explicitly — seccomp
+    // filters on syscall number, not on name.
     let denied_syscalls = [
         libc::SYS_socket,
         libc::SYS_connect,
@@ -211,6 +236,8 @@ fn install_seccomp_network_deny() -> io::Result<()> {
         libc::SYS_recvfrom,
         libc::SYS_sendmsg,
         libc::SYS_recvmsg,
+        libc::SYS_sendmmsg,
+        libc::SYS_recvmmsg,
     ];
 
     let mut rules: BTreeMap<i64, Vec<seccompiler::SeccompRule>> = BTreeMap::new();
