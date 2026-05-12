@@ -383,8 +383,10 @@ fn build_cli() -> Command {
                      against registered schemas, and (in future releases) emit and update\n\
                      namespace caches.\n\n\
                      Subcommands:\n  \
-                     list           — print every registered namespace with its source\n  \
-                     validate <doc> — run analysis against a document, print diagnostics",
+                     list             — print every registered namespace with its source\n  \
+                     validate <doc>   — run analysis against a document, print diagnostics\n  \
+                     emit <doc> [...] — walk a document's labelled annotations / verbatims,\n  \
+                                        write one NDJSON record per match to stdout",
                 )
                 .subcommand_required(true)
                 .subcommand(
@@ -398,6 +400,40 @@ fn build_cli() -> Command {
                                 .help("Path to the .lex document")
                                 .value_hint(ValueHint::FilePath)
                                 .required(true),
+                        ),
+                )
+                .subcommand(
+                    Command::new("emit")
+                        .about("Emit NDJSON records for the document's labelled nodes")
+                        .long_about(
+                            "Walk a .lex document's labelled annotations and verbatim blocks \
+                             and write one newline-delimited JSON record per match to stdout. \
+                             Pull-based export for downstream tools (static-site generators, \
+                             indexers, pipelines). Filter with --label and --namespace; both \
+                             repeatable, intersected when combined.\n\n\
+                             Record shape uses the wire AST `Position`/`Range` types — same \
+                             format LSP hover and extension hook payloads use. Body shapes: \
+                             `{kind:'none'}` for marker labels, `{kind:'text',text:'…'}` for \
+                             text bodies (incl. verbatim) and `{kind:'lex',wire:[…]}` for \
+                             parsed bodies.",
+                        )
+                        .arg(
+                            Arg::new("path")
+                                .help("Path to the .lex document")
+                                .value_hint(ValueHint::FilePath)
+                                .required(true),
+                        )
+                        .arg(
+                            Arg::new("label")
+                                .long("label")
+                                .help("Only emit records for this label (repeatable)")
+                                .action(clap::ArgAction::Append),
+                        )
+                        .arg(
+                            Arg::new("namespace")
+                                .long("namespace")
+                                .help("Only emit records in this namespace (repeatable)")
+                                .action(clap::ArgAction::Append),
                         ),
                 ),
         )
@@ -610,8 +646,29 @@ fn handle_labels_command(top: &ArgMatches, sub: &ArgMatches) -> i32 {
                 .expect("path is required");
             lexd::labels_subcommand::validate(&path, &outcome)
         }
+        Some(("emit", v)) => {
+            // emit doesn't need the boot registry — `to_wire_node`
+            // builds the wire form without schema lookup. The boot
+            // we already paid for above is wasted in this branch
+            // but keeping a single boot call site is simpler than
+            // branching the dispatch tree to skip boot for emit.
+            let _ = outcome;
+            let path = v
+                .get_one::<String>("path")
+                .map(PathBuf::from)
+                .expect("path is required");
+            let labels: Vec<String> = v
+                .get_many::<String>("label")
+                .map(|vals| vals.cloned().collect())
+                .unwrap_or_default();
+            let namespaces: Vec<String> = v
+                .get_many::<String>("namespace")
+                .map(|vals| vals.cloned().collect())
+                .unwrap_or_default();
+            lexd::labels_subcommand::emit(&path, &labels, &namespaces)
+        }
         _ => {
-            eprintln!("lexd labels: subcommand required (list, validate)");
+            eprintln!("lexd labels: subcommand required (list, validate, emit)");
             2
         }
     }
