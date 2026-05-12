@@ -48,7 +48,10 @@ pub mod transport;
 pub mod trust;
 
 pub use registry::{Registry, RegistryError};
-pub use resolve::{resolve_namespace, ResolveError, ResolvedNamespace};
+pub use resolve::{
+    default_fetcher_registry, resolve_namespace, resolve_namespace_with, FetchError, Fetcher,
+    FetcherRegistry, ParsedUri, ResolveError, ResolvedNamespace, ResolverCache, UriParseError,
+};
 pub use sandbox::{NullSandbox, Sandbox, SandboxError};
 pub use schema::{SchemaError, SchemaLoader};
 pub use trust::{

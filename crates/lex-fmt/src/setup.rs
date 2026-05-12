@@ -278,7 +278,10 @@ pub fn boot_registry(setup: ExtensionSetup<'_>) -> BootOutcome {
                     }),
                 }
             }
-            Err(ResolveError::Unimplemented { .. }) => {
+            Err(ResolveError::Fetch {
+                source: lex_extension_host::FetchError::Unimplemented { .. },
+                ..
+            }) => {
                 diagnostics.push(BootDiagnostic {
                     namespace: Some(name.clone()),
                     message: format!(

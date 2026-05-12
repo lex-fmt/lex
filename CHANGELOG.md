@@ -2,6 +2,36 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Resolver machinery** (#546 item A, partial). `lex-extension-host`
+  gains a pluggable [`Fetcher`] trait, a `FetcherRegistry`, and a
+  content-keyed `ResolverCache` (24-hour TTL for mutable refs,
+  indefinite for immutable). The four remote schemes
+  (`github:`/`gitlab:`/`https:`/`git+ssh:`) ship as stub `Fetcher`
+  impls that return `FetchError::Unimplemented` — same observable
+  behaviour as before, but plugged into the new dispatch so an
+  implementer's PR per [lex#562](https://github.com/lex-fmt/lex/issues/562)
+  only needs to swap the stub for a real fetcher. `path:` stays
+  built-in (no cache, no fetcher) — it's special-cased in
+  `resolve_namespace_with` before the registry is consulted.
+- `resolve_namespace_with(uri, workspace_root, &registry, &cache)`
+  for callers that want explicit control over the registry + cache
+  (hosts constructing one cache + registry at boot time; tests
+  using tempdir caches and custom fetchers). The existing
+  `resolve_namespace(uri, workspace_root)` is now a convenience
+  wrapper using `default_fetcher_registry()` and
+  `ResolverCache::user_default()` (XDG-cache-home aware).
+- End-to-end validation: `tests/resolver_http_e2e.rs` exercises the
+  full pipeline (URI parse → registry dispatch → cache miss →
+  fetch → cache hit on second resolve) with a hand-rolled HTTP
+  `Fetcher` against a `std::net::TcpListener` mock server. Proves
+  the machinery works for a non-stub fetcher without depending on
+  any external network.
+- `sha2` workspace dependency, used by `ResolverCache` for the
+  content-key hash function (`hash(scheme + body + rev + subdir)`
+  → 64-char hex directory name under the cache root).
+
 ### Changed
 
 - **Trust-matrix flip (lex#528 PR 12d).** `lex_fmt::boot_registry`
