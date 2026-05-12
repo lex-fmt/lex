@@ -123,18 +123,35 @@ impl ResolverCache {
     ) -> Result<PathBuf, ResolveError> {
         let entry = self.entry_path(uri);
 
-        // Cache hit path: directory exists AND either the rev is
-        // immutable (cache forever) or the fetch timestamp is within
-        // the TTL.
+        // Cache hit path. Two requirements:
+        //
+        //   1. The completion marker (`TIMESTAMP_FILENAME`) exists
+        //      and contains a parseable timestamp. The marker is
+        //      written *only* after a fetcher returns Ok — its
+        //      presence proves the fetch ran to completion, so a
+        //      directory whose fetcher crashed mid-write isn't
+        //      mistaken for a complete entry.
+        //   2. For immutable refs: any complete entry is reusable
+        //      forever. For mutable refs: the marker's timestamp
+        //      must also be within `mutable_ttl`.
+        //
+        // Requiring the marker even for immutable revs is the
+        // partial-fetch defence — without it, a crash mid-fetch
+        // could leave a half-populated directory that the next
+        // resolve would happily reuse as-is for the immutable rev.
         if entry.is_dir() {
-            let immutable = fetcher.is_immutable_rev(uri.rev.as_deref());
-            if immutable || self.is_fresh(&entry) {
-                return Ok(entry);
+            if let Some(fetched_at) = read_completion_marker(&entry) {
+                let immutable = fetcher.is_immutable_rev(uri.rev.as_deref());
+                if immutable || self.is_within_ttl(fetched_at) {
+                    return Ok(entry);
+                }
             }
         }
 
-        // Miss or stale — fetch fresh. Wipe the entry first so a
-        // partial-write from a previous failed fetch doesn't leak.
+        // Miss, stale, or incomplete-from-prior-fetch — fetch fresh.
+        // Wipe the entry first so a partial-write from a previous
+        // failed fetch doesn't get reused via a future code change
+        // that loosens the marker check.
         if entry.exists() {
             std::fs::remove_dir_all(&entry).map_err(|source| ResolveError::CacheIo {
                 path: entry.clone(),
@@ -146,34 +163,33 @@ impl ResolverCache {
             source,
         })?;
 
-        fetcher
-            .fetch(uri, &entry)
-            .map_err(|source| ResolveError::Fetch {
+        fetcher.fetch(uri, &entry).map_err(|source| {
+            // Partial-fetch cleanup: a fetcher that wrote some
+            // files then errored leaves a directory without a
+            // completion marker. The next resolve would re-fetch
+            // anyway (no marker → not a hit), but leaving a
+            // partial entry on disk is wasteful and confusing
+            // when users inspect the cache. Best-effort wipe;
+            // ignore errors since we're already returning one.
+            let _ = std::fs::remove_dir_all(&entry);
+            ResolveError::Fetch {
                 uri: uri.original.clone(),
                 source,
-            })?;
+            }
+        })?;
 
-        // Record the fetch time so the next mutable-rev resolve can
-        // check freshness. Failure here is non-fatal — the cache
-        // entry is still valid; we just won't be able to detect
-        // staleness, which causes us to re-fetch on next call
-        // (degraded, not broken).
+        // Fetch succeeded → drop the completion marker. Failure to
+        // write the marker is non-fatal but degrades subsequent
+        // resolves to re-fetch on every call (entry won't be
+        // recognised as complete). Logging this requires plumbing
+        // a logger into the resolver; out of scope for now.
         let _ = self.write_timestamp(&entry);
 
         Ok(entry)
     }
 
-    /// Check whether a cache entry is within the mutable-rev TTL.
-    /// Returns `false` if the timestamp file is missing (treat as
-    /// stale — forces a re-fetch).
-    fn is_fresh(&self, entry: &Path) -> bool {
-        let stamp = entry.join(TIMESTAMP_FILENAME);
-        let Ok(content) = std::fs::read_to_string(&stamp) else {
-            return false;
-        };
-        let Ok(fetched_at) = content.trim().parse::<u64>() else {
-            return false;
-        };
+    /// Check whether `fetched_at` is within the mutable-rev TTL.
+    fn is_within_ttl(&self, fetched_at: u64) -> bool {
         let Ok(now) = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) else {
             return false;
         };
@@ -187,6 +203,17 @@ impl ResolverCache {
             .unwrap_or(0);
         std::fs::write(entry.join(TIMESTAMP_FILENAME), now.to_string())
     }
+}
+
+/// Read the completion marker as a Unix timestamp. Returns `None` if
+/// the file is missing OR its contents don't parse as a `u64`
+/// (treated as "no marker"; forces a re-fetch). The marker is the
+/// indicator that a previous fetch ran to completion; immutable-rev
+/// reuse and mutable-rev freshness checks both depend on it.
+fn read_completion_marker(entry: &Path) -> Option<u64> {
+    let stamp = entry.join(TIMESTAMP_FILENAME);
+    let content = std::fs::read_to_string(&stamp).ok()?;
+    content.trim().parse::<u64>().ok()
 }
 
 /// SHA-256 of the URI + rev, lowercased hex. Stable across processes
@@ -432,5 +459,94 @@ mod tests {
             } => {}
             other => panic!("expected Fetch::Network error, got: {other}"),
         }
+    }
+
+    /// Regression: a directory left behind by a previous failed
+    /// fetch (no completion marker) must not be mistaken for a
+    /// complete cache entry, even when the rev is immutable.
+    /// Without this, an immutable-rev fetcher that crashed
+    /// mid-write would leave a partial directory that the next
+    /// resolve happily reused forever, since the immutable path
+    /// previously bypassed all completeness checks.
+    #[test]
+    fn fetch_or_reuse_does_not_reuse_partial_entry_for_immutable_rev() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = ResolverCache::new(tmp.path()).unwrap();
+        let uri = parse("mock:something#v1");
+
+        // Hand-craft a partial directory: exists, has some content,
+        // but lacks the completion marker (simulating a crashed
+        // mid-write fetch).
+        let entry = cache.entry_path(&uri);
+        std::fs::create_dir_all(&entry).unwrap();
+        std::fs::write(entry.join("partial-thing.yaml"), b"only half written").unwrap();
+        assert!(!entry.join(TIMESTAMP_FILENAME).exists());
+
+        // Now resolve with an immutable-reporting fetcher. The
+        // partial entry must be wiped and re-fetched, not reused.
+        struct ImmutableMockFetcher {
+            called: std::sync::atomic::AtomicUsize,
+        }
+        impl Fetcher for ImmutableMockFetcher {
+            fn fetch(&self, _uri: &ParsedUri, dest: &Path) -> Result<(), super::super::FetchError> {
+                self.called
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                std::fs::write(dest.join("schema.yaml"), b"complete").unwrap();
+                Ok(())
+            }
+            fn schemes(&self) -> &'static [&'static str] {
+                &["mock"]
+            }
+            fn is_immutable_rev(&self, _rev: Option<&str>) -> bool {
+                true
+            }
+        }
+        let fetcher = ImmutableMockFetcher {
+            called: std::sync::atomic::AtomicUsize::new(0),
+        };
+        let dir = cache.fetch_or_reuse(&uri, &fetcher).unwrap();
+        assert_eq!(
+            fetcher.called.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "partial entry must be wiped and re-fetched, not reused"
+        );
+        // Partial file is gone; only the completed fetch's output remains.
+        assert!(!dir.join("partial-thing.yaml").exists());
+        assert_eq!(std::fs::read(dir.join("schema.yaml")).unwrap(), b"complete");
+        assert!(dir.join(TIMESTAMP_FILENAME).is_file());
+    }
+
+    /// Regression for the same defence-in-depth: a fetcher that
+    /// writes some content and then errors out must leave a clean
+    /// cache (no partial directory). Subsequent resolves see a
+    /// cache miss (no entry) rather than a partial entry.
+    #[test]
+    fn fetch_or_reuse_wipes_partial_writes_when_fetcher_errors() {
+        struct PartialThenFailFetcher;
+        impl Fetcher for PartialThenFailFetcher {
+            fn fetch(&self, _uri: &ParsedUri, dest: &Path) -> Result<(), super::super::FetchError> {
+                // Write some content, then error.
+                std::fs::write(dest.join("half.yaml"), b"x").unwrap();
+                Err(super::super::FetchError::Network {
+                    message: "interrupted".into(),
+                })
+            }
+            fn schemes(&self) -> &'static [&'static str] {
+                &["mock"]
+            }
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = ResolverCache::new(tmp.path()).unwrap();
+        let uri = parse("mock:fail#partial");
+        let entry = cache.entry_path(&uri);
+        let _err = cache
+            .fetch_or_reuse(&uri, &PartialThenFailFetcher)
+            .unwrap_err();
+        // The partial write must have been cleaned up.
+        assert!(
+            !entry.exists(),
+            "partial entry should have been removed; still at {}",
+            entry.display()
+        );
     }
 }

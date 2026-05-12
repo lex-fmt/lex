@@ -180,10 +180,19 @@ impl ParsedUri {
 
 /// Parse the query string after `?`. Only `subdir=<value>` is
 /// recognised; any other key is a parse error.
+///
+/// Returns `Some(String)` whenever the URI carries a `?`, even for
+/// `uri?` with an empty query string (returns `Some(String::new())`).
+/// That symmetry with the fragment parser — where `uri#` yields
+/// `Some("")` not `None` — is load-bearing: callers (notably the
+/// `path:` resolver) inspect `has_query()` to decide whether the
+/// remote-only `?` knob was used; collapsing `?` to `None` would
+/// silently slip `path:dir?` past that check.
 fn parse_query(q: &str) -> Result<Option<String>, UriParseError> {
     if q.is_empty() {
-        // `uri?` with empty query string — treat as no subdir.
-        return Ok(None);
+        // `uri?` with empty query string — represent as Some("") so
+        // `has_query()` correctly reports "URI carried a `?`".
+        return Ok(Some(String::new()));
     }
     // We accept a single `subdir=<value>` for now. Multi-param
     // support (`?subdir=a&otherkey=b`) is unused; reject anything
@@ -291,11 +300,16 @@ mod tests {
     }
 
     #[test]
-    fn empty_query_after_question_is_no_subdir() {
-        // `uri#rev?` — the trailing `?` with no body is a no-op.
+    fn empty_query_after_question_is_some_empty_not_none() {
+        // `uri#rev?` — the trailing `?` parses to `Some("")` so
+        // `has_query()` correctly reports the syntactic presence of
+        // the query separator. The `path:` resolver relies on this
+        // to reject `path:dir?` (see
+        // `path_dir_with_empty_question_is_rejected_by_path_resolver`).
         let p = ParsedUri::parse("github:acme/repo#v1?").unwrap();
         assert_eq!(p.rev.as_deref(), Some("v1"));
-        assert_eq!(p.subdir, None);
+        assert_eq!(p.subdir.as_deref(), Some(""));
+        assert!(p.has_query());
     }
 
     #[test]

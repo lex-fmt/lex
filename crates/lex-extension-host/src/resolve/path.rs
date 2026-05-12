@@ -217,6 +217,37 @@ mod tests {
         assert!(matches!(err, ResolveError::PathNotADirectory { .. }));
     }
 
+    /// Regression: `path:dir?` (or `path:dir#`) with empty
+    /// fragment/query bodies must still be rejected. Earlier the
+    /// query parser collapsed `?` with empty body to `subdir: None`,
+    /// which let `has_query()` return false and slipped the URI past
+    /// this rejection — silently treating `path:dir?` as `path:dir`.
+    /// The fix is in `parse_query`: empty `?` body parses to
+    /// `Some("")` so the syntactic-presence check works.
+    #[test]
+    fn path_uri_with_empty_query_is_rejected() {
+        let workspace = tempfile::tempdir().unwrap();
+        let dir = workspace.path().join("acme");
+        std::fs::create_dir(&dir).unwrap();
+        let err = resolve(&parse("path:acme?"), "path:acme?", workspace.path()).unwrap_err();
+        assert!(
+            matches!(err, ResolveError::PathUriHasFragmentOrQuery { .. }),
+            "expected PathUriHasFragmentOrQuery, got: {err}"
+        );
+    }
+
+    #[test]
+    fn path_uri_with_empty_fragment_is_rejected() {
+        let workspace = tempfile::tempdir().unwrap();
+        let dir = workspace.path().join("acme");
+        std::fs::create_dir(&dir).unwrap();
+        let err = resolve(&parse("path:acme#"), "path:acme#", workspace.path()).unwrap_err();
+        assert!(
+            matches!(err, ResolveError::PathUriHasFragmentOrQuery { .. }),
+            "expected PathUriHasFragmentOrQuery, got: {err}"
+        );
+    }
+
     #[test]
     fn path_uri_pointing_at_file_yields_path_not_a_directory() {
         let workspace = tempfile::tempdir().unwrap();

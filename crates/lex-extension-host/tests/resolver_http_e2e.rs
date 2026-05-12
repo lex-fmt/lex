@@ -86,9 +86,14 @@ fn http_get(url: &str) -> std::io::Result<Vec<u8>> {
 }
 
 /// Spawn a local HTTP mock server that responds to every GET with
-/// `200 OK` + the supplied body. Returns the address it's listening
-/// on and a join handle (joined on Drop via scope semantics — the
-/// test scope owns the server's lifetime).
+/// `200 OK` + the supplied body. Returns just the address it's
+/// listening on; the listener thread is detached and runs until the
+/// test binary exits. We accept the thread "leak" because the test
+/// binary's lifetime is short (single test, sub-second wall time)
+/// and a shutdown mechanism (atomic flag, request limit, channel
+/// close) is more complexity than the test needs at this scale —
+/// future expansion of the integration suite can wire one up if a
+/// single binary ends up spawning many of these.
 fn spawn_mock_server(body: &'static [u8], request_count: Arc<AtomicUsize>) -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind localhost");
     let addr = listener.local_addr().expect("local addr");
