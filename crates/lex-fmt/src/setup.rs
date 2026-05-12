@@ -775,11 +775,31 @@ mod tests {
     /// `enable_handlers` the way CLI does), the prompt denies, and
     /// the namespace registers schema-only with the prompt's
     /// rationale surfaced as a diagnostic.
+    ///
+    /// Uses **non-pure** capabilities (`fs: true`) so the post-12d
+    /// trust-matrix flip doesn't auto-trust this handler on Linux
+    /// before the prompt is ever consulted. The default
+    /// [`write_schema_with_subprocess_handler`] writes pure caps,
+    /// which on Linux now route to `LinuxSandbox::supports(pure)
+    /// == true` → `Trusted` → spawn-fail diagnostic instead of the
+    /// prompt-denial diagnostic this test asserts.
     #[test]
     fn subprocess_handler_in_lsp_surface_with_denying_prompt_is_schema_only() {
         let workspace = tempfile::tempdir().unwrap();
         let acme_dir = workspace.path().join("acme");
-        write_schema_with_subprocess_handler(&acme_dir, "acme.task", &["acme-handler"]);
+        std::fs::create_dir_all(&acme_dir).unwrap();
+        std::fs::write(
+            acme_dir.join("acme_task.yaml"),
+            "schema_version: 1\n\
+             label: acme.task\n\
+             capabilities:\n  \
+             fs: true\n  \
+             net: false\n\
+             handler:\n  \
+             transport: subprocess\n  \
+             command: [\"acme-handler\"]\n",
+        )
+        .unwrap();
 
         let labels = LabelsConfig::default();
         let setup = ExtensionSetup {
