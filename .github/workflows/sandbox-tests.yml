@@ -59,4 +59,7 @@ jobs:
         uses: taiki-e/install-action@nextest
 
       - name: Run sandbox tests
-        run: cargo nextest run -p lex-extension-host sandbox::
+        # Filter expression matches both the unit tests under
+        # `sandbox::` and the `tests/sandbox_enforcement.rs`
+        # integration tests (which are scoped by binary name).
+        run: cargo nextest run -p lex-extension-host -E 'test(/sandbox/)'

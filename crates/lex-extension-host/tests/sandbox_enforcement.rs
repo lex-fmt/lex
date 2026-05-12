@@ -1,0 +1,81 @@
+//! End-to-end sandbox enforcement tests for the per-OS [`Sandbox`]
+//! impls. Drives the probe fixture binaries (`fs_probe`, `net_probe`)
+//! through both the real OS sandbox and [`NullSandbox`] as a negative
+//! control. The test module is an integration test (`tests/`) rather
+//! than a unit test inside `src/` because only integration tests get
+//! the `CARGO_BIN_EXE_*` env vars pointing at the fixture binaries.
+
+#![cfg(any(target_os = "linux", target_os = "macos"))]
+
+use std::net::TcpListener;
+use std::process::Command;
+
+use lex_extension::schema::Capabilities;
+use lex_extension_host::sandbox::{NullSandbox, Sandbox};
+
+#[cfg(target_os = "linux")]
+use lex_extension_host::sandbox::LinuxSandbox;
+
+const FS_PROBE: &str = env!("CARGO_BIN_EXE_lex-extension-host-fixture-fs-probe");
+const NET_PROBE: &str = env!("CARGO_BIN_EXE_lex-extension-host-fixture-net-probe");
+
+/// Spawn `bin` with `args`, installing `sandbox` first. Returns the
+/// child's exit code (panics if the child died via signal so test
+/// failures distinguish "blocked → exit 42" from "killed by SIGSYS").
+fn run_with(sandbox: &dyn Sandbox, bin: &str, args: &[String]) -> i32 {
+    let mut cmd = Command::new(bin);
+    cmd.args(args);
+    sandbox
+        .apply_to(&mut cmd, Capabilities::default())
+        .expect("apply_to should succeed for pure caps");
+    let status = cmd.status().expect("spawn probe");
+    if let Some(code) = status.code() {
+        return code;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        panic!("probe terminated by signal: {:?}", status.signal());
+    }
+    #[cfg(not(unix))]
+    panic!("probe terminated without exit code");
+}
+
+// -- Negative controls: every OS, exercise NullSandbox to confirm
+// the probe fixtures themselves work on the current runner before we
+// trust the positive assertions on the real impls.
+
+#[test]
+fn fs_probe_succeeds_under_null_sandbox() {
+    assert_eq!(run_with(&NullSandbox, FS_PROBE, &[]), 0);
+}
+
+#[test]
+fn net_probe_succeeds_under_null_sandbox() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind localhost");
+    let addr = listener.local_addr().expect("addr");
+    assert_eq!(
+        run_with(&NullSandbox, NET_PROBE, &[addr.to_string()]),
+        0,
+        "negative control should connect to the localhost listener"
+    );
+}
+
+// -- Linux: LinuxSandbox enforcement.
+
+#[cfg(target_os = "linux")]
+#[test]
+fn fs_probe_is_blocked_under_linux_sandbox() {
+    // /etc/passwd is outside the landlock allowlist → EACCES → exit 42.
+    assert_eq!(run_with(&LinuxSandbox, FS_PROBE, &[]), 42);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn net_probe_is_blocked_under_linux_sandbox() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind localhost");
+    let addr = listener.local_addr().expect("addr");
+    // socket() syscall returns EPERM → TcpStream::connect_timeout
+    // returns Err → exit 42.
+    assert_eq!(run_with(&LinuxSandbox, NET_PROBE, &[addr.to_string()]), 42,);
+}
