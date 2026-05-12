@@ -7,7 +7,7 @@ members = [
     "crates/lex-analysis",
     "crates/lex-extension",
     "crates/lex-extension-host",
-    "crates/lex-engine",
+    "crates/lex-fmt",
     "crates/lex-lsp-core",
     "crates/lex-lsp",
     "crates/lex-wasm",
@@ -21,7 +21,7 @@ lex-config = { version = "0.11.0", path = "crates/lex-config" }
 lex-analysis = { version = "0.11.0", path = "crates/lex-analysis" }
 lex-extension = { version = "0.11.0", path = "crates/lex-extension" }
 lex-extension-host = { version = "0.11.0", path = "crates/lex-extension-host", default-features = false }
-lex-engine = { version = "0.11.0", path = "crates/lex-engine" }
+lex-fmt = { version = "0.11.0", path = "crates/lex-fmt" }
 lex-lsp-core = { version = "0.11.0", path = "crates/lex-lsp-core" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

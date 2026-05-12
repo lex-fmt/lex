@@ -1170,17 +1170,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lex-engine"
-version = "0.11.0"
-dependencies = [
- "lex-config",
- "lex-core",
- "lex-extension",
- "lex-extension-host",
- "tempfile",
-]
-
-[[package]]
 name = "lex-extension"
 version = "0.11.0"
 dependencies = [
@@ -1198,6 +1187,20 @@ dependencies = [
  "serde_yaml",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "lex-fmt"
+version = "0.11.0"
+dependencies = [
+ "lex-analysis",
+ "lex-babel",
+ "lex-config",
+ "lex-core",
+ "lex-extension",
+ "lex-extension-host",
+ "serde_yaml",
+ "tempfile",
 ]
 
 [[package]]
@@ -1243,9 +1246,9 @@ dependencies = [
  "lex-babel",
  "lex-config",
  "lex-core",
- "lex-engine",
  "lex-extension",
  "lex-extension-host",
+ "lex-fmt",
  "predicates",
  "serde_json",
  "tempfile",
@@ -1260,9 +1263,9 @@ dependencies = [
  "lex-babel",
  "lex-config",
  "lex-core",
- "lex-engine",
  "lex-extension",
  "lex-extension-host",
+ "lex-fmt",
  "lex-lsp-core",
  "lsp-types",
  "proptest",

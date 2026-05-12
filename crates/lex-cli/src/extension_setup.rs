@@ -1,6 +1,6 @@
 //! CLI-side wiring for the extension boot helper.
 //!
-//! Re-exports the [`lex_engine::setup`] types so existing call sites in
+//! Re-exports the [`lex_fmt::setup`] types so existing call sites in
 //! `main.rs` and `labels_subcommand.rs` keep working with their current
 //! `crate::extension_setup::*` paths, and provides a [`boot_registry`]
 //! shim that injects the CLI-specific [`CliPromptHandler`] (always
@@ -9,12 +9,10 @@
 
 use lex_extension_host::{TrustDecision, TrustPromptContext, TrustPromptHandler};
 
-pub use lex_engine::setup::{
-    BootDiagnostic, BootOutcome, NamespaceSourceKind, RegisteredNamespace,
-};
+pub use lex_fmt::setup::{BootDiagnostic, BootOutcome, NamespaceSourceKind, RegisteredNamespace};
 
 /// CLI-shaped inputs to [`boot_registry`]. Mirrors
-/// [`lex_engine::setup::ExtensionSetup`] minus the `trust_prompt` field —
+/// [`lex_fmt::setup::ExtensionSetup`] minus the `trust_prompt` field —
 /// the CLI's prompt is fixed.
 pub struct ExtensionSetup<'a> {
     pub workspace_root: &'a std::path::Path,
@@ -40,9 +38,9 @@ impl TrustPromptHandler for CliPromptHandler {
 }
 
 /// Boot the registry for the CLI surface. Thin wrapper that fills in
-/// the [`CliPromptHandler`] and forwards to [`lex_engine::setup::boot_registry`].
+/// the [`CliPromptHandler`] and forwards to [`lex_fmt::setup::boot_registry`].
 pub fn boot_registry(setup: ExtensionSetup<'_>) -> BootOutcome {
-    lex_engine::setup::boot_registry(lex_engine::setup::ExtensionSetup {
+    lex_fmt::setup::boot_registry(lex_fmt::setup::ExtensionSetup {
         workspace_root: setup.workspace_root,
         labels_config: setup.labels_config,
         ext_schemas: setup.ext_schemas,
@@ -51,7 +49,7 @@ pub fn boot_registry(setup: ExtensionSetup<'_>) -> BootOutcome {
         trust_prompt: Box::new(CliPromptHandler),
         // Reports `lexd`'s version to subprocess handlers in their
         // initialize handshake — what handlers expect to see, not the
-        // `lex-engine` boot crate's version.
+        // `lex-fmt` boot crate's version.
         host_version: env!("CARGO_PKG_VERSION"),
     })
 }
@@ -59,7 +57,7 @@ pub fn boot_registry(setup: ExtensionSetup<'_>) -> BootOutcome {
 #[cfg(test)]
 mod tests {
     //! CLI-side smoke tests. The exhaustive coverage of every
-    //! [`build_handler`] branch lives in `lex-engine::setup::tests`;
+    //! [`build_handler`] branch lives in `lex-fmt::setup::tests`;
     //! the tests here verify the CLI shim wires the
     //! [`CliPromptHandler`] correctly and the deny rationale mentions
     //! `--enable-handlers` (which is what end users see).

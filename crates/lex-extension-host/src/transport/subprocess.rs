@@ -149,7 +149,7 @@ pub enum SpawnError {
     /// this platform, or a kernel call failed). The child is never
     /// spawned in this case.
     ///
-    /// Current handling in [`lex_engine::setup::boot_registry`]
+    /// Current handling in [`lex_fmt::setup::boot_registry`]
     /// (and any other caller treating spawn failure as terminal):
     /// the namespace registers schema-only — pre-validation still
     /// catches typos but no handler runs — and a `BootDiagnostic`
@@ -162,7 +162,7 @@ pub enum SpawnError {
     /// identically to other spawn failures.
     ///
     /// [`Sandbox`]: crate::sandbox::Sandbox
-    /// [`lex_engine::setup::boot_registry`]: https://docs.rs/lex-engine/latest/lex_engine/setup/fn.boot_registry.html
+    /// [`lex_fmt::setup::boot_registry`]: https://docs.rs/lex-fmt/latest/lex_fmt/setup/fn.boot_registry.html
     Sandbox(String),
     /// Initialize timed out, errored, or returned an incompatible
     /// `wire_version`.

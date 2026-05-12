@@ -87,7 +87,7 @@ pub struct ExtensionSetup<'a> {
     /// Host crate version (typically `env!("CARGO_PKG_VERSION")`)
     /// reported to subprocess handlers in their `initialize`
     /// handshake. The host (`lexd` / `lexd-lsp` / an embedder) supplies
-    /// its own version, *not* `lex-engine`'s — handlers expect to see
+    /// its own version, *not* `lex-fmt`'s — handlers expect to see
     /// the host they're running under, not the boot helper crate.
     pub host_version: &'a str,
 }
@@ -103,9 +103,22 @@ pub struct RegisteredNamespace {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NamespaceSourceKind {
+    /// One of the compiled-in `lex.*` namespaces (currently
+    /// `lex.include`) registered at boot time by
+    /// `builtins::register_into`. Trusted by linkage.
     Builtin,
+    /// A namespace declared in `lex.toml`'s `[labels]` block and
+    /// resolved through the URI resolver.
     LexToml { uri: String },
+    /// A namespace registered via a `--ext-schema <dir>` flag or its
+    /// embedder equivalent ([`crate::EngineBuilder::ext_schema_dir`]).
     ExtSchemaFlag { path: PathBuf },
+    /// An in-process Rust handler registered via
+    /// [`crate::EngineBuilder::with_native_namespace`]. Trusted by
+    /// linkage; distinct from `Builtin` so embedders can inspect
+    /// `registered_namespaces()` and tell their own native handlers
+    /// apart from the `lex.*` built-ins.
+    Native,
 }
 
 /// One thing that went wrong during boot. Surfaced as a diagnostic

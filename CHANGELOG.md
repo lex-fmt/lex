@@ -28,13 +28,22 @@
 - `TrustGate::set_sandbox(Arc<dyn Sandbox>)` and
   `TrustGate::sandbox()` accessor (returns the Arc by clone). The
   default install is `NullSandbox`, so β/γ behaviour is preserved
-  (every subprocess prompts). When PR 12a/b/c land, `lex-engine`
+  (every subprocess prompts). When PR 12a/b/c land, `lex-fmt`
   swaps in the OS-appropriate impl and shares the same Arc across
   the gate and the transport — guaranteeing the auto-trust decision
   is anchored on the sandbox that actually enforces policy.
 
 ### Changed
 
+- Renamed the `lex-engine` crate to `lex-fmt` and positioned it as the
+  canonical Rust embedder API for the lex document format. The
+  `boot_registry` / `ExtensionSetup` / `BootOutcome` types move
+  unchanged; only the crate name (and the `use` paths in `lexd` /
+  `lexd-lsp`) change. Sets up PR 11's `Engine::builder()` to land in
+  a discoverable place (`use lex_fmt::Engine`) rather than under a
+  name that says "boot helper". `lex-engine` 0.11.0 stays published
+  on crates.io for historical reference; future releases publish as
+  `lex-fmt`.
 - `TrustGate::evaluate` now short-circuits to `Trusted` for the
   `(transport=Subprocess, capability=Pure)` pair when
   `sandbox.supports(Capabilities::default())` returns `true`. With

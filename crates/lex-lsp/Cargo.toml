@@ -23,7 +23,7 @@ lex-babel = { workspace = true }
 lex-config = { workspace = true }
 lex-extension = { workspace = true }
 lex-extension-host = { workspace = true }
-lex-engine = { workspace = true }
+lex-fmt = { workspace = true }
 lex-lsp-core = { workspace = true }
 clapfig = { workspace = true }
 tower-lsp = "0.20"

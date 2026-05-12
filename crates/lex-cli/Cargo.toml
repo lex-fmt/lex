@@ -24,7 +24,7 @@ lex-babel = { workspace = true, features = ["native-export"] }
 lex-config = { workspace = true }
 lex-extension = { workspace = true }
 lex-extension-host = { workspace = true, features = ["subprocess"] }
-lex-engine = { workspace = true }
+lex-fmt = { workspace = true }
 clapfig = { workspace = true }
 clap = { workspace = true }
 serde_json = { workspace = true }
