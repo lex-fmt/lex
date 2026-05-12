@@ -277,6 +277,69 @@ fn nearest_lex_toml_walks_upward_to_find_root() {
         .stdout(predicate::str::contains("Foo body content."));
 }
 
+// ============================================================================
+// Regression: prose mentions of "lex.include" + verbatim blocks
+// ============================================================================
+
+/// `lexd inspect` resolves includes by default, which (before the fix in
+/// lex#505) sent the source through a parse → serialize → re-parse round
+/// trip whenever the literal string `lex.include` appeared anywhere — even
+/// in prose. The serializer dropped the blank line that separates a
+/// paragraph from a verbatim block's subject, and the re-parser then
+/// merged the subject into the paragraph and lost the verbatim.
+///
+/// Asserts that `inspect` (default, includes enabled) produces the same
+/// AST tree as `inspect --no-includes` for a document with `lex.include`
+/// in prose and a verbatim block.
+#[test]
+fn inspect_preserves_verbatim_when_lex_include_is_only_in_prose() {
+    // Bare `lex.include` mention in prose, no actual annotation, followed
+    // by a verbatim block (subject line + indented body + closing marker)
+    // which must survive the round trip.
+    let fixture = concat!(
+        "Title\n",
+        "=====\n",
+        "\n",
+        "Some text mentioning `lex.include` in prose.\n",
+        "\n",
+        "Code Example:\n",
+        "\n",
+        "    fn main() {}\n",
+        "\n",
+        ":: rust ::\n",
+        "\n",
+        "End.\n",
+    );
+    let dir = fixture_dir(&[("doc.lex", fixture)]);
+    let doc = path_in(&dir, "doc.lex");
+
+    let default_out = lexd()
+        .arg("inspect")
+        .arg(&doc)
+        .output()
+        .expect("run lexd inspect");
+    assert!(default_out.status.success());
+    let default_stdout = String::from_utf8(default_out.stdout).unwrap();
+
+    let noinc_out = lexd()
+        .arg("inspect")
+        .arg("--no-includes")
+        .arg(&doc)
+        .output()
+        .expect("run lexd inspect --no-includes");
+    assert!(noinc_out.status.success());
+    let noinc_stdout = String::from_utf8(noinc_out.stdout).unwrap();
+
+    assert_eq!(
+        default_stdout, noinc_stdout,
+        "inspect with includes resolved must equal --no-includes when no actual lex.include exists.\n--- default ---\n{default_stdout}\n--- --no-includes ---\n{noinc_stdout}"
+    );
+    assert!(
+        default_stdout.contains("𝒱"),
+        "expected verbatim block in inspect output, got:\n{default_stdout}"
+    );
+}
+
 // Ensure the fixture helper doesn't get pruned by dead-code lint when
 // tests change shape during development.
 #[test]
