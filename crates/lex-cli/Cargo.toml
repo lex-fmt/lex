@@ -27,6 +27,7 @@ lex-extension-host = { workspace = true, features = ["subprocess"] }
 lex-fmt = { workspace = true }
 clapfig = { workspace = true }
 clap = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 
 [build-dependencies]

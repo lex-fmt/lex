@@ -33,7 +33,18 @@
     work; see test
     `multi_annotation_splice_is_a_known_limitation` for context.
 
-### Added
+- `lexd labels emit <doc> [--label X]... [--namespace N]...`
+  ([#564](https://github.com/lex-fmt/lex/issues/564)). Pull-based
+  NDJSON export — one record per labelled annotation / verbatim in
+  the document. Output uses the wire `Position` / `Range` types so
+  the same parser that consumes LSP hover and extension hook
+  payloads consumes emit output unchanged. Body shapes are tagged:
+  `{kind: "none"}`, `{kind: "text", text: "…"}`, or `{kind: "lex",
+  wire: [...]}`. `--label` and `--namespace` are repeatable and
+  intersect. No registry boot required — `to_wire_node` produces
+  the wire form without schema lookup, so this command runs against
+  documents whose namespaces aren't registered. Exit 0 on success
+  (including zero matches), 2 on parse failure.
 
 - **Resolver machinery** (#546 item A, partial). `lex-extension-host`
   gains a pluggable [`Fetcher`] trait, a `FetcherRegistry`, and a
