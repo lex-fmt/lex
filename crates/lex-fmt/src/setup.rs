@@ -181,6 +181,22 @@ pub fn boot_registry(setup: ExtensionSetup<'_>) -> BootOutcome {
         TrustStore::open(&fallback_dir).expect("temp dir writable")
     });
     let mut trust_gate = TrustGate::new(surface, setup.enable_handlers, store, setup.trust_prompt);
+
+    // δ-phase trust-matrix flip (lex#528 PR 12d): install the
+    // OS-appropriate sandbox so declared-pure subprocess handlers
+    // auto-trust under enforced isolation. The same Arc is also
+    // handed to every SubprocessHandler::spawn_with_sandbox call so
+    // the auto-trust decision is anchored on the sandbox that
+    // actually applies policy at spawn time (the contract
+    // documented on TrustGate::set_sandbox).
+    //
+    // Asymmetry: Linux gets LinuxSandbox (supports pure → auto-trust).
+    // macOS gets MacosSandbox (supports always false → prompts) until
+    // a hardened profile lands. Windows + other targets get
+    // NullSandbox (no enforcement → prompts).
+    let sandbox = lex_extension_host::sandbox::os_default();
+    trust_gate.set_sandbox(Arc::clone(&sandbox));
+
     let host_version = setup.host_version;
 
     // Built-ins: lex.* namespace (currently `lex.include`). Native
@@ -486,20 +502,26 @@ fn build_handler(
         }
     }
 
-    // Trusted — spawn the binary.
+    // Trusted — spawn the binary under the same Sandbox the trust
+    // gate consulted to make the auto-trust decision. Pulling the
+    // sandbox off `trust_gate.sandbox()` rather than re-constructing
+    // it guarantees that "what the gate said was safe" and "what the
+    // kernel actually enforces on the child" are the same instance.
+    // See TrustGate::set_sandbox for the contract.
     let labels: Vec<String> = schemas.iter().map(|s| s.label.clone()).collect();
     let env = SpawnEnv {
         workspace_root: Some(workspace_root.display().to_string()),
         lex_cache: None,
         handler_config: None,
     };
-    match SubprocessHandler::spawn(
+    match SubprocessHandler::spawn_with_sandbox(
         handler_spec,
         namespace,
         &labels,
         contract.capabilities,
         host_version,
         &env,
+        trust_gate.sandbox(),
     ) {
         Ok(h) => Box::new(h),
         Err(e) => {
@@ -958,5 +980,52 @@ mod tests {
         let outcome = boot_registry(setup);
         assert_eq!(outcome.trust_gate.surface(), Surface::Ci);
         assert!(outcome.trust_gate.enable_handlers());
+    }
+
+    /// δ-phase trust-matrix flip wiring: after [`boot_registry`], the
+    /// trust gate's sandbox must be the OS-appropriate impl (not the
+    /// pre-δ `NullSandbox`). The per-OS `supports(pure)` result
+    /// confirms which path is installed — Linux's `LinuxSandbox`
+    /// reports `true`, macOS's `MacosSandbox` is pinned to `false`
+    /// pending a hardened profile, and everything else falls back to
+    /// `NullSandbox` (`false`). If this test ever starts asserting
+    /// the wrong direction, the engine is silently auto-trusting (or
+    /// silently prompting) and the user-visible policy has drifted
+    /// from what the host announced.
+    #[test]
+    fn boot_installs_os_default_sandbox() {
+        let workspace = tempfile::tempdir().unwrap();
+        let labels = LabelsConfig::default();
+        let setup = ExtensionSetup {
+            workspace_root: workspace.path(),
+            labels_config: &labels,
+            ext_schemas: &[],
+            enable_handlers: false,
+            surface_override: Some(Surface::CliOneShot),
+            trust_prompt: Box::new(DenyAllPrompt),
+            host_version: "test",
+        };
+        let outcome = boot_registry(setup);
+        let sandbox = outcome.trust_gate.sandbox();
+        let pure = lex_extension::schema::Capabilities::default();
+
+        #[cfg(target_os = "linux")]
+        assert!(
+            sandbox.supports(pure),
+            "Linux default sandbox should support pure capabilities"
+        );
+
+        #[cfg(target_os = "macos")]
+        assert!(
+            !sandbox.supports(pure),
+            "macOS default sandbox is pinned to `supports = false` until \
+             a hardened deny-default SBPL profile lands"
+        );
+
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        assert!(
+            !sandbox.supports(pure),
+            "Unsupported platforms fall back to NullSandbox"
+        );
     }
 }

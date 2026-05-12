@@ -2,8 +2,38 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **Trust-matrix flip (lex#528 PR 12d).** `lex_fmt::boot_registry`
+  now installs the OS-appropriate `Sandbox` on the trust gate (via
+  the new `lex_extension_host::sandbox::os_default()` factory) and
+  passes the same `Arc<dyn Sandbox>` to every
+  `SubprocessHandler::spawn_with_sandbox` call. The effect is
+  per-OS:
+  - **Linux**: declared-pure subprocess handlers (`capabilities: {
+    fs: false, net: false }`) **auto-trust** under the default
+    engine — no prompt, no `--enable-handlers` flag. The kernel
+    enforces the declared capability set via `LinuxSandbox`
+    (seccomp + landlock). This is the user-visible matrix flip
+    promised by §8 of the proposal.
+  - **macOS**: pure handlers continue to **prompt** because
+    `MacosSandbox::supports` is pinned to `false` pending a
+    hardened `(deny default)` SBPL profile. The same prompt UX
+    Windows uses.
+  - **Windows + other**: pure handlers continue to **prompt** —
+    `NullSandbox` is the fallback. `lex#528` PR 12c (Windows Job
+    Objects + restricted tokens) is unscheduled; the trust gate
+    routes those subprocesses to the prompt path until it ships.
+  Full subprocess handlers (any `capabilities` declaring `fs` or
+  `net`) always prompt regardless of OS — `supports` returns
+  `false` for non-pure shapes on every impl.
+
 ### Added
 
+- `lex_extension_host::sandbox::os_default() -> Arc<dyn Sandbox>`:
+  factory selecting the per-target default sandbox. Used by the
+  δ-phase trust-matrix flip (above); also available to embedders
+  building a custom `Engine` who want the same per-OS dispatch.
 - `lex-extension-host::sandbox::MacosSandbox`: macOS implementation of
   the `Sandbox` trait (lex#528 PR 12b). Installs a Sandbox Profile
   Language (SBPL) policy via the libSystem `sandbox_init` API inside
