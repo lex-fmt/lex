@@ -651,4 +651,233 @@ mod tests {
         assert_eq!(outcome.html, baseline);
         assert!(outcome.diagnostics.is_empty());
     }
+
+    // -- Splice tests (PR for #563). The splice mechanism replaces
+    // the default `<!-- lex:label -->` ... `<!-- /lex:label -->`
+    // comment pair (and any content between) with the handler's raw
+    // HTML when the handler returns `RenderOut::String`. WireAst and
+    // `Ok(None)` continue to fall through to default rendering.
+
+    /// Helper: build a registry + handler that returns a fixed
+    /// String for every render call. The returned HTML is what should
+    /// be spliced in place of the annotation's default rendering.
+    fn registry_with_string_handler(label: &str, html_output: &'static str) -> Registry {
+        struct Fixed(&'static str);
+        impl LexHandler for Fixed {
+            fn on_render(
+                &self,
+                _: &LabelCtx,
+                _: Format,
+            ) -> Result<Option<RenderOut>, HandlerError> {
+                Ok(Some(RenderOut::String {
+                    string: self.0.to_string(),
+                }))
+            }
+        }
+        let registry = Registry::new();
+        registry
+            .register_namespace(
+                label.split_once('.').map(|(ns, _)| ns).unwrap_or(label),
+                vec![schema(label, &["html"])],
+                Box::new(Fixed(html_output)),
+            )
+            .unwrap();
+        registry
+    }
+
+    /// Test fixture: a session-scoped annotation. Top-level
+    /// annotations are extracted into the IR's synthetic
+    /// `frontmatter` block before events are emitted, so they
+    /// don't flow through `Event::StartAnnotation` at all and the
+    /// splice can't operate on them. Per-element annotations (the
+    /// realistic extension use case) go through the event stream.
+    /// Lifting this limitation requires reworking the IR's
+    /// document-annotation handling — out of scope here, tracked
+    /// implicitly under `serialize_to_html_with_registry`'s docs.
+    const DOC_WITH_SCOPED_ANNOTATION: &str =
+        "1. Heading\n\n    :: acme.task ::\n        Body that should be replaced.\n";
+
+    #[test]
+    fn splice_replaces_default_annotation_rendering_with_handler_html() {
+        use crate::formats::html::{serialize_to_html_with_registry, HtmlOptions, HtmlTheme};
+        let doc = parse(DOC_WITH_SCOPED_ANNOTATION);
+        let registry = registry_with_string_handler(
+            "acme.task",
+            "<div class=\"acme-task\">handler-rendered</div>",
+        );
+        let outcome = serialize_to_html_with_registry(
+            &doc,
+            HtmlOptions::new(HtmlTheme::default()),
+            &registry,
+        )
+        .expect("serialise");
+        assert!(
+            outcome
+                .html
+                .contains("<div class=\"acme-task\">handler-rendered</div>"),
+            "handler HTML should be spliced into the output. got:\n{}",
+            outcome.html
+        );
+        // Default comment markers gone for this annotation.
+        assert!(
+            !outcome.html.contains("<!-- lex:acme.task"),
+            "default start comment should be replaced by splice. got:\n{}",
+            outcome.html
+        );
+        assert!(
+            !outcome.html.contains("<!-- /lex:acme.task"),
+            "default end comment should be replaced by splice. got:\n{}",
+            outcome.html
+        );
+    }
+
+    #[test]
+    fn splice_consumes_annotation_body_so_default_content_does_not_render() {
+        use crate::formats::html::{serialize_to_html_with_registry, HtmlOptions, HtmlTheme};
+        // The body paragraph below ("Body that should be replaced.")
+        // must NOT appear in the output — the handler owns the
+        // annotation's full rendering, including its body.
+        let doc = parse(DOC_WITH_SCOPED_ANNOTATION);
+        let registry = registry_with_string_handler("acme.task", "<div>HANDLER</div>");
+        let outcome = serialize_to_html_with_registry(
+            &doc,
+            HtmlOptions::new(HtmlTheme::default()),
+            &registry,
+        )
+        .expect("serialise");
+        assert!(outcome.html.contains("<div>HANDLER</div>"));
+        assert!(
+            !outcome.html.contains("Body that should be replaced."),
+            "annotation body must be suppressed inside the handler-owned region. got:\n{}",
+            outcome.html
+        );
+    }
+
+    #[test]
+    fn no_splice_when_handler_returns_none_falls_through_to_default() {
+        use crate::formats::html::{serialize_to_html_with_registry, HtmlOptions, HtmlTheme};
+        struct AlwaysNone;
+        impl LexHandler for AlwaysNone {
+            fn on_render(
+                &self,
+                _: &LabelCtx,
+                _: Format,
+            ) -> Result<Option<RenderOut>, HandlerError> {
+                Ok(None)
+            }
+        }
+        let doc = parse(DOC_WITH_SCOPED_ANNOTATION);
+        let registry = Registry::new();
+        registry
+            .register_namespace(
+                "acme",
+                vec![schema("acme.task", &["html"])],
+                Box::new(AlwaysNone),
+            )
+            .unwrap();
+        let outcome = serialize_to_html_with_registry(
+            &doc,
+            HtmlOptions::new(HtmlTheme::default()),
+            &registry,
+        )
+        .expect("serialise");
+        // No splice → default comment markers present.
+        assert!(
+            outcome.html.contains("<!-- lex:acme.task"),
+            "Ok(None) should fall through to default rendering. got:\n{}",
+            outcome.html
+        );
+    }
+
+    #[test]
+    fn no_splice_when_handler_returns_wire_ast_with_diagnostic() {
+        use crate::formats::html::{serialize_to_html_with_registry, HtmlOptions, HtmlTheme};
+        use lex_extension::wire::{Range as WireRange, WireNode};
+        use lex_extension::Position;
+        struct WireOnly;
+        impl LexHandler for WireOnly {
+            fn on_render(
+                &self,
+                _: &LabelCtx,
+                _: Format,
+            ) -> Result<Option<RenderOut>, HandlerError> {
+                Ok(Some(RenderOut::WireAst {
+                    ast: WireNode::Paragraph {
+                        range: WireRange::new(Position::new(0, 0), Position::new(0, 0)),
+                        inlines: Vec::new(),
+                        origin: None,
+                    },
+                }))
+            }
+        }
+        let doc = parse(DOC_WITH_SCOPED_ANNOTATION);
+        let registry = Registry::new();
+        registry
+            .register_namespace(
+                "acme",
+                vec![schema("acme.task", &["html"])],
+                Box::new(WireOnly),
+            )
+            .unwrap();
+        let outcome = serialize_to_html_with_registry(
+            &doc,
+            HtmlOptions::new(HtmlTheme::default()),
+            &registry,
+        )
+        .expect("serialise");
+        // Default markers present (WireAst doesn't splice for HTML).
+        assert!(outcome.html.contains("<!-- lex:acme.task"));
+        // Diagnostic surfaces.
+        assert!(
+            outcome
+                .diagnostics
+                .iter()
+                .any(|d| d.contains("WireAst") || d.contains("wire_ast")),
+            "expected WireAst-shape-mismatch diagnostic, got: {:?}",
+            outcome.diagnostics
+        );
+    }
+
+    #[test]
+    fn unregistered_namespace_renders_default_unchanged() {
+        use crate::formats::html::{
+            serialize_to_html, serialize_to_html_with_registry, HtmlOptions, HtmlTheme,
+        };
+        // No namespaces registered — splice has nothing to plan, the
+        // registry-less and registry-aware paths produce identical
+        // output.
+        let doc = parse("1. Heading\n\n    :: unknown.label ::\n        body.\n");
+        let registry = Registry::new();
+        let outcome = serialize_to_html_with_registry(
+            &doc,
+            HtmlOptions::new(HtmlTheme::default()),
+            &registry,
+        )
+        .expect("serialise");
+        let baseline = serialize_to_html(&doc, HtmlTheme::default()).expect("baseline");
+        assert_eq!(outcome.html, baseline);
+    }
+
+    /// Plan-vs-events alignment isn't trivially guaranteed when
+    /// multiple annotations appear in one document: the IR's
+    /// flatten pass can reposition trailing annotations relative
+    /// to their host element, breaking the simple counter-based
+    /// indexing the splice relies on. The two-annotation case is
+    /// real and worth fixing, but the fix needs deeper IR-side
+    /// work to preserve source order through the flatten pass —
+    /// out of scope for the initial splice landing. Tracked at
+    /// the same #563 follow-up that handles WireAst → HTML
+    /// conversion.
+    ///
+    /// For v1, the single-annotation case (the dominant use case)
+    /// works correctly, and the trailing-annotation case is the
+    /// only known divergence. Real extension usage (acme.commenting,
+    /// mit.plasma-specs, etc.) attaches per-element and renders
+    /// cleanly.
+    #[test]
+    fn multi_annotation_splice_is_a_known_limitation() {
+        // No assertion — this test exists so a future implementer
+        // grepping for "multi-annotation" lands here. Promote to a
+        // real assertion when the IR ordering is stabilised.
+    }
 }

@@ -4,6 +4,37 @@
 
 ### Added
 
+- **HTML render splice** ([#563](https://github.com/lex-fmt/lex/issues/563)).
+  `lexd convert --to html` (via
+  `lex_babel::serialize_to_html_with_registry`) now actually splices
+  handler-rendered HTML into the output for annotations whose
+  registered handler returns `RenderOut::String`. The default
+  `<!-- lex:label -->` ... body ... `<!-- /lex:label -->` rendering
+  is replaced by the handler's raw HTML; the annotation's body
+  events are suppressed (the handler owns the full rendering of its
+  labelled node). Mechanism: AST-walk and event-walk visit
+  annotations in matching document order; the HTML builder
+  maintains a counter, looks up the matching plan entry on
+  `Event::StartAnnotation`, and emits a sentinel comment that
+  string-replaces with the handler's HTML after DOM serialization.
+  Handler diagnostics from `on_render` continue to surface via
+  `HtmlExportOutcome::diagnostics`.
+  - `RenderOut::WireAst` outputs fall through to default rendering
+    with the existing format-shape-mismatch diagnostic;
+    `WireAst → HTML` conversion is a follow-up.
+  - Document-level annotations (extracted into the IR's synthetic
+    `frontmatter` block before events are emitted) are not splice
+    targets — the existing frontmatter path handles them as
+    metadata. Per-element annotations (the actual extension use
+    case) splice correctly.
+  - Multi-annotation documents with trailing annotations may hit
+    an IR-ordering quirk that breaks the counter-based alignment.
+    Single-annotation documents and clearly-separated annotations
+    work; see test
+    `multi_annotation_splice_is_a_known_limitation` for context.
+
+### Added
+
 - **Resolver machinery** (#546 item A, partial). `lex-extension-host`
   gains a pluggable [`Fetcher`] trait, a `FetcherRegistry`, and a
   content-keyed `ResolverCache` (24-hour TTL for mutable refs,
