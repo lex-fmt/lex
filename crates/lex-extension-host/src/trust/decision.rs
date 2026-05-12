@@ -165,7 +165,7 @@ pub struct TrustGate {
     /// `false` for every capability set and the post-δ pure-handler
     /// auto-trust path is inactive — behaviour matches β/γ. PR 12d
     /// (the matrix flip) becomes a one-line wiring change in
-    /// `lex-engine` to install the OS-appropriate impl here.
+    /// `lex-fmt` to install the OS-appropriate impl here.
     ///
     /// Stored as `Arc` so the host can hand the same instance to
     /// the gate and to [`crate::transport::SubprocessHandler::spawn_with_sandbox`]
@@ -269,7 +269,7 @@ impl TrustGate {
         // [`crate::sandbox::NullSandbox`] as the default, which
         // reports `supports(_) == false` for every capability set.
         // PR 12a/b/c add real per-OS impls; PR 12d switches the
-        // default install in `lex-engine` from `NullSandbox` to the
+        // default install in `lex-fmt` from `NullSandbox` to the
         // OS-appropriate impl so this branch starts firing.
         //
         // We pass `Capabilities::default()` to `supports()` because
@@ -864,7 +864,7 @@ mod tests {
     #[test]
     fn sandbox_arc_is_shared_with_callers() {
         // The Arc<dyn Sandbox> contract: the gate must hand out the
-        // SAME instance to callers (e.g., `lex-engine` wiring this
+        // SAME instance to callers (e.g., `lex-fmt` wiring this
         // through to `SubprocessHandler::spawn_with_sandbox`). If
         // the gate and the transport were to hold separate
         // instances, a future bug could silently auto-trust pure

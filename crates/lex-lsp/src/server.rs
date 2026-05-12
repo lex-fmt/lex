@@ -368,7 +368,7 @@ where
         let trust_requester = std::sync::Arc::new(self.client.clone());
         let runtime_handle = tokio::runtime::Handle::current();
         let outcome = match tokio::task::spawn_blocking(move || {
-            lex_engine::boot_registry(lex_engine::ExtensionSetup {
+            lex_fmt::boot_registry(lex_fmt::ExtensionSetup {
                 workspace_root: workspace_root_owned.as_path(),
                 labels_config: &labels_config,
                 // The LSP server has no `--ext-schema` flag; only
@@ -391,7 +391,7 @@ where
                 )),
                 // Reports `lexd-lsp`'s version to subprocess handlers
                 // in their initialize handshake — what handlers expect
-                // to see, not the `lex-engine` boot crate's version.
+                // to see, not the `lex-fmt` boot crate's version.
                 host_version: env!("CARGO_PKG_VERSION"),
             })
         })

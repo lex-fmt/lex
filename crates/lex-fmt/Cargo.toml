@@ -1,12 +1,12 @@
 [package]
-name = "lex-engine"
+name = "lex-fmt"
 version = "0.11.0"
 edition = "2021"
 authors = ["lex contributors"]
-description = "Boot helper + extension setup glue for lex hosts (lexd CLI, lexd-lsp). The future home of Engine::builder() for embedders."
+description = "Canonical Rust embedder API for the lex document format. Hosts Engine::builder() plus the boot helpers shared by lexd and lexd-lsp."
 license = "MIT"
 repository = "https://github.com/lex-fmt/lex"
-keywords = ["lex", "extensions", "engine"]
+keywords = ["lex", "document", "embedder"]
 categories = ["development-tools"]
 
 [lib]

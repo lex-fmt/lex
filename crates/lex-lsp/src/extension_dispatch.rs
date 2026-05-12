@@ -22,17 +22,17 @@ use lex_core::lex::ast::{
     Annotation, ContentItem, Document, Position as AstPosition, Session, Verbatim,
 };
 use lex_core::lex::wire::to_wire_node;
-use lex_engine::{BootDiagnostic, BootOutcome, RegisteredNamespace};
 use lex_extension::wire::{HostNodeKind, WireNode};
 use lex_extension::{AnnotationBody, LabelCtx, NodeRef};
 use lex_extension_host::Registry;
+use lex_fmt::{BootDiagnostic, BootOutcome, RegisteredNamespace};
 use tower_lsp::lsp_types::{
     self as lsp, CodeAction as LspCodeAction, CompletionItem as LspCompletionItem,
     Hover as LspHover, HoverContents, MarkupContent, MarkupKind, Range as LspRange, TextEdit, Url,
     WorkspaceEdit,
 };
 
-/// Cached state from a single [`lex_engine::boot_registry`] call. Held by
+/// Cached state from a single [`lex_fmt::boot_registry`] call. Held by
 /// the server for the lifetime of a workspace; rebuilt when the workspace
 /// root changes.
 pub struct LspExtensionState {

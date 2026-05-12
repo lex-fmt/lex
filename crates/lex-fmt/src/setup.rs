@@ -87,7 +87,7 @@ pub struct ExtensionSetup<'a> {
     /// Host crate version (typically `env!("CARGO_PKG_VERSION")`)
     /// reported to subprocess handlers in their `initialize`
     /// handshake. The host (`lexd` / `lexd-lsp` / an embedder) supplies
-    /// its own version, *not* `lex-engine`'s — handlers expect to see
+    /// its own version, *not* `lex-fmt`'s — handlers expect to see
     /// the host they're running under, not the boot helper crate.
     pub host_version: &'a str,
 }
