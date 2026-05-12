@@ -154,6 +154,20 @@ impl LexSerializer {
         format!("{}.", parts.join("."))
     }
 
+    /// Whether the most recently written line ended with a single `:` —
+    /// i.e. a container subject line (Definition, annotation-with-body,
+    /// verbatim subject). Used to decide whether to emit a blank line
+    /// before a following verbatim subject. `:: foo ::` (annotation
+    /// closing / verbatim closing) ends with `::`, not a lone `:`, and
+    /// so does not count.
+    fn last_emission_ended_with_container_opener_colon(&self) -> bool {
+        if self.consecutive_newlines != 1 {
+            return false;
+        }
+        let trimmed = self.output.trim_end();
+        trimmed.ends_with(':') && !trimmed.ends_with("::")
+    }
+
     fn ensure_blank_lines(&mut self, count: usize) {
         let target_newlines = count + 1;
         while self.consecutive_newlines < target_newlines {
@@ -329,6 +343,23 @@ impl Visitor for LexSerializer {
     }
 
     fn visit_verbatim_block(&mut self, verbatim: &Verbatim) {
+        // Lex requires a blank line between a preceding paragraph and the
+        // subject line that opens a verbatim block — without one, the
+        // re-parser merges the subject into the preceding paragraph and
+        // the verbatim is lost. The parser consumes that blank line as
+        // part of the verbatim's preamble, so it isn't represented as a
+        // `BlankLineGroup` in the AST and no other visitor emits it. See
+        // lex#505.
+        //
+        // Suppress when the verbatim is the first child of a container
+        // whose opener ends with `:` (Definition, list-item with colon
+        // subject, etc.). A blank line at column 0 between a Definition
+        // subject and its body would terminate the Definition, so the
+        // body's first verbatim must follow immediately.
+        if !self.last_emission_ended_with_container_opener_colon() {
+            self.ensure_blank_lines(1);
+        }
+
         let label = &verbatim.closing_data.label.value;
 
         // Try to get formatted content from handler
@@ -738,6 +769,29 @@ mod tests {
         assert!(formatted_2.contains("| A   | B   |"));
         assert!(formatted_2.contains("| --- | --- |"));
         assert!(formatted_2.contains("| 1   | 2   |"));
+    }
+
+    #[test]
+    fn test_round_trip_paragraph_then_verbatim_lex505() {
+        // Regression: Verbatim preceded by a paragraph must keep its leading
+        // blank line through a parse → serialize → parse round-trip. Without
+        // the blank, the re-parser merges the verbatim's subject line into
+        // the prior paragraph and the verbatim is lost. The parser consumes
+        // that blank as part of the verbatim's preamble (it doesn't appear
+        // as a BlankLineGroup in the AST), so the serializer has to emit it.
+        //
+        // Uses a `Title\n=====\n` header so the first line isn't absorbed as
+        // the document title — without it, "Intro paragraph." would become
+        // the doc title and the regression wouldn't be exercised.
+        let source =
+            "Doc\n===\n\nIntro paragraph.\n\nCode Example:\n\n    fn main() {}\n\n:: rust ::\n";
+        let formatted = format_source(source);
+        assert!(
+            formatted.contains("Intro paragraph.\n\nCode Example:"),
+            "expected blank line between paragraph and verbatim subject, got:\n{formatted}"
+        );
+        let formatted_again = format_source(&formatted);
+        assert_text_eq(&formatted, &formatted_again);
     }
 
     #[test]
