@@ -1,0 +1,62 @@
+name: Sandbox Tests
+
+# Per-OS sandbox tests for lex-extension-host.
+#
+# Path-filtered so PRs that don't touch sandbox code don't burn macOS
+# minutes. Always runs on push to main so we catch regressions from
+# unrelated changes.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/lex-extension-host/src/sandbox/**'
+      - 'crates/lex-extension-host/tests/fixtures/fs_probe.rs'
+      - 'crates/lex-extension-host/tests/fixtures/net_probe.rs'
+      - 'crates/lex-extension-host/tests/sandbox_enforcement.rs'
+      - 'crates/lex-extension-host/Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/sandbox-tests.yml'
+  # No `branches:` filter on pull_request — stacked PRs whose base is
+  # a feature branch (not `main`) should still get sandbox CI signal.
+  # The `paths:` filter alone keeps the workflow cheap on unrelated
+  # PRs.
+  pull_request:
+    paths:
+      - 'crates/lex-extension-host/src/sandbox/**'
+      - 'crates/lex-extension-host/tests/fixtures/fs_probe.rs'
+      - 'crates/lex-extension-host/tests/fixtures/net_probe.rs'
+      - 'crates/lex-extension-host/tests/sandbox_enforcement.rs'
+      - 'crates/lex-extension-host/Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/sandbox-tests.yml'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  sandbox:
+    name: Sandbox tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: true
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: sandbox-${{ matrix.os }}
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Run sandbox tests
+        run: cargo nextest run -p lex-extension-host sandbox::

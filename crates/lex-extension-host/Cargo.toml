@@ -35,3 +35,18 @@ tempfile = { workspace = true }
 name = "lex-extension-host-fixture-handler"
 path = "tests/fixtures/fixture_handler.rs"
 required-features = ["subprocess"]
+
+# Sandbox test fixtures: standalone binaries that attempt one privileged
+# operation each and exit with a known code. Spawned directly via
+# `std::process::Command` with a `Sandbox` impl applied. Same feature
+# gating as the JSON-RPC fixture above — built only as part of the
+# subprocess-test toolchain.
+[[bin]]
+name = "lex-extension-host-fixture-fs-probe"
+path = "tests/fixtures/fs_probe.rs"
+required-features = ["subprocess"]
+
+[[bin]]
+name = "lex-extension-host-fixture-net-probe"
+path = "tests/fixtures/net_probe.rs"
+required-features = ["subprocess"]

@@ -1,0 +1,32 @@
+# Linux dev container for exercising the sandbox tests on a macOS host.
+#
+# Used by scripts/dev/sandbox-test-linux.sh. CI runs the same tests on
+# ubuntu-latest directly; this image only exists so a contributor on
+# macOS can run the Linux-only sandbox suite locally without spinning
+# up a VM.
+#
+# Pinned to the workspace's rust-toolchain.toml channel. Birdcage uses
+# pure-Rust seccomp + landlock crates, so no native dev packages are
+# required beyond what the kernel exposes (landlock ≥5.13, seccomp
+# filter mode + no_new_privs).
+FROM rust:1.88-bookworm
+
+# Match rust-toolchain.toml targets so `cargo build` doesn't trigger a
+# rustup network fetch on first run.
+RUN rustup target add wasm32-unknown-unknown
+
+# Use the prebuilt binary — `cargo install cargo-nextest` from source
+# now requires rust ≥1.91 on the latest release, which doesn't match
+# our pinned toolchain. Architecture is detected at build time so the
+# image works on both Apple Silicon (arm64) hosts and amd64 hosts.
+RUN set -eux; \
+    arch="$(uname -m)"; \
+    case "$arch" in \
+        x86_64)  triple=x86_64-unknown-linux-gnu ;; \
+        aarch64) triple=aarch64-unknown-linux-gnu ;; \
+        *) echo "unsupported arch: $arch" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL "https://get.nexte.st/latest/${triple}.tar.gz" \
+        | tar -xz -C /usr/local/cargo/bin
+
+WORKDIR /work
