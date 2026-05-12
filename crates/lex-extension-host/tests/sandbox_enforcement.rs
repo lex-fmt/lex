@@ -16,6 +16,9 @@ use lex_extension_host::sandbox::{NullSandbox, Sandbox};
 #[cfg(target_os = "linux")]
 use lex_extension_host::sandbox::LinuxSandbox;
 
+#[cfg(target_os = "macos")]
+use lex_extension_host::sandbox::MacosSandbox;
+
 const FS_PROBE: &str = env!("CARGO_BIN_EXE_lex-extension-host-fixture-fs-probe");
 const NET_PROBE: &str = env!("CARGO_BIN_EXE_lex-extension-host-fixture-net-probe");
 
@@ -78,4 +81,24 @@ fn net_probe_is_blocked_under_linux_sandbox() {
     // socket() syscall returns EPERM → TcpStream::connect_timeout
     // returns Err → exit 42.
     assert_eq!(run_with(&LinuxSandbox, NET_PROBE, &[addr.to_string()]), 42,);
+}
+
+// -- macOS: MacosSandbox enforcement.
+
+#[cfg(target_os = "macos")]
+#[test]
+fn fs_probe_is_blocked_under_macos_sandbox() {
+    // Profile denies file-read* on /etc subpath → /etc/passwd open
+    // returns EPERM → exit 42.
+    assert_eq!(run_with(&MacosSandbox, FS_PROBE, &[]), 42);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn net_probe_is_blocked_under_macos_sandbox() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind localhost");
+    let addr = listener.local_addr().expect("addr");
+    // Profile denies network* → TcpStream::connect_timeout returns
+    // Err → exit 42.
+    assert_eq!(run_with(&MacosSandbox, NET_PROBE, &[addr.to_string()]), 42);
 }

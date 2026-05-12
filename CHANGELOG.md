@@ -4,6 +4,19 @@
 
 ### Added
 
+- `lex-extension-host::sandbox::MacosSandbox`: macOS implementation of
+  the `Sandbox` trait (lex#528 PR 12b). Installs a Sandbox Profile
+  Language (SBPL) policy via the libSystem `sandbox_init` API inside
+  a `pre_exec` hook so it applies to the child after `fork()` and
+  survives `execve()`. The pure-handler profile denies `network*` and
+  reads of `/etc` (covering both probe-fixture targets) while keeping
+  other operations permissive enough for the system loader to bring
+  up a Rust binary. Deny-default profiles that run arbitrary Rust
+  binaries on macOS require per-version dyld/mach-lookup tuning and
+  land alongside finer `Capabilities` fields. `sandbox_init` is
+  deprecated since macOS 10.8 but still ships in libSystem on every
+  shipping macOS through Sequoia — same dependency Apple's
+  `sandbox-exec` utility relies on.
 - `lex-extension-host::sandbox::LinuxSandbox`: Linux implementation of
   the `Sandbox` trait (lex#528 PR 12a). Combines `landlock` (filesystem
   allowlist — dynamic-loader paths + the handler binary itself) and

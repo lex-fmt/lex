@@ -30,6 +30,11 @@ tokio = { workspace = true, optional = true }
 [target.'cfg(target_os = "linux")'.dependencies]
 seccompiler = "0.5"
 landlock = "0.4"
+
+# Shared platform dep: libc is used in pre_exec hooks by both the
+# Linux (prctl, write) and macOS (sandbox_init FFI declaration,
+# write) sandbox impls.
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
 libc = "0.2"
 
 [dev-dependencies]
