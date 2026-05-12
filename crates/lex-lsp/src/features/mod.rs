@@ -1,5 +1,6 @@
 // Tower-lsp-specific features that stay in this crate.
 pub mod commands;
+pub mod extract;
 
 // Re-exported sync features. These live in `lex-lsp-core` so they can be
 // shared with `lex-wasm`; we re-export them here so server.rs and the rest

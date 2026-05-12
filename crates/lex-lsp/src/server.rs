@@ -12,6 +12,7 @@ use crate::extension_dispatch::{
 use crate::features::commands::{self, execute_command};
 use crate::features::document_links::collect_document_links;
 use crate::features::document_symbols::{collect_document_symbols, LexDocumentSymbol};
+use crate::features::extract::{self, ExtractError};
 use crate::features::folding_ranges::{folding_ranges as collect_folding_ranges, LexFoldingRange};
 use crate::features::formatting::{self, LineRange as FormattingLineRange, TextEditSpan};
 use crate::features::go_to_definition::goto_definition;
@@ -1094,6 +1095,7 @@ where
                     commands::COMMAND_TABLE_NEXT_CELL.to_string(),
                     commands::COMMAND_TABLE_PREVIOUS_CELL.to_string(),
                     commands::COMMAND_FORMATS_LIST.to_string(),
+                    commands::COMMAND_EXTRACT_TO_INCLUDE.to_string(),
                 ],
                 work_done_progress_options: WorkDoneProgressOptions::default(),
             }),
@@ -1641,11 +1643,127 @@ where
                 }
                 Ok(None)
             }
+            commands::COMMAND_EXTRACT_TO_INCLUDE => {
+                self.handle_extract_to_include(&params.arguments).await
+            }
             _ => self
                 .features
                 .execute_command(&params.command, &params.arguments),
         }
     }
+}
+
+impl<C, P> LexLanguageServer<C, P>
+where
+    C: LspClient,
+    P: FeatureProvider,
+{
+    /// Handler for `lex.extractToInclude`. Args are **positional**:
+    /// `[uri: string, range: lsp.Range, src: string]`.
+    ///
+    /// Returns a `WorkspaceEdit` JSON value the editor applies atomically
+    /// (file creation + selection replacement). All validation failures
+    /// surface as `invalid_params` errors carrying the
+    /// [`ExtractError::message`] string for direct display.
+    async fn handle_extract_to_include(&self, arguments: &[Value]) -> Result<Option<Value>> {
+        let uri_str = arguments
+            .first()
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| Error::invalid_params("Missing 'uri' argument"))?;
+        let range_val = arguments
+            .get(1)
+            .ok_or_else(|| Error::invalid_params("Missing 'range' argument"))?;
+        let src = arguments
+            .get(2)
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| Error::invalid_params("Missing 'src' argument"))?;
+
+        let uri = Url::parse(uri_str)
+            .map_err(|_| Error::invalid_params(format!("Invalid uri: {uri_str}")))?;
+        let range: Range = serde_json::from_value(range_val.clone())
+            .map_err(|e| Error::invalid_params(format!("Invalid range: {e}")))?;
+
+        let host_path = uri
+            .to_file_path()
+            .map_err(|_| Error::invalid_params(ExtractError::InvalidHostUri.message()))?;
+        let host_path = absolutize_path(&host_path);
+
+        let entry = self
+            .document_entry(&uri)
+            .await
+            .ok_or_else(|| Error::invalid_params("Document not open in the server"))?;
+
+        let selection_text = slice_text_by_range(&entry.text, range)
+            .ok_or_else(|| Error::invalid_params("Selection range out of bounds"))?;
+
+        let host_indent = range.start.character as usize;
+
+        let cfg = self.config.read().await;
+        let inc_root = inc_root_for(&host_path, &cfg);
+        drop(cfg);
+
+        let edit = extract::build_extract_workspace_edit(
+            &uri,
+            &host_path,
+            range,
+            &selection_text,
+            host_indent,
+            src,
+            &inc_root,
+        )
+        .map_err(|e| Error::invalid_params(e.message()))?;
+
+        Ok(Some(
+            serde_json::to_value(edit).map_err(|_| Error::internal_error())?,
+        ))
+    }
+}
+
+/// Slice `text` by an LSP `Range`. Returns `None` when the range falls
+/// outside the document or splits a multi-byte character.
+///
+/// `character` is treated as a **UTF-8 byte offset** to match the rest
+/// of the server: lex-core's `LineColumnLocator::byte_to_position`
+/// computes `column = byte_offset - line_start`, and `to_lsp_position`
+/// forwards that value to LSP as-is. Using char offsets here would
+/// mis-slice any selection containing multi-byte characters.
+fn slice_text_by_range(text: &str, range: Range) -> Option<String> {
+    let start_line = range.start.line as usize;
+    let end_line = range.end.line as usize;
+    let start_col = range.start.character as usize;
+    let end_col = range.end.character as usize;
+    if start_line > end_line || (start_line == end_line && start_col > end_col) {
+        return None;
+    }
+
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    if end_line >= lines.len() && !(end_line == lines.len() && end_col == 0) {
+        return None;
+    }
+
+    let mut out = String::new();
+    for (i, line) in lines.iter().enumerate() {
+        if i < start_line || i > end_line {
+            continue;
+        }
+        let line_bytes = line.as_bytes();
+        let from = if i == start_line { start_col } else { 0 };
+        let to = if i == end_line {
+            end_col
+        } else {
+            line_bytes.len()
+        };
+        if from > line_bytes.len() || to > line_bytes.len() {
+            return None;
+        }
+        // Reject ranges that cut a UTF-8 character in half rather than
+        // returning a string with replacement characters.
+        if !line.is_char_boundary(from) || !line.is_char_boundary(to) {
+            return None;
+        }
+        out.push_str(&line[from..to]);
+    }
+    Some(out)
 }
 
 /// Compute the include-resolution root for an entry document.
@@ -3145,6 +3263,153 @@ mod tests {
         assert!(
             response.is_none(),
             "goto-def must return None for missing targets, got {response:?}"
+        );
+    }
+
+    // ========================================================================
+    // lex.extractToInclude — end-to-end via executeCommand (lex#497)
+    // ========================================================================
+
+    #[tokio::test]
+    async fn extract_to_include_returns_workspace_edit_with_create_and_replace() {
+        let host_text = "Doc\n===\n\n1. Section\n\n    Some content.\n    More content.\n";
+        let (server, _client, uri, dir) =
+            open_in_tempdir(&[("main.lex", host_text)], "main.lex").await;
+
+        // Select the indented body of the section — lines 5–6, column 4–end.
+        let range = Range::new(Position::new(5, 4), Position::new(7, 0));
+        let result = server
+            .execute_command(ExecuteCommandParams {
+                command: commands::COMMAND_EXTRACT_TO_INCLUDE.to_string(),
+                arguments: vec![
+                    Value::String(uri.to_string()),
+                    serde_json::to_value(range).unwrap(),
+                    Value::String("section-body.lex".to_string()),
+                ],
+                work_done_progress_params: Default::default(),
+            })
+            .await
+            .unwrap()
+            .expect("extract command should return WorkspaceEdit");
+
+        let edit: tower_lsp::lsp_types::WorkspaceEdit = serde_json::from_value(result).unwrap();
+        let ops = match edit.document_changes.unwrap() {
+            tower_lsp::lsp_types::DocumentChanges::Operations(ops) => ops,
+            _ => panic!("expected operations"),
+        };
+        assert_eq!(ops.len(), 3, "create + target-content + host-replace");
+
+        // First op: create target.
+        match &ops[0] {
+            tower_lsp::lsp_types::DocumentChangeOperation::Op(
+                tower_lsp::lsp_types::ResourceOp::Create(c),
+            ) => {
+                assert!(c.uri.path().ends_with("section-body.lex"));
+            }
+            other => panic!("expected CreateFile, got {other:?}"),
+        }
+
+        // Second op writes the indent-shifted selection into the target.
+        let target_text = match &ops[1] {
+            tower_lsp::lsp_types::DocumentChangeOperation::Edit(e) => match &e.edits[0] {
+                OneOf::Left(t) => t.new_text.clone(),
+                _ => panic!("unexpected edit shape"),
+            },
+            _ => panic!("expected TextDocumentEdit for target"),
+        };
+        assert!(
+            target_text.contains("Some content.") && target_text.contains("More content."),
+            "target should hold the extracted body, got: {target_text:?}"
+        );
+        // Indent-shifted: should start at column 0.
+        assert!(
+            target_text.starts_with("Some content."),
+            "expected indent shift to drop leading 4 spaces, got: {target_text:?}"
+        );
+
+        // Third op replaces the host range with `:: lex.include ::` at indent 4.
+        let host_replace = match &ops[2] {
+            tower_lsp::lsp_types::DocumentChangeOperation::Edit(e) => match &e.edits[0] {
+                OneOf::Left(t) => t.new_text.clone(),
+                _ => panic!("unexpected edit shape"),
+            },
+            _ => panic!("expected TextDocumentEdit for host"),
+        };
+        assert_eq!(
+            host_replace,
+            "    :: lex.include src=\"section-body.lex\" ::"
+        );
+
+        // Keep dir alive until end of test.
+        drop(dir);
+    }
+
+    #[tokio::test]
+    async fn extract_to_include_surfaces_validation_errors_as_invalid_params() {
+        let host_text = "Doc\n===\n\n    Body text.\n";
+        let (server, _client, uri, _dir) =
+            open_in_tempdir(&[("main.lex", host_text)], "main.lex").await;
+
+        let range = Range::new(Position::new(3, 4), Position::new(4, 0));
+        let err = server
+            .execute_command(ExecuteCommandParams {
+                command: commands::COMMAND_EXTRACT_TO_INCLUDE.to_string(),
+                arguments: vec![
+                    Value::String(uri.to_string()),
+                    serde_json::to_value(range).unwrap(),
+                    Value::String("https://elsewhere/foo.lex".to_string()),
+                ],
+                work_done_progress_params: Default::default(),
+            })
+            .await
+            .unwrap_err();
+        assert!(
+            err.message.contains("URL"),
+            "expected URL-scheme error message, got: {}",
+            err.message
+        );
+    }
+
+    #[tokio::test]
+    async fn extract_to_include_capability_advertises_command() {
+        let provider = Arc::new(MockFeatureProvider::default());
+        let server = LexLanguageServer::with_features(NoopClient, provider);
+        let init = server
+            .initialize(InitializeParams::default())
+            .await
+            .unwrap();
+        let advertised = init
+            .capabilities
+            .execute_command_provider
+            .expect("execute_command_provider")
+            .commands;
+        assert!(
+            advertised.contains(&commands::COMMAND_EXTRACT_TO_INCLUDE.to_string()),
+            "extractToInclude must be in advertised commands, got: {advertised:?}"
+        );
+    }
+
+    /// `slice_text_by_range` treats `Range.character` as a UTF-8 byte
+    /// offset, matching lex-core's `LineColumnLocator::byte_to_position`
+    /// (which sets `column = byte_offset - line_start`). Char-based
+    /// slicing would mis-slice selections containing multi-byte chars;
+    /// this test pins the byte semantics.
+    #[test]
+    fn slice_text_by_range_uses_utf8_byte_offsets() {
+        let text = "café\nrestaurant\n";
+        // The é is 2 UTF-8 bytes, so "café" occupies bytes 0..5.
+        let range = Range::new(Position::new(0, 0), Position::new(0, 5));
+        assert_eq!(slice_text_by_range(text, range).as_deref(), Some("café"));
+
+        // Mid-character byte offset (between the two bytes of é) is rejected.
+        let bad = Range::new(Position::new(0, 0), Position::new(0, 4));
+        assert!(slice_text_by_range(text, bad).is_none());
+
+        // Multi-line slice with non-ASCII in the source.
+        let multi = Range::new(Position::new(0, 0), Position::new(1, 10));
+        assert_eq!(
+            slice_text_by_range(text, multi).as_deref(),
+            Some("café\nrestaurant")
         );
     }
 

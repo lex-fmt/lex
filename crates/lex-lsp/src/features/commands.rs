@@ -20,6 +20,7 @@ pub const COMMAND_TABLE_FORMAT: &str = "lex.table.format";
 pub const COMMAND_TABLE_NEXT_CELL: &str = "lex.table.next_cell";
 pub const COMMAND_TABLE_PREVIOUS_CELL: &str = "lex.table.previous_cell";
 pub const COMMAND_FORMATS_LIST: &str = "lex.formats.list";
+pub const COMMAND_EXTRACT_TO_INCLUDE: &str = "lex.extractToInclude";
 
 pub fn execute_command(command: &str, arguments: &[Value]) -> Result<Option<Value>> {
     match command {
