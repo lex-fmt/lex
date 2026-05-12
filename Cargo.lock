@@ -1193,10 +1193,13 @@ dependencies = [
 name = "lex-fmt"
 version = "0.11.0"
 dependencies = [
+ "lex-analysis",
+ "lex-babel",
  "lex-config",
  "lex-core",
  "lex-extension",
  "lex-extension-host",
+ "serde_yaml",
  "tempfile",
 ]
 

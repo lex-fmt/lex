@@ -12,11 +12,21 @@ categories = ["development-tools"]
 [lib]
 doctest = false
 
+[features]
+default = []
+# Pulls in lex-babel's PDF/PNG renderers (transitively: printpdf,
+# image, etc.). Off by default to keep the embedder dep tree small;
+# opt in if you need binary output from `Engine::render`.
+native-export = ["lex-babel/native-export"]
+
 [dependencies]
 lex-core = { workspace = true }
 lex-config = { workspace = true }
 lex-extension = { workspace = true }
 lex-extension-host = { workspace = true, features = ["subprocess"] }
+lex-babel = { workspace = true }
+lex-analysis = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+serde_yaml = { workspace = true }
