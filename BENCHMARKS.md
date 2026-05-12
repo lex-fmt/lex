@@ -1,75 +1,132 @@
-# Lex performance — snapshot
+# Lex Performance Baselines
 
-Where Lex sits today, in three measurements taken together. All numbers from a 2026-05-11 dev workstation (macOS aarch64); regenerate with the commands in [Reproducing](#reproducing) below if you want fresh ones.
+This document tracks Lex's performance against established Markdown tools. Lex is fundamentally more expressive (hierarchical sessions, robust include system, structural annotation), so a "perfect" implementation would still be several times slower than pure Markdown parsers.
 
-## Headline
+The goal isn't parity. It's to **establish a baseline**, track regressions, understand how parser throughput affects end-user latency (interactive editing vs. batch processing), and surface the load-bearing finding that the parser is super-linear in input size.
 
-| Layer | What we asked | Verdict |
-|---|---|---|
-| **Extension-system tax** | Does routing `lex.include` through the wire codec slow things down? | **No, < 0.6%** — invisible. |
-| **Raw parser throughput** | How does `lex_core::lex::parsing::parse_document` compare to `comrak::parse_document`? | **~450× slower per byte** — Lex parses at ~0.3–0.5 MB/s; comrak at ~130–270 MB/s. |
-| **End-to-end CLI** | Does that translate into slow `lexd format` / `convert` for users? | **No** — comparable to or faster than pandoc, well within interactive budgets. |
+## 1. Methodology
 
-## End-to-end positioning
+We measure performance across three dimensions:
 
-Hyperfine (`--warmup 3 --runs 30 --shell=none`) on a freshly-built `target/release/lexd` (v0.11.0), the homebrew `cmark` 0.31.2 (CommonMark reference C implementation), and the homebrew `pandoc`.
+1. **End-to-End CLI Latency (`hyperfine`)**: User-visible time to boot, parse, transform, and emit a document. Tools compared: `lexd`, `cmark` (C reference implementation), and `pandoc`.
+2. **Raw Parser Throughput (`criterion`)**: Pure parsing time. Compares `lex_core::lex::parsing::parse_document` against `comrak::parse_document`.
+3. **Extension-System Tax (`criterion`)**: Overhead of routing `lex.include` resolutions through the extension host and wire codec.
 
-**Startup baselines** (process boot + arg parsing, no work):
+### Corpus and Payloads
 
-| Tool | Mean |
+- **Tier A (Human-Authored)**: Documents written manually in both formats (`010-kitchensink`, `20-ideas-naked`).
+- **Tier B (Auto-Converted)**: `.lex` documents converted to `.md` via `lexd … --to markdown` (`040-on-parsing`, `080-gentle-introduction`).
+- **Tier C (Synthetic Scaling)**: Pure-prose payloads, byte-identical `.lex`/`.md`, sized for asymptotic behavior (10 KB, 100 KB, 1 MB).
+
+---
+
+## 2. Baselines & Measurements
+
+*(Data from a 2026-05-11 dev workstation, macOS aarch64. Regenerate with the instructions in [§5](#5-reproducing).)*
+
+### 2.1. CLI Startup Tax
+
+Process boot + arg parsing, no actual work:
+
+| Tool | Mean Latency |
 |---|---:|
 | `cmark --version` | **1.5 ms** |
 | `lexd --version` | **1.7 ms** |
 | `pandoc --version` | **24.8 ms** |
 
-**Per-fixture** (`<fixture>.lex` for lexd; `<fixture>.md` — equivalent content — for cmark/pandoc):
+**Observation**: `lexd` startup is on par with the bare-metal C `cmark`. `pandoc` (Haskell) pays a ~25 ms initialization tax per invocation — the dominant cost for small documents.
+
+### 2.2. End-to-End CLI Processing
+
+Time to read a file, parse it, and emit HTML.
 
 | Fixture | Size | `lexd → html` | `cmark md → html` | `pandoc md → html` |
 |---|---:|---:|---:|---:|
-| 010-kitchensink | 2.4 KB | 10.6 ms | 1.5 ms | 200 ms |
-| 20-ideas-naked | 9.8 KB | 23.2 ms | 1.6 ms | 222 ms |
-| 040-on-parsing | 12.3 KB | 27.7 ms | 1.7 ms | 224 ms |
-| 080-gentle-introduction | 24.1 KB | 60.6 ms | 1.8 ms | 241 ms |
+| `010-kitchensink` (Tier A) | 2.4 KB | 10.6 ms | 1.5 ms | 200 ms |
+| `20-ideas-naked` (Tier A) | 9.8 KB | 23.2 ms | 1.6 ms | 222 ms |
+| `040-on-parsing` (Tier B) | 12.3 KB | 27.7 ms | 1.7 ms | 224 ms |
+| `080-gentle-introduction` (Tier B) | 24.1 KB | 60.6 ms | 1.8 ms | 241 ms |
 
-Three tiers visible:
+**Observations**:
+- `cmark` shows the floor: ~0.3 ms of real work even on 24 KB. The C reference impl is single-pass, no extensions.
+- `lexd` sits in the middle tier — 7–34× slower than `cmark` end-to-end (gap widens with doc size as parse work dominates over equal startup cost), 4–19× faster than `pandoc` (gap narrows with doc size as `pandoc`'s processing catches up to its 25 ms startup).
+- `lexd format`, `lexd → md`, and `lexd → html` agree within 1–2% on every fixture. Parse cost dominates entirely; once parsed, the IR transform + serializer is < 10% on top. **The only number that matters end-to-end is parse time.**
 
-1. **cmark — basically just startup.** ~0.3 ms of actual work on a 24 KB doc. C reference impl, single-pass, no extensions. The "what's possible" floor.
-2. **lexd — middle tier.** 7–34× slower than cmark end-to-end (more on larger docs, where parse dominates over startup), 4–19× faster than pandoc.
-3. **pandoc — slow startup + slow processing.** 25 ms startup tax + ~1.5 KB/ms processing through the pandoc-AST + filter pipeline.
+### 2.3. Raw Parser Throughput & Scaling
 
-`lexd format`, `lexd → md`, and `lexd → html` agree within 1–2% on every fixture — parse cost dominates entirely. Whatever you ask `lexd` to produce, it's the same job; once parsed, IR transform + serializer is < 10% on top.
+Full in-memory parse cost (no I/O), comparing `lex_core::lex::parsing::parse_document` against `comrak::parse_document`. Note that `lex_core::…::parse_document` is an alias for `process_full` and runs Lex's complete pipeline (lex → analysis → build → inline parse → assemble), not just AST construction; `comrak::parse_document` is comrak's equivalent end-to-end parse. The numbers below charge each parser for everything its public entry point does, which is what library consumers actually pay.
 
-## Reading by use case
+The `comrak` configuration matches `lex_babel::formats::markdown::parser::default_comrak_options` (CommonMark + GFM extensions: table, strikethrough, autolink, tasklist, superscript, front matter) so the comparison is against the same parser configuration Lex actually uses in production — not against bare `ComrakOptions::default()`, which would bias `comrak` favourably with a less-featureful parse.
 
-- **Interactive editing (LSP, lexed, vscode, nvim)**: parse cost is fine. Tree-sitter handles the keystroke loop in sub-millisecond; lex-core's full re-parse on save / debounce stays well under the 100 ms "feels instant" threshold even for medium-large docs (largest fixture: 60 ms). **Not a problem.**
-- **CLI batch (`lexd convert *.lex`)**: faster than pandoc on the same corpus by 4–19×. **Faster than the obvious alternative.**
-- **WASM / browser editor (`lex-web`)**: WASM is 1.5–3× slower than native. The 24 KB doc could push toward 100–180 ms, which starts to be felt on save. **Worth watching as `lex-web` matures.**
-- **Book-length single doc (250+ KB)**: full reparse pushes toward 500 ms+, which is noticeable. **Plausible future motivation for parser perf work.**
+Tier C exposes scaling behavior that the realistic-doc tier can't see (same content, controlled size).
 
-## If parser perf ever becomes a priority
+| Payload | `lex-core` parse | `comrak` parse | **Multiplier gap** |
+|---|---:|---:|---:|
+| Realistic docs (Tier A/B, 2–24 KB) | ~0.3–0.5 MB/s | ~120–220 MB/s | **~270–380×** |
+| Synthetic 10 KB (Tier C) | 12.79 ms | 47.5 µs | **~269×** |
+| Synthetic 100 KB (Tier C) | 158.2 ms | 498.9 µs | **~317×** |
+| Synthetic 1 MB (Tier C) | 3964 ms | 4.53 ms | **~875×** |
 
-The 450× per-byte gap to comrak suggests room. Likely fruit, in rough order of bang-for-buck:
+**Observation — the load-bearing finding**: Lex's parser is **super-linear in input size**. Throughput drops from ~782 KB/s at 10 KB to ~252 KB/s at 1 MB — a **3× slowdown** as input grows 100×. `comrak` stays flat at ~210 MB/s across the same range (essentially linear), so the gap *more than triples* (269× → 875×) as documents get larger.
 
-1. **Regex compilation amortization** — if grammar regexes are re-compiled per parse rather than once at module load, that's an easy 2–10× win.
-2. **Arena-allocated AST** — what comrak uses; typically 2–5× on allocation-heavy parsers.
-3. **Pipeline collapse** — five passes mean five traversals; folding stages cuts the constant factor.
+Practically: a 1 MB document — book-length but not absurd — takes ~4 seconds to parse. Most of that is in some path that scales worse than O(n).
 
-Each is a meaningful chunk of work, none are blocking.
+### 2.4. Extension System Tax
 
-## Reproducing
+Does routing `lex.include` through the wire codec slow things down?
 
-The two Criterion benches live in `crates/lex-core/benches/`:
+**Verdict**: **No, < 0.6%**. The overhead is invisible against the measurement floor across 7 synthetic scenarios (single inclusions, fan-out, deep chains).
+
+---
+
+## 3. Analysis by Use Case
+
+- **Interactive Editing (LSP, lexed, vscode, nvim)**: Parse cost is fine. `tree-sitter` handles the keystroke loop in sub-millisecond time. A full `lex-core` re-parse on save/debounce sits well under the 100 ms "feels instant" threshold for medium-large docs (up to ~40 KB). **Not a problem.**
+- **CLI Batch (`lexd convert *.lex`)**: 4–19× faster than `pandoc` on the same corpus. **Faster than the obvious alternative.**
+- **WASM / Browser (`lex-web`)**: WASM is 1.5–3× slower than native. A 24 KB document may approach 100–180 ms, noticeable on save. **Worth monitoring as `lex-web` matures.**
+- **Book-length single doc (250 KB+)**: extrapolating from the 100 KB → 1 MB super-linear curve, a 250 KB doc parses in ~400–500 ms; a 1 MB doc takes ~4 s. **This is the primary future motivation for parser perf work** — and the super-linear scaling means the cost grows faster than file size, so the problem worsens with adoption.
+
+---
+
+## 4. If Parser Perf Becomes a Priority
+
+Tier C makes the levers visible: the gap to `comrak` more than triples between 10 KB and 1 MB, so something in the parser pipeline is doing work proportional to (n × log n) or worse. Likely fruit, in rough order of bang-for-buck:
+
+1. **Find the super-linear path.** The 269× → 875× progression points to one specific stage that scales badly — most likely a per-line scan that re-walks earlier state (annotation collection, range stamping, or context injection across the multi-stage pipeline). A profile of the 1 MB Tier C run should pinpoint it. Fixing one O(n²) → O(n) hot spot could reclaim most of the gap on large docs.
+2. **Regex compilation amortization.** If grammar regexes are re-compiled per parse rather than once at module load, that's an easy 2–10× win on small docs (compilation cost is fixed; it dominates per-call when the actual work is small).
+3. **Arena-allocated AST.** What `comrak` uses; typically 2–5× on allocation-heavy parsers. Each `Box` allocation hits the global allocator; an arena turns N allocations into one bump-pointer chain.
+4. **Pipeline collapse.** Five passes mean five traversals; folding stages cuts the constant factor and can also eliminate intermediate allocations.
+
+Each is a meaningful chunk of work. None are blocking — interactive use is already fine. Item 1 is the only one with leverage that grows with input size; the others are constant-factor wins.
+
+---
+
+## 5. Reproducing
+
+The benchmarking suite uses `criterion` for micro-benchmarks and `hyperfine` for end-to-end.
+
+### Parser & Resolver Benchmarks
 
 ```sh
-git submodule update --init                       # pulls comms/specs/benchmark/
-python3 crates/lex-core/benches/corpus/gen.py     # synthetic include corpus
-python3 crates/lex-core/benches/md_corpus/prep.py # auto-converts tier-B md fixtures via lexd
+# 1. Pull realistic payload submodules
+git submodule update --init
 
-cargo bench -p lex-core --bench include_resolve   # extension-system tax
-cargo bench -p lex-core --bench parse_vs_markdown # parser throughput vs comrak
+# 2. Generate synthetic Tier C scaling payloads + include rig
+python3 crates/lex-core/benches/corpus/gen.py
+
+# 3. Auto-convert Tier B markdown fixtures via lexd
+python3 crates/lex-core/benches/md_corpus/prep.py
+
+# 4. Execute benchmarks
+cargo bench -p lex-core --bench include_resolve
+cargo bench -p lex-core --bench parse_vs_markdown
 ```
 
-End-to-end matrix (one-shot, requires `hyperfine`, optional `cmark` + `pandoc`):
+The 1 MB Tier C scenario takes ~4 s per iteration; expect the parse_vs_markdown bench to run for ~15 minutes including that fixture. Filter to e.g. `--bench parse_vs_markdown -- "/p1_"` to skip large fixtures during quick iterations.
+
+### End-to-End Matrix
+
+*(Requires `hyperfine`; `cmark` + `pandoc` optional, available via homebrew/apt.)*
 
 ```sh
 cargo build --release -p lexd
@@ -89,4 +146,4 @@ for fx in 010-kitchensink 20-ideas-naked 040-on-parsing 080-gentle-introduction;
 done
 ```
 
-Neither bench runs in CI — runner noise dwarfs the deltas these would need to detect. Run by hand on PRs that touch the resolver, the parser, or the wire codec.
+> **Note:** Neither bench runs in CI — runner noise dwarfs the deltas these would need to detect. Run locally on PRs that touch the resolver, the parser, or the wire codec.

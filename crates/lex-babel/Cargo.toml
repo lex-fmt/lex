@@ -21,7 +21,7 @@ lex-core = { workspace = true }
 lex-extension = { workspace = true }
 lex-extension-host = { workspace = true }
 serde_json = { workspace = true }
-comrak = "0.29"
+comrak = { workspace = true }
 html5ever = "0.38"
 markup5ever_rcdom = "0.38"
 serde = { workspace = true }

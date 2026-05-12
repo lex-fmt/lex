@@ -95,8 +95,29 @@ def s7():
     )
 
 
+def p1_scaling():
+    d = ROOT / "p1_10k"
+    content = paragraphs_for_bytes(10_000)
+    write(d / "host.lex", content)
+    write(d / "host.md", content)
+
+
+def p2_scaling():
+    d = ROOT / "p2_100k"
+    content = paragraphs_for_bytes(100_000)
+    write(d / "host.lex", content)
+    write(d / "host.md", content)
+
+
+def p3_scaling():
+    d = ROOT / "p3_1m"
+    content = paragraphs_for_bytes(1_000_000)
+    write(d / "host.lex", content)
+    write(d / "host.md", content)
+
+
 def main():
-    for fn in (s1, s2, s3, s4, s5, s6, s7):
+    for fn in (s1, s2, s3, s4, s5, s6, s7, p1_scaling, p2_scaling, p3_scaling):
         fn()
     print("scenario,host_bytes,total_bytes")
     for sub in sorted(ROOT.iterdir()):

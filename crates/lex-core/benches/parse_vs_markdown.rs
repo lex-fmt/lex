@@ -29,7 +29,9 @@
 //
 // # Running
 //
-//     python3 crates/lex-core/benches/md_corpus/prep.py
+//     git submodule update --init                       # tier A/B .lex sources
+//     python3 crates/lex-core/benches/corpus/gen.py     # tier C synthetic payloads
+//     python3 crates/lex-core/benches/md_corpus/prep.py # tier B auto-converted .md
 //     cargo bench -p lex-core --bench parse_vs_markdown
 
 use std::path::{Path, PathBuf};
@@ -37,11 +39,29 @@ use std::path::{Path, PathBuf};
 use comrak::{Arena, ComrakOptions};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
-// Repo-root-relative path to the prep generator. The panic in `load`
-// concatenates this onto `repo_root()`, so it must reach the file from
-// the repo root — not from `CARGO_MANIFEST_DIR` (which would be
-// `crates/lex-core/`).
-const GEN_SCRIPT: &str = "crates/lex-core/benches/md_corpus/prep.py";
+// Repo-root-relative paths to the fixture generators. The panic in `load`
+// concatenates these onto `repo_root()`, so they must reach the file
+// from the repo root — not from `CARGO_MANIFEST_DIR` (`crates/lex-core/`).
+const GEN_SCRIPT_MD: &str = "crates/lex-core/benches/md_corpus/prep.py";
+const GEN_SCRIPT_CORPUS: &str = "crates/lex-core/benches/corpus/gen.py";
+
+/// Mirrors `lex_babel::formats::markdown::parser::default_comrak_options`.
+/// We compare against the configuration `lex-babel` uses in production
+/// (CommonMark + the GFM extensions Lex actually round-trips), not
+/// against bare `ComrakOptions::default()` — the latter would bias
+/// `comrak` favourably with a less-featureful parse than anyone in the
+/// Lex ecosystem actually pays for. If `lex-babel`'s options drift,
+/// re-sync this function and re-run the bench.
+fn lex_babel_comrak_options() -> ComrakOptions<'static> {
+    let mut options = ComrakOptions::default();
+    options.extension.table = true;
+    options.extension.strikethrough = true;
+    options.extension.autolink = true;
+    options.extension.tasklist = true;
+    options.extension.superscript = true;
+    options.extension.front_matter_delimiter = Some("---".to_string());
+    options
+}
 
 struct Fixture {
     name: &'static str,
@@ -74,6 +94,21 @@ const FIXTURES: &[Fixture] = &[
         lex: "comms/specs/benchmark/080-gentle-introduction.lex",
         md: "crates/lex-core/benches/md_corpus/auto/080-gentle-introduction.md",
     },
+    Fixture {
+        name: "p1_10k",
+        lex: "crates/lex-core/benches/corpus/p1_10k/host.lex",
+        md: "crates/lex-core/benches/corpus/p1_10k/host.md",
+    },
+    Fixture {
+        name: "p2_100k",
+        lex: "crates/lex-core/benches/corpus/p2_100k/host.lex",
+        md: "crates/lex-core/benches/corpus/p2_100k/host.md",
+    },
+    Fixture {
+        name: "p3_1m",
+        lex: "crates/lex-core/benches/corpus/p3_1m/host.lex",
+        md: "crates/lex-core/benches/corpus/p3_1m/host.md",
+    },
 ];
 
 fn repo_root() -> PathBuf {
@@ -90,14 +125,25 @@ fn repo_root() -> PathBuf {
 fn load(repo: &Path, rel: &str) -> String {
     let path = repo.join(rel);
     std::fs::read_to_string(&path).unwrap_or_else(|e| {
-        panic!(
-            "missing fixture {}: {e}\n\
-             For comms/specs/* fixtures, init the submodule: `git submodule update --init`\n\
-             For md_corpus/auto/* fixtures, run: python3 {}/{}",
-            path.display(),
-            repo.display(),
-            GEN_SCRIPT,
-        )
+        // Different fixture sources have different recovery steps;
+        // pick the relevant one based on the path prefix so the hint
+        // points at the right command.
+        let hint = if rel.starts_with("comms/") {
+            "init the submodule: `git submodule update --init`".to_string()
+        } else if rel.starts_with("crates/lex-core/benches/corpus/") {
+            format!("run: python3 {}/{}", repo.display(), GEN_SCRIPT_CORPUS)
+        } else if rel.starts_with("crates/lex-core/benches/md_corpus/") {
+            format!("run: python3 {}/{}", repo.display(), GEN_SCRIPT_MD)
+        } else {
+            format!(
+                "see {}/{} or {}/{}",
+                repo.display(),
+                GEN_SCRIPT_CORPUS,
+                repo.display(),
+                GEN_SCRIPT_MD
+            )
+        };
+        panic!("missing fixture {}: {e}\n{hint}", path.display());
     })
 }
 
@@ -107,7 +153,7 @@ fn bench_parse(c: &mut Criterion) {
     group.measurement_time(std::time::Duration::from_secs(10));
     group.warm_up_time(std::time::Duration::from_secs(3));
 
-    let md_opts = ComrakOptions::default();
+    let md_opts = lex_babel_comrak_options();
 
     for fx in FIXTURES {
         let lex_src = load(&repo, fx.lex);
