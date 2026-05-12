@@ -74,6 +74,48 @@
   content-key hash function (`hash(scheme + body + rev + subdir)`
   → 64-char hex directory name under the cache root).
 
+- **Extract-to-include LSP command**
+  ([#497](https://github.com/lex-fmt/lex/issues/497)).
+  `lexd-lsp` registers a new workspace command `lex.extractToInclude`
+  that splits a selected slice of a Lex document out into a new file
+  referenced via `:: lex.include src="…" ::`. The command takes
+  positional arguments `[uri, range, src]`, validates the target
+  path against the configured includes root (returns distinct
+  `ExtractError` variants for empty / URL / absolute / root-escape /
+  existing-target / missing-parent-dir cases), indent-shifts the
+  selection so its shallowest non-blank line lands at column 0,
+  parses the shifted text as a Lex fragment, and returns an atomic
+  `WorkspaceEdit` containing `CreateFile` + target-content
+  `TextEdit` + host-replace `TextEdit`. All logic lives in
+  `lex_lsp::features::extract` so per-editor shims stay thin —
+  editor wiring is tracked at
+  [#498](https://github.com/lex-fmt/lex/issues/498). The deeper
+  `GeneralContainer` host-policy check (e.g. rejecting a Session
+  selected for extraction into a Definition body) is reserved for
+  a follow-up; the `ExtractError::ContainerPolicy` variant stays in
+  the enum for it.
+
+### Fixed
+
+- **`lexd inspect` silently dropped verbatim blocks when source
+  mentioned `lex.include` in prose**
+  ([#505](https://github.com/lex-fmt/lex/issues/505)). The CLI's
+  `expand_includes_to_source` round-trips source through
+  `resolve_from_source` → `serialize_to_lex_with_rules` → re-parse
+  whenever the literal string `lex.include` appears anywhere — even
+  in backticked prose or proposal docs describing the feature. The
+  Lex serializer wrote a verbatim block's subject line directly
+  after the preceding paragraph (the parser consumes the
+  separating blank line as part of the verbatim's preamble, so it
+  isn't represented as a `BlankLineGroup` in the AST and no other
+  visitor emits it). On the re-parse the paragraph absorbed the
+  subject and the verbatim — plus everything it bracketed — silently
+  disappeared from the resolved tree. `visit_verbatim_block` now
+  emits the leading blank line, suppressed when the verbatim is the
+  first child of a `Subject:`-style container opener (Definition,
+  verbatim group) where a blank at column 0 would terminate the
+  container.
+
 ### Changed
 
 - **Trust-matrix flip (lex#528 PR 12d).** `lex_fmt::boot_registry`
