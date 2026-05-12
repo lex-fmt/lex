@@ -65,6 +65,12 @@ mod tests {
     use lex_config::LabelsConfig;
     use lex_extension_host::Surface;
 
+    /// Non-pure capabilities (`fs: true`) so the post-12d trust
+    /// matrix flip doesn't auto-trust this handler on Linux before
+    /// the surface deny path runs. A pure handler under
+    /// `LinuxSandbox` would be `Trusted` regardless of
+    /// `--enable-handlers`, which is the correct new behaviour but
+    /// not what this test is asserting.
     #[test]
     fn cli_subprocess_handler_without_enable_flag_says_enable_handlers() {
         let workspace = tempfile::tempdir().unwrap();
@@ -72,7 +78,7 @@ mod tests {
         std::fs::create_dir_all(&acme_dir).unwrap();
         std::fs::write(
             acme_dir.join("task.yaml"),
-            "schema_version: 1\nlabel: acme.task\nhandler:\n  transport: subprocess\n  command: [\"acme-handler\"]\n",
+            "schema_version: 1\nlabel: acme.task\ncapabilities:\n  fs: true\n  net: false\nhandler:\n  transport: subprocess\n  command: [\"acme-handler\"]\n",
         )
         .unwrap();
 
