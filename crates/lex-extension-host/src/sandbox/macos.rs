@@ -30,12 +30,25 @@
 //! allowlists; that hardening is a follow-up once the schema's
 //! `Capabilities` grows finer fields than `is_pure()`.
 //!
-//! ## Capability shapes
+//! ## Why `supports()` returns `false`
 //!
-//! [`MacosSandbox::supports`] returns `true` only for the
-//! [`Capabilities::is_pure`] shape. Finer shapes report unsupported;
-//! the trust gate routes those handlers to the prompt path before
-//! `apply_to` is called.
+//! The `(allow default)` shape above leaves a meaningful gap:
+//! handlers running under it can still **write** anywhere on disk
+//! and **read** anywhere outside `/etc` (notably `~/.ssh`, the
+//! workspace, user documents). The probe tests catch the two
+//! specific operations they target, but those denies are not the
+//! complete protection a caller expects from a `pure` capability
+//! declaration.
+//!
+//! To avoid silently auto-trusting handlers that aren't actually
+//! isolated, [`MacosSandbox::supports`] **always returns `false`**.
+//! `apply_to` still installs the profile (the limited denies remain
+//! useful as a baseline and as regression tests for the SBPL
+//! wiring), but the trust gate routes pure handlers to the prompt
+//! path on macOS — same path Windows and no-landlock Linux use.
+//!
+//! When a hardened `(deny default)` profile lands, flipping
+//! `supports` back to `caps.is_pure()` is a one-line change.
 //!
 //! The module itself is `#[cfg(target_os = "macos")]`-gated in
 //! `super::mod`; no inner cfg is required here.
@@ -84,8 +97,25 @@ impl Sandbox for MacosSandbox {
         Ok(())
     }
 
-    fn supports(&self, caps: Capabilities) -> bool {
-        caps.is_pure()
+    /// **Intentionally returns `false` for every capability shape**
+    /// until the SBPL profile is hardened to `(deny default)`. See
+    /// the module docs for the rationale: the current `(allow
+    /// default)` profile, while it denies the specific cases the
+    /// probe tests cover (`/etc/passwd` reads, IP network), leaves
+    /// every other filesystem operation permitted — including
+    /// writes anywhere on disk and reads of `~/.ssh`, the
+    /// workspace, etc. Reporting `supports = true` here would let
+    /// the trust gate auto-trust a handler that's not actually
+    /// isolated, which is a silent privilege escalation once PR 12d
+    /// flips the matrix.
+    ///
+    /// Falling back to `false` puts macOS on the same path as
+    /// Windows and any Linux kernel without landlock: the trust
+    /// gate prompts the user (or requires `--enable-handlers` in
+    /// CI). That is the correct behaviour given the current
+    /// profile's coverage.
+    fn supports(&self, _caps: Capabilities) -> bool {
+        false
     }
 }
 
@@ -148,9 +178,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn supports_returns_true_only_for_pure_capabilities() {
+    fn supports_returns_false_for_every_capability_shape() {
+        // Pinned to false until the SBPL profile is hardened to
+        // `(deny default)`. See the module docs for the why; this
+        // test guards against an inadvertent re-enable that would
+        // ship a silent privilege escalation.
         let s = MacosSandbox;
-        assert!(s.supports(Capabilities::default()));
+        assert!(!s.supports(Capabilities::default()));
         assert!(!s.supports(Capabilities {
             fs: true,
             net: false,
