@@ -412,9 +412,9 @@ fn build_cli() -> Command {
                              indexers, pipelines). Filter with --label and --namespace; both \
                              repeatable, intersected when combined.\n\n\
                              Record shape uses the wire AST `Position`/`Range` types — same \
-                             format LSP hover and extension hook payloads use. Body shapes: \
-                             `{kind:'none'}` for marker labels, `{kind:'text',text:'…'}` for \
-                             text bodies (incl. verbatim) and `{kind:'lex',wire:[…]}` for \
+                             format LSP hover and extension hook payloads use. Body shapes (JSON): \
+                             `{\"kind\":\"none\"}` for marker labels, `{\"kind\":\"text\",\"text\":\"…\"}` for \
+                             text bodies (incl. verbatim) and `{\"kind\":\"lex\",\"wire\":[…]}` for \
                              parsed bodies.",
                         )
                         .arg(

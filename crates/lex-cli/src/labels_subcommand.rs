@@ -145,9 +145,15 @@ struct EmitRecord {
 enum BodyRecord {
     /// Marker-only annotation (schema `body.kind: none`).
     None,
-    /// Opaque text body — verbatim contents, or annotations with
-    /// schema `body.kind: text`. Without a registry, every parsed
-    /// "non-Lex" body collapses to this variant.
+    /// Opaque text body. Currently produced only for labelled
+    /// **verbatim** blocks — their `body_text` is the unparsed source
+    /// inside the block. Annotation bodies don't land here today
+    /// because `to_wire_node` always serializes annotation bodies as
+    /// `null` (marker-only) or `{kind: "block", children: [...]}`
+    /// (parsed children), never as a JSON string. Schema-aware
+    /// emission for text-typed annotations is a follow-up that needs
+    /// a booted registry; without one, every annotation body is
+    /// either `None` or `Lex`.
     Text { text: String },
     /// Parsed Lex subtree — children are wire AST nodes the
     /// consumer can walk recursively.
@@ -282,16 +288,27 @@ where
             }
             ContentItem::Annotation(a) => self.visit_annotation_node(a)?,
             ContentItem::VerbatimBlock(v) => {
-                self.visit_verbatim_node(v)?;
+                // Drain attached annotations BEFORE emitting the
+                // verbatim record so output order mirrors the
+                // attachment grouping the other walkers use
+                // (annotation precedes its host node).
                 for ann in v.annotations() {
                     self.visit_annotation_node(ann)?;
                 }
+                self.visit_verbatim_node(v)?;
             }
-            ContentItem::Table(_) | ContentItem::ListItem(_) => {
-                // Table cells + list items have no label-carrying
-                // syntax of their own; the parent list walker
-                // already drained list-item annotations above, and
-                // tables don't carry annotations in v1.
+            ContentItem::Table(t) => {
+                for ann in t.annotations() {
+                    self.visit_annotation_node(ann)?;
+                }
+                for child in t.cell_children_iter() {
+                    self.visit_content(child)?;
+                }
+            }
+            ContentItem::ListItem(_) => {
+                // List items have no label-carrying syntax of their
+                // own; the parent list walker drains list-item
+                // annotations and recurses into children directly.
             }
             _ => {
                 // Other content kinds (blank lines, raw text
@@ -631,6 +648,72 @@ Plain paragraph with no label.
         let (code, records) = run_emit(&path, &[], &[]);
         assert_eq!(code, 0);
         assert!(records.is_empty());
+    }
+
+    #[test]
+    fn emit_yields_record_for_labelled_verbatim_block() {
+        // Labelled verbatim blocks emit a record with `kind: "verbatim"`
+        // and a tagged `body: { kind: "text", text: "<body lines>" }`.
+        // Annotations attached to the verbatim emit first (matches
+        // attachment ordering used by the other walkers).
+        let (_ws, path) = write_doc(
+            "\
+Code Example:
+
+    fn main() {}
+
+:: rust ::
+",
+        );
+        let (code, records) = run_emit(&path, &[], &[]);
+        assert_eq!(code, 0);
+        // The verbatim closes with `:: rust ::`, so its label is `rust`
+        // and the namespace is `rust` (no dot).
+        let verbatim = records
+            .iter()
+            .find(|r| r["node"]["kind"].as_str() == Some("verbatim"))
+            .unwrap_or_else(|| panic!("expected a verbatim record in {records:#?}"));
+        assert_eq!(verbatim["label"].as_str(), Some("rust"));
+        assert_eq!(verbatim["namespace"].as_str(), Some("rust"));
+        assert_eq!(verbatim["body"]["kind"].as_str(), Some("text"));
+        let body_text = verbatim["body"]["text"].as_str().unwrap();
+        assert!(
+            body_text.contains("fn main() {}"),
+            "verbatim body should hold the unparsed source, got {body_text:?}"
+        );
+    }
+
+    #[test]
+    fn emit_visits_verbatim_attached_annotation_before_verbatim_record() {
+        // An annotation attached to a verbatim should be emitted *before*
+        // the verbatim record so attached-annotation grouping matches the
+        // other walkers in this file. Without this ordering, consumers
+        // that pair attached annotations with their host node by relative
+        // emit-order get them backwards for verbatims specifically.
+        let (_ws, path) = write_doc(
+            "\
+:: acme.meta priority=\"low\" ::
+Code Example:
+
+    fn main() {}
+
+:: rust ::
+",
+        );
+        let (code, records) = run_emit(&path, &[], &[]);
+        assert_eq!(code, 0);
+        let ann_idx = records
+            .iter()
+            .position(|r| r["label"].as_str() == Some("acme.meta"))
+            .expect("expected acme.meta record");
+        let verbatim_idx = records
+            .iter()
+            .position(|r| r["node"]["kind"].as_str() == Some("verbatim"))
+            .expect("expected verbatim record");
+        assert!(
+            ann_idx < verbatim_idx,
+            "attached annotation must emit before the verbatim record, got ann={ann_idx} verbatim={verbatim_idx} in {records:#?}"
+        );
     }
 
     #[test]
