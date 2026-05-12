@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-05-12
+
+
 ### Added
 
 - **HTML render splice** ([#563](https://github.com/lex-fmt/lex/issues/563)).
@@ -221,7 +224,6 @@
   `NullSandbox` (the default), this branch is inactive —
   observable behaviour is unchanged. Tests cover both the
   supported and unsupported paths via a mock sandbox.
-
 ## [0.11.0] - 2026-05-10
 
 
