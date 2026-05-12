@@ -56,10 +56,16 @@ mod null;
 #[cfg(target_os = "linux")]
 mod linux;
 
+#[cfg(target_os = "macos")]
+mod macos;
+
 pub use null::NullSandbox;
 
 #[cfg(target_os = "linux")]
 pub use linux::LinuxSandbox;
+
+#[cfg(target_os = "macos")]
+pub use macos::MacosSandbox;
 
 /// OS-level sandbox enforcement for subprocess handlers.
 ///
