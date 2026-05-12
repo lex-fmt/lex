@@ -92,7 +92,7 @@ Does routing `lex.include` through the wire codec slow things down?
 
 Tier C makes the levers visible: the gap to `comrak` more than triples between 10 KB and 1 MB, so something in the parser pipeline is doing work proportional to (n × log n) or worse. Likely fruit, in rough order of bang-for-buck:
 
-1. **Find the super-linear path.** The 332× → 1069× progression points to one specific stage that scales badly — most likely a per-line scan that re-walks earlier state (annotation collection, range stamping, or context injection across the multi-stage pipeline). A profile of the 1 MB Tier C run should pinpoint it. Fixing one O(n²) → O(n) hot spot could reclaim most of the gap on large docs.
+1. **Find the super-linear path.** The 269× → 875× progression points to one specific stage that scales badly — most likely a per-line scan that re-walks earlier state (annotation collection, range stamping, or context injection across the multi-stage pipeline). A profile of the 1 MB Tier C run should pinpoint it. Fixing one O(n²) → O(n) hot spot could reclaim most of the gap on large docs.
 2. **Regex compilation amortization.** If grammar regexes are re-compiled per parse rather than once at module load, that's an easy 2–10× win on small docs (compilation cost is fixed; it dominates per-call when the actual work is small).
 3. **Arena-allocated AST.** What `comrak` uses; typically 2–5× on allocation-heavy parsers. Each `Box` allocation hits the global allocator; an arena turns N allocations into one bump-pointer chain.
 4. **Pipeline collapse.** Five passes mean five traversals; folding stages cuts the constant factor and can also eliminate intermediate allocations.
