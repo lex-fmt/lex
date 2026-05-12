@@ -54,16 +54,18 @@ Time to read a file, parse it, and emit HTML.
 
 ### 2.3. Raw Parser Throughput & Scaling
 
-Isolated AST construction cost between `lex-core` and `comrak`. Tier C exposes scaling behavior the realistic-doc tier can't see.
+Isolated AST construction cost between `lex-core` and `comrak`. The `comrak` configuration matches `lex_babel::formats::markdown::parser::default_comrak_options` (CommonMark + GFM extensions: table, strikethrough, autolink, tasklist, superscript, front matter) so the comparison is against the same parser configuration Lex actually uses in production — not against bare `ComrakOptions::default()`, which would bias `comrak` favourably with a less-featureful parse.
+
+Tier C exposes scaling behavior that the realistic-doc tier can't see (same content, controlled size).
 
 | Payload | `lex-core` parse | `comrak` parse | **Multiplier gap** |
 |---|---:|---:|---:|
-| Realistic docs (Tier A/B, 2–24 KB) | ~0.3–0.5 MB/s | ~130–270 MB/s | **~450×** |
-| Synthetic 10 KB (Tier C) | 12.27 ms | 36.9 µs | **~332×** |
-| Synthetic 100 KB (Tier C) | 144.6 ms | 362.6 µs | **~399×** |
-| Synthetic 1 MB (Tier C) | 3924 ms | 3.67 ms | **~1069×** |
+| Realistic docs (Tier A/B, 2–24 KB) | ~0.3–0.5 MB/s | ~120–220 MB/s | **~270–380×** |
+| Synthetic 10 KB (Tier C) | 12.79 ms | 47.5 µs | **~269×** |
+| Synthetic 100 KB (Tier C) | 158.2 ms | 498.9 µs | **~317×** |
+| Synthetic 1 MB (Tier C) | 3964 ms | 4.53 ms | **~875×** |
 
-**Observation — the load-bearing finding**: Lex's parser is **super-linear in input size**. Throughput drops from ~815 KB/s at 10 KB to ~255 KB/s at 1 MB — a **3× slowdown** as input grows 100×. `comrak` stays flat at ~270 MB/s across the same range, so the gap *triples* (332× → 1069×) as documents get larger.
+**Observation — the load-bearing finding**: Lex's parser is **super-linear in input size**. Throughput drops from ~782 KB/s at 10 KB to ~252 KB/s at 1 MB — a **3× slowdown** as input grows 100×. `comrak` stays flat at ~210 MB/s across the same range (essentially linear), so the gap *more than triples* (269× → 875×) as documents get larger.
 
 Practically: a 1 MB document — book-length but not absurd — takes ~4 seconds to parse. Most of that is in some path that scales worse than O(n).
 
@@ -86,7 +88,7 @@ Does routing `lex.include` through the wire codec slow things down?
 
 ## 4. If Parser Perf Becomes a Priority
 
-Tier C makes the levers visible: the gap to `comrak` triples between 10 KB and 1 MB, so something in the parser pipeline is doing work proportional to (n × log n) or worse. Likely fruit, in rough order of bang-for-buck:
+Tier C makes the levers visible: the gap to `comrak` more than triples between 10 KB and 1 MB, so something in the parser pipeline is doing work proportional to (n × log n) or worse. Likely fruit, in rough order of bang-for-buck:
 
 1. **Find the super-linear path.** The 332× → 1069× progression points to one specific stage that scales badly — most likely a per-line scan that re-walks earlier state (annotation collection, range stamping, or context injection across the multi-stage pipeline). A profile of the 1 MB Tier C run should pinpoint it. Fixing one O(n²) → O(n) hot spot could reclaim most of the gap on large docs.
 2. **Regex compilation amortization.** If grammar regexes are re-compiled per parse rather than once at module load, that's an easy 2–10× win on small docs (compilation cost is fixed; it dominates per-call when the actual work is small).

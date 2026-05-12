@@ -37,7 +37,7 @@ insta = { workspace = true }
 trybuild = "1.0"
 tempfile = { workspace = true }
 criterion = "0.5"
-comrak = "0.29"
+comrak = { workspace = true }
 
 [[bench]]
 name = "include_resolve"
