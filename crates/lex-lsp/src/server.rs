@@ -1658,7 +1658,8 @@ where
     C: LspClient,
     P: FeatureProvider,
 {
-    /// Handler for `lex.extractToInclude`. Args: `{ uri, range, src }`.
+    /// Handler for `lex.extractToInclude`. Args are **positional**:
+    /// `[uri: string, range: lsp.Range, src: string]`.
     ///
     /// Returns a `WorkspaceEdit` JSON value the editor applies atomically
     /// (file creation + selection replacement). All validation failures
@@ -1719,8 +1720,13 @@ where
 }
 
 /// Slice `text` by an LSP `Range`. Returns `None` when the range falls
-/// outside the document. Treats `character` as a code-unit offset
-/// matching the rest of the server (see `from_lsp_position`).
+/// outside the document or splits a multi-byte character.
+///
+/// `character` is treated as a **UTF-8 byte offset** to match the rest
+/// of the server: lex-core's `LineColumnLocator::byte_to_position`
+/// computes `column = byte_offset - line_start`, and `to_lsp_position`
+/// forwards that value to LSP as-is. Using char offsets here would
+/// mis-slice any selection containing multi-byte characters.
 fn slice_text_by_range(text: &str, range: Range) -> Option<String> {
     let start_line = range.start.line as usize;
     let end_line = range.end.line as usize;
@@ -1740,17 +1746,22 @@ fn slice_text_by_range(text: &str, range: Range) -> Option<String> {
         if i < start_line || i > end_line {
             continue;
         }
-        let line_chars: Vec<char> = line.chars().collect();
+        let line_bytes = line.as_bytes();
         let from = if i == start_line { start_col } else { 0 };
         let to = if i == end_line {
             end_col
         } else {
-            line_chars.len()
+            line_bytes.len()
         };
-        if from > line_chars.len() || to > line_chars.len() {
+        if from > line_bytes.len() || to > line_bytes.len() {
             return None;
         }
-        out.extend(line_chars[from..to].iter());
+        // Reject ranges that cut a UTF-8 character in half rather than
+        // returning a string with replacement characters.
+        if !line.is_char_boundary(from) || !line.is_char_boundary(to) {
+            return None;
+        }
+        out.push_str(&line[from..to]);
     }
     Some(out)
 }
@@ -3375,6 +3386,30 @@ mod tests {
         assert!(
             advertised.contains(&commands::COMMAND_EXTRACT_TO_INCLUDE.to_string()),
             "extractToInclude must be in advertised commands, got: {advertised:?}"
+        );
+    }
+
+    /// `slice_text_by_range` treats `Range.character` as a UTF-8 byte
+    /// offset, matching lex-core's `LineColumnLocator::byte_to_position`
+    /// (which sets `column = byte_offset - line_start`). Char-based
+    /// slicing would mis-slice selections containing multi-byte chars;
+    /// this test pins the byte semantics.
+    #[test]
+    fn slice_text_by_range_uses_utf8_byte_offsets() {
+        let text = "café\nrestaurant\n";
+        // The é is 2 UTF-8 bytes, so "café" occupies bytes 0..5.
+        let range = Range::new(Position::new(0, 0), Position::new(0, 5));
+        assert_eq!(slice_text_by_range(text, range).as_deref(), Some("café"));
+
+        // Mid-character byte offset (between the two bytes of é) is rejected.
+        let bad = Range::new(Position::new(0, 0), Position::new(0, 4));
+        assert!(slice_text_by_range(text, bad).is_none());
+
+        // Multi-line slice with non-ASCII in the source.
+        let multi = Range::new(Position::new(0, 0), Position::new(1, 10));
+        assert_eq!(
+            slice_text_by_range(text, multi).as_deref(),
+            Some("café\nrestaurant")
         );
     }
 

@@ -3,8 +3,8 @@
 //!
 //! Selecting a section of a Lex document and "extracting" it splits the
 //! selection out into a new file referenced via `:: lex.include src="..." ::`.
-//! All path validation, indent normalization, and the host's container-policy
-//! pre-check live here in Rust (called from the LSP server) so the per-editor
+//! All path validation, indent normalization, and a Lex-fragment parse
+//! check live here in Rust (called from the LSP server) so the per-editor
 //! shims stay thin — see lex#497.
 //!
 //! Two entry points:
@@ -14,10 +14,16 @@
 //!   [`ExtractError`] variant so the editor displays a clear message.
 //!
 //! * [`build_extract_workspace_edit`] — runs validation, indent-shifts the
-//!   selection so its shallowest non-blank line lands at column 0, performs
-//!   the container-policy pre-check, and constructs an atomic
+//!   selection so its shallowest non-blank line lands at column 0, parses
+//!   the shifted text as a Lex fragment, and constructs an atomic
 //!   [`WorkspaceEdit`] containing (1) `CreateFile` for the target and (2)
 //!   `TextEdit` replacing the selection with the include annotation.
+//!
+//! The full `GeneralContainer` host-policy check (e.g. rejecting a Session
+//! selected for extraction into a Definition body) is deferred — the
+//! [`ExtractError::ContainerPolicy`] variant is reserved for it. The
+//! current fragment-parse check covers the common authoring mistakes
+//! (selection that doesn't parse cleanly when shifted to column 0).
 
 use std::path::{Path, PathBuf};
 
@@ -27,23 +33,30 @@ use tower_lsp::lsp_types::{
     TextEdit, Url, WorkspaceEdit,
 };
 
-/// Distinct failure modes from path validation and container-policy
-/// pre-check. Each variant maps to a user-facing message in
-/// [`ExtractError::message`].
+/// Distinct failure modes for the extract operation. Each variant maps
+/// to a user-facing message in [`ExtractError::message`].
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExtractError {
     /// `src` was the empty string.
     EmptyPath,
     /// `src` looked like a URL (`https://…`, `file://…`, …).
     UrlScheme { scheme: String },
-    /// `src` was platform-absolute (`/abs/path` on Unix, `C:\…` on Windows).
-    /// Lex include paths must be relative or root-absolute (leading `/`
-    /// meaning "from the configured includes root").
+    /// `src` is platform-absolute in a way the resolver rejects up
+    /// front. In practice this fires on Windows-shaped absolute paths
+    /// (e.g. `C:\foo`). On Unix a leading `/` is root-absolute per the
+    /// Lex spec (resolved under the includes root) and lands in
+    /// [`Self::EscapesRoot`] only if it normalizes outside that root,
+    /// so `AbsolutePath` is effectively Windows-only there.
     AbsolutePath { src: String },
     /// `src` lexically normalizes outside the includes root.
     EscapesRoot { src: String },
     /// The target file already exists on disk — refuse to overwrite.
     TargetExists { path: PathBuf },
+    /// The target's parent directory does not exist. Directory
+    /// auto-creation is explicitly out of scope, so we fail fast here
+    /// rather than producing an opaque `CreateFile`-time failure in
+    /// the editor (whose atomicity guarantees vary).
+    ParentDirMissing { path: PathBuf },
     /// The host document URI is not a `file://` URL (e.g. stdin, `inmemory:`).
     InvalidHostUri,
     /// The host document sits outside the configured includes root — we
@@ -78,6 +91,10 @@ impl ExtractError {
             }
             Self::TargetExists { path } => format!(
                 "Target file `{}` already exists. Choose a different name to avoid overwriting it.",
+                path.display()
+            ),
+            Self::ParentDirMissing { path } => format!(
+                "Target directory `{}` does not exist. Create it first (extract does not auto-create directories).",
                 path.display()
             ),
             Self::InvalidHostUri => {
@@ -129,10 +146,21 @@ pub fn validate_include_path(
     match lex_core::lex::includes::resolve_file_reference(src, Some(host_path), includes_root) {
         Ok(normalized) => {
             if normalized.exists() {
-                Err(ExtractError::TargetExists { path: normalized })
-            } else {
-                Ok(normalized)
+                return Err(ExtractError::TargetExists { path: normalized });
             }
+            // Fail fast if the parent directory is missing. Editors apply
+            // a CreateFile op against a non-existent parent inconsistently
+            // (vscode silently aborts the whole WorkspaceEdit, others
+            // surface a generic LSP error); surfacing a typed
+            // ExtractError here keeps the editor-side message actionable.
+            if let Some(parent) = normalized.parent() {
+                if !parent.as_os_str().is_empty() && !parent.exists() {
+                    return Err(ExtractError::ParentDirMissing {
+                        path: parent.to_path_buf(),
+                    });
+                }
+            }
+            Ok(normalized)
         }
         Err(lex_core::lex::includes::IncludeError::AbsolutePath { .. }) => {
             Err(ExtractError::AbsolutePath {
@@ -228,10 +256,14 @@ fn leading_space_count(line: &str) -> usize {
 }
 
 /// Build the atomic [`WorkspaceEdit`] for an extract operation. Runs
-/// validation, indent-shifts the selection, performs the container-policy
-/// pre-check, and assembles the edit as a single document-changes vector
-/// so the editor applies the file creation and selection replacement
-/// together.
+/// validation, indent-shifts the selection, parses the shifted text as
+/// a Lex fragment (surfaces [`ExtractError::ParseFailed`] on failure),
+/// and assembles the edit as a single document-changes vector so the
+/// editor applies the file creation and selection replacement together.
+///
+/// The deeper [`ExtractError::ContainerPolicy`] check (host-side
+/// `GeneralContainer` validity for the included content) is reserved
+/// for a follow-up and is currently never produced.
 ///
 /// `selection_text` is the verbatim selected slice of the host document
 /// (the editor extracts it before invoking the command). `host_indent`
@@ -255,10 +287,12 @@ pub fn build_extract_workspace_edit(
 
     let (shifted, _original_indent) = indent_shift(selection_text);
 
-    // Container-policy pre-check: the shifted selection must parse as a
-    // valid Lex document fragment. Parse errors are surfaced as
-    // `ParseFailed` so the user sees an actionable message instead of a
-    // mysterious "extract failed" notification.
+    // Parse pre-check: the shifted selection must parse as a valid Lex
+    // document fragment on its own. This catches selections that break
+    // structure when re-indented to column 0 (e.g. mid-list slices, or
+    // verbatim closings without their opener). The deeper
+    // host-container-policy check (`GeneralContainer` rules for where
+    // the extracted content can sit) is deferred — see module docs.
     if let Err(e) = lex_core::lex::parsing::parse_document(&shifted) {
         return Err(ExtractError::ParseFailed {
             message: e.to_string(),
@@ -402,6 +436,33 @@ mod tests {
     }
 
     #[test]
+    fn validate_rejects_missing_parent_directory() {
+        let tmp = TempDir::new().unwrap();
+        let host = host_in(tmp.path(), "doc.lex");
+        // `subdir/` does not exist under tmp, so creating `subdir/foo.lex`
+        // would fail at CreateFile time. We should catch that up front.
+        let err = validate_include_path("subdir/foo.lex", &host, tmp.path()).unwrap_err();
+        assert!(
+            matches!(err, ExtractError::ParentDirMissing { .. }),
+            "expected ParentDirMissing, got {err:?}"
+        );
+        assert!(err.message().contains("does not exist"));
+    }
+
+    #[test]
+    fn validate_accepts_existing_parent_directory() {
+        let tmp = TempDir::new().unwrap();
+        let host = host_in(tmp.path(), "doc.lex");
+        std::fs::create_dir_all(tmp.path().join("subdir")).unwrap();
+        let resolved = validate_include_path("subdir/foo.lex", &host, tmp.path()).unwrap();
+        assert!(resolved.starts_with(tmp.path()));
+        assert_eq!(
+            resolved.file_name().and_then(|n| n.to_str()),
+            Some("foo.lex")
+        );
+    }
+
+    #[test]
     fn validate_rejects_existing_target() {
         let tmp = TempDir::new().unwrap();
         let host = host_in(tmp.path(), "doc.lex");
@@ -442,6 +503,9 @@ mod tests {
             },
             ExtractError::TargetExists {
                 path: PathBuf::from("/x"),
+            },
+            ExtractError::ParentDirMissing {
+                path: PathBuf::from("/missing"),
             },
             ExtractError::InvalidHostUri,
             ExtractError::HostNotUnderRoot,
