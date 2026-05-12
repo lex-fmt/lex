@@ -22,7 +22,7 @@ We measure performance across three dimensions:
 
 ## 2. Baselines & Measurements
 
-*(Data from a 2026-05-11 dev workstation, macOS aarch64. Regenerate with the instructions in §4.)*
+*(Data from a 2026-05-11 dev workstation, macOS aarch64. Regenerate with the instructions in [§5](#5-reproducing).)*
 
 ### 2.1. CLI Startup Tax
 
@@ -54,7 +54,9 @@ Time to read a file, parse it, and emit HTML.
 
 ### 2.3. Raw Parser Throughput & Scaling
 
-Isolated AST construction cost between `lex-core` and `comrak`. The `comrak` configuration matches `lex_babel::formats::markdown::parser::default_comrak_options` (CommonMark + GFM extensions: table, strikethrough, autolink, tasklist, superscript, front matter) so the comparison is against the same parser configuration Lex actually uses in production — not against bare `ComrakOptions::default()`, which would bias `comrak` favourably with a less-featureful parse.
+Full in-memory parse cost (no I/O), comparing `lex_core::lex::parsing::parse_document` against `comrak::parse_document`. Note that `lex_core::…::parse_document` is an alias for `process_full` and runs Lex's complete pipeline (lex → analysis → build → inline parse → assemble), not just AST construction; `comrak::parse_document` is comrak's equivalent end-to-end parse. The numbers below charge each parser for everything its public entry point does, which is what library consumers actually pay.
+
+The `comrak` configuration matches `lex_babel::formats::markdown::parser::default_comrak_options` (CommonMark + GFM extensions: table, strikethrough, autolink, tasklist, superscript, front matter) so the comparison is against the same parser configuration Lex actually uses in production — not against bare `ComrakOptions::default()`, which would bias `comrak` favourably with a less-featureful parse.
 
 Tier C exposes scaling behavior that the realistic-doc tier can't see (same content, controlled size).
 
