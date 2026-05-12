@@ -16,9 +16,20 @@ use lex_fmt::Engine;
 /// Native handler that:
 /// - Validates by emitting one info diagnostic per invocation.
 /// - Renders an HTML snippet quoting the label name.
-/// - Counts on_label notifications so the test can confirm dispatch.
+/// - Counts `on_label` *and* `on_render` invocations so tests can
+///   confirm each hook fired without re-instrumenting per-test.
 struct FixtureHandler {
     label_count: Arc<AtomicUsize>,
+    render_count: Arc<AtomicUsize>,
+}
+
+impl FixtureHandler {
+    fn new() -> Self {
+        Self {
+            label_count: Arc::new(AtomicUsize::new(0)),
+            render_count: Arc::new(AtomicUsize::new(0)),
+        }
+    }
 }
 
 impl LexHandler for FixtureHandler {
@@ -41,6 +52,7 @@ impl LexHandler for FixtureHandler {
         ctx: &LabelCtx,
         fmt: WireFormat,
     ) -> Result<Option<RenderOut>, HandlerError> {
+        self.render_count.fetch_add(1, Ordering::SeqCst);
         if matches!(fmt, WireFormat::Html) {
             Ok(Some(RenderOut::String {
                 string: format!("<div class=\"acme-task\">{}</div>", ctx.label),
@@ -97,15 +109,12 @@ fn parse_returns_document_for_well_formed_lex() {
 #[test]
 fn native_namespace_registers_and_dispatches_through_engine() {
     let workspace = tempfile::tempdir().expect("tempdir");
-    let label_count = Arc::new(AtomicUsize::new(0));
     let engine = Engine::builder()
         .workspace_root(workspace.path())
         .with_native_namespace(
             "acme",
             vec![fixture_schema()],
-            Box::new(FixtureHandler {
-                label_count: label_count.clone(),
-            }),
+            Box::new(FixtureHandler::new()),
         )
         .build()
         .expect("native namespace registers");
@@ -119,18 +128,47 @@ fn native_namespace_registers_and_dispatches_through_engine() {
 }
 
 #[test]
-fn analyze_dispatches_native_handler_validate_hook() {
+fn native_namespace_source_kind_is_native_not_builtin() {
+    // `with_native_namespace` records the entry as
+    // `NamespaceSourceKind::Native` so embedders can tell their own
+    // in-process handlers apart from the bundled `lex.*` built-ins
+    // when inspecting `registered_namespaces()`.
+    use lex_fmt::NamespaceSourceKind;
+
     let workspace = tempfile::tempdir().expect("tempdir");
-    let label_count = Arc::new(AtomicUsize::new(0));
     let engine = Engine::builder()
         .workspace_root(workspace.path())
         .with_native_namespace(
             "acme",
             vec![fixture_schema()],
-            Box::new(FixtureHandler {
-                label_count: label_count.clone(),
-            }),
+            Box::new(FixtureHandler::new()),
         )
+        .build()
+        .expect("build");
+
+    let acme = engine
+        .registered_namespaces()
+        .iter()
+        .find(|r| r.name == "acme")
+        .expect("acme registered");
+    assert_eq!(acme.source, NamespaceSourceKind::Native);
+
+    let lex = engine
+        .registered_namespaces()
+        .iter()
+        .find(|r| r.name == "lex")
+        .expect("lex.* registered");
+    assert_eq!(lex.source, NamespaceSourceKind::Builtin);
+}
+
+#[test]
+fn analyze_dispatches_native_handler_validate_and_label_hooks() {
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let handler = FixtureHandler::new();
+    let label_count = handler.label_count.clone();
+    let engine = Engine::builder()
+        .workspace_root(workspace.path())
+        .with_native_namespace("acme", vec![fixture_schema()], Box::new(handler))
         .build()
         .expect("build");
 
@@ -138,8 +176,6 @@ fn analyze_dispatches_native_handler_validate_hook() {
     let doc = engine.parse(source).expect("parse");
     let diagnostics = engine.analyze(&doc);
 
-    // FixtureHandler emits an Info diagnostic for every dispatched
-    // label; the analyze pass surfaces it.
     let from_handler = diagnostics
         .iter()
         .filter(|d| d.message.contains("fixture handler reached"))
@@ -149,36 +185,77 @@ fn analyze_dispatches_native_handler_validate_hook() {
         "expected one handler-sourced diagnostic, got {diagnostics:?}",
     );
 
-    // on_label notification fires alongside on_validate.
     assert!(
         label_count.load(Ordering::SeqCst) >= 1,
-        "on_label should fire at least once",
+        "on_label should fire alongside on_validate",
     );
 }
 
 #[test]
-fn render_dispatches_html_hook_and_splices_handler_output() {
+fn render_html_produces_output_today_without_on_render_splice() {
+    // Per Engine::render's doc string: `on_render` hook splicing
+    // through the FormatRegistry path awaits the integration tracked
+    // at lex-fmt/lex#546. Today, `Engine::render` produces HTML via
+    // the no-registry serializer — the handler's `on_render` is not
+    // invoked, and its output is not spliced in.
+    //
+    // This test pins the current behaviour: output is non-empty and
+    // contains the standard scaffolding, render_count stays at 0.
+    // When #546 lands, flip the render_count assertion to >= 1 and
+    // add an HTML-content assertion that proves the splice.
     let workspace = tempfile::tempdir().expect("tempdir");
+    let handler = FixtureHandler::new();
+    let render_count = handler.render_count.clone();
     let engine = Engine::builder()
         .workspace_root(workspace.path())
-        .with_native_namespace(
-            "acme",
-            vec![fixture_schema()],
-            Box::new(FixtureHandler {
-                label_count: Arc::new(AtomicUsize::new(0)),
-            }),
-        )
+        .with_native_namespace("acme", vec![fixture_schema()], Box::new(handler))
         .build()
         .expect("build");
 
     let doc = engine.parse(":: acme.task ::\n").expect("parse");
     let html = engine.render(&doc, "html").expect("render html");
-    // The integration with the render_dispatch splice pipeline lives
-    // in lex-babel; this test confirms the Engine wraps the same
-    // pipeline successfully (HTML output is non-empty and contains
-    // expected scaffolding). End-to-end splice verification stays
-    // in lex-babel's render_dispatch tests.
-    assert!(!html.is_empty(), "html render is non-empty");
+    assert!(!html.is_empty(), "html output non-empty");
+    assert!(
+        html.contains("lex-document"),
+        "html contains default scaffolding",
+    );
+    assert_eq!(
+        render_count.load(Ordering::SeqCst),
+        0,
+        "on_render is NOT invoked through Engine::render today (tracked at lex#546)",
+    );
+}
+
+#[test]
+fn on_render_fires_via_registry_aware_serializer_workaround() {
+    // The current workaround for #546: embedders that need on_render
+    // dispatch use `Engine::registry()` with the per-format
+    // registry-aware serializer directly. This test demonstrates the
+    // workaround works end-to-end and proves the engine carries
+    // everything the embedder needs to opt into hook dispatch today.
+    use lex_babel::formats::html::{serialize_to_html_with_registry, HtmlOptions, HtmlTheme};
+
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let handler = FixtureHandler::new();
+    let render_count = handler.render_count.clone();
+    let engine = Engine::builder()
+        .workspace_root(workspace.path())
+        .with_native_namespace("acme", vec![fixture_schema()], Box::new(handler))
+        .build()
+        .expect("build");
+
+    let doc = engine.parse(":: acme.task ::\n").expect("parse");
+    let outcome = serialize_to_html_with_registry(
+        &doc,
+        HtmlOptions::new(HtmlTheme::Modern),
+        engine.registry(),
+    )
+    .expect("registry-aware html");
+    assert!(!outcome.html.is_empty(), "html output non-empty");
+    assert!(
+        render_count.load(Ordering::SeqCst) >= 1,
+        "on_render fires when the registry-aware serializer is used directly",
+    );
 }
 
 #[test]
@@ -208,13 +285,7 @@ fn native_namespace_collision_with_builtin_is_build_error() {
     let schema: Schema = serde_yaml::from_str(yaml).expect("schema");
     let result = Engine::builder()
         .workspace_root(workspace.path())
-        .with_native_namespace(
-            "lex",
-            vec![schema],
-            Box::new(FixtureHandler {
-                label_count: Arc::new(AtomicUsize::new(0)),
-            }),
-        )
+        .with_native_namespace("lex", vec![schema], Box::new(FixtureHandler::new()))
         .build();
     match result {
         Err(lex_fmt::BuildError::NamespaceCollision { namespace, .. }) => {

@@ -42,11 +42,14 @@ impl TrustPromptHandler for AutoDenyPrompt {
 /// stderr warning per invocation so production misuse leaves a paper
 /// trail in CI logs.
 ///
-/// The β/γ trust matrix represents the post-δ design target: until
-/// PR 12's OS-level sandboxing lands, declared `capabilities: { fs:
-/// false, net: false }` is not enforced. Auto-trusting handlers in a
-/// production embedder gives those handlers ambient host privilege —
-/// which is fine for fixture-driven tests, not for anything else.
+/// The β/γ enforcement policy is "subprocess handlers always prompt"
+/// — declared `capabilities: { fs: false, net: false }` is not
+/// kernel-enforced until PR 12's OS-level sandboxing lands. The
+/// proposal §8 trust matrix (with auto-trust for declared-pure
+/// handlers) represents the post-δ target. Until then,
+/// auto-trusting via this prompt gives every subprocess handler
+/// ambient host privilege — which is fine for fixture-driven tests,
+/// not for anything else.
 pub struct AutoTrustPrompt;
 
 impl TrustPromptHandler for AutoTrustPrompt {

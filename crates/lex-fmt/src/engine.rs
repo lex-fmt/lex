@@ -286,12 +286,22 @@ impl Engine {
     }
 
     /// Render `doc` as the named format (`"html"`, `"markdown"`,
-    /// `"lex"`, …). Fires `on_render` hooks for every labelled node
-    /// whose namespace declares the format in its `hooks.render`
-    /// list. Returns text output; use
+    /// `"lex"`, …). Returns text output; use
     /// [`Engine::render_with_options`] for formats that may produce
     /// binary output (PDF, PNG when the `native-export` feature is
     /// enabled).
+    ///
+    /// **`on_render` hook splicing — current limitation.** Today this
+    /// method routes through `FormatRegistry::serialize`, which calls
+    /// the format's no-registry serializer path. Per-namespace
+    /// `on_render` hooks are *not* invoked, and any handler-rendered
+    /// content is *not* spliced into the output. The engine carries
+    /// the registry to support hook dispatch once the format-by-format
+    /// splice integration lands (tracked at lex-fmt/lex#546); until
+    /// then, embedders that need on_render output must call the
+    /// per-format registry-aware serializer directly (e.g.,
+    /// `lex_babel::formats::html::serializer::serialize_to_html_with_registry`)
+    /// using [`Engine::registry`].
     pub fn render(&self, doc: &Document, format: &str) -> Result<String, RenderError> {
         self.inner
             .formats
@@ -302,6 +312,9 @@ impl Engine {
     /// Render with format-specific options (e.g., HTML theme, PDF
     /// page size). Returns a [`SerializedDocument`] which is either
     /// text or binary depending on the format.
+    ///
+    /// Same `on_render` caveat as [`Engine::render`]: hook splicing
+    /// awaits lex-fmt/lex#546.
     pub fn render_with_options(
         &self,
         doc: &Document,
@@ -413,10 +426,13 @@ impl EngineBuilder {
         self
     }
 
-    /// Load and merge a `lex.toml` file's `[labels]` block. Other
-    /// sections of the file are ignored. Missing files return the
-    /// default empty config; only IO / parse errors surface as
-    /// [`BuildError::LabelsConfig`].
+    /// Load a `lex.toml` file's `[labels]` block. Replaces any
+    /// previously-configured labels config — call this *before*
+    /// [`Self::labels_config`] if you want the in-memory config to
+    /// override the file. Other sections of the file (`[formatting]`,
+    /// `[convert]`, `[includes]`, …) are ignored. Missing files
+    /// return the default empty config; only IO / parse errors
+    /// surface as [`BuildError::LabelsConfig`].
     pub fn load_lex_toml(mut self, path: impl AsRef<Path>) -> Result<Self, BuildError> {
         let path = path.as_ref();
         match lex_config::load_labels_from_toml(path) {
@@ -540,11 +556,7 @@ impl EngineBuilder {
                 Ok(()) => {
                     registered.push(RegisteredNamespace {
                         name: name.clone(),
-                        // Native handlers registered via the builder
-                        // share lifecycle with the host binary; treat
-                        // them as built-in equivalents for listing
-                        // purposes.
-                        source: crate::setup::NamespaceSourceKind::Builtin,
+                        source: crate::setup::NamespaceSourceKind::Native,
                         schema_count,
                     });
                 }
@@ -585,9 +597,35 @@ impl EngineBuilder {
         // already canonicalises and falls back gracefully on macOS
         // /var → /private/var symlinks; mirror that policy here so
         // the Engine and the registry agree on root.
-        let resolve_root = workspace_root
-            .canonicalize()
-            .unwrap_or_else(|_| workspace_root.clone());
+        //
+        // If canonicalize fails (rare — non-existent path, permission
+        // error), fall back to an absolute path derived from the
+        // current directory + the configured root. `ResolveConfig`'s
+        // root-escape prefix check compares byte-for-byte, so handing
+        // it a relative path would silently weaken include security.
+        let resolve_root = match workspace_root.canonicalize() {
+            Ok(p) => p,
+            Err(e) => {
+                let fallback = if workspace_root.is_absolute() {
+                    workspace_root.clone()
+                } else {
+                    std::env::current_dir()
+                        .map(|cwd| cwd.join(&workspace_root))
+                        .unwrap_or_else(|_| workspace_root.clone())
+                };
+                boot_diagnostics.push(BootDiagnostic {
+                    namespace: None,
+                    message: format!(
+                        "could not canonicalize workspace root `{}`: {e}; \
+                         using `{}` for Engine::resolve_source — \
+                         include root-escape checks may be weakened",
+                        workspace_root.display(),
+                        fallback.display(),
+                    ),
+                });
+                fallback
+            }
+        };
         let resolve_config = ResolveConfig::with_root(resolve_root);
 
         Ok(Engine {

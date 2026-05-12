@@ -33,6 +33,7 @@ pub fn list(outcome: &BootOutcome) -> i32 {
                 NamespaceSourceKind::ExtSchemaFlag { path } => {
                     format!("--ext-schema {}", path.display())
                 }
+                NamespaceSourceKind::Native => "native (embedder)".to_string(),
             };
             println!(
                 "  {} ({} schema{}) — {}",

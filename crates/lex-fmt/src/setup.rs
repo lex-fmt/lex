@@ -103,9 +103,22 @@ pub struct RegisteredNamespace {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NamespaceSourceKind {
+    /// One of the compiled-in `lex.*` namespaces (currently
+    /// `lex.include`) registered at boot time by
+    /// `builtins::register_into`. Trusted by linkage.
     Builtin,
+    /// A namespace declared in `lex.toml`'s `[labels]` block and
+    /// resolved through the URI resolver.
     LexToml { uri: String },
+    /// A namespace registered via a `--ext-schema <dir>` flag or its
+    /// embedder equivalent ([`crate::EngineBuilder::ext_schema_dir`]).
     ExtSchemaFlag { path: PathBuf },
+    /// An in-process Rust handler registered via
+    /// [`crate::EngineBuilder::with_native_namespace`]. Trusted by
+    /// linkage; distinct from `Builtin` so embedders can inspect
+    /// `registered_namespaces()` and tell their own native handlers
+    /// apart from the `lex.*` built-ins.
+    Native,
 }
 
 /// One thing that went wrong during boot. Surfaced as a diagnostic
