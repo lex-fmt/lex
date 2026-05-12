@@ -293,22 +293,24 @@ fn nearest_lex_toml_walks_upward_to_find_root() {
 /// in prose and a verbatim block.
 #[test]
 fn inspect_preserves_verbatim_when_lex_include_is_only_in_prose() {
-    let dir = fixture_dir(&[(
-        "doc.lex",
-        // Bare `lex.include` mention in prose, no actual annotation.
-        // Followed by a verbatim block which must survive the round trip.
-        "Title\n\
-         =====\n\
-         \n\
-         Some text mentioning `lex.include` in prose.\n\
-         \n\
-         Code Example:\n\
-         \n    fn main() {}\n\
-         \n\
-         :: rust ::\n\
-         \n\
-         End.\n",
-    )]);
+    // Bare `lex.include` mention in prose, no actual annotation, followed
+    // by a verbatim block (subject line + indented body + closing marker)
+    // which must survive the round trip.
+    let fixture = concat!(
+        "Title\n",
+        "=====\n",
+        "\n",
+        "Some text mentioning `lex.include` in prose.\n",
+        "\n",
+        "Code Example:\n",
+        "\n",
+        "    fn main() {}\n",
+        "\n",
+        ":: rust ::\n",
+        "\n",
+        "End.\n",
+    );
+    let dir = fixture_dir(&[("doc.lex", fixture)]);
     let doc = path_in(&dir, "doc.lex");
 
     let default_out = lexd()

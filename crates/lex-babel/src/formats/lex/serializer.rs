@@ -155,11 +155,14 @@ impl LexSerializer {
     }
 
     /// Whether the most recently written line ended with a single `:` —
-    /// i.e. a container subject line (Definition, annotation-with-body,
-    /// verbatim subject). Used to decide whether to emit a blank line
-    /// before a following verbatim subject. `:: foo ::` (annotation
-    /// closing / verbatim closing) ends with `::`, not a lone `:`, and
-    /// so does not count.
+    /// i.e. a `Subject:`-style container opener (Definition subject,
+    /// verbatim group subject, etc.). Used to decide whether to emit a
+    /// blank line before a following verbatim subject: a blank line at
+    /// column 0 between a Definition subject and its body would
+    /// terminate the Definition, so the body's first verbatim must
+    /// follow immediately. Annotation headers (`:: label ::` / `:: label`)
+    /// end with `::` not a lone `:`, so this check correctly leaves them
+    /// out — a verbatim after an annotation does want a leading blank.
     fn last_emission_ended_with_container_opener_colon(&self) -> bool {
         if self.consecutive_newlines != 1 {
             return false;
