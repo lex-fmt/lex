@@ -48,6 +48,7 @@
 
 use std::error::Error;
 use std::fmt;
+use std::sync::Arc;
 
 use lex_extension::schema::Capabilities;
 
@@ -66,6 +67,51 @@ pub use linux::LinuxSandbox;
 
 #[cfg(target_os = "macos")]
 pub use macos::MacosSandbox;
+
+/// Construct the OS-appropriate default [`Sandbox`] for the running
+/// platform. The δ-phase ([lex#528]) trust-matrix flip uses this to
+/// switch the engine's default from [`NullSandbox`] (post-plumbing
+/// stand-in, never enforces) to the per-OS impl on supported
+/// platforms.
+///
+/// Asymmetry by design:
+///
+/// - **Linux**: returns [`LinuxSandbox`]. `supports(pure)` returns
+///   `true`, so the trust gate auto-trusts declared-pure handlers
+///   under this default.
+/// - **macOS**: returns [`MacosSandbox`]. `supports()` returns
+///   `false` for every capability shape until a hardened
+///   `(deny default)` SBPL profile lands, so the trust gate
+///   continues to route pure handlers to the prompt path —
+///   identical UX to Windows. `apply_to` still installs the limited
+///   profile so handlers that do run after a user prompt still get
+///   the partial denies.
+/// - **Other (Windows etc.)**: returns [`NullSandbox`]. No
+///   enforcement, no auto-trust — the trust gate prompts on every
+///   subprocess handler, matching β/γ behaviour for now.
+///
+/// Returned as `Arc<dyn Sandbox>` so the host can install one
+/// instance and share it with both [`crate::TrustGate::set_sandbox`]
+/// and [`crate::transport::SubprocessHandler::spawn_with_sandbox`].
+/// That sharing is load-bearing: the auto-trust decision must be
+/// anchored on the *same* sandbox that actually enforces policy at
+/// spawn time.
+///
+/// [lex#528]: https://github.com/lex-fmt/lex/issues/528
+pub fn os_default() -> Arc<dyn Sandbox> {
+    #[cfg(target_os = "linux")]
+    {
+        Arc::new(LinuxSandbox)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Arc::new(MacosSandbox)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        Arc::new(NullSandbox)
+    }
+}
 
 /// OS-level sandbox enforcement for subprocess handlers.
 ///
