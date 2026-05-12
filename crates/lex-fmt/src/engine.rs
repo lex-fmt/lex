@@ -75,12 +75,14 @@ use crate::setup::{
 /// Failure assembling an [`Engine`] from an [`EngineBuilder`].
 ///
 /// Boot-time *diagnostics* (per-namespace resolver failures, denied
-/// trust prompts, schema load errors for individual namespaces) are
-/// accumulated on the resulting `Engine` and surfaced via
-/// [`Engine::diagnostics`] — they don't fail the build. `BuildError`
-/// is reserved for things that prevent the engine from existing at
-/// all: missing/unreadable workspace root, malformed `lex.toml`,
-/// native-namespace collisions, etc.
+/// trust prompts, schema load errors for individual namespaces,
+/// unreadable workspace root) are accumulated on the resulting
+/// `Engine` and surfaced via [`Engine::diagnostics`] — they don't
+/// fail the build. `BuildError` is reserved for the two things that
+/// prevent the engine from existing at all today: a malformed
+/// `lex.toml` ([`Self::LabelsConfig`]) and a native-namespace
+/// collision with an already-registered namespace
+/// ([`Self::NamespaceCollision`] / [`Self::InvalidNativeSchemas`]).
 #[derive(Debug)]
 pub enum BuildError {
     /// `load_lex_toml` couldn't read or parse the supplied path.
@@ -153,7 +155,17 @@ impl std::error::Error for ParseError {}
 /// chain context, so the variant is boxed to keep the `Result` small.
 #[derive(Debug)]
 pub enum ResolveError {
+    /// Parser failed on the source text supplied to
+    /// [`Engine::resolve_source`] (or on the re-parse step inside
+    /// [`Engine::resolve`]).
     Parse(ParseError),
+    /// [`Engine::resolve`]'s serialize→reparse round-trip couldn't
+    /// turn the input [`Document`] back into source text. Distinct
+    /// from `Parse` so callers can tell the document went *into*
+    /// resolve broken from a downstream parse failure.
+    Serialize(FormatError),
+    /// The include resolver or a third-party `on_resolve` hook
+    /// reported failure. See [`IncludeError`] for the chain.
     Include(Box<IncludeError>),
 }
 
@@ -161,6 +173,7 @@ impl std::fmt::Display for ResolveError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ResolveError::Parse(e) => write!(f, "{e}"),
+            ResolveError::Serialize(e) => write!(f, "serialize before resolve: {e}"),
             ResolveError::Include(e) => write!(f, "{e}"),
         }
     }
@@ -169,6 +182,7 @@ impl std::error::Error for ResolveError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             ResolveError::Parse(e) => Some(e),
+            ResolveError::Serialize(e) => Some(e),
             ResolveError::Include(e) => Some(e),
         }
     }
@@ -268,11 +282,11 @@ impl Engine {
         doc: &Document,
         source_path: Option<&Path>,
     ) -> Result<Document, ResolveError> {
-        let source = self.inner.formats.serialize(doc, "lex").map_err(|e| {
-            ResolveError::Parse(ParseError {
-                message: e.to_string(),
-            })
-        })?;
+        let source = self
+            .inner
+            .formats
+            .serialize(doc, "lex")
+            .map_err(ResolveError::Serialize)?;
         self.resolve_source(&source, source_path)
     }
 
@@ -560,10 +574,10 @@ impl EngineBuilder {
                         schema_count,
                     });
                 }
-                Err(RegistryError::NamespaceAlreadyRegistered { .. }) => {
+                Err(source @ RegistryError::NamespaceAlreadyRegistered { .. }) => {
                     return Err(BuildError::NamespaceCollision {
-                        namespace: name.clone(),
-                        source: RegistryError::NamespaceAlreadyRegistered { namespace: name },
+                        namespace: name,
+                        source,
                     });
                 }
                 Err(other) => {
@@ -580,9 +594,13 @@ impl EngineBuilder {
         // time, etc.) and lift them into boot diagnostics so the
         // embedder sees one accumulated list.
         for root_diag in registry.take_root_diagnostics() {
+            let message = match &root_diag.code {
+                Some(code) => format!("[{}] {}", code, root_diag.message),
+                None => root_diag.message.clone(),
+            };
             boot_diagnostics.push(BootDiagnostic {
                 namespace: None,
-                message: format!("{root_diag:?}"),
+                message,
             });
         }
 
