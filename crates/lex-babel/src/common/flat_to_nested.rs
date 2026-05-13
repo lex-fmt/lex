@@ -586,6 +586,15 @@ pub fn events_to_tree(events: &[Event]) -> Result<Document, ConversionError> {
                     if event_iter.peek().is_some() {
                         return Err(ConversionError::ExtraEvents);
                     }
+                    // Phase 3a of #570: `Document::document_annotations`
+                    // stays empty on this path. The event stream
+                    // doesn't yet distinguish document-scope
+                    // annotations from inline ones — every
+                    // StartAnnotation under StartDocument lands in
+                    // `children` as today. Phase 3b adds the
+                    // scope marker (or formalises a position
+                    // contract) atomically with the legacy-path
+                    // retirement.
                     return Ok(doc);
                 } else {
                     return Err(ConversionError::MismatchedEvents {
@@ -1292,6 +1301,48 @@ mod tests {
             result,
             Err(ConversionError::MismatchedEvents { .. })
         ));
+    }
+
+    #[test]
+    fn document_annotations_event_stream_is_one_way_in_phase_3a() {
+        // Phase 3a of #570 is *additive*. `tree_to_events` deliberately
+        // does not emit `document_annotations`, and `events_to_tree`
+        // initializes the slot empty. This locks the contract:
+        // anything in `document_annotations` on the IR side is lost
+        // when the document travels through the event stream, and
+        // every annotation in the event stream lands in `children` as
+        // it always has. Phase 3b adds the scope marker that lets the
+        // events stream distinguish the two — atomically with the
+        // legacy-path retirement so downstream serializers see exactly
+        // one copy.
+        use crate::ir::nodes::Annotation;
+        use crate::ir::to_events::tree_to_events;
+
+        let original = Document {
+            title: None,
+            subtitle: None,
+            children: vec![DocNode::Paragraph(Paragraph {
+                content: vec![InlineContent::Text("Body.".to_string())],
+            })],
+            document_annotations: vec![Annotation {
+                label: "lex.metadata.author".to_string(),
+                parameters: vec![("name".to_string(), "Alice".to_string())],
+                content: vec![],
+            }],
+        };
+
+        let events = tree_to_events(&DocNode::Document(original.clone()));
+        let doc = events_to_tree(&events).expect("events round-trip");
+
+        // The annotation was dropped on the way to events.
+        assert!(
+            doc.document_annotations.is_empty(),
+            "Phase 3a: events stream loses document_annotations (by design)"
+        );
+        // Body paragraph survives — only the document-scope slot was
+        // not encoded.
+        assert_eq!(doc.children.len(), 1);
+        assert!(matches!(doc.children[0], DocNode::Paragraph(_)));
     }
 
     #[test]

@@ -18,6 +18,18 @@ use super::nodes::{
 };
 
 /// Converts an IR document to a Lex document.
+///
+/// **Phase 3a note (#570):** `Document::document_annotations` is *not*
+/// emitted back into `lex_doc.annotations` on this path. The legacy
+/// frontmatter promotion in `from_lex_document` still synthesizes a
+/// `frontmatter` annotation into `children`, and downstream Lex
+/// serializers expect to see it there — emitting both would
+/// double-write. Phase 3b retires the promotion and flips the
+/// source-of-truth to `document_annotations` atomically; the
+/// [`to_lex_annotation_raw`] helper introduced here is wired into
+/// production then. Until that flip, `document_annotations` is a
+/// one-way slot: populated by `from_lex_document`, consumed only by
+/// embedders that read it directly.
 pub fn to_lex_document(doc: &Document) -> LexDocument {
     let mut children = Vec::new();
 
@@ -44,6 +56,39 @@ pub fn to_lex_document(doc: &Document) -> LexDocument {
     }
 
     lex_doc
+}
+
+/// Build a `LexAnnotation` directly from an IR `Annotation`, mirroring
+/// what [`to_lex_annotation`] does but without wrapping the result in
+/// [`LexContentItem::Annotation`].
+///
+/// Shipped in Phase 3a (#570) ready for Phase 3b to wire it into
+/// [`to_lex_document`]: when that PR retires the legacy frontmatter
+/// promotion, `to_lex_document` will iterate `document_annotations`
+/// through this helper to populate `lex_doc.annotations`. Until then
+/// it is dead code in production, exercised only by the Phase-3a
+/// contract test that confirms the helper produces the expected
+/// shape.
+#[allow(dead_code)]
+fn to_lex_annotation_raw(ann: &Annotation) -> LexAnnotation {
+    let label = Label::new(ann.label.clone());
+    let parameters: Vec<Parameter> = ann
+        .parameters
+        .iter()
+        .map(|(k, v)| Parameter {
+            key: k.clone(),
+            value: v.clone(),
+            location: default_range(),
+        })
+        .collect();
+
+    let mut child_items = Vec::new();
+    for child in &ann.content {
+        child_items.extend(to_lex_content_items(child, 1));
+    }
+
+    let children = to_content_elements(child_items);
+    LexAnnotation::new(label, parameters, children)
 }
 
 /// Converts an IR DocNode to one or more Lex ContentItems.
@@ -625,5 +670,43 @@ mod tests {
 
         // Document should have root session with our content
         assert!(!lex_doc.root.children.is_empty());
+    }
+
+    #[test]
+    fn to_lex_document_drops_document_annotations_in_phase_3a() {
+        // Phase 3a of #570 is *additive*. `document_annotations` is
+        // populated on the lex → IR direction (via `from_lex_document`)
+        // but consumed only by embedders that read the slot directly;
+        // `to_lex_document` deliberately ignores it, because the
+        // legacy frontmatter promotion that runs *before* this stage
+        // already synthesizes a `frontmatter` annotation into
+        // `children`, and downstream Lex serializers expect exactly
+        // one copy. Phase 3b retires the legacy promotion and wires
+        // `to_lex_annotation_raw` into `to_lex_document` atomically.
+        // This test locks the Phase 3a behaviour so a premature flip
+        // can't sneak in.
+        use crate::ir::nodes::Annotation;
+
+        let ir_doc = Document {
+            title: None,
+            subtitle: None,
+            children: vec![],
+            document_annotations: vec![Annotation {
+                label: "lex.metadata.author".to_string(),
+                parameters: vec![("name".to_string(), "Alice".to_string())],
+                content: vec![],
+            }],
+        };
+
+        let lex_doc = to_lex_document(&ir_doc);
+        assert!(
+            lex_doc.annotations.is_empty(),
+            "Phase 3a contract: to_lex_document leaves lex_doc.annotations empty"
+        );
+
+        // Sanity: the helper exists and produces a non-empty result —
+        // Phase 3b uses it.
+        let raw = to_lex_annotation_raw(&ir_doc.document_annotations[0]);
+        assert_eq!(raw.data.label.value, "lex.metadata.author");
     }
 }
