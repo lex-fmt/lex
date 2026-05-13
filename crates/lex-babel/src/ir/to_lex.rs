@@ -11,52 +11,18 @@ use lex_core::lex::ast::elements::{
 };
 use lex_core::lex::ast::range::Position;
 use lex_core::lex::ast::{Data, Document as LexDocument, Parameter, Range, TextContent};
-use lex_core::lex::includes::{LoadError, LoadedFile, Loader, ResolveConfig};
 use lex_extension::wire::{FormatCtx, LexAnnotationOut, WireNode};
 use lex_extension::wire::{Position as WirePosition, Range as WireRange};
-use lex_extension_host::registry::Registry;
-use std::path::Path;
-use std::sync::Arc;
 
 use super::nodes::{
     Annotation, Definition, DocNode, Document, Heading, InlineContent, List, ListItem, Paragraph,
     Table, TableCell, TableRow, Verbatim,
 };
 
-/// A loader that always reports NotFound. The to_lex direction never
-/// resolves includes — it only emits source — so we never actually
-/// touch the loader. It exists because
-/// `lex_core::lex::builtins::register_into` requires one.
-struct NoopLoader;
-impl Loader for NoopLoader {
-    fn load(&self, path: &Path) -> Result<LoadedFile, LoadError> {
-        Err(LoadError::NotFound {
-            path: path.to_path_buf(),
-        })
-    }
-}
-
-/// Cached process-wide registry for the to_lex direction. The
-/// registry's contents are invariant (always the same built-in
-/// `lex.*` schemas), so constructing it once and reusing across
-/// every call to `to_lex_document` avoids re-registering for every
-/// table/media node in a document.
-///
-/// `Registry` uses interior `RwLock`s for its state, so sharing
-/// `&'static Registry` across threads is safe.
-fn to_lex_registry() -> &'static Registry {
-    use std::sync::OnceLock;
-    static REGISTRY: OnceLock<Registry> = OnceLock::new();
-    REGISTRY.get_or_init(|| {
-        let registry = Registry::new();
-        lex_core::lex::builtins::register_into(
-            &registry,
-            Arc::new(NoopLoader),
-            ResolveConfig::with_root(std::path::PathBuf::from("/")),
-        )
-        .expect("registering built-in lex.* handlers must succeed for a fresh registry");
-        registry
-    })
+/// The to_lex direction shares the same default registry as the
+/// from_lex direction — see [`crate::default_registry`].
+fn to_lex_registry() -> &'static lex_extension_host::registry::Registry {
+    crate::default_registry()
 }
 
 fn default_wire_range() -> WireRange {

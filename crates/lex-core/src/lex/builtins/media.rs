@@ -1,20 +1,11 @@
-//! Schemas for the `lex.media.*` family of verbatim labels.
+//! Schemas for the `lex.media.*` family of verbatim labels:
+//! `lex.media.image`, `lex.media.video`, `lex.media.audio`.
 //!
-//! The members — `lex.media.image`, `lex.media.video`, `lex.media.audio` —
-//! are the registry-shaped replacements for the legacy `doc.image`,
-//! `doc.video`, and `doc.audio` handlers in `lex-babel`
-//! (`crates/lex-babel/src/common/verbatim/media.rs`).
-//! Issue [#570](https://github.com/lex-fmt/lex/issues/570) tracks the
-//! multi-phase migration.
-//!
-//! # Phase 1 status
-//!
-//! Schemas only — no `on_resolve` bodies yet. The legacy
-//! `VerbatimRegistry` still converts verbatim params into typed
-//! `DocNode::Image` / `Video` / `Audio` nodes. Phase 2's parse-time
-//! auto-rewrite retargets `:: doc.image ::` &c. at these labels;
-//! Phase 3 deletes the legacy lookup and Phase 4 wires `on_format` so
-//! they round-trip back to Lex source through the registry.
+//! `on_resolve` is declared on all three; resolve bodies live in
+//! [`crate::lex::builtins`] (`resolve_media_image` / `_video` /
+//! `_audio`) and emit the typed [`WireNode::Image`],
+//! [`WireNode::Video`], [`WireNode::Audio`] variants introduced with
+//! `wire_version: 2`.
 
 use lex_extension::schema::{
     BodyKind, BodyPresence, BodyShape, Capabilities, HookSet, ParamSpec, ParamType, Schema,
@@ -58,7 +49,10 @@ fn media_schema(
         },
         verbatim_label: true,
         capabilities: Capabilities::default(),
-        hooks: HookSet::default(),
+        hooks: HookSet {
+            resolve: true,
+            ..HookSet::default()
+        },
         handler: None,
     }
 }
@@ -194,11 +188,15 @@ mod tests {
     }
 
     #[test]
-    fn media_schemas_declare_no_hooks_in_phase_1() {
+    fn media_schemas_declare_resolve_hook() {
+        // Phase 3 of #570 turned on `on_resolve` for the media labels
+        // so they go through the registry dispatch like
+        // `lex.tabular.table`. Validate + render stay off — those are
+        // future-phase work.
         for schema in all_schemas() {
             assert!(
-                !schema.hooks.resolve,
-                "{} resolve must stay off",
+                schema.hooks.resolve,
+                "{} resolve must be on (Phase 3+)",
                 schema.label
             );
             assert!(

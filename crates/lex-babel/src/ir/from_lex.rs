@@ -19,6 +19,9 @@ use lex_core::lex::ast::elements::{
     Verbatim as LexVerbatim, VerbatimLine as LexVerbatimLine,
 };
 use lex_core::lex::ast::TextContent;
+use lex_core::lex::wire::from_wire_node;
+use lex_extension::wire::{AnnotationBody, LabelCtx, NodeRef, Position, Range};
+use lex_extension_host::registry::Registry;
 
 use super::nodes::{
     Annotation, Definition, DocNode, Document, Heading, InlineContent, List, ListForm, ListItem,
@@ -26,6 +29,14 @@ use super::nodes::{
 };
 
 /// Converts a lex document to the IR.
+///
+/// `registry` is the extension registry used to dispatch verbatim
+/// labels through their `on_resolve` hooks (#583 — required for
+/// `lex.tabular.table` to produce a typed `DocNode::Table` and for
+/// `lex.media.{image,video,audio}` to participate in the IR
+/// construction). Callers that only need the built-in `lex.*`
+/// namespaces can pass [`default_registry()`]; CLI / LSP callers
+/// that boot a registry with third-party namespaces pass theirs.
 ///
 /// Post-refac/label cleanup: the legacy frontmatter promotion (which
 /// scanned `children` for `lex.metadata.*` annotations and synthesized
@@ -42,7 +53,7 @@ use super::nodes::{
 /// promoted to document metadata. Inline annotations stay inline;
 /// document-scope metadata must be attached at the document level
 /// (lex-core's `doc.annotations` slot).
-pub fn from_lex_document(doc: &LexDocument) -> Document {
+pub fn from_lex_document(doc: &LexDocument, registry: &Registry) -> Document {
     // Extract document title and subtitle
     let title = doc
         .title
@@ -54,9 +65,13 @@ pub fn from_lex_document(doc: &LexDocument) -> Document {
         .and_then(|t| t.subtitle.as_ref())
         .map(convert_inline_content);
 
-    let children = convert_children(&doc.root.children, 2);
+    let children = convert_children(&doc.root.children, 2, registry);
 
-    let document_annotations = doc.annotations.iter().map(ir_annotation_from_lex).collect();
+    let document_annotations = doc
+        .annotations
+        .iter()
+        .map(|a| ir_annotation_from_lex(a, registry))
+        .collect();
 
     Document {
         title,
@@ -69,7 +84,7 @@ pub fn from_lex_document(doc: &LexDocument) -> Document {
 /// Build an IR `Annotation` directly from a lex-core annotation, without
 /// the `DocNode` enum wrapper that [`from_lex_annotation`] returns. Used
 /// by [`from_lex_document`] to populate `Document::document_annotations`.
-fn ir_annotation_from_lex(annotation: &LexAnnotation) -> Annotation {
+fn ir_annotation_from_lex(annotation: &LexAnnotation, registry: &Registry) -> Annotation {
     let label = annotation.data.label.value.clone();
     let parameters = annotation
         .data
@@ -77,7 +92,7 @@ fn ir_annotation_from_lex(annotation: &LexAnnotation) -> Annotation {
         .iter()
         .map(|p| (p.key.clone(), p.value.clone()))
         .collect();
-    let content = convert_children(&annotation.children, 2);
+    let content = convert_children(&annotation.children, 2, registry);
     Annotation {
         label,
         parameters,
@@ -87,20 +102,24 @@ fn ir_annotation_from_lex(annotation: &LexAnnotation) -> Annotation {
 
 /// Helper: Converts a list of content items, filtering out blank lines
 /// Also extracts annotations attached to each element
-fn convert_children(items: &[LexContentItem], level: usize) -> Vec<DocNode> {
+fn convert_children(items: &[LexContentItem], level: usize, registry: &Registry) -> Vec<DocNode> {
     items
         .iter()
         .filter(|item| !matches!(item, LexContentItem::BlankLineGroup(_)))
         .flat_map(|item| {
-            let mut nodes = extract_attached_annotations(item, level);
-            nodes.push(from_lex_content_item_with_level(item, level));
+            let mut nodes = extract_attached_annotations(item, level, registry);
+            nodes.push(from_lex_content_item_with_level(item, level, registry));
             nodes
         })
         .collect()
 }
 
 /// Extracts annotations attached to a content item and converts them to IR nodes
-fn extract_attached_annotations(item: &LexContentItem, level: usize) -> Vec<DocNode> {
+fn extract_attached_annotations(
+    item: &LexContentItem,
+    level: usize,
+    registry: &Registry,
+) -> Vec<DocNode> {
     let annotations = match item {
         LexContentItem::Session(session) => session.annotations(),
         LexContentItem::Paragraph(paragraph) => paragraph.annotations(),
@@ -114,7 +133,7 @@ fn extract_attached_annotations(item: &LexContentItem, level: usize) -> Vec<DocN
 
     annotations
         .iter()
-        .map(|anno| from_lex_annotation(anno, level))
+        .map(|anno| from_lex_annotation(anno, level, registry))
         .collect()
 }
 
@@ -152,16 +171,20 @@ fn convert_inline_node(node: &InlineNode) -> InlineContent {
 }
 
 /// Converts a lex content item to an IR node with a given level.
-fn from_lex_content_item_with_level(item: &LexContentItem, level: usize) -> DocNode {
+fn from_lex_content_item_with_level(
+    item: &LexContentItem,
+    level: usize,
+    registry: &Registry,
+) -> DocNode {
     match item {
-        LexContentItem::Session(session) => from_lex_session(session, level),
+        LexContentItem::Session(session) => from_lex_session(session, level, registry),
         LexContentItem::Paragraph(paragraph) => from_lex_paragraph(paragraph),
-        LexContentItem::List(list) => from_lex_list(list, level),
-        LexContentItem::ListItem(list_item) => from_lex_list_item(list_item, level),
-        LexContentItem::Definition(definition) => from_lex_definition(definition, level),
-        LexContentItem::VerbatimBlock(verbatim) => from_lex_verbatim(verbatim),
-        LexContentItem::Table(table) => from_lex_table(table),
-        LexContentItem::Annotation(annotation) => from_lex_annotation(annotation, level),
+        LexContentItem::List(list) => from_lex_list(list, level, registry),
+        LexContentItem::ListItem(list_item) => from_lex_list_item(list_item, level, registry),
+        LexContentItem::Definition(definition) => from_lex_definition(definition, level, registry),
+        LexContentItem::VerbatimBlock(verbatim) => from_lex_verbatim(verbatim, registry),
+        LexContentItem::Table(table) => from_lex_table(table, registry),
+        LexContentItem::Annotation(annotation) => from_lex_annotation(annotation, level, registry),
         LexContentItem::TextLine(text_line) => from_lex_text_line(text_line),
         LexContentItem::VerbatimLine(verbatim_line) => from_lex_verbatim_line(verbatim_line),
         LexContentItem::BlankLineGroup(_) => {
@@ -177,10 +200,10 @@ fn from_lex_content_item_with_level(item: &LexContentItem, level: usize) -> DocN
 /// title text and are preserved as regular `InlineContent::Text` — not as a
 /// separate structural variant. The full title text (including any numbering
 /// prefix) is kept in `Heading.content`.
-fn from_lex_session(session: &LexSession, level: usize) -> DocNode {
+fn from_lex_session(session: &LexSession, level: usize, registry: &Registry) -> DocNode {
     let content = convert_inline_content(&session.title);
 
-    let children = convert_children(&session.children, level + 1);
+    let children = convert_children(&session.children, level + 1, registry);
     DocNode::Heading(Heading {
         level,
         content,
@@ -205,13 +228,13 @@ fn from_lex_paragraph(paragraph: &LexParagraph) -> DocNode {
 }
 
 /// Converts a lex list to an IR list.
-fn from_lex_list(list: &LexList, level: usize) -> DocNode {
+fn from_lex_list(list: &LexList, level: usize, registry: &Registry) -> DocNode {
     let items: Vec<ListItem> = list
         .items
         .iter()
         .filter_map(|item| {
             if let LexContentItem::ListItem(li) = item {
-                Some(convert_list_item(li, level))
+                Some(convert_list_item(li, level, registry))
             } else {
                 None
             }
@@ -245,32 +268,46 @@ fn from_lex_list(list: &LexList, level: usize) -> DocNode {
 }
 
 /// Converts a lex list item to an IR list item node.
-fn from_lex_list_item(list_item: &LexListItem, level: usize) -> DocNode {
-    DocNode::ListItem(convert_list_item(list_item, level))
+fn from_lex_list_item(list_item: &LexListItem, level: usize, registry: &Registry) -> DocNode {
+    DocNode::ListItem(convert_list_item(list_item, level, registry))
 }
 
 /// Converts a lex list item to an IR list item struct.
 ///
 /// List markers are structural (captured by `List.style` and `List.form` on the
 /// parent) and are not included in the item's inline content.
-fn convert_list_item(list_item: &LexListItem, level: usize) -> ListItem {
+fn convert_list_item(list_item: &LexListItem, level: usize, registry: &Registry) -> ListItem {
     let mut content = Vec::new();
     for text_content in &list_item.text {
         content.extend(convert_inline_content(text_content));
     }
-    let children = convert_children(&list_item.children, level);
+    let children = convert_children(&list_item.children, level, registry);
     ListItem { content, children }
 }
 
 /// Converts a lex definition to an IR definition.
-fn from_lex_definition(definition: &LexDefinition, level: usize) -> DocNode {
+fn from_lex_definition(definition: &LexDefinition, level: usize, registry: &Registry) -> DocNode {
     let term = convert_inline_content(&definition.subject);
-    let description = convert_children(&definition.children, level);
+    let description = convert_children(&definition.children, level, registry);
     DocNode::Definition(Definition { term, description })
 }
 
 /// Converts a lex verbatim block to an IR verbatim block.
-fn from_lex_verbatim(verbatim: &LexVerbatim) -> DocNode {
+///
+/// #583: dispatches through the registry first. The built-in
+/// `lex.tabular.table` and `lex.media.{image,video,audio}` handlers
+/// parse the verbatim into a typed `WireNode` (`Table` / `Image` /
+/// `Video` / `Audio` per `wire_version: 2`); we decode that back to
+/// a lex-core AST node via `from_wire_node`, then run the matching
+/// `from_lex_*` converter for the final IR. Third-party namespaces
+/// that register a verbatim handler with `on_resolve` participate
+/// the same way — their registered handler's typed output flows
+/// through this path.
+///
+/// Falls back to a generic `DocNode::Verbatim` when no handler is
+/// registered for the label (third-party verbatim labels with no
+/// resolve hook, or unrecognised labels).
+fn from_lex_verbatim(verbatim: &LexVerbatim, registry: &Registry) -> DocNode {
     let subject_str = verbatim.subject.as_string();
     let subject = if subject_str.is_empty() {
         None
@@ -291,32 +328,53 @@ fn from_lex_verbatim(verbatim: &LexVerbatim) -> DocNode {
         .collect::<Vec<_>>()
         .join("\n");
 
-    // Post-refac/label cleanup: the legacy
-    // `VerbatimRegistry::get(...).to_ir(...)` indirection is gone.
-    // Dispatch on the canonical label directly to the free hydration
-    // helpers — same logic, no trait-object overhead.
-    let label = verbatim.closing_data.label.value.as_str();
-    let params: std::collections::HashMap<String, String> = verbatim
-        .closing_data
-        .parameters
-        .iter()
-        .map(|p| (p.key.clone(), p.value.clone()))
-        .collect();
-
-    match label {
-        "lex.tabular.table" => {
-            return crate::common::verbatim::table::parse_pipe_table(&content);
+    // Build a LabelCtx and dispatch through the registry. The
+    // handler-returned WireNode goes through `from_wire_node` →
+    // lex-core AST `ContentItem`, then the matching `from_lex_*`
+    // converter produces IR.
+    let label = verbatim.closing_data.label.value.clone();
+    let params_object = serde_json::Value::Object(
+        verbatim
+            .closing_data
+            .parameters
+            .iter()
+            .map(|p| (p.key.clone(), serde_json::Value::String(p.value.clone())))
+            .collect(),
+    );
+    let ctx = LabelCtx {
+        label,
+        params: params_object,
+        body: AnnotationBody::Text(content.clone()),
+        node: NodeRef {
+            kind: "verbatim".into(),
+            range: Range {
+                start: Position(0, 0),
+                end: Position(0, 0),
+            },
+            origin: None,
+        },
+    };
+    if let Ok(Some(wire_node)) = registry.dispatch_resolve(&ctx) {
+        if let Ok(items) = from_wire_node(&wire_node) {
+            if let Some(first) = items.into_iter().next() {
+                match first {
+                    LexContentItem::Table(table) => return from_lex_table(&table, registry),
+                    LexContentItem::VerbatimBlock(v) => {
+                        // Image/Video/Audio wire kinds decode to a
+                        // Verbatim with their params reconstructed
+                        // (lex-core's `ContentItem` has no typed
+                        // media variants today). Re-dispatch on the
+                        // canonical label to build the typed IR
+                        // node via the free hydration helpers.
+                        return from_lex_media_verbatim(&v, &content);
+                    }
+                    _ => {
+                        // Unrecognised wire kind for a verbatim
+                        // resolve — fall through to generic Verbatim.
+                    }
+                }
+            }
         }
-        "lex.media.image" => {
-            return crate::common::verbatim::media::image_from_params(&content, &params);
-        }
-        "lex.media.video" => {
-            return crate::common::verbatim::media::video_from_params(&params);
-        }
-        "lex.media.audio" => {
-            return crate::common::verbatim::media::audio_from_params(&params);
-        }
-        _ => {}
     }
 
     DocNode::Verbatim(Verbatim {
@@ -326,8 +384,36 @@ fn from_lex_verbatim(verbatim: &LexVerbatim) -> DocNode {
     })
 }
 
+/// Decode a media verbatim (canonical label `lex.media.{image,video,audio}`)
+/// into the matching IR `DocNode::Image` / `Video` / `Audio` by routing
+/// through the existing free helpers. The wire `Image` / `Video` /
+/// `Audio` kinds decode to a lex-core AST `Verbatim` with their
+/// params reconstructed; this helper closes the loop to a typed IR
+/// node.
+fn from_lex_media_verbatim(verbatim: &LexVerbatim, original_content: &str) -> DocNode {
+    let label = verbatim.closing_data.label.value.as_str();
+    let params: std::collections::HashMap<String, String> = verbatim
+        .closing_data
+        .parameters
+        .iter()
+        .map(|p| (p.key.clone(), p.value.clone()))
+        .collect();
+    match label {
+        "lex.media.image" => {
+            crate::common::verbatim::media::image_from_params(original_content, &params)
+        }
+        "lex.media.video" => crate::common::verbatim::media::video_from_params(&params),
+        "lex.media.audio" => crate::common::verbatim::media::audio_from_params(&params),
+        _ => DocNode::Verbatim(Verbatim {
+            subject: None,
+            language: Some(label.to_string()),
+            content: original_content.to_string(),
+        }),
+    }
+}
+
 /// Converts a lex annotation to an IR annotation.
-fn from_lex_annotation(annotation: &LexAnnotation, level: usize) -> DocNode {
+fn from_lex_annotation(annotation: &LexAnnotation, level: usize, registry: &Registry) -> DocNode {
     let label = annotation.data.label.value.clone();
     let parameters = annotation
         .data
@@ -335,7 +421,7 @@ fn from_lex_annotation(annotation: &LexAnnotation, level: usize) -> DocNode {
         .iter()
         .map(|p| (p.key.clone(), p.value.clone()))
         .collect();
-    let content = convert_children(&annotation.children, level);
+    let content = convert_children(&annotation.children, level, registry);
     DocNode::Annotation(Annotation {
         label,
         parameters,
@@ -353,7 +439,7 @@ fn from_lex_text_line(text_line: &LexTextLine) -> DocNode {
 /// Converts a VerbatimLine to an IR verbatim block.
 /// VerbatimLines are typically parts of VerbatimBlocks, but can appear standalone.
 /// Converts a native lex Table AST node to an IR Table node.
-fn from_lex_table(table: &lex_core::lex::ast::Table) -> DocNode {
+fn from_lex_table(table: &lex_core::lex::ast::Table, registry: &Registry) -> DocNode {
     use crate::ir::nodes::{
         Table as IrTable, TableCell as IrTableCell, TableCellAlignment as IrAlign,
         TableRow as IrTableRow,
@@ -375,7 +461,7 @@ fn from_lex_table(table: &lex_core::lex::ast::Table) -> DocNode {
                 .iter()
                 .map(|cell| {
                     let content = if cell.has_block_content() {
-                        convert_children(&cell.children, 2)
+                        convert_children(&cell.children, 2, registry)
                     } else {
                         vec![DocNode::Paragraph(Paragraph {
                             content: convert_inline_content(&cell.content),
@@ -404,7 +490,7 @@ fn from_lex_table(table: &lex_core::lex::ast::Table) -> DocNode {
     let footnotes = table
         .footnotes
         .as_ref()
-        .map(|list| vec![from_lex_list(list, 2)])
+        .map(|list| vec![from_lex_list(list, 2, registry)])
         .unwrap_or_default();
 
     let fullwidth = matches!(
@@ -496,6 +582,12 @@ mod tests {
     };
     use lex_core::lex::ast::{ContentItem, Document as LexDocument, TextContent};
 
+    /// Test-scope shorthand for the lex-babel default registry —
+    /// every test that calls `from_lex_document` directly needs one.
+    fn test_registry() -> &'static Registry {
+        crate::default_registry()
+    }
+
     #[test]
     fn test_simple_paragraph_conversion() {
         let lex_para = LexParagraph::from_line("Hello world".to_string());
@@ -515,7 +607,7 @@ mod tests {
     #[test]
     fn test_session_to_heading() {
         let session = LexSession::with_title("Test Section".to_string());
-        let ir_node = from_lex_session(&session, 1);
+        let ir_node = from_lex_session(&session, 1, test_registry());
 
         match ir_node {
             DocNode::Heading(heading) => {
@@ -533,7 +625,7 @@ mod tests {
         let item2 = LexListItem::new("-".to_string(), "Item 2".to_string());
         let list = LexList::new(vec![item1, item2]);
 
-        let ir_node = from_lex_list(&list, 1);
+        let ir_node = from_lex_list(&list, 1, test_registry());
 
         match ir_node {
             DocNode::List(list) => {
@@ -560,7 +652,7 @@ mod tests {
             lex_core::lex::ast::elements::verbatim::VerbatimBlockMode::Inflow,
         );
 
-        let ir_node = from_lex_verbatim(&verb);
+        let ir_node = from_lex_verbatim(&verb, test_registry());
 
         match ir_node {
             DocNode::Verbatim(verb) => {
@@ -579,7 +671,7 @@ mod tests {
             Vec::new(),
         ));
 
-        let children = convert_children(&[para, blank], 1);
+        let children = convert_children(&[para, blank], 1, test_registry());
 
         assert_eq!(children.len(), 1);
     }
@@ -590,7 +682,7 @@ mod tests {
             "Test paragraph".to_string(),
         ))]);
 
-        let ir_doc = from_lex_document(&doc);
+        let ir_doc = from_lex_document(&doc, test_registry());
 
         assert_eq!(ir_doc.children.len(), 1);
         assert!(matches!(ir_doc.children[0], DocNode::Paragraph(_)));
@@ -621,7 +713,7 @@ mod tests {
         // annotation that the legacy promotion inserts into
         // `children` is *additive* in Phase 3a — Phase 3b removes it.
         let doc = doc_with_one_annotation("acme.custom", "Body text.");
-        let ir_doc = from_lex_document(&doc);
+        let ir_doc = from_lex_document(&doc, test_registry());
 
         assert_eq!(
             ir_doc.document_annotations.len(),
@@ -640,7 +732,7 @@ mod tests {
         let doc = LexDocument::with_content(vec![ContentItem::Paragraph(LexParagraph::from_line(
             "Body only.".to_string(),
         ))]);
-        let ir_doc = from_lex_document(&doc);
+        let ir_doc = from_lex_document(&doc, test_registry());
         assert!(
             ir_doc.document_annotations.is_empty(),
             "empty input must produce empty document_annotations"
@@ -674,7 +766,7 @@ mod tests {
         // canonical-labelled annotation lands in
         // `document_annotations` instead; the `frontmatter` event is
         // synthesized at the events-emission layer.
-        let ir = from_lex_document(&lex_doc);
+        let ir = from_lex_document(&lex_doc, test_registry());
         let frontmatter_in_children = ir
             .children
             .iter()
@@ -691,7 +783,7 @@ mod tests {
         // through `document_annotations` only — the legacy
         // `frontmatter` synthesis in children is gone.
         let doc = doc_with_one_annotation("author", "Alice");
-        let ir_doc = from_lex_document(&doc);
+        let ir_doc = from_lex_document(&doc, test_registry());
 
         // The new slot carries the annotation.
         assert_eq!(ir_doc.document_annotations.len(), 1);

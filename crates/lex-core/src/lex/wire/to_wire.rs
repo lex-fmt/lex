@@ -219,7 +219,7 @@ fn table_to_wire(t: &Table) -> WireNode {
     }
 
     let header_rows = u32::try_from(t.header_rows.len()).unwrap_or(u32::MAX);
-    let align = table_align_summary(t);
+    let column_aligns = table_column_aligns(t);
     let rows = t
         .all_rows()
         .map(|row| WireRow {
@@ -236,7 +236,7 @@ fn table_to_wire(t: &Table) -> WireNode {
         origin: origin_string(&t.location),
         caption: t.subject.as_string().to_string(),
         header_rows,
-        align,
+        column_aligns,
         rows,
         footnotes,
     }
@@ -257,26 +257,61 @@ fn table_cell_to_wire(cell: &TableCell) -> WireTableCell {
     }
 }
 
-/// Summarise a table's per-cell alignment into a single string. Wire
-/// tables carry one alignment per table; lex-core tracks alignment per
-/// cell. We pick the alignment of the first non-`None` *body* cell —
-/// header cells are skipped because their alignment is often a
-/// styling artefact (centered headers over left-aligned columns) and
-/// would mislead the reverse codec, which applies the chosen
-/// alignment to every cell in the table. Returns the empty string
-/// when no body alignment is set anywhere.
-fn table_align_summary(t: &Table) -> String {
+/// Produce per-column alignment strings for a table's wire form.
+///
+/// One entry per column. For each column we pick the alignment of
+/// the first non-`None` body cell, falling back to the header cell's
+/// alignment when every body cell is `None` (matters for
+/// header-only tables and for tables whose body cells inherit from
+/// the alignment row implicitly). Columns with no alignment
+/// anywhere yield `""`.
+///
+/// `column_aligns.length` equals the widest row in the table — this
+/// is what the wire spec uses to define the table's column count.
+fn table_column_aligns(t: &Table) -> Vec<String> {
+    let column_count = t.all_rows().map(|row| row.cells.len()).max().unwrap_or(0);
+    let mut aligns: Vec<String> = vec![String::new(); column_count];
+
+    let align_str = |a: TableCellAlignment| -> Option<&'static str> {
+        match a {
+            TableCellAlignment::Left => Some("left"),
+            TableCellAlignment::Center => Some("center"),
+            TableCellAlignment::Right => Some("right"),
+            TableCellAlignment::None => None,
+        }
+    };
+
+    // First pass: scan body rows, fill the first non-None per column.
     for row in &t.body_rows {
-        for cell in &row.cells {
-            match cell.align {
-                TableCellAlignment::Left => return "left".into(),
-                TableCellAlignment::Center => return "center".into(),
-                TableCellAlignment::Right => return "right".into(),
-                TableCellAlignment::None => {}
+        for (col, cell) in row.cells.iter().enumerate() {
+            if col >= aligns.len() {
+                continue;
+            }
+            if aligns[col].is_empty() {
+                if let Some(s) = align_str(cell.align) {
+                    aligns[col] = s.to_string();
+                }
             }
         }
     }
-    String::new()
+
+    // Second pass: any column still empty falls back to the header
+    // cell's alignment. This covers header-only tables and any table
+    // whose body cells all happen to be `None` for a given column.
+    for row in &t.header_rows {
+        for (col, cell) in row.cells.iter().enumerate() {
+            if col >= aligns.len() {
+                continue;
+            }
+            if aligns[col].is_empty() {
+                if let Some(s) = align_str(cell.align) {
+                    aligns[col] = s.to_string();
+                }
+            }
+        }
+    }
+
+    aligns
 }
 
 fn table_footnotes_to_wire(footnotes: &List) -> Vec<WireFootnote> {

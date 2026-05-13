@@ -42,7 +42,7 @@ use lex_extension::{
     schema::{
         BodyKind, BodyPresence, BodyShape, Capabilities, HookSet, ParamSpec, ParamType, Schema,
     },
-    wire::{FormatCtx, LabelCtx, LexAnnotationOut, WireNode},
+    wire::{AnnotationBody, FormatCtx, LabelCtx, LexAnnotationOut, Position, Range, WireNode},
 };
 use lex_extension_host::registry::{Registry, RegistryError};
 
@@ -132,9 +132,10 @@ impl LexHandler for LexBuiltinsHandler {
     fn on_resolve(&self, ctx: &LabelCtx) -> Result<Option<WireNode>, HandlerError> {
         match ctx.label.as_str() {
             "lex.include" => self.include.on_resolve(ctx),
-            // Phase 1 of #570: schemas register but don't intercept.
-            // The legacy IR paths in lex-babel still own the work for
-            // every other `lex.*` label. Phase 3 fills these arms in.
+            "lex.tabular.table" => Ok(Some(resolve_tabular_table(ctx))),
+            "lex.media.image" => Ok(Some(resolve_media_image(ctx))),
+            "lex.media.video" => Ok(Some(resolve_media_video(ctx))),
+            "lex.media.audio" => Ok(Some(resolve_media_audio(ctx))),
             _ => Ok(None),
         }
     }
@@ -173,6 +174,83 @@ impl LexHandler for LexBuiltinsHandler {
 /// being a wire-internal copy of the same data. A well-formed host
 /// fills both with the same `(key, value)` pairs; in the
 /// hypothetical case where they diverge, `ctx.params` wins.
+/// `on_resolve` for `lex.tabular.table`: parse the verbatim body
+/// (pipe-table source) into a typed [`WireNode::Table`]. The wire
+/// table carries per-column alignment in `column_aligns` — no
+/// fidelity loss on mixed-alignment tables.
+fn resolve_tabular_table(ctx: &LabelCtx) -> WireNode {
+    let body = match &ctx.body {
+        AnnotationBody::Text(s) => s.as_str(),
+        // No body or a `Lex`-shaped body — fall back to an empty
+        // table. (Verbatim labels can't legitimately have a `Lex`
+        // body; schema enforcement keeps this branch unreachable in
+        // well-formed inputs.)
+        _ => "",
+    };
+    tabular::parse_pipe_table_to_wire(body)
+}
+
+/// `on_resolve` for `lex.media.image`: read `src`/`alt`/`title` from
+/// `ctx.params`. Falls back to the verbatim body for `alt` when the
+/// `alt=` param is missing — mirrors the lex-babel
+/// `image_from_params` contract.
+fn resolve_media_image(ctx: &LabelCtx) -> WireNode {
+    let src = string_param(ctx, "src").unwrap_or_default();
+    let alt = string_param(ctx, "alt").unwrap_or_else(|| match &ctx.body {
+        AnnotationBody::Text(s) => s.trim().to_string(),
+        _ => String::new(),
+    });
+    let title = string_param(ctx, "title");
+    WireNode::Image {
+        range: ctx.node.range,
+        origin: ctx.node.origin.clone(),
+        src,
+        alt,
+        title,
+    }
+}
+
+/// `on_resolve` for `lex.media.video`: read `src`/`title`/`poster`
+/// from `ctx.params`.
+fn resolve_media_video(ctx: &LabelCtx) -> WireNode {
+    WireNode::Video {
+        range: ctx.node.range,
+        origin: ctx.node.origin.clone(),
+        src: string_param(ctx, "src").unwrap_or_default(),
+        title: string_param(ctx, "title"),
+        poster: string_param(ctx, "poster"),
+    }
+}
+
+/// `on_resolve` for `lex.media.audio`: read `src`/`title` from
+/// `ctx.params`.
+fn resolve_media_audio(ctx: &LabelCtx) -> WireNode {
+    WireNode::Audio {
+        range: ctx.node.range,
+        origin: ctx.node.origin.clone(),
+        src: string_param(ctx, "src").unwrap_or_default(),
+        title: string_param(ctx, "title"),
+    }
+}
+
+/// Extract a string-typed parameter from `ctx.params`. Returns `None`
+/// when the key is missing or the value isn't a string. Used by the
+/// media resolve helpers.
+fn string_param(ctx: &LabelCtx, key: &str) -> Option<String> {
+    ctx.params
+        .get(key)
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+}
+
+#[allow(dead_code)]
+fn default_resolve_range() -> Range {
+    Range {
+        start: Position(0, 0),
+        end: Position(0, 0),
+    }
+}
+
 fn verbatim_label_on_format(ctx: &FormatCtx) -> Result<Option<LexAnnotationOut>, HandlerError> {
     let body = match &ctx.node {
         WireNode::Verbatim { body_text, .. } => body_text.clone(),
@@ -473,31 +551,45 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_resolve_for_new_schemas_returns_none_in_phase_1() {
-        // Phase 1 contract: schemas register but don't intercept.
-        // Dispatch must succeed (no panic, no error) and return None
-        // so the legacy IR paths continue to own the work until
-        // Phase 3 retires them.
+    fn dispatch_resolve_metadata_returns_none() {
+        // Metadata schemas don't declare `on_resolve` (they're
+        // attached to the document, consumed by analysis). Dispatch
+        // must short-circuit to None for each one.
         let registry = fresh_registry();
-        let labels: Vec<&str> = metadata::METADATA_LABELS
-            .iter()
-            .copied()
-            .chain(std::iter::once(tabular::LEX_TABULAR_TABLE))
-            .chain([
-                media::LEX_MEDIA_IMAGE,
-                media::LEX_MEDIA_VIDEO,
-                media::LEX_MEDIA_AUDIO,
-            ])
-            .collect();
-        for label in labels {
+        for label in metadata::METADATA_LABELS {
             let ctx = make_ctx(label, None, None);
             let result = registry
                 .dispatch_resolve(&ctx)
                 .unwrap_or_else(|e| panic!("dispatch_resolve({label}) errored: {e:?}"));
             assert!(
                 result.is_none(),
-                "dispatch_resolve({label}) must return None in Phase 1; got Some(...)"
+                "dispatch_resolve({label}) must return None; got Some(...)"
             );
+        }
+    }
+
+    #[test]
+    fn dispatch_resolve_media_returns_typed_wire_kinds() {
+        // Phase 3 of #570: `lex.media.*` resolve to typed
+        // `WireNode::{Image, Video, Audio}` variants.
+        let registry = fresh_registry();
+        for (label, expect_kind) in [
+            (media::LEX_MEDIA_IMAGE, "image"),
+            (media::LEX_MEDIA_VIDEO, "video"),
+            (media::LEX_MEDIA_AUDIO, "audio"),
+        ] {
+            let ctx = make_ctx(label, Some("./asset.media"), None);
+            let result = registry
+                .dispatch_resolve(&ctx)
+                .unwrap_or_else(|e| panic!("dispatch_resolve({label}) errored: {e:?}"))
+                .unwrap_or_else(|| panic!("dispatch_resolve({label}) must return Some"));
+            let actual = match result {
+                lex_extension::wire::WireNode::Image { .. } => "image",
+                lex_extension::wire::WireNode::Video { .. } => "video",
+                lex_extension::wire::WireNode::Audio { .. } => "audio",
+                other => panic!("dispatch_resolve({label}) produced unexpected variant {other:?}"),
+            };
+            assert_eq!(actual, expect_kind, "wire variant for {label}");
         }
     }
 

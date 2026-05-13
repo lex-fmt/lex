@@ -184,7 +184,7 @@ fn convert_one(
             origin,
             caption,
             header_rows,
-            align,
+            column_aligns,
             rows,
             footnotes,
             ..
@@ -195,7 +195,7 @@ fn convert_one(
                 eff,
                 caption,
                 *header_rows,
-                align,
+                column_aligns,
                 rows,
                 footnotes,
                 interner,
@@ -214,6 +214,92 @@ fn convert_one(
             let eff = effective(origin.as_deref(), inherited_origin);
             Ok(verbatim_from_wire(
                 range, eff, label, params, body_text, subject, mode, interner,
+            )?)
+        }
+        // `Image` / `Video` / `Audio` are wire_version 2 media kinds.
+        // lex-core has no typed `ContentItem` variant for them — the
+        // information lives in `ContentItem::Verbatim` with the same
+        // params lex-babel's media helpers consume. Round-trip them
+        // back to a Verbatim with the canonical label + params, so
+        // downstream `from_lex_verbatim` (or any consumer using the
+        // free `image_from_params` / `video_from_params` /
+        // `audio_from_params` helpers in lex-babel) sees the shape
+        // it expects.
+        WireNode::Image {
+            range,
+            origin,
+            src,
+            alt,
+            title,
+        } => {
+            let eff = effective(origin.as_deref(), inherited_origin);
+            let mut params = serde_json::Map::new();
+            params.insert("src".into(), Value::String(src.clone()));
+            if !alt.is_empty() {
+                params.insert("alt".into(), Value::String(alt.clone()));
+            }
+            if let Some(title) = title {
+                params.insert("title".into(), Value::String(title.clone()));
+            }
+            Ok(verbatim_from_wire(
+                range,
+                eff,
+                "lex.media.image",
+                &Value::Object(params),
+                "",
+                "",
+                "inflow",
+                interner,
+            )?)
+        }
+        WireNode::Video {
+            range,
+            origin,
+            src,
+            title,
+            poster,
+        } => {
+            let eff = effective(origin.as_deref(), inherited_origin);
+            let mut params = serde_json::Map::new();
+            params.insert("src".into(), Value::String(src.clone()));
+            if let Some(title) = title {
+                params.insert("title".into(), Value::String(title.clone()));
+            }
+            if let Some(poster) = poster {
+                params.insert("poster".into(), Value::String(poster.clone()));
+            }
+            Ok(verbatim_from_wire(
+                range,
+                eff,
+                "lex.media.video",
+                &Value::Object(params),
+                "",
+                "",
+                "inflow",
+                interner,
+            )?)
+        }
+        WireNode::Audio {
+            range,
+            origin,
+            src,
+            title,
+        } => {
+            let eff = effective(origin.as_deref(), inherited_origin);
+            let mut params = serde_json::Map::new();
+            params.insert("src".into(), Value::String(src.clone()));
+            if let Some(title) = title {
+                params.insert("title".into(), Value::String(title.clone()));
+            }
+            Ok(verbatim_from_wire(
+                range,
+                eff,
+                "lex.media.audio",
+                &Value::Object(params),
+                "",
+                "",
+                "inflow",
+                interner,
             )?)
         }
         // WireNode is `#[non_exhaustive]` — future kinds surface here.
@@ -433,17 +519,24 @@ fn table_from_wire(
     origin: Option<&str>,
     caption: &str,
     header_rows: u32,
-    align: &str,
+    column_aligns: &[String],
     rows: &[WireRow],
     footnotes: &[WireFootnote],
     interner: &mut OriginInterner,
 ) -> Result<Table, FromWireError> {
-    let alignment = match align {
-        "left" => TableCellAlignment::Left,
-        "center" => TableCellAlignment::Center,
-        "right" => TableCellAlignment::Right,
-        _ => TableCellAlignment::None,
-    };
+    // Per-column alignment in wire_version 2 — one entry per column.
+    // Applied to every cell in that column on the reverse codec; rows
+    // shorter than `column_aligns.length` get cells dropped on the
+    // wire and aren't reconstructed here.
+    let column_alignment: Vec<TableCellAlignment> = column_aligns
+        .iter()
+        .map(|s| match s.as_str() {
+            "left" => TableCellAlignment::Left,
+            "center" => TableCellAlignment::Center,
+            "right" => TableCellAlignment::Right,
+            _ => TableCellAlignment::None,
+        })
+        .collect();
     let header_count = header_rows as usize;
     let mut header_vec = Vec::with_capacity(header_count.min(rows.len()));
     let mut body_vec = Vec::with_capacity(rows.len().saturating_sub(header_count));
@@ -452,7 +545,14 @@ fn table_from_wire(
         let cells = row
             .cells
             .iter()
-            .map(|c| table_cell_from_wire(c, alignment, is_header))
+            .enumerate()
+            .map(|(col, c)| {
+                let align = column_alignment
+                    .get(col)
+                    .copied()
+                    .unwrap_or(TableCellAlignment::None);
+                table_cell_from_wire(c, align, is_header)
+            })
             .collect();
         let table_row = TableRow::new(cells);
         if is_header {
@@ -664,6 +764,9 @@ fn kind_name(node: &WireNode) -> &'static str {
         WireNode::List { .. } => "list",
         WireNode::Verbatim { .. } => "verbatim",
         WireNode::Table { .. } => "table",
+        WireNode::Image { .. } => "image",
+        WireNode::Video { .. } => "video",
+        WireNode::Audio { .. } => "audio",
         WireNode::Annotation { .. } => "annotation",
         WireNode::Blank { .. } => "blank",
         _ => "unknown",
