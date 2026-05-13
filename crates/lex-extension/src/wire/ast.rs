@@ -120,6 +120,26 @@ pub enum WireNode {
     },
 }
 
+impl WireNode {
+    /// The byte range this node spans in its origin source. Useful for
+    /// diagnostic attribution when the host only has the wire node
+    /// (e.g., the `on_format` dispatch path doesn't carry a separate
+    /// `NodeRef`).
+    pub fn range(&self) -> Range {
+        match self {
+            Self::Document { range, .. }
+            | Self::Session { range, .. }
+            | Self::Definition { range, .. }
+            | Self::Paragraph { range, .. }
+            | Self::List { range, .. }
+            | Self::Verbatim { range, .. }
+            | Self::Table { range, .. }
+            | Self::Annotation { range, .. }
+            | Self::Blank { range, .. } => *range,
+        }
+    }
+}
+
 /// One item inside a [`WireNode::List`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WireListItem {
