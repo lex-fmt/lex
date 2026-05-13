@@ -802,6 +802,14 @@ mod tests {
         // NOTE: The user's original input had dedented marker "::  doc.table ::".
         // This caused it to be parsed as Definition + Document Annotation.
         // The fix is to indent the marker to match the subject.
+        //
+        // #570 Phase 3b activated `NormalizeLabels`, so the document
+        // annotation's label `doc.table` is rewritten to its canonical
+        // form `lex.tabular.table` before serialization. The footer
+        // assertion looks for the canonical form. Phase 5 ships
+        // `lexd migrate-labels` for source-level migration; this is
+        // the parser-side equivalent for files that already flow
+        // through `format`.
         let source = "  The Table:\n    | Markup Language | Great |\n    |--------------------|--------|\n    | Markdown | No |\n    | Lex | Yes |\n  ::  doc.table ::\n";
 
         let formatted = format_source(source);
@@ -814,7 +822,9 @@ mod tests {
         let separator = formatted
             .find("| --------------- | ----- |")
             .expect("Separator not found");
-        let footer_start = formatted.find(":: doc.table").expect("Footer not found");
+        let footer_start = formatted
+            .find(":: lex.tabular.table")
+            .expect("Footer not found");
 
         assert!(table_start < separator);
         assert!(separator < footer_start);

@@ -12,7 +12,9 @@ pub struct TableHandler;
 
 impl VerbatimHandler for TableHandler {
     fn label(&self) -> &str {
-        "doc.table"
+        // #570 Phase 3b: canonical label. Legacy alias `doc.table`
+        // registered in `VerbatimRegistry::default_with_standard`.
+        "lex.tabular.table"
     }
 
     fn to_ir(&self, content: &str, _params: &HashMap<String, String>) -> Option<DocNode> {

@@ -42,9 +42,21 @@ pub fn from_lex_document(doc: &LexDocument) -> Document {
 
     let mut parameters = Vec::new();
 
-    // 1. Process document-level annotations
+    // 1. Process document-level annotations.
+    //
+    // Strip the `lex.metadata.` prefix (#570 Phase 3b) when building
+    // the parameter key so document-level annotations rewritten by
+    // `NormalizeLabels` still produce the short-form keys downstream
+    // HTML serializers consume (`<meta name="title">`, not
+    // `<meta name="lex.metadata.title">`).
     for ann in &doc.annotations {
-        let key = ann.data.label.value.clone();
+        let key = ann
+            .data
+            .label
+            .value
+            .strip_prefix("lex.metadata.")
+            .unwrap_or(ann.data.label.value.as_str())
+            .to_string();
         let value = if !ann.children.is_empty() {
             let mut text = String::new();
             for child in &ann.children {
@@ -69,8 +81,24 @@ pub fn from_lex_document(doc: &LexDocument) -> Document {
     // 2. Scan children for metadata annotations (e.g. attached to first element)
     let mut indices_to_remove = Vec::new();
 
-    // Whitelist of labels to treat as frontmatter
+    // Whitelist of labels to treat as frontmatter. #570 Phase 3b
+    // activated `NormalizeLabels` (lex-core) which rewrites bare
+    // labels to their canonical `lex.metadata.*` form before this
+    // pass runs, so the canonical names are what we match against.
+    // The legacy bare names stay in the list as aliases so IR built
+    // outside `STRING_TO_AST` (markdown imports, hand-built AST,
+    // alternate format adapters) continues to work.
     let metadata_labels = [
+        // Canonical (#570 Phase 3b).
+        "lex.metadata.author",
+        "lex.metadata.publishing-date",
+        "lex.metadata.title",
+        "lex.metadata.date",
+        "lex.metadata.tags",
+        "lex.metadata.category",
+        "lex.metadata.template",
+        "lex.metadata.front-matter",
+        // Legacy aliases.
         "author",
         "publishing-date",
         "title",
@@ -84,8 +112,17 @@ pub fn from_lex_document(doc: &LexDocument) -> Document {
     for (i, child) in children.iter().enumerate() {
         if let DocNode::Annotation(ann) = child {
             if metadata_labels.contains(&ann.label.as_str()) {
-                // It's metadata!
-                let key = ann.label.clone();
+                // It's metadata! Strip the `lex.metadata.` prefix when
+                // building the key so the frontmatter annotation's
+                // parameter keys stay in the legacy short form
+                // (`title`, `author`, …) — that preserves the HTML
+                // comment shape (`<meta name="title">`) downstream
+                // serializers emit.
+                let key = ann
+                    .label
+                    .strip_prefix("lex.metadata.")
+                    .unwrap_or(ann.label.as_str())
+                    .to_string();
                 // Extract value (content or params)
                 let value = if !ann.content.is_empty() {
                     // Flatten content
@@ -711,6 +748,54 @@ mod tests {
         assert!(
             ir_doc.document_annotations.is_empty(),
             "empty input must produce empty document_annotations"
+        );
+    }
+
+    #[test]
+    fn normalize_labels_pipeline_writes_canonical_labels_into_ast() {
+        // #570 Phase 3b regression: confirm the activated
+        // `NormalizeLabels` pass produces a Document whose annotations
+        // carry canonical `lex.metadata.*` labels by the time
+        // `from_lex_document` sees them.
+        use lex_core::lex::transforms::standard::STRING_TO_AST;
+
+        let lex_doc = STRING_TO_AST
+            .run(":: title :: My Doc\n\nBody.\n".to_string())
+            .expect("parse ok");
+        // After NormalizeLabels, the title annotation is canonical.
+        let title_in_ast = lex_doc
+            .annotations
+            .first()
+            .or_else(|| {
+                lex_doc.root.children.iter().find_map(|item| match item {
+                    lex_core::lex::ast::ContentItem::Annotation(a) => Some(a),
+                    _ => None,
+                })
+            })
+            .expect("title annotation parsed");
+        assert_eq!(
+            title_in_ast.data.label.value, "lex.metadata.title",
+            "NormalizeLabels is wired into STRING_TO_AST"
+        );
+        // And `from_lex_document` still promotes it into the
+        // frontmatter (legacy whitelist accepts the canonical form).
+        let ir = from_lex_document(&lex_doc);
+        let frontmatter = ir.children.iter().find_map(|c| match c {
+            DocNode::Annotation(a) if a.label == "frontmatter" => Some(a),
+            _ => None,
+        });
+        let frontmatter = frontmatter.expect("frontmatter still synthesized in Phase 3b");
+        // The key is the *short* form so the HTML comment output stays
+        // backwards-compatible. The prefix-strip in `from_lex_document`
+        // handles this.
+        let has_title_key = frontmatter
+            .parameters
+            .iter()
+            .any(|(k, _)| k == "title" || k == "frontmatter.title");
+        assert!(
+            has_title_key,
+            "frontmatter param key must be the short form (`title`), got {:?}",
+            frontmatter.parameters
         );
     }
 

@@ -111,8 +111,27 @@ impl VerbatimRegistry {
     }
 
     /// Creates a registry with standard handlers (e.g. doc.table) pre-registered.
+    ///
+    /// #570 Phase 3b activated the [`NormalizeLabels`] pass that
+    /// rewrites bare `doc.table` / `doc.image` / `doc.video` /
+    /// `doc.audio` to their canonical `lex.tabular.*` / `lex.media.*`
+    /// forms before this lookup runs. The canonical labels are the
+    /// keys we register today. The legacy bare labels stay registered
+    /// alongside so any IR built outside `STRING_TO_AST` (e.g. an
+    /// embedder hand-building a Verbatim with the legacy label, or a
+    /// non-Lex format adapter feeding the same registry) continues
+    /// to work. Both paths point at the same handler.
+    ///
+    /// [`NormalizeLabels`]: lex_core::lex::assembling::stages::NormalizeLabels
     pub fn default_with_standard() -> Self {
         let mut registry = Self::new();
+        // Canonical (#570 Phase 3b) — what `STRING_TO_AST` produces.
+        registry.register("lex.tabular.table", Box::new(table::TableHandler));
+        registry.register("lex.media.image", Box::new(media::ImageHandler));
+        registry.register("lex.media.video", Box::new(media::VideoHandler));
+        registry.register("lex.media.audio", Box::new(media::AudioHandler));
+        // Legacy aliases — accept inputs that didn't go through
+        // `NormalizeLabels` (embedder-built IR, alternate format adapters).
         registry.register("doc.table", Box::new(table::TableHandler));
         registry.register("doc.image", Box::new(media::ImageHandler));
         registry.register("doc.video", Box::new(media::VideoHandler));

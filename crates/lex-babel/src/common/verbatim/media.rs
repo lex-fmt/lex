@@ -7,7 +7,10 @@ pub struct ImageHandler;
 
 impl VerbatimHandler for ImageHandler {
     fn label(&self) -> &str {
-        "doc.image"
+        // #570 Phase 3b: canonical label. Legacy `doc.image` is still
+        // registered as an alias in `VerbatimRegistry::default_with_standard`
+        // so legacy-shaped IR continues to route to this handler.
+        "lex.media.image"
     }
 
     fn to_ir(&self, content: &str, params: &HashMap<String, String>) -> Option<DocNode> {
@@ -48,7 +51,9 @@ pub struct VideoHandler;
 
 impl VerbatimHandler for VideoHandler {
     fn label(&self) -> &str {
-        "doc.video"
+        // #570 Phase 3b: canonical label. Legacy alias `doc.video`
+        // registered in `VerbatimRegistry::default_with_standard`.
+        "lex.media.video"
     }
 
     fn to_ir(&self, _content: &str, params: &HashMap<String, String>) -> Option<DocNode> {
@@ -81,7 +86,9 @@ pub struct AudioHandler;
 
 impl VerbatimHandler for AudioHandler {
     fn label(&self) -> &str {
-        "doc.audio"
+        // #570 Phase 3b: canonical label. Legacy alias `doc.audio`
+        // registered in `VerbatimRegistry::default_with_standard`.
+        "lex.media.audio"
     }
 
     fn to_ir(&self, _content: &str, params: &HashMap<String, String>) -> Option<DocNode> {
