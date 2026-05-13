@@ -19,17 +19,18 @@ use super::nodes::{
 
 /// Converts an IR document to a Lex document.
 ///
-/// **Phase 3a note (#570):** `Document::document_annotations` is *not*
+/// **`document_annotations` note (#570):** the new IR slot is *not*
 /// emitted back into `lex_doc.annotations` on this path. The legacy
 /// frontmatter promotion in `from_lex_document` still synthesizes a
 /// `frontmatter` annotation into `children`, and downstream Lex
 /// serializers expect to see it there — emitting both would
-/// double-write. Phase 3b retires the promotion and flips the
-/// source-of-truth to `document_annotations` atomically; the
-/// [`to_lex_annotation_raw`] helper introduced here is wired into
-/// production then. Until that flip, `document_annotations` is a
-/// one-way slot: populated by `from_lex_document`, consumed only by
-/// embedders that read it directly.
+/// double-write. A follow-up to Phase 3b retires the promotion and
+/// flips the source-of-truth to `document_annotations` atomically;
+/// the [`to_lex_annotation_raw`] helper introduced in Phase 3a is
+/// wired into production then. Until that flip,
+/// `document_annotations` is a one-way slot: populated by
+/// `from_lex_document`, consumed only by embedders that read it
+/// directly.
 pub fn to_lex_document(doc: &Document) -> LexDocument {
     let mut children = Vec::new();
 

@@ -11,15 +11,19 @@
 //!
 //! # Activation lifecycle
 //!
-//! In Phase 2 (this PR) the stage is **shipped but not wired** into the
-//! default [`STRING_TO_AST`](crate::lex::transforms::standard::STRING_TO_AST)
-//! pipeline. Activating it here would break the legacy IR paths in
-//! `lex-babel` (`ir/from_lex.rs`'s frontmatter whitelist and
-//! `common/verbatim/VerbatimRegistry`'s handler registrations both
-//! still match on the bare label strings). Phase 3a flips the legacy
-//! paths to canonical names atomically with the wire-up, so both
-//! halves of the bare-label retirement land together. Phase 3b then
-//! deletes the legacy paths.
+//! Phase 2 of #570 shipped this stage as a module without wiring it
+//! into the default
+//! [`STRING_TO_AST`](crate::lex::transforms::standard::STRING_TO_AST)
+//! pipeline. **Phase 3b wired it up**: the rewrite now runs between
+//! `AttachAnnotations` and `ApplyTableConfig`, so every Document
+//! emitted by `STRING_TO_AST` carries canonical labels. The legacy
+//! whitelists in `lex-babel` (`ir/from_lex.rs`'s frontmatter
+//! promotion and `common/verbatim/VerbatimRegistry`'s handler
+//! registrations) were updated in the same PR to recognize the
+//! canonical names — both halves of the bare-label flip landed
+//! together so no intermediate state was broken. A follow-up phase
+//! retires the legacy paths altogether once render hooks (#570
+//! Phase 4) are live.
 //!
 //! # Why warnings are silent
 //!
@@ -190,10 +194,11 @@ mod tests {
     use super::*;
     use crate::lex::transforms::standard::STRING_TO_AST;
 
-    /// Parse + invoke the normalize stage explicitly. Phase 2 ships the
-    /// stage but does not insert it into the default pipeline; tests
-    /// run it manually so we can exercise the rewrite behaviour without
-    /// a production wire-up.
+    /// Parse + invoke the normalize stage explicitly. `STRING_TO_AST`
+    /// already runs `NormalizeLabels` after Phase 3b's wire-up, so
+    /// the second call here is idempotent — kept so the tests stay
+    /// readable as direct exercises of the stage's behaviour rather
+    /// than depending on pipeline order.
     fn parse(src: &str) -> Document {
         let doc = STRING_TO_AST.run(src.to_string()).expect("parse ok");
         NormalizeLabels::new().run(doc).expect("normalize ok")

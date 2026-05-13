@@ -27,16 +27,17 @@ pub struct Document {
     /// Document-scope annotations (i.e. annotations attached directly
     /// to the document, not nested inside any block).
     ///
-    /// Phase 3a of #570 adds this slot as a first-class home for them.
-    /// In this phase the slot is populated **one-way** from
-    /// `from_lex_document` (lex → IR direction); `to_lex_document`,
-    /// `tree_to_events`, and `events_to_tree` do **not** consume or
-    /// emit it. The legacy frontmatter promotion in
-    /// `from_lex_document` continues to synthesize a `frontmatter`
-    /// annotation into [`children`](Self::children), and downstream
-    /// serializers keep reading from there — emitting both would
-    /// double-write. Phase 3b retires the promotion and wires the new
-    /// slot through every consumer atomically.
+    /// Phase 3a of #570 added this slot as a first-class home for them.
+    /// The slot is populated **one-way** from `from_lex_document`
+    /// (lex → IR direction); `to_lex_document`, `tree_to_events`, and
+    /// `events_to_tree` do **not** consume or emit it today. The
+    /// legacy frontmatter promotion in `from_lex_document` continues
+    /// to synthesize a `frontmatter` annotation into
+    /// [`children`](Self::children), and downstream serializers keep
+    /// reading from there — emitting both would double-write.
+    /// A follow-up phase (after #570 Phase 4's render hooks land)
+    /// retires the promotion and wires the new slot through every
+    /// consumer atomically.
     pub document_annotations: Vec<Annotation>,
 }
 
