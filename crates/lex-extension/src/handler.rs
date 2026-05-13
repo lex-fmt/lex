@@ -12,7 +12,8 @@
 //! [`LexHandler::on_label`] returns `()` because it is a notification.
 
 use crate::wire::{
-    CodeAction, Completion, Diagnostic, Format, Hover, LabelCtx, RenderOut, WireNode,
+    CodeAction, Completion, Diagnostic, Format, FormatCtx, Hover, LabelCtx, LexAnnotationOut,
+    RenderOut, WireNode,
 };
 
 /// The hook-event interface a Lex extension implements.
@@ -63,6 +64,21 @@ pub trait LexHandler: Send + Sync {
     /// `textDocument/codeAction`.
     fn on_code_action(&self, _ctx: &LabelCtx) -> Result<Vec<CodeAction>, HandlerError> {
         Ok(Vec::new())
+    }
+
+    /// Returns the Lex-source representation of a typed AST subtree
+    /// owned by this handler's namespace — the inverse of
+    /// [`on_resolve`](Self::on_resolve), and the reverse-direction
+    /// sibling of [`on_render`](Self::on_render) for the Lex target
+    /// format. Fires during `lexd format`, `to_lex`, and any
+    /// library-driven IR→Lex pass.
+    ///
+    /// `Ok(None)` lets the host fall back to its built-in formatter
+    /// for the underlying node kind — there is no separate
+    /// "not handled" error code. See `comms/specs/proposals/lex-extension-wire.lex`
+    /// §4.8 for the full wire contract.
+    fn on_format(&self, _ctx: &FormatCtx) -> Result<Option<LexAnnotationOut>, HandlerError> {
+        Ok(None)
     }
 }
 
@@ -164,6 +180,21 @@ mod tests {
         assert!(h.on_hover(&c).unwrap().is_none());
         assert!(h.on_completion(&c).unwrap().is_empty());
         assert!(h.on_code_action(&c).unwrap().is_empty());
+        // on_format added in #570 Phase 4a — same Ok(None) default.
+        let format_ctx = crate::wire::FormatCtx {
+            label: "test.label".into(),
+            params: vec![],
+            node: WireNode::Paragraph {
+                range: Range {
+                    start: Position(0, 0),
+                    end: Position(0, 0),
+                },
+                origin: None,
+                inlines: vec![],
+            },
+            format_options: None,
+        };
+        assert!(h.on_format(&format_ctx).unwrap().is_none());
     }
 
     #[test]

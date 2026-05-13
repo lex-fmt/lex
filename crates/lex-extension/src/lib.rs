@@ -59,9 +59,9 @@ pub mod wire;
 pub use handler::{HandlerError, LexHandler};
 pub use wire::{
     AnnotationBody, CodeAction, CodeActionKind, Completion, CompletionKind, Diagnostic,
-    DiagnosticSeverity, Format, HostNodeKind, Hover, HoverFormat, LabelCtx, NodeRef, Position,
-    Range, RefKind, RelatedDiagnostic, RenderOut, TextEdit, WireFootnote, WireInline, WireListItem,
-    WireNode, WireRow, WireTableCell,
+    DiagnosticSeverity, Format, FormatCtx, HostNodeKind, Hover, HoverFormat, LabelCtx,
+    LexAnnotationOut, NodeRef, Position, Range, RefKind, RelatedDiagnostic, RenderOut, TextEdit,
+    WireFootnote, WireInline, WireListItem, WireNode, WireRow, WireTableCell,
 };
 
 pub use schema::{
