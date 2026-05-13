@@ -63,7 +63,6 @@
 //! ```
 
 use crate::error::FormatError;
-use crate::ir::nodes::DocNode;
 use lex_core::lex::ast::Verbatim;
 use std::collections::HashMap;
 
@@ -71,23 +70,21 @@ pub mod media;
 pub mod table;
 
 /// A handler for a specific verbatim block type.
+///
+/// Post-refac/label cleanup: the `to_ir` and `convert_from_ir` trait
+/// methods are retired. `from_lex_verbatim` now calls free hydration
+/// helpers (`table::parse_pipe_table`, `media::image_from_params`,
+/// etc.) directly, and `to_lex_table` / `to_lex_media` route through
+/// `Registry::dispatch_format` (the `lex.tabular.*` / `lex.media.*`
+/// built-in handlers in lex-core own the IR→Lex contract). The trait
+/// shrinks to `label()` + `format_content()` — the latter is still
+/// consumed by the Lex serializer for reformat-during-format.
 pub trait VerbatimHandler: Send + Sync {
-    /// Returns the label this handler supports (e.g., "doc.table").
+    /// Returns the canonical label this handler supports
+    /// (e.g., `"lex.tabular.table"`).
     fn label(&self) -> &str;
 
-    /// Converts a Lex verbatim block to an IR node.
-    ///
-    /// # Arguments
-    /// * `content` - The raw text content of the verbatim block.
-    /// * `params` - The parameters specified in the closing marker.
-    fn to_ir(&self, content: &str, params: &HashMap<String, String>) -> Option<DocNode>;
-
-    /// Converts an IR node back to a Lex verbatim block.
-    ///
-    /// Returns `Some((content, params))` if this handler can represent the given node.
-    fn convert_from_ir(&self, node: &DocNode) -> Option<(String, HashMap<String, String>)>;
-
-    /// Formats the content of a verbatim block.
+    /// Formats the content of a verbatim block during `lexd format`.
     ///
     /// Returns `Ok(Some(formatted_content))` if the handler supports formatting,
     /// `Ok(None)` if it doesn't, or `Err` if formatting failed.
@@ -110,32 +107,23 @@ impl VerbatimRegistry {
         }
     }
 
-    /// Creates a registry with standard handlers (e.g. doc.table) pre-registered.
+    /// Creates a registry with standard handlers pre-registered under
+    /// their canonical `lex.*` labels.
     ///
-    /// #570 Phase 3b activated the [`NormalizeLabels`] pass that
-    /// rewrites bare `doc.table` / `doc.image` / `doc.video` /
-    /// `doc.audio` to their canonical `lex.tabular.*` / `lex.media.*`
-    /// forms before this lookup runs. The canonical labels are the
-    /// keys we register today. The legacy bare labels stay registered
-    /// alongside so any IR built outside `STRING_TO_AST` (e.g. an
-    /// embedder hand-building a Verbatim with the legacy label, or a
-    /// non-Lex format adapter feeding the same registry) continues
-    /// to work. Both paths point at the same handler.
-    ///
-    /// [`NormalizeLabels`]: lex_core::lex::assembling::stages::NormalizeLabels
+    /// `STRING_TO_AST` runs `NormalizeLabels` (#570 Phase 3b) before
+    /// this lookup ever sees a label, so the AST always carries
+    /// canonical names by the time `from_lex_verbatim` calls
+    /// `registry.get(...)`. The legacy `doc.*` aliases that were kept
+    /// alongside in Phase 3b are removed in the post-refac/label
+    /// cleanup — embedders that hand-build IR Verbatim nodes with the
+    /// legacy form will now hit a `None` lookup, which is the
+    /// documented breaking-change behaviour.
     pub fn default_with_standard() -> Self {
         let mut registry = Self::new();
-        // Canonical (#570 Phase 3b) — what `STRING_TO_AST` produces.
         registry.register("lex.tabular.table", Box::new(table::TableHandler));
         registry.register("lex.media.image", Box::new(media::ImageHandler));
         registry.register("lex.media.video", Box::new(media::VideoHandler));
         registry.register("lex.media.audio", Box::new(media::AudioHandler));
-        // Legacy aliases — accept inputs that didn't go through
-        // `NormalizeLabels` (embedder-built IR, alternate format adapters).
-        registry.register("doc.table", Box::new(table::TableHandler));
-        registry.register("doc.image", Box::new(media::ImageHandler));
-        registry.register("doc.video", Box::new(media::VideoHandler));
-        registry.register("doc.audio", Box::new(media::AudioHandler));
         registry
     }
 

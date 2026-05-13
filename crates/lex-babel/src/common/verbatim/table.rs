@@ -3,7 +3,6 @@ use crate::ir::nodes::{
     DocNode, InlineContent, Paragraph, Table, TableCell, TableCellAlignment, TableRow,
 };
 use lex_core::lex::ast::Verbatim;
-use std::collections::HashMap;
 
 /// Handler for `doc.table` verbatim blocks.
 ///
@@ -12,21 +11,7 @@ pub struct TableHandler;
 
 impl VerbatimHandler for TableHandler {
     fn label(&self) -> &str {
-        // #570 Phase 3b: canonical label. Legacy alias `doc.table`
-        // registered in `VerbatimRegistry::default_with_standard`.
         "lex.tabular.table"
-    }
-
-    fn to_ir(&self, content: &str, _params: &HashMap<String, String>) -> Option<DocNode> {
-        Some(parse_pipe_table(content))
-    }
-
-    fn convert_from_ir(&self, node: &DocNode) -> Option<(String, HashMap<String, String>)> {
-        if let DocNode::Table(table) = node {
-            Some((serialize_pipe_table(table), HashMap::new()))
-        } else {
-            None
-        }
     }
 
     fn format_content(
@@ -95,7 +80,7 @@ impl VerbatimHandler for TableHandler {
     }
 }
 
-fn parse_pipe_table(content: &str) -> DocNode {
+pub(crate) fn parse_pipe_table(content: &str) -> DocNode {
     let mut header = Vec::new();
     let mut rows = Vec::new();
     let mut alignments = Vec::new();
@@ -204,7 +189,7 @@ fn parse_table_row(line: &str) -> Vec<String> {
     line.split('|').map(|s| s.trim().to_string()).collect()
 }
 
-fn serialize_pipe_table(table: &Table) -> String {
+pub(crate) fn serialize_pipe_table(table: &Table) -> String {
     let mut output = String::new();
 
     // 1. Calculate column widths
