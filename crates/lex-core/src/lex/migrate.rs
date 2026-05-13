@@ -229,7 +229,7 @@ fn check_label(label: &Label, src: &str, sites: &mut Vec<LabelMigration>) {
         return;
     }
     let slice = &src[trim_start..trim_end];
-    if let Some(canonical) = canonical_for(slice) {
+    if let Some((canonical, _form)) = canonical_for(slice) {
         // Sanity check: the AST value should be the canonical form
         // NormalizeLabels rewrote it to.
         debug_assert_eq!(
@@ -239,8 +239,8 @@ fn check_label(label: &Label, src: &str, sites: &mut Vec<LabelMigration>) {
         );
         let from = LEGACY_TO_CANONICAL
             .iter()
-            .find(|(l, _)| *l == slice)
-            .map(|(l, _)| *l)
+            .find(|(l, _, _)| *l == slice)
+            .map(|(l, _, _)| *l)
             .expect("canonical_for matched but legacy table lookup didn't");
         sites.push(LabelMigration {
             byte_range: trim_start..trim_end,
@@ -303,9 +303,9 @@ mod tests {
     fn every_legacy_label_round_trips_through_migration() {
         // Each legacy label, when used in source, produces exactly one
         // migration entry with the right canonical replacement.
-        for (legacy, canonical) in LEGACY_TO_CANONICAL
+        for (legacy, canonical, _form) in LEGACY_TO_CANONICAL
             .iter()
-            .filter(|(_, c)| c.starts_with("lex.metadata."))
+            .filter(|(_, c, _)| c.starts_with("lex.metadata."))
         {
             let src = format!(":: {legacy} :: value\n\nBody.\n");
             let out = migrate_labels_in_source(&src).unwrap_or_else(|e| {
@@ -429,6 +429,7 @@ mod tests {
         let label = Label {
             value: "lex.metadata.title".to_string(),
             location: AstRange::new(label_span, Position::new(0, 3), Position::new(0, 8)),
+            form: crate::lex::ast::elements::label::LabelForm::Canonical,
         };
         let inner_annotation = Annotation::from_data(Data::new(label, Vec::new()), Vec::new());
 
