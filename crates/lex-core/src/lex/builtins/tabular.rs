@@ -26,8 +26,9 @@ pub fn lex_tabular_table_schema() -> Schema {
         label: LEX_TABULAR_TABLE.into(),
         description: Some(
             "Pipe-table verbatim. The verbatim body uses markdown-style pipe-table syntax \
-             (`| col1 | col2 |\\n|------|------|\\n| ... |`) which the resolve hook \
-             parses into a typed table AST node."
+             (`| col1 | col2 |\\n|------|------|\\n| ... |`); the legacy lex-babel path \
+             parses it into a typed table AST node today, and Phase 3b of #570 moves that \
+             work into the schema's `on_resolve` hook."
                 .into(),
         ),
         params: BTreeMap::new(),
@@ -36,9 +37,7 @@ pub fn lex_tabular_table_schema() -> Schema {
             kind: BodyKind::Text,
             presence: BodyPresence::Required,
             description: Some(
-                "Pipe-table source: header row, alignment row, then one row per body \
-                 line. Empty body is rejected at resolve time."
-                    .into(),
+                "Pipe-table source: header row, alignment row, then one row per body line.".into(),
             ),
         },
         verbatim_label: true,

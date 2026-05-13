@@ -69,35 +69,41 @@ fn metadata_schema(label: &'static str, description: &'static str) -> Schema {
 pub fn lex_metadata_title_schema() -> Schema {
     metadata_schema(
         "lex.metadata.title",
-        "Document title. Renders as `<title>` and `<meta name=\"title\">` in HTML output.",
+        "Document title. Phase 4 of #570 wires the render hook so HTML output emits \
+         `<title>` and `<meta name=\"title\">`; until then the legacy frontmatter \
+         promotion in lex-babel handles it.",
     )
 }
 
 pub fn lex_metadata_author_schema() -> Schema {
     metadata_schema(
         "lex.metadata.author",
-        "Document author. Renders as `<meta name=\"author\">` in HTML output.",
+        "Document author. Render hook (Phase 4 of #570) will emit `<meta name=\"author\">` \
+         in HTML output.",
     )
 }
 
 pub fn lex_metadata_date_schema() -> Schema {
     metadata_schema(
         "lex.metadata.date",
-        "Document date. Renders as `<meta name=\"date\">` in HTML output.",
+        "Document date. Render hook (Phase 4 of #570) will emit `<meta name=\"date\">` \
+         in HTML output.",
     )
 }
 
 pub fn lex_metadata_tags_schema() -> Schema {
     metadata_schema(
         "lex.metadata.tags",
-        "Document tags (comma-separated). Renders as `<meta name=\"keywords\">` in HTML output.",
+        "Document tags (comma-separated). Render hook (Phase 4 of #570) will emit \
+         `<meta name=\"keywords\">` in HTML output.",
     )
 }
 
 pub fn lex_metadata_category_schema() -> Schema {
     metadata_schema(
         "lex.metadata.category",
-        "Document category. Renders as `<meta name=\"category\">` in HTML output.",
+        "Document category. Render hook (Phase 4 of #570) will emit \
+         `<meta name=\"category\">` in HTML output.",
     )
 }
 
@@ -111,8 +117,8 @@ pub fn lex_metadata_template_schema() -> Schema {
 pub fn lex_metadata_publishing_date_schema() -> Schema {
     metadata_schema(
         "lex.metadata.publishing-date",
-        "Publishing date (distinct from authoring `date`). Renders as \
-         `<meta name=\"publishing-date\">` in HTML output.",
+        "Publishing date (distinct from authoring `date`). Render hook (Phase 4 of #570) \
+         will emit `<meta name=\"publishing-date\">` in HTML output.",
     )
 }
 

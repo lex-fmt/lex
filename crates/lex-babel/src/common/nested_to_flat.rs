@@ -47,6 +47,15 @@ pub fn tree_to_events(root_node: &DocNode) -> Vec<Event> {
 fn walk_node(node: &DocNode, events: &mut Vec<Event>) {
     match node {
         DocNode::Document(Document { children, .. }) => {
+            // Phase 3a of #570: `document_annotations` is intentionally
+            // NOT emitted into the event stream by this pass. The
+            // event stream doesn't yet have a way to distinguish
+            // document-scope annotations from inline ones — Phase 3b
+            // adds the scope marker (or position contract) atomically
+            // with the source-of-truth flip. Until then, IR Documents
+            // carrying `document_annotations` lose them when they
+            // travel through events; this is documented on the IR
+            // `Document` struct.
             events.push(Event::StartDocument);
             for child in children {
                 walk_node(child, events);
@@ -309,6 +318,7 @@ mod tests {
                     })],
                 }),
             ],
+            document_annotations: vec![],
         })
     }
 
