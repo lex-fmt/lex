@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Added — `LabelForm` infrastructure ([#584](https://github.com/lex-fmt/lex/issues/584) PR 1 of 5)
+
+First of five PRs implementing the bare-as-blessed label namespace model spelled out in `comms/specs/general.lex` §4. This PR is the lex-core foundation: it adds the `LabelForm` enum (`Canonical | Stripped | Shortcut | Community`) and a `form: LabelForm` field on `Label`. `NormalizeLabels` now tags every rewrite with the matching form so downstream formatters can preserve the user's choice of spelling on roundtrip. No emission behavior changes yet — formatters still emit `label.value` verbatim; PR 3 wires `form` through.
+
+- New `comms` submodule pin: includes `specs/general.lex` §4 (Label Namespaces) and the bare-form flip in `specs/elements/lex.include.lex`.
+- `LEGACY_TO_CANONICAL` table grew a third tuple element: `(legacy, canonical, form)`. The four new-shortcut entries (`title`, `author`, `date`, `tags`) tag as `Shortcut`; the four non-shortcut metadata entries (`category`, `template`, `publishing-date`, `front-matter`) and the four `doc.*` entries tag as `Stripped`. Today these classifications are forward-looking; PR 2 of #584 hard-rejects `doc.*` and bare non-shortcut names, and PR 3 wires the form into the formatter.
+
 ### Refactored — label semantics ([#570](https://github.com/lex-fmt/lex/issues/570))
 
 Multi-phase refactor moving label-semantic decisions out of the IR layer and through the extension registry. Eight PRs (#575–#581) landed via the `refac/label` integration branch, followed by a legacy-code cleanup pass.

@@ -28,7 +28,7 @@
 //! and rewrite the source in reverse byte order. No re-parsing, no
 //! regex heuristics, no ambiguity.
 
-use crate::lex::assembling::stages::normalize_labels::{canonical_for, LEGACY_TO_CANONICAL};
+use crate::lex::assembling::stages::normalize_labels::LEGACY_TO_CANONICAL;
 use crate::lex::ast::elements::annotation::Annotation;
 use crate::lex::ast::elements::content_item::ContentItem;
 use crate::lex::ast::elements::label::Label;
@@ -229,19 +229,20 @@ fn check_label(label: &Label, src: &str, sites: &mut Vec<LabelMigration>) {
         return;
     }
     let slice = &src[trim_start..trim_end];
-    if let Some(canonical) = canonical_for(slice) {
+    // Single pass through the table — keep the `'static` legacy slice
+    // for the migration record alongside the canonical and (unused
+    // here) form classification, so we don't pay for a second lookup.
+    if let Some((from, canonical, _form)) = LEGACY_TO_CANONICAL
+        .iter()
+        .find(|(legacy, _, _)| *legacy == slice)
+    {
         // Sanity check: the AST value should be the canonical form
         // NormalizeLabels rewrote it to.
         debug_assert_eq!(
-            label.value, canonical,
+            label.value, *canonical,
             "NormalizeLabels should have rewritten {slice} to {canonical}, got {} in AST",
             label.value
         );
-        let from = LEGACY_TO_CANONICAL
-            .iter()
-            .find(|(l, _)| *l == slice)
-            .map(|(l, _)| *l)
-            .expect("canonical_for matched but legacy table lookup didn't");
         sites.push(LabelMigration {
             byte_range: trim_start..trim_end,
             from,
@@ -303,9 +304,9 @@ mod tests {
     fn every_legacy_label_round_trips_through_migration() {
         // Each legacy label, when used in source, produces exactly one
         // migration entry with the right canonical replacement.
-        for (legacy, canonical) in LEGACY_TO_CANONICAL
+        for (legacy, canonical, _form) in LEGACY_TO_CANONICAL
             .iter()
-            .filter(|(_, c)| c.starts_with("lex.metadata."))
+            .filter(|(_, c, _)| c.starts_with("lex.metadata."))
         {
             let src = format!(":: {legacy} :: value\n\nBody.\n");
             let out = migrate_labels_in_source(&src).unwrap_or_else(|e| {
@@ -429,6 +430,7 @@ mod tests {
         let label = Label {
             value: "lex.metadata.title".to_string(),
             location: AstRange::new(label_span, Position::new(0, 3), Position::new(0, 8)),
+            form: crate::lex::ast::elements::label::LabelForm::Canonical,
         };
         let inner_annotation = Annotation::from_data(Data::new(label, Vec::new()), Vec::new());
 

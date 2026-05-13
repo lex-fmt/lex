@@ -42,39 +42,67 @@
 
 use crate::lex::ast::elements::annotation::Annotation;
 use crate::lex::ast::elements::content_item::ContentItem;
+use crate::lex::ast::elements::label::{Label, LabelForm};
 use crate::lex::ast::elements::verbatim::Verbatim;
 use crate::lex::ast::Document;
 use crate::lex::transforms::{Runnable, TransformError};
 
-/// Pairings of legacy bare label → canonical `lex.*` form.
+/// Pairings of legacy bare label → canonical `lex.*` form, paired with
+/// the [`LabelForm`] each rewrite represents.
 ///
-/// Ordering mirrors the legacy whitelist in
-/// `crates/lex-babel/src/ir/from_lex.rs` (metadata first), followed by
-/// the four verbatim labels owned by the legacy
-/// `lex-babel::common::verbatim::VerbatimRegistry`. Anything not in
-/// this table is left untouched — third-party and user-defined labels
-/// are out of scope.
-pub const LEGACY_TO_CANONICAL: &[(&str, &str)] = &[
-    ("title", "lex.metadata.title"),
-    ("author", "lex.metadata.author"),
-    ("date", "lex.metadata.date"),
-    ("tags", "lex.metadata.tags"),
-    ("category", "lex.metadata.category"),
-    ("template", "lex.metadata.template"),
-    ("publishing-date", "lex.metadata.publishing-date"),
-    ("front-matter", "lex.metadata.front-matter"),
-    ("doc.table", "lex.tabular.table"),
-    ("doc.image", "lex.media.image"),
-    ("doc.video", "lex.media.video"),
-    ("doc.audio", "lex.media.audio"),
+/// The form classification is the parser-side record of which input
+/// spelling the user wrote, so downstream formatters can emit the same
+/// spelling back. See `comms/specs/general.lex` §4.2 for the normative
+/// resolution rules and §4.3 for the form-preservation contract.
+///
+/// Today the table still includes a few labels that fall outside the
+/// new bare-as-blessed namespace model (`category`, `template`,
+/// `publishing-date`, `front-matter` are tagged as `Stripped` because
+/// their bare form is scheduled for removal in PR 2 of #584; the four
+/// `doc.*` entries are tagged as `Stripped` because the prefix is
+/// reserved-forbidden and will become a parse error in PR 2). PR 1
+/// preserves current parsing behavior — every input that parses today
+/// continues to parse — and only adds the `form` classification.
+pub const LEGACY_TO_CANONICAL: &[(&str, &str, LabelForm)] = &[
+    ("title", "lex.metadata.title", LabelForm::Shortcut),
+    ("author", "lex.metadata.author", LabelForm::Shortcut),
+    ("date", "lex.metadata.date", LabelForm::Shortcut),
+    ("tags", "lex.metadata.tags", LabelForm::Shortcut),
+    ("category", "lex.metadata.category", LabelForm::Stripped),
+    ("template", "lex.metadata.template", LabelForm::Stripped),
+    (
+        "publishing-date",
+        "lex.metadata.publishing-date",
+        LabelForm::Stripped,
+    ),
+    (
+        "front-matter",
+        "lex.metadata.front-matter",
+        LabelForm::Stripped,
+    ),
+    ("doc.table", "lex.tabular.table", LabelForm::Stripped),
+    ("doc.image", "lex.media.image", LabelForm::Stripped),
+    ("doc.video", "lex.media.video", LabelForm::Stripped),
+    ("doc.audio", "lex.media.audio", LabelForm::Stripped),
 ];
 
-/// Lookup the canonical form for a legacy label, if any.
-pub fn canonical_for(label: &str) -> Option<&'static str> {
+/// Lookup the canonical form and matching [`LabelForm`] for a legacy
+/// label, if any.
+pub fn canonical_for(label: &str) -> Option<(&'static str, LabelForm)> {
     LEGACY_TO_CANONICAL
         .iter()
-        .find(|(legacy, _)| *legacy == label)
-        .map(|(_, canonical)| *canonical)
+        .find(|(legacy, _, _)| *legacy == label)
+        .map(|(_, canonical, form)| (*canonical, *form))
+}
+
+/// Rewrite `label` in place if its current value matches the legacy
+/// table. Shared by every label-bearing AST node the walker reaches
+/// (annotations, verbatim closers, table-cell-nested annotations).
+fn normalize_label(label: &mut Label) {
+    if let Some((canonical, form)) = canonical_for(&label.value) {
+        label.value = canonical.to_string();
+        label.form = form;
+    }
 }
 
 /// Post-parse pass that rewrites legacy labels to their canonical form.
@@ -109,11 +137,7 @@ impl Runnable<Document, Document> for NormalizeLabels {
 
 fn rewrite_in_item(item: &mut ContentItem) {
     match item {
-        ContentItem::Annotation(a) => {
-            if let Some(canonical) = canonical_for(&a.data.label.value) {
-                a.data.label.value = canonical.to_string();
-            }
-        }
+        ContentItem::Annotation(a) => normalize_label(&mut a.data.label),
         ContentItem::VerbatimBlock(v) => rewrite_verbatim_label(v),
         ContentItem::Table(t) => rewrite_in_table(t),
         _ => {}
@@ -162,18 +186,14 @@ fn rewrite_in_table(table: &mut crate::lex::ast::Table) {
 }
 
 fn rewrite_annotation(annotation: &mut Annotation) {
-    if let Some(canonical) = canonical_for(&annotation.data.label.value) {
-        annotation.data.label.value = canonical.to_string();
-    }
+    normalize_label(&mut annotation.data.label);
     for child in annotation.children.as_mut_vec().iter_mut() {
         rewrite_in_item(child);
     }
 }
 
 fn rewrite_verbatim_label(verbatim: &mut Verbatim) {
-    if let Some(canonical) = canonical_for(&verbatim.closing_data.label.value) {
-        verbatim.closing_data.label.value = canonical.to_string();
-    }
+    normalize_label(&mut verbatim.closing_data.label);
 }
 
 fn attached_annotations_mut(item: &mut ContentItem) -> Option<&mut Vec<Annotation>> {
@@ -241,10 +261,10 @@ mod tests {
 
     #[test]
     fn canonical_for_recognizes_every_legacy_label() {
-        for (legacy, canonical) in LEGACY_TO_CANONICAL {
+        for (legacy, canonical, form) in LEGACY_TO_CANONICAL {
             assert_eq!(
                 canonical_for(legacy),
-                Some(*canonical),
+                Some((*canonical, *form)),
                 "lookup must round-trip for {legacy}"
             );
         }
@@ -265,19 +285,66 @@ mod tests {
         assert_eq!(LEGACY_TO_CANONICAL.len(), 12);
         let metadata_count = LEGACY_TO_CANONICAL
             .iter()
-            .filter(|(_, c)| c.starts_with("lex.metadata."))
+            .filter(|(_, c, _)| c.starts_with("lex.metadata."))
             .count();
         let tabular_count = LEGACY_TO_CANONICAL
             .iter()
-            .filter(|(_, c)| c.starts_with("lex.tabular."))
+            .filter(|(_, c, _)| c.starts_with("lex.tabular."))
             .count();
         let media_count = LEGACY_TO_CANONICAL
             .iter()
-            .filter(|(_, c)| c.starts_with("lex.media."))
+            .filter(|(_, c, _)| c.starts_with("lex.media."))
             .count();
         assert_eq!(metadata_count, 8);
         assert_eq!(tabular_count, 1);
         assert_eq!(media_count, 3);
+    }
+
+    #[test]
+    fn shortcut_labels_tag_form_as_shortcut() {
+        // The four labels in the new normative shortcut table that today
+        // are also accepted as legacy bare names must tag form=Shortcut
+        // when rewritten (forward-looking; formatters consume this in
+        // PR 3 of #584).
+        for shortcut in ["title", "author", "date", "tags"] {
+            let (_, form) =
+                canonical_for(shortcut).unwrap_or_else(|| panic!("expected entry for {shortcut}"));
+            assert_eq!(form, LabelForm::Shortcut, "{shortcut} must tag as Shortcut");
+        }
+    }
+
+    #[test]
+    fn non_shortcut_metadata_labels_tag_form_as_stripped() {
+        // The four metadata labels with no shortcut alias in §4.2
+        // (category, template, publishing-date, front-matter) tag as
+        // Stripped today. PR 2 of #584 makes the bare form a parse
+        // error, leaving only `metadata.<name>` (Stripped) and
+        // `lex.metadata.<name>` (Canonical) accepted.
+        for stripped in ["category", "template", "publishing-date", "front-matter"] {
+            let (_, form) =
+                canonical_for(stripped).unwrap_or_else(|| panic!("expected entry for {stripped}"));
+            assert_eq!(form, LabelForm::Stripped, "{stripped} must tag as Stripped");
+        }
+    }
+
+    #[test]
+    fn doc_prefix_labels_tag_form_as_stripped() {
+        // PR 2 of #584 turns `doc.*` into a parse error; today these
+        // four still rewrite to canonical. They tag as Stripped (rather
+        // than Shortcut) so that once PR 3 wires `Label.form` through
+        // the formatter, the emitted spelling will be the prefix-
+        // stripped canonical (`tabular.table` etc.) instead of the
+        // deprecated `doc.*` form. This PR records the tag only — no
+        // formatter consults it yet.
+        for doc_label in ["doc.table", "doc.image", "doc.video", "doc.audio"] {
+            let (_, form) = canonical_for(doc_label)
+                .unwrap_or_else(|| panic!("expected entry for {doc_label}"));
+            assert_eq!(
+                form,
+                LabelForm::Stripped,
+                "{doc_label} must tag as Stripped"
+            );
+        }
     }
 
     #[test]
@@ -293,9 +360,9 @@ mod tests {
 
     #[test]
     fn every_metadata_label_rewrites() {
-        for (legacy, canonical) in LEGACY_TO_CANONICAL
+        for (legacy, canonical, _form) in LEGACY_TO_CANONICAL
             .iter()
-            .filter(|(_, c)| c.starts_with("lex.metadata."))
+            .filter(|(_, c, _)| c.starts_with("lex.metadata."))
         {
             let src = format!(":: {legacy} :: value\n\nBody.\n");
             let doc = parse(&src);
