@@ -26,7 +26,7 @@
 //!
 //! The single `lex` namespace is shared by every built-in label; the
 //! composite [`LexBuiltinsHandler`] routes each dispatch by
-//! [`LabelCtx::label`](lex_extension::wire::LabelCtx) to the right
+//! [`LabelCtx::label`](lex_extension::wire::LabelCtx::label) to the right
 //! sub-handler.
 
 use std::sync::Arc;

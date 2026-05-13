@@ -2,7 +2,7 @@
 //!
 //! Today the family has a single member: `lex.tabular.table`, the
 //! registry-shaped replacement for the legacy `doc.table` handler in
-//! [`crate::common::verbatim::table`](../../../../lex-babel/src/common/verbatim/table.rs).
+//! `lex-babel` (`crates/lex-babel/src/common/verbatim/table.rs`).
 //! Issue [#570](https://github.com/lex-fmt/lex/issues/570) tracks the
 //! multi-phase migration.
 //!

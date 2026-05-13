@@ -1,12 +1,11 @@
 //! Schemas for the `lex.metadata.*` family of document-level labels.
 //!
 //! These are the registry-shaped replacements for the hardcoded
-//! frontmatter-promotion whitelist in
-//! [`crate::ir::from_lex`](../../../../lex-babel/src/ir/from_lex.rs)
-//! (`author`, `title`, `date`, `tags`, `category`, `template`,
-//! `publishing-date`, `front-matter`). Issue
-//! [#570](https://github.com/lex-fmt/lex/issues/570) tracks the multi-phase
-//! migration.
+//! frontmatter-promotion whitelist in `lex-babel`
+//! (`crates/lex-babel/src/ir/from_lex.rs`): `author`, `title`, `date`,
+//! `tags`, `category`, `template`, `publishing-date`, `front-matter`.
+//! Issue [#570](https://github.com/lex-fmt/lex/issues/570) tracks the
+//! multi-phase migration.
 //!
 //! # Phase 1 status
 //!
@@ -18,8 +17,8 @@
 //! labels emit `<title>` / `<meta>` in HTML.
 //!
 //! Every schema in this module shares the same shape — only the
-//! fully-qualified label string differs — so [`metadata_schema`] does
-//! the heavy lifting and each public function is a one-liner.
+//! fully-qualified label string differs — so a private `metadata_schema`
+//! helper does the heavy lifting and each public function is a one-liner.
 
 use lex_extension::schema::{BodyKind, BodyPresence, BodyShape, Capabilities, HookSet, Schema};
 use std::collections::BTreeMap;

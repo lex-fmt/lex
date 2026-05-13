@@ -2,8 +2,8 @@
 //!
 //! The members — `lex.media.image`, `lex.media.video`, `lex.media.audio` —
 //! are the registry-shaped replacements for the legacy `doc.image`,
-//! `doc.video`, and `doc.audio` handlers in
-//! [`crate::common::verbatim::media`](../../../../lex-babel/src/common/verbatim/media.rs).
+//! `doc.video`, and `doc.audio` handlers in `lex-babel`
+//! (`crates/lex-babel/src/common/verbatim/media.rs`).
 //! Issue [#570](https://github.com/lex-fmt/lex/issues/570) tracks the
 //! multi-phase migration.
 //!
