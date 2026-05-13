@@ -29,12 +29,21 @@ use std::fmt;
 
 /// How the user spelled a label site, relative to the resolved canonical.
 ///
+/// Forward-looking infrastructure for the label namespace model
+/// described in `comms/specs/general.lex` §4. The eventual contract:
 /// Lex accepts up to three spellings of any `lex.*` label and one
 /// spelling of any community label, and round-trips the user's choice
-/// so `lexd format` does not silently rewrite the source. The full
-/// namespace model and shortcut table are normative in
-/// `comms/specs/general.lex` §4; this enum is the parser-side
-/// representation of that classification.
+/// so `lexd format` does not silently rewrite the source.
+///
+/// **Status in this PR (#584 PR 1/5):** the enum and the `form` field
+/// on [`Label`] exist; the parse-time `NormalizeLabels` stage tags
+/// labels that match its legacy-rewrite table, defaulting to
+/// `Canonical` for every other site. No formatter consults `form` yet
+/// — `lexd format` still emits `label.value` verbatim. PR 2 expands
+/// `NormalizeLabels` into the full resolution rules (universal
+/// prefix-strip, `Community` classification, hard-error for `doc.*`
+/// and unrecognized bare); PR 3 wires `form` through the formatter
+/// so the roundtrip promise lands end-to-end.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LabelForm {
     /// User wrote the canonical form verbatim (`lex.metadata.author`).
@@ -68,11 +77,11 @@ pub struct Label {
     /// the user wrote (community labels carry only one accepted form).
     pub value: String,
     pub location: Range,
-    /// Which input form the user wrote. Consumed by formatters to
-    /// emit the same spelling back, so `lexd format` does not rewrite
-    /// the user's source. Defaults to [`LabelForm::Canonical`] when a
-    /// Label is built programmatically; the parse-time
-    /// `NormalizeLabels` stage tags this based on the original input.
+    /// Which input form the user wrote. Defaults to
+    /// [`LabelForm::Canonical`] when a Label is built programmatically;
+    /// the parse-time `NormalizeLabels` stage tags this for the labels
+    /// it rewrites. See [`LabelForm`]'s docs for the PR-by-PR status —
+    /// in this PR the field is recorded but no formatter consults it.
     pub form: LabelForm,
 }
 

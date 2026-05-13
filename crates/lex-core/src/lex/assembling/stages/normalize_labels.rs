@@ -42,7 +42,7 @@
 
 use crate::lex::ast::elements::annotation::Annotation;
 use crate::lex::ast::elements::content_item::ContentItem;
-use crate::lex::ast::elements::label::LabelForm;
+use crate::lex::ast::elements::label::{Label, LabelForm};
 use crate::lex::ast::elements::verbatim::Verbatim;
 use crate::lex::ast::Document;
 use crate::lex::transforms::{Runnable, TransformError};
@@ -95,6 +95,16 @@ pub fn canonical_for(label: &str) -> Option<(&'static str, LabelForm)> {
         .map(|(_, canonical, form)| (*canonical, *form))
 }
 
+/// Rewrite `label` in place if its current value matches the legacy
+/// table. Shared by every label-bearing AST node the walker reaches
+/// (annotations, verbatim closers, table-cell-nested annotations).
+fn normalize_label(label: &mut Label) {
+    if let Some((canonical, form)) = canonical_for(&label.value) {
+        label.value = canonical.to_string();
+        label.form = form;
+    }
+}
+
 /// Post-parse pass that rewrites legacy labels to their canonical form.
 pub struct NormalizeLabels;
 
@@ -127,12 +137,7 @@ impl Runnable<Document, Document> for NormalizeLabels {
 
 fn rewrite_in_item(item: &mut ContentItem) {
     match item {
-        ContentItem::Annotation(a) => {
-            if let Some((canonical, form)) = canonical_for(&a.data.label.value) {
-                a.data.label.value = canonical.to_string();
-                a.data.label.form = form;
-            }
-        }
+        ContentItem::Annotation(a) => normalize_label(&mut a.data.label),
         ContentItem::VerbatimBlock(v) => rewrite_verbatim_label(v),
         ContentItem::Table(t) => rewrite_in_table(t),
         _ => {}
@@ -181,20 +186,14 @@ fn rewrite_in_table(table: &mut crate::lex::ast::Table) {
 }
 
 fn rewrite_annotation(annotation: &mut Annotation) {
-    if let Some((canonical, form)) = canonical_for(&annotation.data.label.value) {
-        annotation.data.label.value = canonical.to_string();
-        annotation.data.label.form = form;
-    }
+    normalize_label(&mut annotation.data.label);
     for child in annotation.children.as_mut_vec().iter_mut() {
         rewrite_in_item(child);
     }
 }
 
 fn rewrite_verbatim_label(verbatim: &mut Verbatim) {
-    if let Some((canonical, form)) = canonical_for(&verbatim.closing_data.label.value) {
-        verbatim.closing_data.label.value = canonical.to_string();
-        verbatim.closing_data.label.form = form;
-    }
+    normalize_label(&mut verbatim.closing_data.label);
 }
 
 fn attached_annotations_mut(item: &mut ContentItem) -> Option<&mut Vec<Annotation>> {
@@ -331,9 +330,12 @@ mod tests {
     #[test]
     fn doc_prefix_labels_tag_form_as_stripped() {
         // PR 2 of #584 turns `doc.*` into a parse error; today these
-        // four still rewrite to canonical and tag as Stripped so the
-        // formatter can emit `tabular.table` / `media.image` / etc.
-        // rather than continuing to emit `doc.table` / `doc.image`.
+        // four still rewrite to canonical. They tag as Stripped (rather
+        // than Shortcut) so that once PR 3 wires `Label.form` through
+        // the formatter, the emitted spelling will be the prefix-
+        // stripped canonical (`tabular.table` etc.) instead of the
+        // deprecated `doc.*` form. This PR records the tag only — no
+        // formatter consults it yet.
         for doc_label in ["doc.table", "doc.image", "doc.video", "doc.audio"] {
             let (_, form) = canonical_for(doc_label)
                 .unwrap_or_else(|| panic!("expected entry for {doc_label}"));
