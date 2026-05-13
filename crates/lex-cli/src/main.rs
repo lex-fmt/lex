@@ -437,6 +437,42 @@ fn build_cli() -> Command {
                         ),
                 ),
         )
+        .subcommand(
+            Command::new("migrate-labels")
+                .about("Migrate legacy bare labels in a .lex file to their canonical lex.* form")
+                .long_about(
+                    "Walk a .lex source file and rewrite legacy bare labels (`title`, \
+                     `author`, `date`, `tags`, `category`, `template`, `publishing-date`, \
+                     `front-matter`, `doc.table`, `doc.image`, `doc.video`, `doc.audio`) \
+                     to their canonical `lex.metadata.*` / `lex.tabular.*` / `lex.media.*` \
+                     equivalents. By default the rewritten source is written to stdout; \
+                     pass --in-place to overwrite the file. --check exits non-zero if any \
+                     migrations are needed (CI-friendly dry run).\n\n\
+                     This is the source-level companion to the parse-time `NormalizeLabels` \
+                     pass shipped in #570 Phase 3b — running it once leaves your sources \
+                     in canonical form so future parses don't rely on the in-flight \
+                     rewrite.",
+                )
+                .arg(
+                    Arg::new("path")
+                        .help("Path to the .lex document")
+                        .value_hint(ValueHint::FilePath)
+                        .required(true),
+                )
+                .arg(
+                    Arg::new("in-place")
+                        .long("in-place")
+                        .short('i')
+                        .help("Overwrite the file in place")
+                        .action(ArgAction::SetTrue),
+                )
+                .arg(
+                    Arg::new("check")
+                        .long("check")
+                        .help("Exit non-zero if any migrations are needed; do not write output")
+                        .action(ArgAction::SetTrue),
+                ),
+        )
 }
 
 fn main() {
@@ -458,6 +494,7 @@ fn main() {
                 "token-at",
                 "generate-lex-css",
                 "labels",
+                "migrate-labels",
                 "help",
             ];
             let first_arg = args.get(1).map(String::as_str);
@@ -593,6 +630,12 @@ fn main() {
                         std::process::exit(exit);
                     }
                 }
+                Some(("migrate-labels", sub_matches)) => {
+                    let exit = handle_migrate_labels_command(sub_matches);
+                    if exit != 0 {
+                        std::process::exit(exit);
+                    }
+                }
                 _ => {
                     eprintln!("Unknown subcommand. Use --help for usage information.");
                     std::process::exit(1);
@@ -600,6 +643,95 @@ fn main() {
             }
         }
     }
+}
+
+/// Dispatch `lexd migrate-labels <path>`. Reads the file, rewrites
+/// legacy bare labels to their canonical `lex.*` form via
+/// [`lex_core::lex::migrate::migrate_labels_in_source`], and prints
+/// the rewritten source (or overwrites the file with `--in-place`,
+/// or just reports what would change with `--check`).
+///
+/// Exit codes:
+///
+/// - `0`: success; either no changes were needed, or `--check` ran
+///   and confirmed the file is already canonical.
+/// - `1`: `--check` ran and found at least one legacy label that
+///   would be migrated.
+/// - `2`: I/O failure (file not found, write failed) or parse error
+///   in the source.
+fn handle_migrate_labels_command(sub: &ArgMatches) -> i32 {
+    let path: PathBuf = sub
+        .get_one::<String>("path")
+        .map(PathBuf::from)
+        .expect("clap enforces required");
+    let in_place = sub.get_flag("in-place");
+    let check = sub.get_flag("check");
+
+    if in_place && check {
+        eprintln!("lexd migrate-labels: --in-place and --check are mutually exclusive");
+        return 2;
+    }
+
+    let source = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!(
+                "lexd migrate-labels: failed to read {}: {e}",
+                path.display()
+            );
+            return 2;
+        }
+    };
+
+    let outcome = match lex_core::lex::migrate::migrate_labels_in_source(&source) {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!(
+                "lexd migrate-labels: {} could not be parsed: {e}",
+                path.display()
+            );
+            return 2;
+        }
+    };
+
+    if check {
+        if outcome.is_modified() {
+            eprintln!(
+                "{}: {} legacy label(s) would be migrated",
+                path.display(),
+                outcome.migrations.len()
+            );
+            for m in &outcome.migrations {
+                eprintln!("  {} → {}", m.from, m.to);
+            }
+            return 1;
+        }
+        return 0;
+    }
+
+    if in_place {
+        if !outcome.is_modified() {
+            // Nothing to do — leave the file untouched.
+            return 0;
+        }
+        if let Err(e) = std::fs::write(&path, &outcome.rewritten) {
+            eprintln!(
+                "lexd migrate-labels: failed to write {}: {e}",
+                path.display()
+            );
+            return 2;
+        }
+        eprintln!(
+            "{}: migrated {} legacy label(s)",
+            path.display(),
+            outcome.migrations.len()
+        );
+        return 0;
+    }
+
+    // Default: print rewritten source to stdout.
+    print!("{}", outcome.rewritten);
+    0
 }
 
 /// Dispatch `lexd labels {list,validate}`. Returns the exit code
