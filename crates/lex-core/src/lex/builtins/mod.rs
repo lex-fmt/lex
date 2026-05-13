@@ -10,18 +10,24 @@
 //!
 //! | Label family            | Handler                | Status                                |
 //! |-------------------------|------------------------|---------------------------------------|
-//! | `lex.include`           | [`LexIncludeHandler`]  | Registrable; resolve pass still runs  |
+//! | `lex.include`           | [`LexIncludeHandler`]  | Registrable; resolve pass runs        |
 //! |                         |                        | through the legacy inline path until  |
 //! |                         |                        | PR 3d (#533).                         |
-//! | `lex.metadata.*` (×8)   | [`LexBuiltinsHandler`] | Phase 1 of #570 — schemas only.       |
+//! | `lex.metadata.*` (×8)   | [`LexBuiltinsHandler`] | Schemas registered (#570 Phase 1).    |
 //! |                         |                        | Legacy frontmatter promotion in       |
 //! |                         |                        | `lex-babel/src/ir/from_lex.rs` still  |
-//! |                         |                        | owns the IR work.                     |
-//! | `lex.tabular.table`     | [`LexBuiltinsHandler`] | Phase 1 of #570 — schema only.        |
-//! |                         |                        | Legacy `VerbatimRegistry::TableHandler` |
-//! |                         |                        | still parses pipe-tables.             |
-//! | `lex.media.{image,…}`   | [`LexBuiltinsHandler`] | Phase 1 of #570 — schemas only.       |
-//! |                         |                        | Legacy `VerbatimRegistry::Image/…`    |
+//! |                         |                        | owns the IR work; on_format returns   |
+//! |                         |                        | None for this family in Phase 4b.     |
+//! | `lex.tabular.table`     | [`LexBuiltinsHandler`] | Schema registered (#570 Phase 1) +    |
+//! |                         |                        | `on_format` implemented (#570 Phase   |
+//! |                         |                        | 4b). The legacy `VerbatimRegistry::`  |
+//! |                         |                        | `TableHandler` still parses pipe-     |
+//! |                         |                        | tables on the from_lex direction; the |
+//! |                         |                        | to_lex production wiring lands in a   |
+//! |                         |                        | Phase 4b follow-up.                   |
+//! | `lex.media.{image,…}`   | [`LexBuiltinsHandler`] | Same shape as `lex.tabular.table`:    |
+//! |                         |                        | schemas + on_format implemented;      |
+//! |                         |                        | legacy `VerbatimRegistry::Image/…`    |
 //! |                         |                        | handlers still build the IR nodes.    |
 //!
 //! The single `lex` namespace is shared by every built-in label; the
@@ -36,7 +42,7 @@ use lex_extension::{
     schema::{
         BodyKind, BodyPresence, BodyShape, Capabilities, HookSet, ParamSpec, ParamType, Schema,
     },
-    wire::{LabelCtx, WireNode},
+    wire::{FormatCtx, LabelCtx, LexAnnotationOut, WireNode},
 };
 use lex_extension_host::registry::{Registry, RegistryError};
 
@@ -60,11 +66,16 @@ pub const NAMESPACE: &str = "lex";
 /// composite shape lets every `lex.*` built-in live under a single
 /// namespace registration while keeping per-label logic isolated.
 ///
-/// Today the only sub-handler with a non-stub implementation is
-/// [`LexIncludeHandler`]; the `lex.metadata.*`, `lex.tabular.*`, and
-/// `lex.media.*` labels register their schemas but their hooks return
-/// the trait's default `Ok(None)` until Phase 3 of #570 moves the
-/// legacy IR transformations into the registry path.
+/// Implementations across hooks:
+///
+/// - `on_resolve`: only [`LexIncludeHandler`] (#532) — the
+///   `lex.tabular.*` / `lex.media.*` / `lex.metadata.*` labels return
+///   the default `Ok(None)` because the legacy `from_lex` direction
+///   in `lex-babel` already hydrates the AST.
+/// - `on_format`: implemented for `lex.tabular.table` and
+///   `lex.media.{image,video,audio}` (#570 Phase 4b). `lex.include` is
+///   resolve-only and falls back; `lex.metadata.*` flows through the
+///   render hook + legacy frontmatter promotion.
 pub struct LexBuiltinsHandler {
     include: LexIncludeHandler,
 }
@@ -87,6 +98,56 @@ impl LexHandler for LexBuiltinsHandler {
             _ => Ok(None),
         }
     }
+
+    /// Phase 4b of #570: emit the canonical Lex-source shape for the
+    /// built-in `lex.tabular.*` and `lex.media.*` labels.
+    ///
+    /// The verbatim labels round-trip as `:: lex.<family>.<kind> ::`
+    /// closers with the body text and parameters carried verbatim from
+    /// the supplied `WireNode::Verbatim`. Anything else (e.g.
+    /// `lex.include`, metadata labels, unrecognised labels) returns
+    /// `Ok(None)` so the host falls back to its built-in formatter.
+    fn on_format(&self, ctx: &FormatCtx) -> Result<Option<LexAnnotationOut>, HandlerError> {
+        match ctx.label.as_str() {
+            "lex.tabular.table" | "lex.media.image" | "lex.media.video" | "lex.media.audio" => {
+                verbatim_label_on_format(ctx)
+            }
+            // `lex.include` is the resolve-only direction — it splices
+            // content in via on_resolve; no IR→Lex emission path. The
+            // metadata labels (`lex.metadata.*`) and any unrecognised
+            // label fall back to the host's default formatter.
+            _ => Ok(None),
+        }
+    }
+}
+
+/// Shared `on_format` body for the four built-in verbatim labels
+/// (`lex.tabular.table`, `lex.media.{image,video,audio}`). Each one
+/// has the same wire shape: a `WireNode::Verbatim` whose `body_text`
+/// carries the verbatim source (pipe-table syntax, alt-text fallback,
+/// etc.).
+///
+/// The handler uses `ctx.params` directly — the wire spec
+/// (`lex-extension-wire.lex` §4.8) treats `FormatCtx::params` as the
+/// authoritative originating parameters, with `WireNode::Verbatim.params`
+/// being a wire-internal copy of the same data. A well-formed host
+/// fills both with the same `(key, value)` pairs; in the
+/// hypothetical case where they diverge, `ctx.params` wins.
+fn verbatim_label_on_format(ctx: &FormatCtx) -> Result<Option<LexAnnotationOut>, HandlerError> {
+    let body = match &ctx.node {
+        WireNode::Verbatim { body_text, .. } => body_text.clone(),
+        // For non-verbatim wire nodes (e.g. a typed Table kind that a
+        // future wire-spec revision adds), the built-in handler
+        // doesn't have a serializer yet — return None so the host
+        // falls back. Phase 4b ships the verbatim path only.
+        _ => return Ok(None),
+    };
+    Ok(Some(LexAnnotationOut {
+        label: ctx.label.clone(),
+        params: ctx.params.clone(),
+        body,
+        verbatim_label: true,
+    }))
 }
 
 /// Register every built-in `lex.*` schema and handler into `registry`.
@@ -390,5 +451,146 @@ mod tests {
                 "expected label {label} to be registered"
             );
         }
+    }
+
+    /// Build a `FormatCtx` whose `node` is a `WireNode::Verbatim`
+    /// carrying the supplied body text and params. The four built-in
+    /// verbatim labels share this shape; this helper keeps each test
+    /// to a single line of meaningful setup.
+    fn format_ctx_verbatim(
+        label: &str,
+        params: Vec<(&str, &str)>,
+        body_text: &str,
+    ) -> lex_extension::wire::FormatCtx {
+        use lex_extension::wire::{FormatCtx, WireNode};
+        let owned_params: Vec<(String, String)> = params
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        FormatCtx {
+            label: label.into(),
+            params: owned_params.clone(),
+            node: WireNode::Verbatim {
+                range: Range {
+                    start: Position(0, 0),
+                    end: Position(0, 0),
+                },
+                origin: None,
+                label: label.into(),
+                params: serde_json::Value::Object(
+                    owned_params
+                        .iter()
+                        .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+                        .collect(),
+                ),
+                body_text: body_text.into(),
+                subject: String::new(),
+                mode: "inflow".into(),
+            },
+            format_options: None,
+        }
+    }
+
+    #[test]
+    fn dispatch_format_for_lex_tabular_table_returns_verbatim_annotation() {
+        // Phase 4b of #570: the built-in `lex.tabular.table` handler
+        // takes a WireNode::Verbatim whose body_text carries the
+        // pipe-table source and emits a LexAnnotationOut that the
+        // caller (`to_lex` etc.) can splice as `:: lex.tabular.table ::`.
+        let registry = fresh_registry();
+        let body = "| a | b |\n|---|---|\n| 1 | 2 |";
+        let ctx = format_ctx_verbatim("lex.tabular.table", vec![("header", "1")], body);
+        let out = registry
+            .dispatch_format(&ctx)
+            .expect("dispatch_format ok")
+            .expect("handler returned Some");
+        assert_eq!(out.label, "lex.tabular.table");
+        assert_eq!(out.params, vec![("header".into(), "1".into())]);
+        assert_eq!(out.body, body);
+        assert!(out.verbatim_label);
+    }
+
+    #[test]
+    fn dispatch_format_for_lex_media_image_returns_verbatim_annotation() {
+        let registry = fresh_registry();
+        let ctx = format_ctx_verbatim(
+            "lex.media.image",
+            vec![("src", "chart.png"), ("alt", "Q4 chart")],
+            "",
+        );
+        let out = registry
+            .dispatch_format(&ctx)
+            .expect("dispatch_format ok")
+            .expect("handler returned Some");
+        assert_eq!(out.label, "lex.media.image");
+        let src = out
+            .params
+            .iter()
+            .find(|(k, _)| k == "src")
+            .map(|(_, v)| v.as_str());
+        assert_eq!(src, Some("chart.png"));
+        assert!(out.verbatim_label);
+    }
+
+    #[test]
+    fn dispatch_format_for_lex_media_video_and_audio_return_verbatim_annotation() {
+        let registry = fresh_registry();
+        for label in ["lex.media.video", "lex.media.audio"] {
+            let ctx = format_ctx_verbatim(label, vec![("src", "media.mp4")], "");
+            let out = registry
+                .dispatch_format(&ctx)
+                .expect("dispatch_format ok")
+                .unwrap_or_else(|| panic!("handler must return Some for {label}"));
+            assert_eq!(out.label, label);
+            assert!(out.verbatim_label);
+        }
+    }
+
+    #[test]
+    fn dispatch_format_for_lex_include_returns_none() {
+        // `lex.include` is the resolve-only direction; on_format is
+        // not implemented for it.
+        let registry = fresh_registry();
+        let ctx = format_ctx_verbatim("lex.include", vec![("src", "other.lex")], "");
+        let out = registry.dispatch_format(&ctx).expect("dispatch_format ok");
+        assert!(out.is_none(), "lex.include has no on_format path");
+    }
+
+    #[test]
+    fn dispatch_format_for_lex_metadata_returns_none() {
+        // Metadata labels fall back to the host's built-in formatter
+        // in Phase 4b — they're not verbatim and the wire shape isn't
+        // a Verbatim node, so the shared verbatim-label helper bails.
+        let registry = fresh_registry();
+        let ctx = format_ctx_verbatim("lex.metadata.title", vec![], "My Doc");
+        let out = registry.dispatch_format(&ctx).expect("dispatch_format ok");
+        assert!(out.is_none(), "metadata labels fall back to host default");
+    }
+
+    #[test]
+    fn dispatch_format_with_non_verbatim_node_returns_none() {
+        // Even for a built-in verbatim label, if the host passes a
+        // non-verbatim WireNode (e.g. a Paragraph), the handler bails
+        // rather than emit a malformed annotation.
+        use lex_extension::wire::{FormatCtx, WireNode};
+        let registry = fresh_registry();
+        let ctx = FormatCtx {
+            label: "lex.tabular.table".into(),
+            params: vec![],
+            node: WireNode::Paragraph {
+                range: Range {
+                    start: Position(0, 0),
+                    end: Position(0, 0),
+                },
+                origin: None,
+                inlines: vec![],
+            },
+            format_options: None,
+        };
+        let out = registry.dispatch_format(&ctx).expect("dispatch_format ok");
+        assert!(
+            out.is_none(),
+            "non-verbatim wire node must fall back to host default"
+        );
     }
 }

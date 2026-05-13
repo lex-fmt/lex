@@ -75,11 +75,13 @@ pub trait LexHandler: Send + Sync {
     /// Phase 4a of #570 ships this trait method, the `FormatCtx` /
     /// `LexAnnotationOut` wire types, and the
     /// [`Registry::dispatch_format`](`lex_extension_host::registry::Registry::dispatch_format`)
-    /// entry point. Production call sites in `to_lex.rs` and `lexd
-    /// format` get wired in Phase 4b — until that lands, the hook is
-    /// invocable through the registry (tests + library embedders use
-    /// it) but no built-in pass dispatches through it yet, so a
-    /// handler implementing `on_format` will be exercised by direct
+    /// entry point. Phase 4b implements `on_format` in the built-in
+    /// `lex.tabular.*` / `lex.media.*` handlers. Production call
+    /// sites in `to_lex.rs` and `lexd format` get wired in a Phase 4b
+    /// follow-up — until that lands, the hook is invocable through
+    /// the registry (tests + library embedders use it) but no
+    /// built-in pass dispatches through it yet, so a handler
+    /// implementing `on_format` will be exercised by direct
     /// `Registry::dispatch_format` callers only.
     ///
     /// `Ok(None)` lets the host fall back to its built-in formatter
