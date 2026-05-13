@@ -528,6 +528,7 @@ pub fn events_to_tree(events: &[Event]) -> Result<Document, ConversionError> {
             title: None,
             subtitle: None,
             children: vec![],
+            document_annotations: vec![],
         });
     }
 
@@ -541,6 +542,7 @@ pub fn events_to_tree(events: &[Event]) -> Result<Document, ConversionError> {
                 title: None,
                 subtitle: None,
                 children: vec![],
+                document_annotations: vec![],
             }));
         }
         Some(other) => {
@@ -554,6 +556,7 @@ pub fn events_to_tree(events: &[Event]) -> Result<Document, ConversionError> {
                 title: None,
                 subtitle: None,
                 children: vec![],
+                document_annotations: vec![],
             })
         }
     }
@@ -1305,6 +1308,7 @@ mod tests {
                     content: vec![InlineContent::Text("Content".to_string())],
                 })],
             })],
+            document_annotations: vec![],
         };
 
         // Convert to events
@@ -1356,6 +1360,7 @@ mod tests {
                     }),
                 ],
             })],
+            document_annotations: vec![],
         };
 
         let events = tree_to_events(&DocNode::Document(original_doc.clone()));

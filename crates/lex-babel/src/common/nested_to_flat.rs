@@ -309,6 +309,7 @@ mod tests {
                     })],
                 }),
             ],
+            document_annotations: vec![],
         })
     }
 

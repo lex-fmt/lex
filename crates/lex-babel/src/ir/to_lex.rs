@@ -618,6 +618,7 @@ mod tests {
                     content: vec![InlineContent::Text("Second paragraph".to_string())],
                 }),
             ],
+            document_annotations: vec![],
         };
 
         let lex_doc = to_lex_document(&ir_doc);

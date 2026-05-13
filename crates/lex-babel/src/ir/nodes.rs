@@ -24,6 +24,14 @@ pub struct Document {
     pub title: Option<Vec<InlineContent>>,
     pub subtitle: Option<Vec<InlineContent>>,
     pub children: Vec<DocNode>,
+    /// Document-scope annotations (i.e. annotations attached directly
+    /// to the document, not nested inside any block). Phase 3a of #570
+    /// adds this slot as a first-class home for them; the synthetic
+    /// `frontmatter` annotation that legacy `from_lex_document`
+    /// inserts into [`children`](Self::children) remains in place
+    /// during this phase so downstream serializers see the same shape
+    /// they always have. Phase 3b retires the legacy promotion.
+    pub document_annotations: Vec<Annotation>,
 }
 
 /// Represents a heading with a specific level.

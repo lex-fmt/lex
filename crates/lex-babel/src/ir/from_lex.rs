@@ -131,10 +131,38 @@ pub fn from_lex_document(doc: &LexDocument) -> Document {
         children.insert(0, frontmatter);
     }
 
+    // Phase 3a of #570: populate the first-class `document_annotations`
+    // slot in parallel with the legacy frontmatter promotion above.
+    // This is additive — downstream serializers continue to read the
+    // synthetic `frontmatter` annotation from `children`. Phase 3b
+    // makes `document_annotations` the source of truth and deletes the
+    // promotion.
+    let document_annotations = doc.annotations.iter().map(ir_annotation_from_lex).collect();
+
     Document {
         title,
         subtitle,
         children,
+        document_annotations,
+    }
+}
+
+/// Build an IR `Annotation` directly from a lex-core annotation, without
+/// the `DocNode` enum wrapper that [`from_lex_annotation`] returns. Used
+/// by [`from_lex_document`] to populate `Document::document_annotations`.
+fn ir_annotation_from_lex(annotation: &LexAnnotation) -> Annotation {
+    let label = annotation.data.label.value.clone();
+    let parameters = annotation
+        .data
+        .parameters
+        .iter()
+        .map(|p| (p.key.clone(), p.value.clone()))
+        .collect();
+    let content = convert_children(&annotation.children, 2);
+    Annotation {
+        label,
+        parameters,
+        content,
     }
 }
 
@@ -633,5 +661,89 @@ mod tests {
 
         assert_eq!(ir_doc.children.len(), 1);
         assert!(matches!(ir_doc.children[0], DocNode::Paragraph(_)));
+    }
+
+    /// Build a lex-core document with one document-scope annotation
+    /// attached. Used by Phase 3a tests for the new
+    /// `Document::document_annotations` slot.
+    fn doc_with_one_annotation(label: &str, value: &str) -> LexDocument {
+        use lex_core::lex::ast::elements::annotation::Annotation as LexAnnotation;
+        use lex_core::lex::ast::elements::label::Label;
+        use lex_core::lex::ast::elements::paragraph::Paragraph;
+        use lex_core::lex::ast::elements::typed_content::ContentElement;
+
+        let body = ContentElement::Paragraph(Paragraph::from_line(value.to_string()));
+        let ann = LexAnnotation::new(Label::from_string(label), Vec::new(), vec![body]);
+        let mut doc = LexDocument::new();
+        doc.annotations.push(ann);
+        doc
+    }
+
+    #[test]
+    fn document_annotations_field_is_populated_from_lex_document() {
+        // Phase 3a contract: `from_lex_document` must populate the new
+        // `document_annotations: Vec<Annotation>` slot from every
+        // annotation in `doc.annotations` (the lex-core
+        // document-scope slot). The synthetic `frontmatter`
+        // annotation that the legacy promotion inserts into
+        // `children` is *additive* in Phase 3a — Phase 3b removes it.
+        let doc = doc_with_one_annotation("acme.custom", "Body text.");
+        let ir_doc = from_lex_document(&doc);
+
+        assert_eq!(
+            ir_doc.document_annotations.len(),
+            1,
+            "one document-scope annotation must populate document_annotations"
+        );
+        let ann = &ir_doc.document_annotations[0];
+        assert_eq!(ann.label, "acme.custom");
+        assert_eq!(ann.content.len(), 1);
+    }
+
+    #[test]
+    fn document_annotations_empty_when_no_document_scope_annotations() {
+        // No document-scope annotations → empty slot. Phase 3a must
+        // not synthesize anything here on its own.
+        let doc = LexDocument::with_content(vec![ContentItem::Paragraph(LexParagraph::from_line(
+            "Body only.".to_string(),
+        ))]);
+        let ir_doc = from_lex_document(&doc);
+        assert!(
+            ir_doc.document_annotations.is_empty(),
+            "empty input must produce empty document_annotations"
+        );
+    }
+
+    #[test]
+    fn legacy_frontmatter_promotion_still_runs_alongside_document_annotations() {
+        // Phase 3a is additive — the synthetic `frontmatter` annotation
+        // that the legacy promotion inserts must still appear in
+        // `children` so downstream serializers keep their existing
+        // shape. Phase 3b retires this duplication.
+        let doc = doc_with_one_annotation("author", "Alice");
+        let ir_doc = from_lex_document(&doc);
+
+        // New slot populated with the raw annotation.
+        assert_eq!(ir_doc.document_annotations.len(), 1);
+        assert_eq!(ir_doc.document_annotations[0].label, "author");
+
+        // Legacy frontmatter promotion still synthesizes the
+        // `frontmatter` annotation in children, with the value
+        // collected into a parameter under the bare key.
+        let frontmatter = ir_doc.children.iter().find_map(|c| match c {
+            DocNode::Annotation(a) if a.label == "frontmatter" => Some(a),
+            _ => None,
+        });
+        let frontmatter = frontmatter.expect("legacy frontmatter promotion still runs in Phase 3a");
+        let author_value = frontmatter
+            .parameters
+            .iter()
+            .find(|(k, _)| k == "author")
+            .map(|(_, v)| v.as_str());
+        assert_eq!(
+            author_value,
+            Some("Alice"),
+            "legacy frontmatter param must still carry the annotation body under the bare label"
+        );
     }
 }
