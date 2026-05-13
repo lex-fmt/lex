@@ -132,6 +132,7 @@ fn collect_in_item(item: &ContentItem, src: &str, sites: &mut Vec<LabelMigration
     match item {
         ContentItem::Annotation(a) => check_annotation(a, src, sites),
         ContentItem::VerbatimBlock(v) => check_verbatim(v, src, sites),
+        ContentItem::Table(t) => collect_in_table(t, src, sites),
         _ => {}
     }
     if let Some(attached) = attached_annotations(item) {
@@ -142,6 +143,31 @@ fn collect_in_item(item: &ContentItem, src: &str, sites: &mut Vec<LabelMigration
     if let Some(children) = item.children() {
         for child in children.iter() {
             collect_in_item(child, src, sites);
+        }
+    }
+}
+
+fn collect_in_table(table: &crate::lex::ast::Table, src: &str, sites: &mut Vec<LabelMigration>) {
+    // `ContentItem::children()` returns `None` for tables (their
+    // structure lives in rows/cells), so the generic walker doesn't
+    // reach legacy labels nested inside cell block content or
+    // footnotes. Mirror the explicit table walk that
+    // `assembling::stages::normalize_labels` uses so the source-level
+    // migration discovers everything the AST-level normalize pass
+    // would have rewritten.
+    for row in table.header_rows.iter().chain(table.body_rows.iter()) {
+        for cell in row.cells.iter() {
+            for child in cell.children.iter() {
+                collect_in_item(child, src, sites);
+            }
+        }
+    }
+    if let Some(footnotes) = table.footnotes.as_ref() {
+        for ann in footnotes.annotations.iter() {
+            check_annotation(ann, src, sites);
+        }
+        for item in footnotes.items.iter() {
+            collect_in_item(item, src, sites);
         }
     }
 }
@@ -371,6 +397,68 @@ mod tests {
         let out = migrate_labels_in_source(src).expect("migrate ok");
         assert!(!out.is_modified(), "body words must not be rewritten");
         assert_eq!(out.rewritten, src);
+    }
+
+    #[test]
+    fn collect_in_table_recurses_into_cell_block_children() {
+        // Regression for Copilot's PR 581 callout, mirroring the Phase 2
+        // `normalize_labels` regression: `ContentItem::Table` returns
+        // `None` from `children()`, so the generic walker doesn't reach
+        // a legacy annotation that lives in a cell's block-content
+        // `children` slot. Today's parser doesn't emit block children
+        // in cells (annotations in cells live in inline `content`),
+        // but the AST surface allows it via `TableCell::with_children`,
+        // and a future parser change must not silently lose migrations.
+        //
+        // The check_label byte-range lookup requires the src string to
+        // contain the legacy label at the right offset, so we use a
+        // crafted src string and a hand-built AST with matching span.
+        use crate::lex::ast::elements::annotation::Annotation;
+        use crate::lex::ast::elements::data::Data;
+        use crate::lex::ast::elements::label::Label;
+        use crate::lex::ast::elements::table::{Table, TableCell, TableRow};
+        use crate::lex::ast::elements::typed_content::ContentElement;
+        use crate::lex::ast::elements::verbatim::VerbatimBlockMode;
+        use crate::lex::ast::range::{Position, Range as AstRange};
+        use crate::lex::ast::text_content::TextContent;
+        use crate::lex::ast::Document as LexDocument;
+
+        // The crafted src places `title` at bytes 3..8 (after `:: `).
+        let src = ":: title ::\n";
+        let label_span = std::ops::Range { start: 3, end: 8 };
+        let label = Label {
+            value: "lex.metadata.title".to_string(),
+            location: AstRange::new(label_span, Position::new(0, 3), Position::new(0, 8)),
+        };
+        let inner_annotation = Annotation::from_data(Data::new(label, Vec::new()), Vec::new());
+
+        let cell = TableCell::new(TextContent::from_string("cell".into(), None))
+            .with_children(vec![ContentElement::Annotation(inner_annotation)]);
+        let row = TableRow::new(vec![cell]);
+        let table = Table::new(
+            TextContent::from_string("Data".into(), None),
+            Vec::new(),
+            vec![row],
+            VerbatimBlockMode::Inflow,
+        );
+
+        let mut doc = LexDocument::new();
+        doc.root
+            .children
+            .as_mut_vec()
+            .push(ContentItem::Table(Box::new(table)));
+
+        let mut sites = Vec::new();
+        collect_sites(&doc, src, &mut sites);
+
+        assert_eq!(
+            sites.len(),
+            1,
+            "legacy annotation inside a table cell's block children must be discovered"
+        );
+        assert_eq!(sites[0].from, "title");
+        assert_eq!(sites[0].to, "lex.metadata.title");
+        assert_eq!(sites[0].byte_range, 3..8);
     }
 
     #[test]
