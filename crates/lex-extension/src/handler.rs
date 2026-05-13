@@ -70,8 +70,17 @@ pub trait LexHandler: Send + Sync {
     /// owned by this handler's namespace — the inverse of
     /// [`on_resolve`](Self::on_resolve), and the reverse-direction
     /// sibling of [`on_render`](Self::on_render) for the Lex target
-    /// format. Fires during `lexd format`, `to_lex`, and any
-    /// library-driven IR→Lex pass.
+    /// format.
+    ///
+    /// Phase 4a of #570 ships this trait method, the `FormatCtx` /
+    /// `LexAnnotationOut` wire types, and the
+    /// [`Registry::dispatch_format`](`lex_extension_host::registry::Registry::dispatch_format`)
+    /// entry point. Production call sites in `to_lex.rs` and `lexd
+    /// format` get wired in Phase 4b — until that lands, the hook is
+    /// invocable through the registry (tests + library embedders use
+    /// it) but no built-in pass dispatches through it yet, so a
+    /// handler implementing `on_format` will be exercised by direct
+    /// `Registry::dispatch_format` callers only.
     ///
     /// `Ok(None)` lets the host fall back to its built-in formatter
     /// for the underlying node kind — there is no separate

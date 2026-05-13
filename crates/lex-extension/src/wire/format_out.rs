@@ -68,8 +68,10 @@ pub struct LexAnnotationOut {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub body: String,
     /// `true` for verbatim closing form, `false` for inline annotation
-    /// form. Defaults to `false` on the wire.
-    #[serde(default)]
+    /// form. Defaults to `false` on the wire — omitted entirely from
+    /// the serialized JSON when `false` so marker-form annotations get
+    /// the compact `{ "label": "..." }` shape.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub verbatim_label: bool,
 }
 
@@ -136,8 +138,8 @@ mod tests {
     #[test]
     fn lex_annotation_out_minimal_form_omits_defaults() {
         // Marker-form annotation: empty params, empty body, not verbatim.
-        // The serialized form should skip those fields per the
-        // `skip_serializing_if` attributes.
+        // The serialized form must skip every default field so the
+        // wire shape collapses to `{ "label": "..." }`.
         let a = LexAnnotationOut {
             label: "lex.metadata.author".into(),
             params: vec![],
@@ -145,10 +147,12 @@ mod tests {
             verbatim_label: false,
         };
         let s = serde_json::to_string(&a).unwrap();
-        assert!(!s.contains("params"));
-        assert!(!s.contains("body"));
-        // verbatim_label is bool, not Option, so #[serde(default)] alone
-        // doesn't skip — but the default-false case still round-trips.
+        assert!(!s.contains("params"), "params must be omitted: {s}");
+        assert!(!s.contains("body"), "body must be omitted: {s}");
+        assert!(
+            !s.contains("verbatim_label"),
+            "verbatim_label must be omitted when false: {s}"
+        );
         let back: LexAnnotationOut = serde_json::from_str(&s).unwrap();
         assert_eq!(back, a);
     }
