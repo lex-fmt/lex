@@ -252,13 +252,18 @@ fn emit_frontmatter_event(document_annotations: &[Annotation], events: &mut Vec<
             for (k, v) in &ann.parameters {
                 parameters.push((format!("{key}.{k}"), v.clone()));
             }
-        } else {
-            // Marker-form annotation with neither body nor params:
-            // emit the key with an empty value so its presence is
-            // surfaced (matches the legacy promotion behaviour for
-            // such cases).
-            parameters.push((key, String::new()));
         }
+        // Marker-form annotation (no body, no params): contribute
+        // nothing — matches the legacy `from_lex_document` promotion
+        // behaviour, which only pushed entries for annotations that
+        // carried a value or structured params.
+    }
+    // Don't emit the frontmatter event at all if every document
+    // annotation was a marker-form. Matches legacy behaviour: a
+    // synthesized `frontmatter` annotation was only inserted when
+    // `parameters` was non-empty.
+    if parameters.is_empty() {
+        return;
     }
     events.push(Event::StartAnnotation {
         label: "frontmatter".to_string(),

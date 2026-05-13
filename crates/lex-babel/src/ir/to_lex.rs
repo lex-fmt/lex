@@ -36,19 +36,27 @@ impl Loader for NoopLoader {
     }
 }
 
-/// Build a `lex_extension_host::Registry` with the built-in `lex.*`
-/// schemas registered, suitable for the to_lex direction (no
-/// filesystem access needed). Constructed lazily per call to
-/// `to_lex_document` — cheap enough that callers don't need to pass
-/// one in.
-fn build_to_lex_registry() -> Registry {
-    let registry = Registry::new();
-    let _ = lex_core::lex::builtins::register_into(
-        &registry,
-        Arc::new(NoopLoader),
-        ResolveConfig::with_root(std::path::PathBuf::from("/")),
-    );
-    registry
+/// Cached process-wide registry for the to_lex direction. The
+/// registry's contents are invariant (always the same built-in
+/// `lex.*` schemas), so constructing it once and reusing across
+/// every call to `to_lex_document` avoids re-registering for every
+/// table/media node in a document.
+///
+/// `Registry` uses interior `RwLock`s for its state, so sharing
+/// `&'static Registry` across threads is safe.
+fn to_lex_registry() -> &'static Registry {
+    use std::sync::OnceLock;
+    static REGISTRY: OnceLock<Registry> = OnceLock::new();
+    REGISTRY.get_or_init(|| {
+        let registry = Registry::new();
+        lex_core::lex::builtins::register_into(
+            &registry,
+            Arc::new(NoopLoader),
+            ResolveConfig::with_root(std::path::PathBuf::from("/")),
+        )
+        .expect("registering built-in lex.* handlers must succeed for a fresh registry");
+        registry
+    })
 }
 
 fn default_wire_range() -> WireRange {
@@ -236,15 +244,31 @@ fn to_lex_table(table: &Table, level: usize) -> LexContentItem {
     // the built-in `lex.tabular.table` handler (#570 Phase 4b) owns
     // the IR→Lex contract.
     let body = crate::common::verbatim::table::serialize_pipe_table(table);
-    let registry = build_to_lex_registry();
     let ctx = FormatCtx {
         label: "lex.tabular.table".to_string(),
         params: Vec::new(),
         node: wire_verbatim("lex.tabular.table", body, Vec::new()),
         format_options: None,
     };
-    if let Ok(Some(out)) = registry.dispatch_format(&ctx) {
-        return lex_verbatim_from_annotation_out(out);
+    match to_lex_registry().dispatch_format(&ctx) {
+        Ok(Some(out)) => return lex_verbatim_from_annotation_out(out),
+        Ok(None) => {
+            // The built-in `lex.tabular.table` handler is registered
+            // by `to_lex_registry()` and always returns Some for this
+            // canonical label. None here means the registry was
+            // mutated unexpectedly — fall through to the nested-
+            // annotation fallback below so the table content isn't
+            // dropped, but log so the divergence is visible.
+            eprintln!(
+                "to_lex_table: dispatch_format returned None for `lex.tabular.table`; \
+                 falling back to nested-annotation form"
+            );
+        }
+        Err(diag) => {
+            eprintln!(
+                "to_lex_table: dispatch_format errored: {diag:?}; falling back to nested-annotation form"
+            );
+        }
     }
 
     // Fallback to annotation if dispatch_format somehow fails (the
@@ -603,18 +627,38 @@ fn to_lex_media(node: &DocNode) -> LexContentItem {
         _ => return LexContentItem::Paragraph(LexParagraph::new(vec![])),
     };
 
-    let registry = build_to_lex_registry();
     let ctx = FormatCtx {
         label: label.to_string(),
         params: params.clone(),
-        node: wire_verbatim(label, String::new(), params),
+        node: wire_verbatim(label, String::new(), params.clone()),
         format_options: None,
     };
-    if let Ok(Some(out)) = registry.dispatch_format(&ctx) {
-        return lex_verbatim_from_annotation_out(out);
+    match to_lex_registry().dispatch_format(&ctx) {
+        Ok(Some(out)) => return lex_verbatim_from_annotation_out(out),
+        Ok(None) => {
+            eprintln!(
+                "to_lex_media: dispatch_format returned None for `{label}`; \
+                 falling back to a labelled verbatim that preserves params"
+            );
+        }
+        Err(diag) => {
+            eprintln!(
+                "to_lex_media: dispatch_format errored for `{label}`: {diag:?}; \
+                 falling back to a labelled verbatim that preserves params"
+            );
+        }
     }
 
-    LexContentItem::Paragraph(LexParagraph::new(vec![]))
+    // Fallback: emit the verbatim directly with the canonical label
+    // and the same params we tried to dispatch. Preserves `src`/
+    // `alt`/`title`/`poster` rather than silently dropping the node's
+    // contents on the unreachable-in-production failure path.
+    lex_verbatim_from_annotation_out(LexAnnotationOut {
+        label: label.to_string(),
+        params,
+        body: String::new(),
+        verbatim_label: true,
+    })
 }
 
 #[cfg(test)]
