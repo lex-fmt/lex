@@ -111,6 +111,7 @@ fn rewrite_in_item(item: &mut ContentItem) {
             }
         }
         ContentItem::VerbatimBlock(v) => rewrite_verbatim_label(v),
+        ContentItem::Table(t) => rewrite_in_table(t),
         _ => {}
     }
     if let Some(attached) = attached_annotations_mut(item) {
@@ -121,6 +122,37 @@ fn rewrite_in_item(item: &mut ContentItem) {
     if let Some(children) = item.children_mut() {
         for child in children.iter_mut() {
             rewrite_in_item(child);
+        }
+    }
+}
+
+fn rewrite_in_table(table: &mut crate::lex::ast::Table) {
+    // `ContentItem::children_mut` returns `None` for tables (their
+    // structure lives in rows/cells, not a flat children list), so an
+    // explicit walk is needed to reach annotations nested inside cells
+    // or footnotes. Without this, a legacy label inside a table cell
+    // would slip through the pipeline untouched.
+    for row in table
+        .header_rows
+        .iter_mut()
+        .chain(table.body_rows.iter_mut())
+    {
+        for cell in row.cells.iter_mut() {
+            for child in cell.children.as_mut_vec().iter_mut() {
+                rewrite_in_item(child);
+            }
+        }
+    }
+    if let Some(footnotes) = table.footnotes.as_mut() {
+        for annotation in footnotes.annotations.iter_mut() {
+            rewrite_annotation(annotation);
+        }
+        // List children are ListItems; their `children` slot reaches
+        // through `children_mut`, but we still need to walk
+        // `list.items` directly because List items use the typed
+        // `items` collection rather than a plain children list.
+        for item in footnotes.items.as_mut_vec().iter_mut() {
+            rewrite_in_item(item);
         }
     }
 }
@@ -377,6 +409,69 @@ mod tests {
         assert_ne!(
             loc.start, loc.end,
             "rewrite must preserve the label's source location, not zero it"
+        );
+    }
+
+    #[test]
+    fn rewrite_recurses_into_table_cell_block_children() {
+        // Regression for Copilot's PR 576 callout: `ContentItem::Table`
+        // returns `None` from `children_mut()` (its structure lives in
+        // rows/cells), so the generic walker won't reach legacy labels
+        // nested inside a cell's block content. Today's parser does
+        // not emit block children in cells — cell annotations land in
+        // the inline `content: TextContent` — but the AST surface
+        // allows it via `TableCell::with_children`, and Phase 3's
+        // wire-up may begin using that slot. Test the contract
+        // directly by building the AST programmatically.
+        use crate::lex::ast::elements::annotation::Annotation;
+        use crate::lex::ast::elements::label::Label;
+        use crate::lex::ast::elements::table::{Table, TableCell, TableRow};
+        use crate::lex::ast::elements::typed_content::ContentElement;
+        use crate::lex::ast::elements::verbatim::VerbatimBlockMode;
+        use crate::lex::ast::text_content::TextContent;
+
+        let inner_annotation = Annotation::marker(Label::from_string("title"));
+        let cell = TableCell::new(TextContent::from_string("inline".into(), None))
+            .with_children(vec![ContentElement::Annotation(inner_annotation)]);
+        let row = TableRow::new(vec![cell]);
+        let table = Table::new(
+            TextContent::from_string("Data".into(), None),
+            Vec::new(),
+            vec![row],
+            VerbatimBlockMode::Inflow,
+        );
+
+        let mut doc = Document::new();
+        doc.root
+            .children
+            .as_mut_vec()
+            .push(ContentItem::Table(Box::new(table)));
+
+        let doc = NormalizeLabels::new().run(doc).expect("normalize ok");
+
+        // Reach into the table and confirm the nested annotation got
+        // rewritten.
+        let table = doc
+            .root
+            .children
+            .iter()
+            .find_map(|item| match item {
+                ContentItem::Table(t) => Some(t),
+                _ => None,
+            })
+            .expect("table present");
+        let cell = &table.body_rows[0].cells[0];
+        let nested_label = cell
+            .children
+            .iter()
+            .find_map(|item| match item {
+                ContentItem::Annotation(a) => Some(a.data.label.value.as_str()),
+                _ => None,
+            })
+            .expect("nested annotation in cell.children");
+        assert_eq!(
+            nested_label, "lex.metadata.title",
+            "legacy label inside a table cell's block children must be rewritten"
         );
     }
 
