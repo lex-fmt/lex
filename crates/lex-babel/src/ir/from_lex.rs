@@ -19,8 +19,8 @@ use lex_core::lex::ast::elements::{
     Verbatim as LexVerbatim, VerbatimLine as LexVerbatimLine,
 };
 use lex_core::lex::ast::TextContent;
-use lex_core::lex::wire::from_wire_node;
-use lex_extension::wire::{AnnotationBody, LabelCtx, NodeRef, Position, Range};
+use lex_core::lex::wire::{from_wire_node, origin_string, range_to_wire};
+use lex_extension::wire::{AnnotationBody, HostNodeKind, LabelCtx, NodeRef};
 use lex_extension_host::registry::Registry;
 
 use super::nodes::{
@@ -346,12 +346,9 @@ fn from_lex_verbatim(verbatim: &LexVerbatim, registry: &Registry) -> DocNode {
         params: params_object,
         body: AnnotationBody::Text(content.clone()),
         node: NodeRef {
-            kind: "verbatim".into(),
-            range: Range {
-                start: Position(0, 0),
-                end: Position(0, 0),
-            },
-            origin: None,
+            kind: HostNodeKind::Verbatim.as_str().into(),
+            range: range_to_wire(&verbatim.location),
+            origin: origin_string(&verbatim.location),
         },
     };
     if let Ok(Some(wire_node)) = registry.dispatch_resolve(&ctx) {

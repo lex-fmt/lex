@@ -75,7 +75,7 @@ pub(crate) fn position_from_wire(p: &WirePosition) -> CorePosition {
     CorePosition::new(p.line() as usize, p.column() as usize)
 }
 
-pub(crate) fn range_to_wire(r: &CoreRange) -> WireRange {
+pub fn range_to_wire(r: &CoreRange) -> WireRange {
     WireRange::new(position_to_wire(&r.start), position_to_wire(&r.end))
 }
 
@@ -103,8 +103,7 @@ pub(crate) fn range_from_wire_with_origin(
 }
 
 /// Lift a lex-core `Range`'s `origin_path` to the wire `origin` string.
-#[allow(dead_code)] // consumed by to_wire.rs starting in the next module
-pub(crate) fn origin_string(r: &CoreRange) -> Option<String> {
+pub fn origin_string(r: &CoreRange) -> Option<String> {
     r.origin_path
         .as_ref()
         .map(|p| p.to_string_lossy().into_owned())

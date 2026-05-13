@@ -93,7 +93,7 @@
 mod error;
 pub mod from_wire;
 mod inline;
-mod range;
+pub mod range;
 pub mod to_wire;
 
 #[cfg(test)]
@@ -101,4 +101,5 @@ mod tests;
 
 pub use error::FromWireError;
 pub use from_wire::{from_wire_node, from_wire_subtree};
+pub use range::{origin_string, range_to_wire};
 pub use to_wire::{to_wire_document, to_wire_node};

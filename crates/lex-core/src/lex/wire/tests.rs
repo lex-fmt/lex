@@ -655,6 +655,82 @@ fn table_round_trips_caption_and_rows() {
 }
 
 #[test]
+fn table_colspan_preserves_per_column_alignment_round_trip() {
+    use crate::lex::ast::elements::table::{Table, TableCell, TableCellAlignment, TableRow};
+    use crate::lex::ast::elements::verbatim::VerbatimBlockMode;
+    // 4-column table whose body row contains a `colspan = 2` cell
+    // covering columns 1 and 2. The wire codec must produce a
+    // 4-entry `column_aligns` vector and the reverse codec must
+    // restore the per-column alignments without indexing by cell
+    // position (which would mis-align columns 2 and 3).
+    let header = TableRow::new(vec![
+        TableCell::new(TextContent::from_string("L".into(), None))
+            .with_header(true)
+            .with_align(TableCellAlignment::Left),
+        TableCell::new(TextContent::from_string("C".into(), None))
+            .with_header(true)
+            .with_align(TableCellAlignment::Center),
+        TableCell::new(TextContent::from_string("R".into(), None))
+            .with_header(true)
+            .with_align(TableCellAlignment::Right),
+        TableCell::new(TextContent::from_string("L".into(), None))
+            .with_header(true)
+            .with_align(TableCellAlignment::Left),
+    ]);
+    let body = vec![TableRow::new(vec![
+        TableCell::new(TextContent::from_string("a".into(), None))
+            .with_align(TableCellAlignment::Left),
+        TableCell::new(TextContent::from_string("merged".into(), None))
+            .with_span(2, 1)
+            .with_align(TableCellAlignment::Center),
+        TableCell::new(TextContent::from_string("d".into(), None))
+            .with_align(TableCellAlignment::Left),
+    ])];
+    let t = Table::new(
+        TextContent::from_string(String::new(), None),
+        vec![header],
+        body,
+        VerbatimBlockMode::Inflow,
+    );
+    let item = ContentItem::Table(Box::new(t));
+    let wire = to_wire_node(&item);
+
+    if let WireNode::Table {
+        ref column_aligns, ..
+    } = wire
+    {
+        assert_eq!(
+            column_aligns,
+            &vec![
+                "left".to_string(),
+                "center".to_string(),
+                "right".to_string(),
+                "left".to_string(),
+            ],
+            "column_aligns must be widened by colspan and stay per-column"
+        );
+    } else {
+        panic!("expected WireNode::Table");
+    }
+
+    let back = from_wire_node(&json_round_trip(&wire)).expect("ok");
+    match &back[0] {
+        ContentItem::Table(t) => {
+            // Body row: cell 0 is column 0 (Left); cell 1 is a
+            // colspan=2 covering columns 1+2 — its align comes from
+            // column_aligns[1] (Center); cell 2 advances to column 3
+            // (Left).
+            let row = &t.body_rows[0];
+            assert_eq!(row.cells[0].align, TableCellAlignment::Left);
+            assert_eq!(row.cells[1].align, TableCellAlignment::Center);
+            assert_eq!(row.cells[1].colspan, 2);
+            assert_eq!(row.cells[2].align, TableCellAlignment::Left);
+        }
+        other => panic!("expected Table, got {other:?}"),
+    }
+}
+
+#[test]
 fn document_with_session_paragraph_blank_round_trips() {
     use crate::lex::ast::elements::session::Session;
     let mut s = Session::with_title("Intro".into());

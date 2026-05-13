@@ -187,7 +187,15 @@ fn resolve_tabular_table(ctx: &LabelCtx) -> WireNode {
         // well-formed inputs.)
         _ => "",
     };
-    tabular::parse_pipe_table_to_wire(body)
+    let mut table = tabular::parse_pipe_table_to_wire(body);
+    // Stamp the host's range + origin onto the wire node — the
+    // parser builds with `(0,0)` defaults since it has no source
+    // context of its own.
+    if let WireNode::Table { range, origin, .. } = &mut table {
+        *range = ctx.node.range;
+        *origin = ctx.node.origin.clone();
+    }
+    table
 }
 
 /// `on_resolve` for `lex.media.image`: read `src`/`alt`/`title` from
@@ -590,6 +598,61 @@ mod tests {
                 other => panic!("dispatch_resolve({label}) produced unexpected variant {other:?}"),
             };
             assert_eq!(actual, expect_kind, "wire variant for {label}");
+        }
+    }
+
+    #[test]
+    fn dispatch_resolve_propagates_ctx_range_and_origin() {
+        // Resolve handlers must stamp `ctx.node.range` and
+        // `ctx.node.origin` onto the WireNode they return so
+        // downstream diagnostics can attribute back to source. Hard-
+        // coded `(0,0)` and `origin: None` would silently break LSP
+        // hover / go-to-def for handler-emitted nodes.
+        let registry = fresh_registry();
+        let stamped_range = Range {
+            start: Position(12, 4),
+            end: Position(14, 10),
+        };
+        let stamped_origin = Some("/host/doc.lex".to_string());
+        let cases: &[(&str, &str)] = &[
+            (
+                tabular::LEX_TABULAR_TABLE,
+                "| a | b |\n|---|---|\n| 1 | 2 |",
+            ),
+            (media::LEX_MEDIA_IMAGE, ""),
+            (media::LEX_MEDIA_VIDEO, ""),
+            (media::LEX_MEDIA_AUDIO, ""),
+        ];
+        for (label, body) in cases {
+            let ctx = LabelCtx {
+                label: (*label).into(),
+                params: serde_json::json!({ "src": "x" }),
+                body: AnnotationBody::Text((*body).into()),
+                node: NodeRef {
+                    kind: "verbatim".into(),
+                    range: stamped_range,
+                    origin: stamped_origin.clone(),
+                },
+            };
+            let result = registry
+                .dispatch_resolve(&ctx)
+                .unwrap_or_else(|e| panic!("dispatch_resolve({label}) errored: {e:?}"))
+                .unwrap_or_else(|| panic!("dispatch_resolve({label}) must return Some"));
+            let (got_range, got_origin) = match result {
+                lex_extension::wire::WireNode::Table { range, origin, .. }
+                | lex_extension::wire::WireNode::Image { range, origin, .. }
+                | lex_extension::wire::WireNode::Video { range, origin, .. }
+                | lex_extension::wire::WireNode::Audio { range, origin, .. } => (range, origin),
+                other => panic!("dispatch_resolve({label}) produced unexpected variant {other:?}"),
+            };
+            assert_eq!(
+                got_range, stamped_range,
+                "range must propagate from LabelCtx to WireNode for {label}"
+            );
+            assert_eq!(
+                got_origin, stamped_origin,
+                "origin must propagate from LabelCtx to WireNode for {label}"
+            );
         }
     }
 

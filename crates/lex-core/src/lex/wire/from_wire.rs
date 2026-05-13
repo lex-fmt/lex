@@ -542,15 +542,21 @@ fn table_from_wire(
     let mut body_vec = Vec::with_capacity(rows.len().saturating_sub(header_count));
     for (i, row) in rows.iter().enumerate() {
         let is_header = i < header_count;
+        // Track a running column cursor so cells with `colspan > 1`
+        // advance past the columns they cover when picking
+        // alignments. Naively using the cell index would mis-align
+        // every cell after a spanning one.
+        let mut col_cursor: usize = 0;
         let cells = row
             .cells
             .iter()
-            .enumerate()
-            .map(|(col, c)| {
+            .map(|c| {
                 let align = column_alignment
-                    .get(col)
+                    .get(col_cursor)
                     .copied()
                     .unwrap_or(TableCellAlignment::None);
+                col_cursor =
+                    col_cursor.saturating_add(usize::try_from(c.colspan.max(1)).unwrap_or(1));
                 table_cell_from_wire(c, align, is_header)
             })
             .collect();
