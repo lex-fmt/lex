@@ -135,15 +135,13 @@ pub static STRING_TO_AST: Lazy<AstTransform> = Lazy::new(|| {
         // Attach annotations as metadata
         doc = AttachAnnotations::new().run(doc)?;
 
-        // Note: `NormalizeLabels` (the #570 Phase 2 label-rewrite stage)
-        // is intentionally NOT inserted here yet. The stage is shipped
-        // as a module so the codec, tests, and a future Phase 3 wiring
-        // can use it; the legacy whitelist in
-        // `lex-babel/src/ir/from_lex.rs` and the `VerbatimRegistry` in
-        // `lex-babel/src/common/verbatim` still match on the bare label
-        // forms (`title`, `doc.table`, …), so activating the rewrite
-        // here would break the legacy IR path. Phase 3a flips the
-        // legacy paths to canonical names atomically with this wire-up.
+        // Normalize legacy labels to their canonical `lex.*` form
+        // (#570 Phase 3b). The legacy whitelists in
+        // `lex-babel/src/ir/from_lex.rs` and the `VerbatimRegistry`
+        // in `lex-babel/src/common/verbatim` have been updated to
+        // match the canonical names, so this rewrite is now safe to
+        // activate.
+        doc = crate::lex::assembling::stages::NormalizeLabels::new().run(doc)?;
 
         // Apply table config from :: table :: annotations (header, align)
         doc = crate::lex::assembling::stages::ApplyTableConfig::new().run(doc)?;

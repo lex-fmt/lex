@@ -654,8 +654,12 @@ Code sample:
 
     #[test]
     fn verbatim_src_completion_offers_known_paths() {
+        // #570 Phase 3b activated `NormalizeLabels`, so `:: doc.image ::`
+        // in `SAMPLE_DOC` is rewritten to its canonical form before
+        // this test sees the parsed AST. Look up the verbatim under
+        // the canonical name.
         let document = parse_sample();
-        let verbatim = find_verbatim(&document, "doc.image");
+        let verbatim = find_verbatim(&document, "lex.media.image");
         let param = verbatim
             .closing_data
             .parameters
