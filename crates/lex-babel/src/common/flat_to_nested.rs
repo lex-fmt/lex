@@ -1304,17 +1304,12 @@ mod tests {
     }
 
     #[test]
-    fn document_annotations_event_stream_is_one_way_in_phase_3a() {
-        // Phase 3a of #570 is *additive*. `tree_to_events` deliberately
-        // does not emit `document_annotations`, and `events_to_tree`
-        // initializes the slot empty. This locks the contract:
-        // anything in `document_annotations` on the IR side is lost
-        // when the document travels through the event stream, and
-        // every annotation in the event stream lands in `children` as
-        // it always has. Phase 3b adds the scope marker that lets the
-        // events stream distinguish the two — atomically with the
-        // legacy-path retirement so downstream serializers see exactly
-        // one copy.
+    fn document_annotations_synthesize_frontmatter_event() {
+        // Post-refac/label cleanup: `tree_to_events` synthesizes a
+        // single `frontmatter` annotation event from
+        // `document_annotations`. The synthesis is what downstream
+        // HTML/Markdown serializers consume; the IR no longer carries
+        // a redundant `frontmatter` annotation in children.
         use crate::ir::nodes::Annotation;
         use crate::ir::to_events::tree_to_events;
 
@@ -1326,23 +1321,29 @@ mod tests {
             })],
             document_annotations: vec![Annotation {
                 label: "lex.metadata.author".to_string(),
-                parameters: vec![("name".to_string(), "Alice".to_string())],
-                content: vec![],
+                parameters: vec![],
+                content: vec![DocNode::Paragraph(Paragraph {
+                    content: vec![InlineContent::Text("Alice".to_string())],
+                })],
             }],
         };
 
         let events = tree_to_events(&DocNode::Document(original.clone()));
-        let doc = events_to_tree(&events).expect("events round-trip");
 
-        // The annotation was dropped on the way to events.
-        assert!(
-            doc.document_annotations.is_empty(),
-            "Phase 3a: events stream loses document_annotations (by design)"
-        );
-        // Body paragraph survives — only the document-scope slot was
-        // not encoded.
-        assert_eq!(doc.children.len(), 1);
-        assert!(matches!(doc.children[0], DocNode::Paragraph(_)));
+        // The frontmatter event must be present and carry the
+        // prefix-stripped `author` key with the body text as value.
+        let frontmatter = events.iter().find_map(|e| match e {
+            Event::StartAnnotation { label, parameters } if label == "frontmatter" => {
+                Some(parameters.clone())
+            }
+            _ => None,
+        });
+        let parameters = frontmatter.expect("frontmatter event must be synthesized");
+        let author = parameters
+            .iter()
+            .find(|(k, _)| k == "author")
+            .map(|(_, v)| v.as_str());
+        assert_eq!(author, Some("Alice"));
     }
 
     #[test]

@@ -2,6 +2,37 @@
 
 ## [Unreleased]
 
+### Refactored — label semantics ([#570](https://github.com/lex-fmt/lex/issues/570))
+
+Multi-phase refactor moving label-semantic decisions out of the IR layer and through the extension registry. Eight PRs (#575–#581) landed via the `refac/label` integration branch, followed by a legacy-code cleanup pass.
+
+**New built-in `lex.*` schemas** registered alongside `lex.include`:
+
+- `lex.metadata.{title, author, date, tags, category, template, publishing-date, front-matter}`
+- `lex.tabular.table`
+- `lex.media.{image, video, audio}`
+
+**New parse-time pass** (`NormalizeLabels`) rewrites bare labels to their canonical `lex.*` form during `STRING_TO_AST`. Source `:: title ::` becomes `:: lex.metadata.title ::` in the AST; source `:: doc.table ::` (verbatim) becomes `:: lex.tabular.table ::`.
+
+**New `on_format` reverse hook** in the extension wire spec (`lex-extension-wire.lex` §4.8) and the `LexHandler` trait. Given a typed AST subtree, a handler returns a `LexAnnotationOut` describing the label, parameters, body, and verbatim flag the host emits as Lex source. `Registry::dispatch_format` is the entry point. The four built-in verbatim handlers implement it.
+
+**`to_lex.rs` now dispatches through `Registry::dispatch_format`** for `lex.tabular.table` and `lex.media.{image,video,audio}` instead of pattern-matching on `DocNode` variants through the local `VerbatimRegistry`. Output now carries canonical labels (`:: lex.tabular.table ::`, not `:: doc.table ::`).
+
+**`document_annotations` field on `DocNode::Document`** is the source of truth for document-scope metadata. `nested_to_flat` synthesizes the `frontmatter` event from it at emission time — the IR no longer carries a synthetic `frontmatter` annotation in children.
+
+**New `lexd migrate-labels <path>` subcommand** for source-level migration. Default mode prints the rewritten source to stdout; `--in-place` overwrites; `--check` exits non-zero if any migrations are pending.
+
+#### Breaking changes (pre-release, documented)
+
+- **Bare labels in source are silently rewritten at parse time.** This is observable in `lexd format` output: a file containing `:: title :: My Doc` will format to `:: lex.metadata.title :: My Doc`. Use `lexd migrate-labels` for explicit batch migration.
+- **`doc.table`, `doc.image`, `doc.video`, `doc.audio` verbatim labels in `to_lex` output are now canonical:** `lex.tabular.table` / `lex.media.{image,video,audio}`.
+- **The `VerbatimRegistry::default_with_standard()` registry no longer carries `doc.*` legacy aliases.** Embedders hand-building IR `Verbatim` nodes with the legacy labels and feeding them through `from_lex_verbatim` will hit a `None` lookup. Use the canonical names.
+- **The `VerbatimHandler` trait shrunk:** `to_ir` and `convert_from_ir` methods removed. `label()` and `format_content()` remain. The IR-construction path now goes through `from_lex_verbatim` calling free helpers directly (`table::parse_pipe_table`, `media::image_from_params`, etc.); the IR→Lex path goes through `Registry::dispatch_format`.
+- **Inline `:: lex.metadata.title :: ...` in the document body is no longer promoted to document metadata.** Inline annotations stay inline. Document-scope metadata must be attached at the document level (the lex-core `Document.annotations` slot, i.e. annotations at the very top of the source before any content). This was a behavioural quirk of the legacy whitelist.
+- **`lex-babel::ir::nodes::Document` gained a `document_annotations: Vec<Annotation>` field.** Code constructing `Document` via struct-literal syntax must add `document_annotations: vec![]` (or populate as needed).
+- **`lex-babel::common::nested_to_flat`'s legacy bare-label metadata whitelist (`["author", "note", "title", ...]`) is gone.** It synthesized `lex-metadata:<label>` verbatim events; after the refactor, document metadata flows through the `frontmatter` annotation event synthesized at the document boundary instead.
+- **`lex-extension` trait `LexHandler` gained a default-impl `on_format` method.** Existing impls compile unchanged; new method is non-breaking per the wire-spec versioning policy.
+
 ## [0.12.0] - 2026-05-12
 
 

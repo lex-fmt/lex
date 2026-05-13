@@ -26,6 +26,22 @@ use super::nodes::{
 };
 
 /// Converts a lex document to the IR.
+///
+/// Post-refac/label cleanup: the legacy frontmatter promotion (which
+/// scanned `children` for `lex.metadata.*` annotations and synthesized
+/// a single `frontmatter` IR Annotation into `children[0]`) is retired.
+/// Document-scope metadata now lives exclusively in
+/// `Document::document_annotations`, populated from the lex-core
+/// `doc.annotations` slot. `nested_to_flat` emits the
+/// `Event::StartAnnotation { label: "frontmatter", ... }` events
+/// downstream serializers consume — synthesized at the events layer,
+/// not in the IR tree.
+///
+/// **Behavioural break** (documented in CHANGELOG): an inline
+/// `:: lex.metadata.title :: ...` in the document body is no longer
+/// promoted to document metadata. Inline annotations stay inline;
+/// document-scope metadata must be attached at the document level
+/// (lex-core's `doc.annotations` slot).
 pub fn from_lex_document(doc: &LexDocument) -> Document {
     // Extract document title and subtitle
     let title = doc
@@ -38,142 +54,8 @@ pub fn from_lex_document(doc: &LexDocument) -> Document {
         .and_then(|t| t.subtitle.as_ref())
         .map(convert_inline_content);
 
-    let mut children = convert_children(&doc.root.children, 2);
+    let children = convert_children(&doc.root.children, 2);
 
-    let mut parameters = Vec::new();
-
-    // 1. Process document-level annotations.
-    //
-    // Strip the `lex.metadata.` prefix (#570 Phase 3b) when building
-    // the parameter key so document-level annotations rewritten by
-    // `NormalizeLabels` still produce the short-form keys downstream
-    // HTML serializers consume (`<meta name="title">`, not
-    // `<meta name="lex.metadata.title">`).
-    for ann in &doc.annotations {
-        let key = ann
-            .data
-            .label
-            .value
-            .strip_prefix("lex.metadata.")
-            .unwrap_or(ann.data.label.value.as_str())
-            .to_string();
-        let value = if !ann.children.is_empty() {
-            let mut text = String::new();
-            for child in &ann.children {
-                if let LexContentItem::Paragraph(p) = child {
-                    text.push_str(&p.text());
-                }
-            }
-            text
-        } else {
-            String::new()
-        };
-
-        if !value.is_empty() {
-            parameters.push((key, value));
-        } else {
-            for param in &ann.data.parameters {
-                parameters.push((format!("{}.{}", key, param.key), param.value.clone()));
-            }
-        }
-    }
-
-    // 2. Scan children for metadata annotations (e.g. attached to first element)
-    let mut indices_to_remove = Vec::new();
-
-    // Whitelist of labels to treat as frontmatter. #570 Phase 3b
-    // activated `NormalizeLabels` (lex-core) which rewrites bare
-    // labels to their canonical `lex.metadata.*` form before this
-    // pass runs, so the canonical names are what we match against.
-    // The legacy bare names stay in the list as aliases so IR built
-    // outside `STRING_TO_AST` (markdown imports, hand-built AST,
-    // alternate format adapters) continues to work.
-    let metadata_labels = [
-        // Canonical (#570 Phase 3b).
-        "lex.metadata.author",
-        "lex.metadata.publishing-date",
-        "lex.metadata.title",
-        "lex.metadata.date",
-        "lex.metadata.tags",
-        "lex.metadata.category",
-        "lex.metadata.template",
-        "lex.metadata.front-matter",
-        // Legacy aliases.
-        "author",
-        "publishing-date",
-        "title",
-        "date",
-        "tags",
-        "category",
-        "template",
-        "front-matter",
-    ];
-
-    for (i, child) in children.iter().enumerate() {
-        if let DocNode::Annotation(ann) = child {
-            if metadata_labels.contains(&ann.label.as_str()) {
-                // It's metadata! Strip the `lex.metadata.` prefix when
-                // building the key so the frontmatter annotation's
-                // parameter keys stay in the legacy short form
-                // (`title`, `author`, …) — that preserves the HTML
-                // comment shape (`<meta name="title">`) downstream
-                // serializers emit.
-                let key = ann
-                    .label
-                    .strip_prefix("lex.metadata.")
-                    .unwrap_or(ann.label.as_str())
-                    .to_string();
-                // Extract value (content or params)
-                let value = if !ann.content.is_empty() {
-                    // Flatten content
-                    let mut text = String::new();
-                    for c in &ann.content {
-                        if let DocNode::Paragraph(p) = c {
-                            for ic in &p.content {
-                                if let InlineContent::Text(t) = ic {
-                                    text.push_str(t);
-                                }
-                            }
-                        }
-                    }
-                    text
-                } else {
-                    String::new()
-                };
-
-                if !value.is_empty() {
-                    parameters.push((key, value));
-                } else {
-                    for (k, v) in &ann.parameters {
-                        parameters.push((format!("{key}.{k}"), v.clone()));
-                    }
-                }
-
-                indices_to_remove.push(i);
-            }
-        }
-    }
-
-    // Remove promoted annotations (in reverse order to keep indices valid)
-    for i in indices_to_remove.iter().rev() {
-        children.remove(*i);
-    }
-
-    if !parameters.is_empty() {
-        let frontmatter = DocNode::Annotation(Annotation {
-            label: "frontmatter".to_string(),
-            parameters,
-            content: vec![],
-        });
-        children.insert(0, frontmatter);
-    }
-
-    // Phase 3a of #570: populate the first-class `document_annotations`
-    // slot in parallel with the legacy frontmatter promotion above.
-    // This is additive — downstream serializers continue to read the
-    // synthetic `frontmatter` annotation from `children`. Phase 3b
-    // makes `document_annotations` the source of truth and deletes the
-    // promotion.
     let document_annotations = doc.annotations.iter().map(ir_annotation_from_lex).collect();
 
     Document {
@@ -409,18 +291,32 @@ fn from_lex_verbatim(verbatim: &LexVerbatim) -> DocNode {
         .collect::<Vec<_>>()
         .join("\n");
 
-    let registry = crate::common::verbatim::VerbatimRegistry::default_with_standard();
+    // Post-refac/label cleanup: the legacy
+    // `VerbatimRegistry::get(...).to_ir(...)` indirection is gone.
+    // Dispatch on the canonical label directly to the free hydration
+    // helpers — same logic, no trait-object overhead.
+    let label = verbatim.closing_data.label.value.as_str();
+    let params: std::collections::HashMap<String, String> = verbatim
+        .closing_data
+        .parameters
+        .iter()
+        .map(|p| (p.key.clone(), p.value.clone()))
+        .collect();
 
-    if let Some(handler) = registry.get(&verbatim.closing_data.label.value) {
-        let params = verbatim
-            .closing_data
-            .parameters
-            .iter()
-            .map(|p| (p.key.clone(), p.value.clone()))
-            .collect();
-        if let Some(node) = handler.to_ir(&content, &params) {
-            return node;
+    match label {
+        "lex.tabular.table" => {
+            return crate::common::verbatim::table::parse_pipe_table(&content);
         }
+        "lex.media.image" => {
+            return crate::common::verbatim::media::image_from_params(&content, &params);
+        }
+        "lex.media.video" => {
+            return crate::common::verbatim::media::video_from_params(&params);
+        }
+        "lex.media.audio" => {
+            return crate::common::verbatim::media::audio_from_params(&params);
+        }
+        _ => {}
     }
 
     DocNode::Verbatim(Verbatim {
@@ -753,16 +649,14 @@ mod tests {
 
     #[test]
     fn normalize_labels_pipeline_writes_canonical_labels_into_ast() {
-        // #570 Phase 3b regression: confirm the activated
-        // `NormalizeLabels` pass produces a Document whose annotations
-        // carry canonical `lex.metadata.*` labels by the time
-        // `from_lex_document` sees them.
+        // Confirm the activated `NormalizeLabels` pass produces a
+        // Document whose annotations carry canonical `lex.metadata.*`
+        // labels by the time `from_lex_document` sees them.
         use lex_core::lex::transforms::standard::STRING_TO_AST;
 
         let lex_doc = STRING_TO_AST
             .run(":: title :: My Doc\n\nBody.\n".to_string())
             .expect("parse ok");
-        // After NormalizeLabels, the title annotation is canonical.
         let title_in_ast = lex_doc
             .annotations
             .first()
@@ -773,62 +667,44 @@ mod tests {
                 })
             })
             .expect("title annotation parsed");
-        assert_eq!(
-            title_in_ast.data.label.value, "lex.metadata.title",
-            "NormalizeLabels is wired into STRING_TO_AST"
-        );
-        // And `from_lex_document` still promotes it into the
-        // frontmatter (legacy whitelist accepts the canonical form).
+        assert_eq!(title_in_ast.data.label.value, "lex.metadata.title");
+
+        // Post-refac/label cleanup: `from_lex_document` no longer
+        // synthesizes a `frontmatter` annotation in children. The
+        // canonical-labelled annotation lands in
+        // `document_annotations` instead; the `frontmatter` event is
+        // synthesized at the events-emission layer.
         let ir = from_lex_document(&lex_doc);
-        let frontmatter = ir.children.iter().find_map(|c| match c {
-            DocNode::Annotation(a) if a.label == "frontmatter" => Some(a),
-            _ => None,
-        });
-        let frontmatter = frontmatter.expect("frontmatter still synthesized in Phase 3b");
-        // The key is the *short* form so the HTML comment output stays
-        // backwards-compatible. The prefix-strip in `from_lex_document`
-        // handles this.
-        let has_title_key = frontmatter
-            .parameters
+        let frontmatter_in_children = ir
+            .children
             .iter()
-            .any(|(k, _)| k == "title" || k == "frontmatter.title");
+            .any(|c| matches!(c, DocNode::Annotation(a) if a.label == "frontmatter"));
         assert!(
-            has_title_key,
-            "frontmatter param key must be the short form (`title`), got {:?}",
-            frontmatter.parameters
+            !frontmatter_in_children,
+            "frontmatter must no longer be synthesized in children"
         );
     }
 
     #[test]
-    fn legacy_frontmatter_promotion_still_runs_alongside_document_annotations() {
-        // Phase 3a is additive — the synthetic `frontmatter` annotation
-        // that the legacy promotion inserts must still appear in
-        // `children` so downstream serializers keep their existing
-        // shape. Phase 3b retires this duplication.
+    fn document_annotations_is_source_of_truth_for_doc_metadata() {
+        // Post-refac/label cleanup: document-scope metadata flows
+        // through `document_annotations` only — the legacy
+        // `frontmatter` synthesis in children is gone.
         let doc = doc_with_one_annotation("author", "Alice");
         let ir_doc = from_lex_document(&doc);
 
-        // New slot populated with the raw annotation.
+        // The new slot carries the annotation.
         assert_eq!(ir_doc.document_annotations.len(), 1);
         assert_eq!(ir_doc.document_annotations[0].label, "author");
 
-        // Legacy frontmatter promotion still synthesizes the
-        // `frontmatter` annotation in children, with the value
-        // collected into a parameter under the bare key.
-        let frontmatter = ir_doc.children.iter().find_map(|c| match c {
-            DocNode::Annotation(a) if a.label == "frontmatter" => Some(a),
-            _ => None,
-        });
-        let frontmatter = frontmatter.expect("legacy frontmatter promotion still runs in Phase 3a");
-        let author_value = frontmatter
-            .parameters
+        // Children no longer carry a synthetic frontmatter annotation.
+        let frontmatter_in_children = ir_doc
+            .children
             .iter()
-            .find(|(k, _)| k == "author")
-            .map(|(_, v)| v.as_str());
-        assert_eq!(
-            author_value,
-            Some("Alice"),
-            "legacy frontmatter param must still carry the annotation body under the bare label"
+            .any(|c| matches!(c, DocNode::Annotation(a) if a.label == "frontmatter"));
+        assert!(
+            !frontmatter_in_children,
+            "synthetic frontmatter must not appear in children after cleanup"
         );
     }
 }
