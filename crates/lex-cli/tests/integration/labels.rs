@@ -144,3 +144,83 @@ lex = "github:fake/lex-labels"
         .failure()
         .stderr(predicates::str::contains("reserved"));
 }
+
+// `lexd check-labels` — PR 5 of #584.
+
+#[test]
+fn check_labels_exits_zero_on_clean_document() {
+    let dir = TempDir::new().unwrap();
+    let doc = dir.path().join("clean.lex");
+    fs::write(&doc, ":: author :: Alice\n\n1. Intro\n\n    Body.\n").unwrap();
+    Command::cargo_bin("lexd")
+        .unwrap()
+        .args(["check-labels", doc.to_str().unwrap()])
+        .assert()
+        .success();
+}
+
+#[test]
+fn check_labels_exits_one_on_forbidden_doc_prefix() {
+    let dir = TempDir::new().unwrap();
+    let doc = dir.path().join("bad.lex");
+    fs::write(&doc, ":: doc.table ::\n\nBody.\n").unwrap();
+    Command::cargo_bin("lexd")
+        .unwrap()
+        .args(["check-labels", doc.to_str().unwrap()])
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(
+            predicates::str::contains("doc.table")
+                .and(predicates::str::contains("forbidden-label-prefix"))
+                .and(predicates::str::contains("1 label-policy violation")),
+        );
+}
+
+#[test]
+fn check_labels_exits_one_on_unknown_lex_canonical() {
+    let dir = TempDir::new().unwrap();
+    let doc = dir.path().join("bad.lex");
+    fs::write(&doc, ":: lex.foobar :: x\n\nBody.\n").unwrap();
+    Command::cargo_bin("lexd")
+        .unwrap()
+        .args(["check-labels", doc.to_str().unwrap()])
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(
+            predicates::str::contains("lex.foobar")
+                .and(predicates::str::contains("unknown-lex-canonical")),
+        );
+}
+
+#[test]
+fn check_labels_reports_every_violation_in_one_run() {
+    // Permissive parse means every violation surfaces in a single
+    // invocation — useful for batch CI runs.
+    let dir = TempDir::new().unwrap();
+    let doc = dir.path().join("multi.lex");
+    fs::write(
+        &doc,
+        ":: doc.table :: x\n:: doc.image :: y\n:: lex.foobar :: z\n\nBody.\n",
+    )
+    .unwrap();
+    Command::cargo_bin("lexd")
+        .unwrap()
+        .args(["check-labels", doc.to_str().unwrap()])
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicates::str::contains("3 label-policy violation"));
+}
+
+#[test]
+fn check_labels_exits_two_on_missing_file() {
+    Command::cargo_bin("lexd")
+        .unwrap()
+        .args(["check-labels", "/nonexistent/path/that/does/not/exist.lex"])
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(predicates::str::contains("failed to read"));
+}
