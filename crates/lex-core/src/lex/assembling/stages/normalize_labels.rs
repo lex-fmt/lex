@@ -182,6 +182,44 @@ pub fn classify_label(input: &str) -> Resolution {
     Resolution::Resolved(input.to_string(), LabelForm::Community)
 }
 
+/// Reverse-lookup the [`SHORTCUT_TABLE`]: given a canonical `lex.*`
+/// label, return its blessed shortcut, if any. Used by emitters that
+/// preserve the user's source spelling on roundtrip — when a label
+/// was classified as `LabelForm::Shortcut`, this is the spelling to
+/// emit.
+pub fn shortcut_for_canonical(canonical: &str) -> Option<&'static str> {
+    SHORTCUT_TABLE
+        .iter()
+        .find(|(_, c)| *c == canonical)
+        .map(|(shortcut, _)| *shortcut)
+}
+
+/// Return the source-form spelling for `label`. Formatters call this
+/// to emit the same spelling the user wrote, honoring the
+/// form-preservation contract from `comms/specs/general.lex` §4.3.
+///
+/// - `Canonical` / `Community` → the stored `value` verbatim.
+/// - `Stripped` → `lex.` prefix stripped from the canonical.
+/// - `Shortcut` → the blessed shortcut from [`SHORTCUT_TABLE`].
+///
+/// Falls back to `value` for any malformed combination (e.g. a
+/// `Shortcut`-tagged label whose canonical isn't in the table —
+/// shouldn't happen but defensively keeps emission lossless).
+pub fn source_spelling(label: &crate::lex::ast::elements::label::Label) -> String {
+    use crate::lex::ast::elements::label::LabelForm;
+    match label.form {
+        LabelForm::Canonical | LabelForm::Community => label.value.clone(),
+        LabelForm::Stripped => label
+            .value
+            .strip_prefix(LEX_PREFIX)
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| label.value.clone()),
+        LabelForm::Shortcut => shortcut_for_canonical(&label.value)
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| label.value.clone()),
+    }
+}
+
 /// Post-parse pass that resolves and tags label sites against the
 /// namespace policy.
 pub struct NormalizeLabels {
@@ -352,6 +390,65 @@ mod tests {
             }
         }
         None
+    }
+
+    // ── source_spelling round-trip tests ────────────────────────────────
+
+    #[test]
+    fn source_spelling_canonical_returns_value() {
+        use crate::lex::ast::elements::label::Label;
+        let label = Label::from_string("lex.metadata.author").with_form(LabelForm::Canonical);
+        assert_eq!(source_spelling(&label), "lex.metadata.author");
+    }
+
+    #[test]
+    fn source_spelling_stripped_drops_lex_prefix() {
+        use crate::lex::ast::elements::label::Label;
+        let label = Label::from_string("lex.metadata.author").with_form(LabelForm::Stripped);
+        assert_eq!(source_spelling(&label), "metadata.author");
+    }
+
+    #[test]
+    fn source_spelling_shortcut_reverse_looks_up_table() {
+        use crate::lex::ast::elements::label::Label;
+        let label = Label::from_string("lex.metadata.author").with_form(LabelForm::Shortcut);
+        assert_eq!(source_spelling(&label), "author");
+    }
+
+    #[test]
+    fn source_spelling_community_returns_value() {
+        use crate::lex::ast::elements::label::Label;
+        let label = Label::from_string("acme.task").with_form(LabelForm::Community);
+        assert_eq!(source_spelling(&label), "acme.task");
+    }
+
+    #[test]
+    fn source_spelling_round_trips_every_shortcut_table_entry() {
+        // For each (shortcut, canonical) row, building a Shortcut-form
+        // Label with the canonical value must round-trip to the
+        // shortcut. Locks the SHORTCUT_TABLE forward + reverse maps in
+        // lockstep.
+        use crate::lex::ast::elements::label::Label;
+        for (shortcut, canonical) in SHORTCUT_TABLE {
+            let label = Label::from_string(canonical).with_form(LabelForm::Shortcut);
+            assert_eq!(
+                source_spelling(&label),
+                *shortcut,
+                "round-trip mismatch for canonical {canonical}"
+            );
+        }
+    }
+
+    #[test]
+    fn shortcut_for_canonical_returns_none_for_unmapped_canonical() {
+        // `lex.metadata.category` has no shortcut entry (it's
+        // intentionally not in the table per §4.2 — its bare form
+        // reads ambiguously). Reverse lookup returns None; emitters
+        // fall back to the stripped form via the spelling helper's
+        // own logic.
+        assert!(shortcut_for_canonical("lex.metadata.category").is_none());
+        assert!(shortcut_for_canonical("acme.task").is_none());
+        assert!(shortcut_for_canonical("").is_none());
     }
 
     // ── classify_label pure-function tests ──────────────────────────────

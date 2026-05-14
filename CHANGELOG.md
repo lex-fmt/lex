@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Added — form-preserving emit ([#584](https://github.com/lex-fmt/lex/issues/584) PR 3 of 5)
+
+Third of five PRs for the bare-as-blessed label namespace model. PRs 1 + 2 added `LabelForm` and tagged every label site at parse time; this PR wires that tag through `LexSerializer` so emit preserves the user's source spelling.
+
+- New `source_spelling(&Label) -> String` and `shortcut_for_canonical(&str) -> Option<&'static str>` in `crates/lex-core/src/lex/assembling/stages/normalize_labels.rs`. Pure functions; reverse-lookup `SHORTCUT_TABLE` for Shortcut-tagged labels, strip the `lex.` prefix for Stripped-tagged labels, return `value` verbatim for Canonical / Community.
+- `LexSerializer::visit_annotation` and `LexSerializer::leave_verbatim_block` now call `source_spelling` instead of emitting `label.value` directly. Tables inherit the same behavior because the `:: table ::` closer is itself an annotation walked through `visit_annotation`.
+- Roundtrip contract from `comms/specs/general.lex` §4.3 is now live: `:: author ::` → AST canonical `lex.metadata.author` (form=Shortcut) → emit `:: author ::`. Same for `metadata.author` (Stripped), `lex.metadata.author` (Canonical), `acme.task` (Community).
+- New round-trip tests in `formats/lex/serializer.rs` for all four forms, plus a verbatim closer test (`image src=…`). `test_verbatim_04_user_repro` was updated to expect the shortcut closer (`:: table ::`) instead of the canonical (`:: lex.tabular.table ::`).
+- New unit tests in `normalize_labels.rs` covering `source_spelling` for each form variant and `shortcut_for_canonical` for both hit + miss.
+
 ### Changed — strict `NormalizeLabels` + structural-Table emit ([#584](https://github.com/lex-fmt/lex/issues/584) PR 2 of 5)
 
 Second of five PRs for the bare-as-blessed label namespace model. PR 1 added the form-tagging infrastructure; this PR replaces `NormalizeLabels`'s legacy whitelist with the resolution rules from `comms/specs/general.lex` §4.2 and rejects forbidden forms at parse time.
