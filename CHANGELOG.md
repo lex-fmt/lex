@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+### Added — label-policy diagnostics, hover info, quickfix ([#584](https://github.com/lex-fmt/lex/issues/584) PR 4 of 5)
+
+Fourth of five PRs for the bare-as-blessed label namespace model. PRs 1–3 added the form-tagging infrastructure, strict resolution, and form-preserving emit. This PR wires the **user-facing surface** so editors can show what's going wrong and fix it.
+
+- **New `process_full_permissive` parse entry point** in `crates/lex-core/src/lex/parsing.rs`. Mirrors `process_full` but runs `NormalizeLabels` in permissive mode so `doc.*` and unknown `lex.*` labels flow through into the AST instead of failing the parse. Intended for hosts (the LSP) that want to surface label-policy violations as in-place diagnostics rather than as wholesale parse failures.
+
+- **LSP parse switched to permissive mode** (`crates/lex-lsp/src/server.rs::DocumentStore::upsert`). A `:: doc.table ::` in a file no longer blanks out every LSP feature (semantic tokens, hover, completion, goto-def) — the rest of the file keeps working and the offending label gets a diagnostic.
+
+- **New `check_labels` analysis pass** (`crates/lex-analysis/src/diagnostics.rs`). Walks every label site (annotation, verbatim closer, table closer, nested annotation) and re-classifies via `classify_label`. Emits:
+  - `DiagnosticKind::ForbiddenLabelPrefix` (Error, code `forbidden-label-prefix`) for `doc.*` labels.
+  - `DiagnosticKind::UnknownLexCanonical` (Error, code `unknown-lex-canonical`) for `lex.*` literals not in the registered canonical set.
+
+- **Hover shows form classification** (`crates/lex-analysis/src/hover.rs::annotation_hover_result`). For `Shortcut`-form labels: "Shortcut for `lex.metadata.author`". For `Stripped`: "Prefix-stripped form of `lex.metadata.author`". For `Community`: "Community label". `Canonical` form gets no extra line (already the natural reading).
+
+- **Quickfix for `doc.*` labels** (`crates/lex-lsp-core/src/available_actions.rs`). When a `forbidden-label-prefix` diagnostic is on a known legacy spelling (`doc.table`, `doc.image`, `doc.video`, `doc.audio`), offers "Rewrite `doc.table` to `table`" as a `QUICKFIX`-kind code action. Reuses the legacy→blessed map newly exposed as `lex_core::lex::migrate::blessed_for_legacy`.
+
 ### Wire `on_resolve` for tabular + media ([#583](https://github.com/lex-fmt/lex/issues/583))
 
 Closing follow-up to #570. The `lex.tabular.table` and `lex.media.{image,video,audio}` labels now go through `Registry::dispatch_resolve` at IR construction time rather than being pattern-matched on `DocNode` variants by the legacy `VerbatimRegistry` lookup. This is the load-bearing piece of the refactor: third-party namespaces can now intercept verbatim labels through the same code path the built-ins use.

@@ -25,6 +25,17 @@ pub enum DiagnosticKind {
         namespace: String,
         code: Option<String>,
     },
+    /// A label uses the reserved `doc.*` prefix (forbidden under
+    /// `comms/specs/general.lex` §4.1). PR 4 of #584 emits this when
+    /// permissive-mode parse lets the label flow through; the LSP
+    /// then offers a quickfix to rewrite to the blessed shortcut
+    /// (`doc.table` → `table`, `doc.image` → `image`, etc.).
+    ForbiddenLabelPrefix,
+    /// A `lex.*` literal that doesn't match any registered canonical
+    /// in [`lex_core::lex::builtins::CANONICAL_LABELS`]. Typically a
+    /// typo (`lex.fooar`) or a label authored against a future
+    /// version of the core schemas.
+    UnknownLexCanonical,
 }
 
 /// Severity for analysis-emitted diagnostics. The analyser populates
@@ -88,8 +99,131 @@ pub fn analyze_with_registry(document: &Document, registry: &Registry) -> Vec<An
     let mut diagnostics = Vec::new();
     check_footnotes(document, &mut diagnostics);
     check_tables(document, &mut diagnostics);
+    check_labels(document, &mut diagnostics);
     crate::label_dispatch::dispatch_labels(document, registry, &mut diagnostics);
     diagnostics
+}
+
+/// Walk every label site in the document and re-classify via
+/// [`classify_label`](lex_core::lex::assembling::stages::normalize_labels::classify_label).
+/// Emits diagnostics for sites that strict-mode parsing would have
+/// rejected — `doc.*` (forbidden) and unknown `lex.*` (not a
+/// registered canonical). The LSP-side permissive parse keeps the
+/// AST building so these surface as in-place diagnostics rather than
+/// as a wholesale parse failure.
+fn check_labels(document: &Document, diagnostics: &mut Vec<AnalysisDiagnostic>) {
+    use lex_core::lex::assembling::stages::normalize_labels::{
+        classify_label, RejectReason, Resolution,
+    };
+    use lex_core::lex::ast::{Label, Verbatim};
+
+    fn emit(label: &Label, diagnostics: &mut Vec<AnalysisDiagnostic>) {
+        if let Resolution::Rejected(reason) = classify_label(&label.value) {
+            let (kind, message) = match reason {
+                RejectReason::Forbidden { input } => (
+                    DiagnosticKind::ForbiddenLabelPrefix,
+                    format!(
+                        "label `{input}` uses the reserved `doc.*` prefix (forbidden under \
+                         namespace policy; see general.lex §4.1)"
+                    ),
+                ),
+                RejectReason::UnknownCanonical { input } => (
+                    DiagnosticKind::UnknownLexCanonical,
+                    format!("label `{input}` is not a registered `lex.*` canonical"),
+                ),
+            };
+            diagnostics.push(AnalysisDiagnostic {
+                range: label.location.clone(),
+                severity: DiagnosticSeverity::Error,
+                kind,
+                message,
+            });
+        }
+    }
+
+    fn walk_annotation(annotation: &Annotation, diagnostics: &mut Vec<AnalysisDiagnostic>) {
+        emit(&annotation.data.label, diagnostics);
+        for child in annotation.children.iter() {
+            walk_item(child, diagnostics);
+        }
+    }
+
+    fn walk_verbatim(verbatim: &Verbatim, diagnostics: &mut Vec<AnalysisDiagnostic>) {
+        emit(&verbatim.closing_data.label, diagnostics);
+        for annotation in verbatim.annotations() {
+            walk_annotation(annotation, diagnostics);
+        }
+    }
+
+    fn walk_table(table: &Table, diagnostics: &mut Vec<AnalysisDiagnostic>) {
+        for annotation in table.annotations() {
+            walk_annotation(annotation, diagnostics);
+        }
+        for row in table.header_rows.iter().chain(table.body_rows.iter()) {
+            for cell in &row.cells {
+                for child in cell.children.iter() {
+                    walk_item(child, diagnostics);
+                }
+            }
+        }
+        if let Some(footnotes) = table.footnotes.as_ref() {
+            for annotation in footnotes.annotations() {
+                walk_annotation(annotation, diagnostics);
+            }
+            for item in footnotes.items.iter() {
+                walk_item(item, diagnostics);
+            }
+        }
+    }
+
+    fn walk_item(item: &ContentItem, diagnostics: &mut Vec<AnalysisDiagnostic>) {
+        match item {
+            ContentItem::Annotation(a) => walk_annotation(a, diagnostics),
+            ContentItem::VerbatimBlock(v) => walk_verbatim(v, diagnostics),
+            ContentItem::Table(t) => walk_table(t, diagnostics),
+            _ => {}
+        }
+        // Walk attached annotations (sessions, paragraphs, lists, etc.).
+        if let Some(attached) = attached_annotations(item) {
+            for annotation in attached {
+                walk_annotation(annotation, diagnostics);
+            }
+        }
+        if let Some(children) = item.children() {
+            for child in children {
+                walk_item(child, diagnostics);
+            }
+        }
+    }
+
+    fn walk_session(session: &Session, diagnostics: &mut Vec<AnalysisDiagnostic>) {
+        for annotation in session.annotations() {
+            walk_annotation(annotation, diagnostics);
+        }
+        for child in &session.children {
+            walk_item(child, diagnostics);
+        }
+    }
+
+    fn attached_annotations(item: &ContentItem) -> Option<&[Annotation]> {
+        match item {
+            ContentItem::Session(s) => Some(s.annotations()),
+            ContentItem::Paragraph(p) => Some(p.annotations()),
+            ContentItem::Definition(d) => Some(d.annotations()),
+            ContentItem::List(l) => Some(l.annotations()),
+            ContentItem::ListItem(li) => Some(li.annotations()),
+            ContentItem::VerbatimBlock(v) => Some(v.annotations()),
+            ContentItem::Table(t) => Some(t.annotations()),
+            _ => None,
+        }
+    }
+
+    // Document-level annotations.
+    for annotation in document.annotations() {
+        walk_annotation(annotation, diagnostics);
+    }
+    // Root session walks.
+    walk_session(&document.root, diagnostics);
 }
 
 fn check_footnotes(document: &Document, diagnostics: &mut Vec<AnalysisDiagnostic>) {
@@ -375,6 +509,7 @@ fn compute_row_widths(rows: &[&TableRow]) -> Vec<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lex_core::lex::parsing::process_full_permissive;
     use lex_core::lex::testing::lexplore::Lexplore;
 
     fn footnote_diags(doc: &Document) -> Vec<AnalysisDiagnostic> {
@@ -382,6 +517,73 @@ mod tests {
             .into_iter()
             .filter(|d| d.kind == DiagnosticKind::MissingFootnoteDefinition)
             .collect()
+    }
+
+    fn label_diags(source: &str) -> Vec<AnalysisDiagnostic> {
+        let doc = process_full_permissive(source).expect("permissive parse");
+        analyze(&doc)
+            .into_iter()
+            .filter(|d| {
+                matches!(
+                    d.kind,
+                    DiagnosticKind::ForbiddenLabelPrefix | DiagnosticKind::UnknownLexCanonical
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn check_labels_emits_for_doc_prefix() {
+        let diags = label_diags(":: doc.table :: x\n\nBody.\n");
+        assert_eq!(diags.len(), 1, "expected 1 forbidden-prefix diagnostic");
+        assert_eq!(diags[0].kind, DiagnosticKind::ForbiddenLabelPrefix);
+        assert_eq!(diags[0].severity, DiagnosticSeverity::Error);
+        assert!(
+            diags[0].message.contains("doc.table") && diags[0].message.contains("reserved"),
+            "message names the offending prefix; got: {}",
+            diags[0].message
+        );
+    }
+
+    #[test]
+    fn check_labels_emits_for_unknown_lex_canonical() {
+        let diags = label_diags(":: lex.foobar :: x\n\nBody.\n");
+        assert_eq!(diags.len(), 1, "expected 1 unknown-canonical diagnostic");
+        assert_eq!(diags[0].kind, DiagnosticKind::UnknownLexCanonical);
+        assert_eq!(diags[0].severity, DiagnosticSeverity::Error);
+        assert!(
+            diags[0].message.contains("lex.foobar"),
+            "message names the offending label; got: {}",
+            diags[0].message
+        );
+    }
+
+    #[test]
+    fn check_labels_silent_on_accepted_forms() {
+        // Shortcut, prefix-stripped, canonical, and community labels
+        // all accept silently — analysis only flags the two reject
+        // categories from `classify_label`.
+        let sources = [
+            ":: author :: Alice\n\nBody.\n",
+            ":: metadata.author :: Alice\n\nBody.\n",
+            ":: lex.metadata.author :: Alice\n\nBody.\n",
+            ":: acme.task :: x\n\nBody.\n",
+        ];
+        for src in sources {
+            let diags = label_diags(src);
+            assert!(
+                diags.is_empty(),
+                "no label diagnostics expected for {src:?}; got {diags:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn check_labels_finds_verbatim_closer_violations() {
+        let diags =
+            label_diags("Table:\n    | a | b |\n    |---|---|\n    | 1 | 2 |\n:: doc.table ::\n");
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].kind, DiagnosticKind::ForbiddenLabelPrefix);
     }
 
     #[test]

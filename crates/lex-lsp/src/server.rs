@@ -211,7 +211,14 @@ struct DocumentStore {
 
 impl DocumentStore {
     async fn upsert(&self, uri: Url, text: String) -> Option<DocumentEntry> {
-        let parsed = match parsing::parse_document(&text) {
+        // Permissive parse: `doc.*` and unknown `lex.*` labels — which
+        // strict-mode `NormalizeLabels` rejects as parse errors — flow
+        // through into the AST instead so the analysis stage can
+        // surface them as in-place diagnostics. PR 4 of #584 wires up
+        // the diagnostic surface; without permissive parse here, a
+        // single forbidden label would blank out every LSP feature
+        // for the document.
+        let parsed = match parsing::process_full_permissive(&text) {
             Ok(document) => Some(DocumentEntry {
                 document: Arc::new(document),
                 text: Arc::new(text),
@@ -1979,6 +1986,8 @@ fn to_lsp_diagnostic(diag: AnalysisDiagnostic) -> Diagnostic {
         DiagnosticKind::Handler { code, .. } => {
             code.clone().unwrap_or_else(|| "handler.diagnostic".into())
         }
+        DiagnosticKind::ForbiddenLabelPrefix => "forbidden-label-prefix".into(),
+        DiagnosticKind::UnknownLexCanonical => "unknown-lex-canonical".into(),
     };
 
     let source = match &diag.kind {

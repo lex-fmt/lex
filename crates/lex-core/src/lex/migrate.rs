@@ -51,7 +51,7 @@ use crate::lex::transforms::Runnable;
 /// blessed shortcut). The non-shortcut metadata labels (`category`,
 /// `template`, etc.) rewrite to their prefix-stripped form (e.g.
 /// `:: category ::` → `:: metadata.category ::`).
-const LEGACY_TO_BLESSED: &[(&str, &str)] = &[
+pub const LEGACY_TO_BLESSED: &[(&str, &str)] = &[
     ("category", "metadata.category"),
     ("template", "metadata.template"),
     ("publishing-date", "metadata.publishing-date"),
@@ -61,6 +61,16 @@ const LEGACY_TO_BLESSED: &[(&str, &str)] = &[
     ("doc.video", "video"),
     ("doc.audio", "audio"),
 ];
+
+/// Lookup helper for the legacy→blessed map. Used by the LSP's
+/// `forbidden-label-prefix` quickfix in `lex-lsp-core::available_actions`
+/// — PR 4 of #584 wired up the code action surface.
+pub fn blessed_for_legacy(legacy: &str) -> Option<&'static str> {
+    LEGACY_TO_BLESSED
+        .iter()
+        .find(|(l, _)| *l == legacy)
+        .map(|(_, b)| *b)
+}
 
 /// One legacy-label rewrite site.
 #[derive(Debug, Clone, PartialEq, Eq)]
