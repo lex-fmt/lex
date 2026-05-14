@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-05-14
+
+
 ### Added — `lexd check-labels` pre-flight validator ([#584](https://github.com/lex-fmt/lex/issues/584) PR 5 of 5)
 
 Final PR of the bare-as-blessed label namespace model. PRs 1–4 added the form-tagging infrastructure, strict resolution, form-preserving emit, and the LSP-side label-policy surface. This PR ships the CLI equivalent for batch / CI use.
@@ -152,7 +155,6 @@ Multi-phase refactor moving label-semantic decisions out of the IR layer and thr
 - **`lex-babel::ir::nodes::Document` gained a `document_annotations: Vec<Annotation>` field.** Code constructing `Document` via struct-literal syntax must add `document_annotations: vec![]` (or populate as needed).
 - **`lex-babel::common::nested_to_flat`'s legacy bare-label metadata whitelist (`["author", "note", "title", ...]`) is gone.** It synthesized `lex-metadata:<label>` verbatim events; after the refactor, document metadata flows through the `frontmatter` annotation event synthesized at the document boundary instead.
 - **`lex-extension` trait `LexHandler` gained a default-impl `on_format` method.** Existing impls compile unchanged; new method is non-breaking per the wire-spec versioning policy.
-
 ## [0.12.0] - 2026-05-12
 
 
