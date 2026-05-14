@@ -1,5 +1,6 @@
 use lex_analysis::utils::collect_footnote_definitions;
 use lex_core::lex::ast::Document;
+use lex_core::lex::migrate::blessed_for_legacy;
 use lsp_types::{
     CodeAction, CodeActionKind, CodeActionParams, Position, Range, TextEdit, WorkspaceEdit,
 };
@@ -64,6 +65,48 @@ pub fn compute_actions(
         });
     }
 
+    // 1b. `forbidden-label-prefix` quickfix.
+    //
+    // Each `:: doc.X ::` diagnostic gets its own QuickFix that
+    // replaces the label text with the blessed shortcut/stripped
+    // form via `lex_core::lex::migrate::blessed_for_legacy`. The
+    // diagnostic range points at the label token; the replacement
+    // operates on that exact slice so surrounding `::` markers and
+    // parameters survive unchanged. PR 4 of #584.
+    for diagnostic in &params.context.diagnostics {
+        let Some(lsp_types::NumberOrString::String(code)) = &diagnostic.code else {
+            continue;
+        };
+        if code.as_str() != "forbidden-label-prefix" {
+            continue;
+        }
+        let Some(label) = label_text_at_range(source, &diagnostic.range) else {
+            continue;
+        };
+        let Some(blessed) = blessed_for_legacy(&label) else {
+            continue;
+        };
+        actions.push(CodeAction {
+            title: format!("Rewrite `{label}` to `{blessed}`"),
+            kind: Some(CodeActionKind::QUICKFIX),
+            diagnostics: Some(vec![diagnostic.clone()]),
+            edit: Some(WorkspaceEdit {
+                changes: Some(HashMap::from([(
+                    params.text_document.uri.clone(),
+                    vec![TextEdit {
+                        range: diagnostic.range,
+                        new_text: blessed.to_string(),
+                    }],
+                )])),
+                ..Default::default()
+            }),
+            command: None,
+            is_preferred: Some(true),
+            disabled: None,
+            data: None,
+        });
+    }
+
     // 2. Global actions (Refactor)
     let requested_kind = params.context.only.as_ref().and_then(|k| k.first());
     let wants_refactor = requested_kind
@@ -116,6 +159,29 @@ pub fn compute_actions(
     }
 
     actions
+}
+
+/// Reads the source text spanned by the diagnostic range and returns
+/// it with whitespace trimmed. Used by the `forbidden-label-prefix`
+/// quickfix: the diagnostic range covers the label token, which the
+/// parser-emitted location may pad with surrounding whitespace; we
+/// want the bare label string to feed into
+/// `blessed_for_legacy(...)`. Same multi-byte safety constraints as
+/// `label_from_diagnostic_range`.
+fn label_text_at_range(source: &str, range: &Range) -> Option<String> {
+    if range.start.line != range.end.line {
+        return None;
+    }
+    let line = source.lines().nth(range.start.line as usize)?;
+    let start_byte = range.start.character as usize;
+    let end_byte = range.end.character as usize;
+    let slice = line.get(start_byte..end_byte)?;
+    let trimmed = slice.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
 /// Reads the source text spanned by the diagnostic range and extracts the
