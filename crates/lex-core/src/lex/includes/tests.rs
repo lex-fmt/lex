@@ -921,15 +921,15 @@ fn invariant_unrelated_annotations_in_included_file_keep_their_attachment_target
         ":: lex.include src=\"chapter.lex\" ::\n",
         &[(
             "/repo/chapter.lex",
-            "1. Chapter\n\n    :: note :: Important.\n\n    The body.\n",
+            "1. Chapter\n\n    :: test.note :: Important.\n\n    The body.\n",
         )],
     )
     .unwrap();
 
     let labels = tree.all_attached_annotation_labels();
     assert!(
-        labels.iter().any(|l| l == "note"),
-        "note annotation should still be attached after splice, got {labels:?}"
+        labels.iter().any(|l| l == "test.note"),
+        "test.note annotation should still be attached after splice, got {labels:?}"
     );
 }
 

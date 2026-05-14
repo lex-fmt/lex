@@ -15,7 +15,7 @@
 //!
 //!     Examples:
 //!         :: note
-//!         :: note severity=high
+//!         :: test.note severity=high
 //!         :: syntax
 //!
 //!     Data nodes always appear at the start of a line (after whitespace), so they are

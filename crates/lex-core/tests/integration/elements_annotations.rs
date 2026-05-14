@@ -24,7 +24,7 @@ fn parse_annotation_without_attachment(
 
 #[test]
 fn test_annotation_01_flat_marker_simple() {
-    // annotation-01-flat-marker-simple.lex: Simple marker annotation ":: note ::"
+    // annotation-01-flat-marker-simple.lex: Simple marker annotation ":: test.note ::"
     let doc = parse_annotation_without_attachment(1).unwrap();
 
     assert_ast(&doc).item_count(1).item(0, |item| {

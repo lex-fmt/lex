@@ -747,7 +747,7 @@ mod tests {
     fn test_annotation_allows_non_session_children() {
         use crate::lex::ast::elements::Paragraph;
 
-        let source = ":: note ::\n    Some content\n";
+        let source = ":: test.note ::\n    Some content\n";
         let source_location = SourceLocation::new(source);
         let para = Paragraph::from_line("Some content".to_string());
         let content = vec![ContentElement::Paragraph(para)];

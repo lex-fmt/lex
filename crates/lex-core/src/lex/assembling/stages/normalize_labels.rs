@@ -1,116 +1,208 @@
-//! Normalize legacy bare labels to their canonical `lex.*` form.
+//! Resolve label input forms to their canonical `lex.*` spelling and
+//! tag each label site with the form the user wrote.
 //!
-//! Phase 2 of the label-semantics refactor tracked in
-//! [#570](https://github.com/lex-fmt/lex/issues/570). Walks a parsed
-//! [`Document`] and rewrites annotation labels matching the
-//! pre-extension whitelist (`title`, `author`, `date`, `tags`,
-//! `category`, `template`, `publishing-date`, `front-matter`) plus the
-//! four verbatim labels (`doc.table`, `doc.image`, `doc.video`,
-//! `doc.audio`) to their canonical `lex.metadata.*` / `lex.tabular.*` /
-//! `lex.media.*` equivalents.
+//! This stage implements the namespace-policy rules normatively
+//! defined in `comms/specs/general.lex` §4 — see [PR 1 of
+//! #584](https://github.com/lex-fmt/lex/pull/586) for the foundation
+//! (`LabelForm` enum + `form` field on [`Label`]) and PR 2 (this
+//! revision) for the resolution logic + rejection.
 //!
-//! # Activation lifecycle
+//! # Resolution order
 //!
-//! Phase 2 of #570 shipped this stage as a module without wiring it
-//! into the default
-//! [`STRING_TO_AST`](crate::lex::transforms::standard::STRING_TO_AST)
-//! pipeline. **Phase 3b wired it up**: the rewrite now runs between
-//! `AttachAnnotations` and `ApplyTableConfig`, so every Document
-//! emitted by `STRING_TO_AST` carries canonical labels. The legacy
-//! whitelists in `lex-babel` (`ir/from_lex.rs`'s frontmatter
-//! promotion and `common/verbatim/VerbatimRegistry`'s handler
-//! registrations) were updated in the same PR to recognize the
-//! canonical names — both halves of the bare-label flip landed
-//! together so no intermediate state was broken. A follow-up phase
-//! retires the legacy paths altogether once render hooks (#570
-//! Phase 4) are live.
+//! For each label-bearing AST node, the parser-time pipeline runs the
+//! resolution order from §4.2:
 //!
-//! # Why warnings are silent
+//! 1. **Shortcut.** If the input is a key in [`SHORTCUT_TABLE`],
+//!    resolve to its canonical and tag [`LabelForm::Shortcut`].
+//! 2. **Input as-is.** Otherwise, if the input names a registered
+//!    [`builtins::CANONICAL_LABELS`] entry verbatim, keep it and tag
+//!    [`LabelForm::Canonical`]; if the input has the community shape
+//!    (one or more dots, not in a reserved prefix) and no `lex.<input>`
+//!    canonical exists, tag [`LabelForm::Community`] — registry
+//!    validation is deferred to the analysis stage.
+//! 3. **Prefix strip.** Otherwise, if `lex.<input>` names a registered
+//!    canonical, resolve to that canonical and tag [`LabelForm::Stripped`].
+//! 4. **Reject.** Otherwise, the stage in [`Strict`] mode returns a
+//!    [`TransformError`] with the offending input; in [`Permissive`]
+//!    mode the label is left unchanged (used by the migration tool,
+//!    which needs to walk legacy source bytes).
 //!
-//! The issue's Phase 2 spec calls for a "parse-time deprecation
-//! warning" alongside the rewrite. Lex-core has no production
-//! diagnostic-collection vehicle today
-//! ([`Document::diagnostics`](crate::lex::ast::Document::diagnostics) is
-//! pull-based and not wired through the LSP / CLI; the LSP uses
-//! `lex-analysis::diagnostics`). Surfacing a warning therefore either
-//! requires adding storage on the AST (invasive, breaks
-//! `PartialEq`-based test fixtures) or a side channel that the LSP must
-//! opt into. Phase 5 ships the user-facing surface naturally: a
-//! `lexd migrate-labels` subcommand walks raw source, lists every legacy
-//! site by line/column, and offers an in-place rewrite. The rewrite
-//! itself stays silent here.
+//! Step 2's community branch deliberately preempts step 3's
+//! prefix-strip when the input has registered community semantics;
+//! the parser cannot know which dotted inputs have community handlers
+//! today, so it tags Community whenever no `lex.<input>` canonical
+//! exists. Core promises not to ship `lex.<owner>.<repo>`-shaped
+//! canonicals whose stripped form would shadow a third-party label;
+//! see the §4.2 closing paragraph.
+//!
+//! # Strict vs Permissive
+//!
+//! The standard parse pipeline ([`STRING_TO_AST`](crate::lex::transforms::standard::STRING_TO_AST))
+//! uses strict mode: `doc.*` (reserved-forbidden) and unrecognized
+//! bare labels surface as `TransformError`s, which propagate out as
+//! parse errors. The migration tool ([`crate::lex::migrate`]) uses
+//! permissive mode so it can parse legacy `doc.*` source and rewrite
+//! it before the source reaches a strict-mode parse.
 
 use crate::lex::ast::elements::annotation::Annotation;
 use crate::lex::ast::elements::content_item::ContentItem;
 use crate::lex::ast::elements::label::{Label, LabelForm};
 use crate::lex::ast::elements::verbatim::Verbatim;
 use crate::lex::ast::Document;
+use crate::lex::builtins;
 use crate::lex::transforms::{Runnable, TransformError};
 
-/// Pairings of legacy bare label → canonical `lex.*` form, paired with
-/// the [`LabelForm`] each rewrite represents.
+/// Curated one-segment shortcuts for high-traffic `lex.*` canonicals.
 ///
-/// The form classification is the parser-side record of which input
-/// spelling the user wrote, so downstream formatters can emit the same
-/// spelling back. See `comms/specs/general.lex` §4.2 for the normative
-/// resolution rules and §4.3 for the form-preservation contract.
-///
-/// Today the table still includes a few labels that fall outside the
-/// new bare-as-blessed namespace model (`category`, `template`,
-/// `publishing-date`, `front-matter` are tagged as `Stripped` because
-/// their bare form is scheduled for removal in PR 2 of #584; the four
-/// `doc.*` entries are tagged as `Stripped` because the prefix is
-/// reserved-forbidden and will become a parse error in PR 2). PR 1
-/// preserves current parsing behavior — every input that parses today
-/// continues to parse — and only adds the `form` classification.
-pub const LEGACY_TO_CANONICAL: &[(&str, &str, LabelForm)] = &[
-    ("title", "lex.metadata.title", LabelForm::Shortcut),
-    ("author", "lex.metadata.author", LabelForm::Shortcut),
-    ("date", "lex.metadata.date", LabelForm::Shortcut),
-    ("tags", "lex.metadata.tags", LabelForm::Shortcut),
-    ("category", "lex.metadata.category", LabelForm::Stripped),
-    ("template", "lex.metadata.template", LabelForm::Stripped),
-    (
-        "publishing-date",
-        "lex.metadata.publishing-date",
-        LabelForm::Stripped,
-    ),
-    (
-        "front-matter",
-        "lex.metadata.front-matter",
-        LabelForm::Stripped,
-    ),
-    ("doc.table", "lex.tabular.table", LabelForm::Stripped),
-    ("doc.image", "lex.media.image", LabelForm::Stripped),
-    ("doc.video", "lex.media.video", LabelForm::Stripped),
-    ("doc.audio", "lex.media.audio", LabelForm::Stripped),
+/// Normative; the same table appears verbatim in
+/// `comms/specs/general.lex` §4.2. Adding a new entry is a minor
+/// version bump; removing one is breaking and should not happen.
+pub const SHORTCUT_TABLE: &[(&str, &str)] = &[
+    ("table", "lex.tabular.table"),
+    ("image", "lex.media.image"),
+    ("video", "lex.media.video"),
+    ("audio", "lex.media.audio"),
+    ("author", "lex.metadata.author"),
+    ("title", "lex.metadata.title"),
+    ("tags", "lex.metadata.tags"),
+    ("date", "lex.metadata.date"),
+    ("include", "lex.include"),
+    ("notes", "lex.notes"),
 ];
 
-/// Lookup the canonical form and matching [`LabelForm`] for a legacy
-/// label, if any.
-pub fn canonical_for(label: &str) -> Option<(&'static str, LabelForm)> {
-    LEGACY_TO_CANONICAL
-        .iter()
-        .find(|(legacy, _, _)| *legacy == label)
-        .map(|(_, canonical, form)| (*canonical, *form))
+/// Reserved prefix the namespace policy forbids third parties (and
+/// users) from authoring. Authoring any `doc.<anything>` label is a
+/// parse error under [`Mode::Strict`].
+const FORBIDDEN_PREFIX: &str = "doc.";
+
+/// Reserved prefix for the core namespace. Inputs starting with this
+/// prefix follow the "canonical" branch of the resolution order: the
+/// label must name a registered [`builtins::CANONICAL_LABELS`] entry.
+const LEX_PREFIX: &str = "lex.";
+
+/// The resolved spelling + form classification for a label input, or a
+/// structured reason the input cannot be accepted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Resolution {
+    /// Accept; carry forward `(canonical, form)` to the AST.
+    Resolved(String, LabelForm),
+    /// Reject; the input cannot be authored. Strict mode propagates
+    /// this as a parse error.
+    Rejected(RejectReason),
 }
 
-/// Rewrite `label` in place if its current value matches the legacy
-/// table. Shared by every label-bearing AST node the walker reaches
-/// (annotations, verbatim closers, table-cell-nested annotations).
-fn normalize_label(label: &mut Label) {
-    if let Some((canonical, form)) = canonical_for(&label.value) {
-        label.value = canonical.to_string();
-        label.form = form;
+/// Why a label input was rejected. Surfaces in the strict-mode
+/// [`TransformError`] message and (in PR 4 of #584) in the analysis
+/// stage's diagnostics with a quickfix.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RejectReason {
+    /// Input started with `doc.`. The prefix is reserved-forbidden.
+    Forbidden { input: String },
+    /// Input starts with `lex.` but does not name a registered canonical.
+    UnknownCanonical { input: String },
+}
+
+impl RejectReason {
+    /// Render the reason as a user-facing message. Used by both the
+    /// strict-mode `TransformError` and PR 4's analysis-time
+    /// diagnostic.
+    pub fn message(&self) -> String {
+        match self {
+            Self::Forbidden { input } => format!(
+                "label `{input}` uses the reserved `doc.*` prefix \
+                 (forbidden under namespace policy; see general.lex §4.1)"
+            ),
+            Self::UnknownCanonical { input } => {
+                format!("label `{input}` is not a registered `lex.*` canonical")
+            }
+        }
     }
 }
 
-/// Post-parse pass that rewrites legacy labels to their canonical form.
-pub struct NormalizeLabels;
+/// Resolution mode. See module-level docs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    /// Standard parse pipeline behavior — rejected inputs surface as
+    /// `TransformError`. Used by [`STRING_TO_AST`].
+    Strict,
+    /// Migration-tool behavior — rejected inputs leave the label
+    /// unchanged, value and form untouched, so the walker can still
+    /// reach legacy spellings to rewrite them.
+    Permissive,
+}
+
+/// Classify a single label string against the namespace policy.
+/// Pure function over the input string; exposed for unit tests + the
+/// CLI's pre-format validation (PR 5).
+pub fn classify_label(input: &str) -> Resolution {
+    // 1. Shortcut table.
+    if let Some((_, canonical)) = SHORTCUT_TABLE.iter().find(|(s, _)| *s == input) {
+        return Resolution::Resolved((*canonical).to_string(), LabelForm::Shortcut);
+    }
+
+    // doc.* is reserved-forbidden — reject before any other branch.
+    if input.starts_with(FORBIDDEN_PREFIX) {
+        return Resolution::Rejected(RejectReason::Forbidden {
+            input: input.to_string(),
+        });
+    }
+
+    // 2a. `lex.*` literal — must be a registered canonical.
+    if input.starts_with(LEX_PREFIX) {
+        if builtins::is_canonical_label(input) {
+            return Resolution::Resolved(input.to_string(), LabelForm::Canonical);
+        }
+        return Resolution::Rejected(RejectReason::UnknownCanonical {
+            input: input.to_string(),
+        });
+    }
+
+    // 3. Prefix-strip: `lex.<input>` would be a registered canonical?
+    let candidate = format!("{LEX_PREFIX}{input}");
+    if builtins::is_canonical_label(&candidate) {
+        return Resolution::Resolved(candidate, LabelForm::Stripped);
+    }
+
+    // 2b. Community shape — at least one dot, no registered canonical
+    //     under the prefix-strip rule. Defer registry validation to
+    //     the analysis stage.
+    if input.contains('.') {
+        return Resolution::Resolved(input.to_string(), LabelForm::Community);
+    }
+
+    // 4. Bare input with no shortcut and no `lex.<input>` canonical:
+    //    accept as Community. The parser is deliberately permissive
+    //    here so document-scoped reference identifiers (footnote
+    //    numbers, labeled-footnote `^name` markers, citation keys)
+    //    parse without each needing a dedicated carve-out. PR 4 of
+    //    #584 adds an analysis-time lint that flags suspicious bare
+    //    names (e.g. close matches to known shortcuts) so typo
+    //    prevention moves up the stack rather than into parse-time
+    //    rejection. See `comms/specs/general.lex` §4.2 step 4.
+    Resolution::Resolved(input.to_string(), LabelForm::Community)
+}
+
+/// Post-parse pass that resolves and tags label sites against the
+/// namespace policy.
+pub struct NormalizeLabels {
+    mode: Mode,
+}
 
 impl NormalizeLabels {
+    /// Strict-mode constructor used by the standard parse pipeline.
     pub fn new() -> Self {
-        Self
+        Self { mode: Mode::Strict }
+    }
+
+    /// Permissive-mode constructor used by the migration tool.
+    pub fn permissive() -> Self {
+        Self {
+            mode: Mode::Permissive,
+        }
+    }
+
+    pub fn mode(&self) -> Mode {
+        self.mode
     }
 }
 
@@ -123,38 +215,70 @@ impl Default for NormalizeLabels {
 impl Runnable<Document, Document> for NormalizeLabels {
     fn run(&self, mut input: Document) -> Result<Document, TransformError> {
         for annotation in input.annotations.iter_mut() {
-            rewrite_annotation(annotation);
+            rewrite_annotation(annotation, self.mode)?;
         }
         for annotation in input.root.annotations.iter_mut() {
-            rewrite_annotation(annotation);
+            rewrite_annotation(annotation, self.mode)?;
         }
         for child in input.root.children.as_mut_vec().iter_mut() {
-            rewrite_in_item(child);
+            rewrite_in_item(child, self.mode)?;
         }
         Ok(input)
     }
 }
 
-fn rewrite_in_item(item: &mut ContentItem) {
+/// Resolve `label` in place against the namespace policy. Strict mode
+/// surfaces rejections as `TransformError`; permissive mode leaves
+/// rejected labels untouched (used by the migration tool).
+fn normalize_label(label: &mut Label, mode: Mode) -> Result<(), TransformError> {
+    apply_resolution(label, classify_label(&label.value), mode)
+}
+
+// (verbatim labels share the same resolution as annotations now that
+// bare unknowns tag Community; the dedicated carve-out is gone.)
+
+fn apply_resolution(
+    label: &mut Label,
+    resolution: Resolution,
+    mode: Mode,
+) -> Result<(), TransformError> {
+    match resolution {
+        Resolution::Resolved(canonical, form) => {
+            label.value = canonical;
+            label.form = form;
+            Ok(())
+        }
+        Resolution::Rejected(reason) => match mode {
+            Mode::Strict => Err(TransformError::StageFailed {
+                stage: "NormalizeLabels".to_string(),
+                message: reason.message(),
+            }),
+            Mode::Permissive => Ok(()),
+        },
+    }
+}
+
+fn rewrite_in_item(item: &mut ContentItem, mode: Mode) -> Result<(), TransformError> {
     match item {
-        ContentItem::Annotation(a) => normalize_label(&mut a.data.label),
-        ContentItem::VerbatimBlock(v) => rewrite_verbatim_label(v),
-        ContentItem::Table(t) => rewrite_in_table(t),
+        ContentItem::Annotation(a) => normalize_label(&mut a.data.label, mode)?,
+        ContentItem::VerbatimBlock(v) => rewrite_verbatim_label(v, mode)?,
+        ContentItem::Table(t) => rewrite_in_table(t, mode)?,
         _ => {}
     }
     if let Some(attached) = attached_annotations_mut(item) {
         for annotation in attached.iter_mut() {
-            rewrite_annotation(annotation);
+            rewrite_annotation(annotation, mode)?;
         }
     }
     if let Some(children) = item.children_mut() {
         for child in children.iter_mut() {
-            rewrite_in_item(child);
+            rewrite_in_item(child, mode)?;
         }
     }
+    Ok(())
 }
 
-fn rewrite_in_table(table: &mut crate::lex::ast::Table) {
+fn rewrite_in_table(table: &mut crate::lex::ast::Table, mode: Mode) -> Result<(), TransformError> {
     // `ContentItem::children_mut` returns `None` for tables (their
     // structure lives in rows/cells, not a flat children list), so an
     // explicit walk is needed to reach annotations nested inside cells
@@ -167,33 +291,35 @@ fn rewrite_in_table(table: &mut crate::lex::ast::Table) {
     {
         for cell in row.cells.iter_mut() {
             for child in cell.children.as_mut_vec().iter_mut() {
-                rewrite_in_item(child);
+                rewrite_in_item(child, mode)?;
             }
         }
     }
     if let Some(footnotes) = table.footnotes.as_mut() {
         for annotation in footnotes.annotations.iter_mut() {
-            rewrite_annotation(annotation);
+            rewrite_annotation(annotation, mode)?;
         }
         // List children are ListItems; their `children` slot reaches
         // through `children_mut`, but we still need to walk
         // `list.items` directly because List items use the typed
         // `items` collection rather than a plain children list.
         for item in footnotes.items.as_mut_vec().iter_mut() {
-            rewrite_in_item(item);
+            rewrite_in_item(item, mode)?;
         }
     }
+    Ok(())
 }
 
-fn rewrite_annotation(annotation: &mut Annotation) {
-    normalize_label(&mut annotation.data.label);
+fn rewrite_annotation(annotation: &mut Annotation, mode: Mode) -> Result<(), TransformError> {
+    normalize_label(&mut annotation.data.label, mode)?;
     for child in annotation.children.as_mut_vec().iter_mut() {
-        rewrite_in_item(child);
+        rewrite_in_item(child, mode)?;
     }
+    Ok(())
 }
 
-fn rewrite_verbatim_label(verbatim: &mut Verbatim) {
-    normalize_label(&mut verbatim.closing_data.label);
+fn rewrite_verbatim_label(verbatim: &mut Verbatim, mode: Mode) -> Result<(), TransformError> {
+    normalize_label(&mut verbatim.closing_data.label, mode)
 }
 
 fn attached_annotations_mut(item: &mut ContentItem) -> Option<&mut Vec<Annotation>> {
@@ -214,37 +340,6 @@ mod tests {
     use super::*;
     use crate::lex::transforms::standard::STRING_TO_AST;
 
-    /// Parse + invoke the normalize stage explicitly. `STRING_TO_AST`
-    /// already runs `NormalizeLabels` after Phase 3b's wire-up, so
-    /// the second call here is idempotent — kept so the tests stay
-    /// readable as direct exercises of the stage's behaviour rather
-    /// than depending on pipeline order.
-    fn parse(src: &str) -> Document {
-        let doc = STRING_TO_AST.run(src.to_string()).expect("parse ok");
-        NormalizeLabels::new().run(doc).expect("normalize ok")
-    }
-
-    fn find_first_annotation_label(doc: &Document) -> Option<String> {
-        doc.annotations
-            .first()
-            .map(|a| a.data.label.value.clone())
-            .or_else(|| find_inline_annotation_label(&doc.root.children))
-    }
-
-    fn find_inline_annotation_label(items: &[ContentItem]) -> Option<String> {
-        for item in items {
-            if let ContentItem::Annotation(a) = item {
-                return Some(a.data.label.value.clone());
-            }
-            if let Some(children) = item.children() {
-                if let Some(label) = find_inline_annotation_label(children) {
-                    return Some(label);
-                }
-            }
-        }
-        None
-    }
-
     fn find_first_verbatim_label(items: &[ContentItem]) -> Option<String> {
         for item in items {
             if let ContentItem::VerbatimBlock(v) = item {
@@ -259,179 +354,274 @@ mod tests {
         None
     }
 
+    // ── classify_label pure-function tests ──────────────────────────────
+
     #[test]
-    fn canonical_for_recognizes_every_legacy_label() {
-        for (legacy, canonical, form) in LEGACY_TO_CANONICAL {
+    fn classify_shortcut_table_entries() {
+        // Every entry in SHORTCUT_TABLE resolves to its canonical with
+        // form=Shortcut.
+        for (input, canonical) in SHORTCUT_TABLE {
             assert_eq!(
-                canonical_for(legacy),
-                Some((*canonical, *form)),
-                "lookup must round-trip for {legacy}"
+                classify_label(input),
+                Resolution::Resolved((*canonical).to_string(), LabelForm::Shortcut),
+                "shortcut {input} must resolve to {canonical}"
             );
         }
     }
 
     #[test]
-    fn canonical_for_returns_none_for_unknown_labels() {
-        assert!(canonical_for("acme.custom").is_none());
-        assert!(canonical_for("lex.include").is_none());
-        assert!(canonical_for("").is_none());
-    }
-
-    #[test]
-    fn legacy_to_canonical_table_covers_phase_1_targets() {
-        // Locks the rewrite set to the 8 metadata + 1 tabular + 3 media
-        // schemas that Phase 1 (#575) registered. If those families grow,
-        // this list grows with them.
-        assert_eq!(LEGACY_TO_CANONICAL.len(), 12);
-        let metadata_count = LEGACY_TO_CANONICAL
-            .iter()
-            .filter(|(_, c, _)| c.starts_with("lex.metadata."))
-            .count();
-        let tabular_count = LEGACY_TO_CANONICAL
-            .iter()
-            .filter(|(_, c, _)| c.starts_with("lex.tabular."))
-            .count();
-        let media_count = LEGACY_TO_CANONICAL
-            .iter()
-            .filter(|(_, c, _)| c.starts_with("lex.media."))
-            .count();
-        assert_eq!(metadata_count, 8);
-        assert_eq!(tabular_count, 1);
-        assert_eq!(media_count, 3);
-    }
-
-    #[test]
-    fn shortcut_labels_tag_form_as_shortcut() {
-        // The four labels in the new normative shortcut table that today
-        // are also accepted as legacy bare names must tag form=Shortcut
-        // when rewritten (forward-looking; formatters consume this in
-        // PR 3 of #584).
-        for shortcut in ["title", "author", "date", "tags"] {
-            let (_, form) =
-                canonical_for(shortcut).unwrap_or_else(|| panic!("expected entry for {shortcut}"));
-            assert_eq!(form, LabelForm::Shortcut, "{shortcut} must tag as Shortcut");
-        }
-    }
-
-    #[test]
-    fn non_shortcut_metadata_labels_tag_form_as_stripped() {
-        // The four metadata labels with no shortcut alias in §4.2
-        // (category, template, publishing-date, front-matter) tag as
-        // Stripped today. PR 2 of #584 makes the bare form a parse
-        // error, leaving only `metadata.<name>` (Stripped) and
-        // `lex.metadata.<name>` (Canonical) accepted.
-        for stripped in ["category", "template", "publishing-date", "front-matter"] {
-            let (_, form) =
-                canonical_for(stripped).unwrap_or_else(|| panic!("expected entry for {stripped}"));
-            assert_eq!(form, LabelForm::Stripped, "{stripped} must tag as Stripped");
-        }
-    }
-
-    #[test]
-    fn doc_prefix_labels_tag_form_as_stripped() {
-        // PR 2 of #584 turns `doc.*` into a parse error; today these
-        // four still rewrite to canonical. They tag as Stripped (rather
-        // than Shortcut) so that once PR 3 wires `Label.form` through
-        // the formatter, the emitted spelling will be the prefix-
-        // stripped canonical (`tabular.table` etc.) instead of the
-        // deprecated `doc.*` form. This PR records the tag only — no
-        // formatter consults it yet.
-        for doc_label in ["doc.table", "doc.image", "doc.video", "doc.audio"] {
-            let (_, form) = canonical_for(doc_label)
-                .unwrap_or_else(|| panic!("expected entry for {doc_label}"));
+    fn classify_lex_canonical_input_as_canonical() {
+        // `lex.*` literal authored verbatim resolves to itself,
+        // form=Canonical, when registered.
+        for canonical in ["lex.include", "lex.metadata.author", "lex.tabular.table"] {
             assert_eq!(
-                form,
-                LabelForm::Stripped,
-                "{doc_label} must tag as Stripped"
+                classify_label(canonical),
+                Resolution::Resolved(canonical.to_string(), LabelForm::Canonical),
             );
         }
     }
 
     #[test]
-    fn document_level_title_annotation_is_rewritten() {
-        // Annotation single-line form: `:: label :: inline content`.
-        let doc = parse(":: title :: My Document\n\nBody.\n");
+    fn classify_lex_unknown_canonical_rejects() {
+        // `lex.X` that isn't registered surfaces an UnknownCanonical
+        // rejection — strict mode propagates it; permissive mode
+        // leaves the label alone.
         assert_eq!(
-            find_first_annotation_label(&doc).as_deref(),
-            Some("lex.metadata.title"),
-            "document-level :: title :: must rewrite to lex.metadata.title"
+            classify_label("lex.foobar"),
+            Resolution::Rejected(RejectReason::UnknownCanonical {
+                input: "lex.foobar".to_string()
+            })
         );
     }
 
     #[test]
-    fn every_metadata_label_rewrites() {
-        for (legacy, canonical, _form) in LEGACY_TO_CANONICAL
-            .iter()
-            .filter(|(_, c, _)| c.starts_with("lex.metadata."))
-        {
-            let src = format!(":: {legacy} :: value\n\nBody.\n");
-            let doc = parse(&src);
-            assert_eq!(
-                find_first_annotation_label(&doc).as_deref(),
-                Some(*canonical),
-                ":: {legacy} :: must rewrite to {canonical}"
-            );
-        }
-    }
-
-    #[test]
-    fn doc_table_verbatim_rewrites_to_lex_tabular_table() {
-        // Lex verbatim syntax: subject line ending in `:`, indented body,
-        // then `:: label ::` as the closer.
-        let src = "Table:\n\n    | a | b |\n    |---|---|\n    | 1 | 2 |\n:: doc.table ::\n";
-        let doc = parse(src);
+    fn classify_stripped_form_resolves_against_canonical_set() {
+        // Multi-segment input that prepends to a known canonical
+        // resolves Stripped.
         assert_eq!(
-            find_first_verbatim_label(&doc.root.children).as_deref(),
-            Some("lex.tabular.table"),
-            ":: doc.table :: verbatim must rewrite to lex.tabular.table"
+            classify_label("metadata.author"),
+            Resolution::Resolved("lex.metadata.author".to_string(), LabelForm::Stripped),
+        );
+        assert_eq!(
+            classify_label("tabular.table"),
+            Resolution::Resolved("lex.tabular.table".to_string(), LabelForm::Stripped),
+        );
+        assert_eq!(
+            classify_label("media.image"),
+            Resolution::Resolved("lex.media.image".to_string(), LabelForm::Stripped),
         );
     }
 
     #[test]
-    fn doc_image_verbatim_rewrites_to_lex_media_image() {
-        let src = "Image:\n    alt text\n:: doc.image src=x.png ::\n";
-        let doc = parse(src);
-        assert_eq!(
-            find_first_verbatim_label(&doc.root.children).as_deref(),
-            Some("lex.media.image"),
-        );
-    }
-
-    #[test]
-    fn doc_video_and_audio_verbatims_rewrite() {
-        for (legacy, canonical) in [
-            ("doc.video", "lex.media.video"),
-            ("doc.audio", "lex.media.audio"),
+    fn classify_stripped_form_works_for_non_shortcut_metadata() {
+        // The four metadata labels without a shortcut entry must still
+        // be reachable via prefix-strip (this is the §4.2 contract:
+        // prefix-strip is universal, shortcuts are curated additions).
+        for stripped in [
+            "metadata.category",
+            "metadata.template",
+            "metadata.publishing-date",
+            "metadata.front-matter",
         ] {
-            let src = format!("Media:\n    caption\n:: {legacy} src=file ::\n");
-            let doc = parse(&src);
+            let canonical = format!("lex.{stripped}");
             assert_eq!(
-                find_first_verbatim_label(&doc.root.children).as_deref(),
-                Some(canonical),
-                ":: {legacy} :: must rewrite to {canonical}"
+                classify_label(stripped),
+                Resolution::Resolved(canonical.clone(), LabelForm::Stripped),
+                "{stripped} must resolve to {canonical}"
             );
         }
     }
 
     #[test]
-    fn non_legacy_labels_are_left_alone() {
-        let src = ":: acme.custom param=value :: body\n\nBody.\n";
-        let doc = parse(src);
-        let label = find_first_annotation_label(&doc);
+    fn classify_community_labels_tag_as_community() {
+        // Dotted non-reserved inputs without a prefix-strip match tag
+        // Community. Registry validation is deferred to analysis.
+        for community in ["acme.task", "mycompany.review", "owner.repo.subtype"] {
+            assert_eq!(
+                classify_label(community),
+                Resolution::Resolved(community.to_string(), LabelForm::Community),
+                "{community} must tag as Community"
+            );
+        }
+    }
+
+    #[test]
+    fn classify_doc_prefix_rejects() {
+        // `doc.*` is reserved-forbidden under §4.1; every doc.X input
+        // must reject with Forbidden, including the four legacy
+        // entries (doc.table / doc.image / doc.video / doc.audio).
+        for forbidden in [
+            "doc.table",
+            "doc.image",
+            "doc.video",
+            "doc.audio",
+            "doc.random",
+        ] {
+            assert_eq!(
+                classify_label(forbidden),
+                Resolution::Rejected(RejectReason::Forbidden {
+                    input: forbidden.to_string()
+                }),
+                "{forbidden} must reject as Forbidden"
+            );
+        }
+    }
+
+    #[test]
+    fn classify_unknown_bare_tags_as_community() {
+        // Bare inputs that aren't in SHORTCUT_TABLE and have no
+        // matching `lex.<input>` canonical are accepted as Community
+        // (per the spec's §4.2 step 4 — analysis lints typos rather
+        // than parse-time rejection). This covers footnote IDs (`42`,
+        // `^name`), citation keys (`spec2025`), and unrecognized but
+        // user-authored marker labels.
+        for community in ["42", "^name", "spec2025", "foobar"] {
+            assert_eq!(
+                classify_label(community),
+                Resolution::Resolved(community.to_string(), LabelForm::Community),
+                "{community} must tag as Community"
+            );
+        }
+    }
+
+    // ── End-to-end NormalizeLabels (strict mode) tests ──────────────────
+
+    /// Parse through the standard strict-mode pipeline. `STRING_TO_AST`
+    /// already invokes `NormalizeLabels::new()` (strict) as one of its
+    /// stages, so the resulting document is fully classified.
+    fn parse(src: &str) -> Document {
+        STRING_TO_AST.run(src.to_string()).expect("parse ok")
+    }
+
+    fn parse_strict(src: &str) -> Result<Document, TransformError> {
+        STRING_TO_AST.run(src.to_string())
+    }
+
+    #[test]
+    fn shortcut_title_resolves_to_canonical_with_shortcut_form() {
+        let doc = parse(":: title :: My Document\n\nBody.\n");
+        let ann = doc.annotations.first().expect("title annotation");
+        assert_eq!(ann.data.label.value, "lex.metadata.title");
+        assert_eq!(ann.data.label.form, LabelForm::Shortcut);
+    }
+
+    #[test]
+    fn stripped_metadata_resolves_to_canonical_with_stripped_form() {
+        let doc = parse(":: metadata.category :: tech\n\nBody.\n");
+        let ann = doc.annotations.first().expect("category annotation");
+        assert_eq!(ann.data.label.value, "lex.metadata.category");
+        assert_eq!(ann.data.label.form, LabelForm::Stripped);
+    }
+
+    #[test]
+    fn lex_canonical_input_keeps_value_and_canonical_form() {
+        let doc = parse(":: lex.include src=other.lex ::\n\nBody.\n");
+        let ann = doc.annotations.first().expect("include annotation");
+        assert_eq!(ann.data.label.value, "lex.include");
+        assert_eq!(ann.data.label.form, LabelForm::Canonical);
+    }
+
+    #[test]
+    fn community_label_keeps_value_and_community_form() {
+        let doc = parse(":: acme.custom param=value :: body\n\nBody.\n");
+        let ann = doc.annotations.first().expect("acme annotation");
+        assert_eq!(ann.data.label.value, "acme.custom");
+        assert_eq!(ann.data.label.form, LabelForm::Community);
+    }
+
+    #[test]
+    fn doc_table_verbatim_rejects_in_strict_mode() {
+        // Was accepted under PR 1; strict mode now rejects per §4.1.
+        let src = "Table:\n\n    | a | b |\n    |---|---|\n    | 1 | 2 |\n:: doc.table ::\n";
+        let err = parse_strict(src).expect_err("doc.table must be rejected in strict mode");
+        match err {
+            TransformError::StageFailed { stage, message } => {
+                assert_eq!(stage, "NormalizeLabels");
+                assert!(
+                    message.contains("doc.table") && message.contains("reserved"),
+                    "message should call out the forbidden prefix; got: {message}"
+                );
+            }
+            _ => panic!("expected StageFailed; got: {err:?}"),
+        }
+    }
+
+    #[test]
+    fn unknown_bare_annotation_tags_as_community_in_strict_mode() {
+        // Per §4.2 step 4, bare unknowns are accepted as Community at
+        // parse time; PR 4 of #584 wires up the typo-prevention lint
+        // in lex-analysis. This test pins the parser-side behavior so
+        // a future regression to hard-reject can't silently break
+        // existing documents.
+        let doc = parse(":: category :: foo\n\nBody.\n");
+        let ann = doc.annotations.first().expect("category annotation");
+        assert_eq!(ann.data.label.value, "category");
+        assert_eq!(ann.data.label.form, LabelForm::Community);
+    }
+
+    #[test]
+    fn unknown_lex_prefix_rejects_in_strict_mode() {
+        // `lex.foobar` looks canonical-shaped but isn't registered.
+        let err = parse_strict(":: lex.foobar ::\n\nBody.\n")
+            .expect_err("unregistered lex.* canonical must reject");
+        match err {
+            TransformError::StageFailed { message, .. } => {
+                assert!(message.contains("lex.foobar"));
+            }
+            _ => panic!("expected StageFailed; got: {err:?}"),
+        }
+    }
+
+    #[test]
+    fn permissive_mode_keeps_doc_table_unchanged() {
+        // The migration tool needs to walk legacy source; permissive
+        // mode classifies what it can and silently leaves the rest.
+        let src = "Table:\n\n    | a | b |\n    |---|---|\n    | 1 | 2 |\n:: doc.table ::\n";
+        // Bypass STRING_TO_AST (which always uses strict mode); run
+        // the earlier stages explicitly and finish with permissive
+        // NormalizeLabels.
+        use crate::lex::assembling::stages::{ApplyTableConfig, AttachAnnotations, AttachRoot};
+        use crate::lex::transforms::stages::ParseInlines;
+        use crate::lex::transforms::standard::LEXING;
+        let source = format!("{src}\n");
+        let tokens = LEXING.run(source.clone()).expect("tokens");
+        let mut output =
+            crate::lex::parsing::engine::parse_from_flat_tokens(tokens, &source).expect("parse");
+        output.root = ParseInlines::new().run(output.root).expect("inlines");
+        let mut doc = AttachRoot::new().run(output).expect("attach root");
+        doc = AttachAnnotations::new().run(doc).expect("attach anns");
+        let doc = NormalizeLabels::permissive()
+            .run(doc)
+            .expect("permissive must not error");
+        // ApplyTableConfig runs after normalize in the standard pipeline,
+        // but isn't needed for this assertion.
+        let _ = ApplyTableConfig::new();
+
+        let verbatim_label = find_first_verbatim_label(&doc.root.children);
         assert_eq!(
-            label.as_deref(),
-            Some("acme.custom"),
-            "third-party labels must be preserved verbatim"
+            verbatim_label.as_deref(),
+            Some("doc.table"),
+            "permissive mode must leave doc.* untouched so the migration tool can rewrite it"
         );
     }
 
     #[test]
-    fn lex_include_label_is_left_alone() {
-        // Already-canonical lex.* labels must not be rewritten.
-        let src = ":: lex.include src=other.lex ::\n\nBody.\n";
-        let doc = parse(src);
-        let label = find_first_annotation_label(&doc);
-        assert_eq!(label.as_deref(), Some("lex.include"));
+    fn shortcut_table_covers_normative_entries() {
+        // Lock the table to exactly the 10 shortcuts §4.2 names.
+        // Adding a label requires updating both this test and the
+        // comms spec — the constraint is intentional.
+        assert_eq!(SHORTCUT_TABLE.len(), 10);
+        let names: Vec<&str> = SHORTCUT_TABLE.iter().map(|(s, _)| *s).collect();
+        assert!(names.contains(&"table"));
+        assert!(names.contains(&"image"));
+        assert!(names.contains(&"video"));
+        assert!(names.contains(&"audio"));
+        assert!(names.contains(&"author"));
+        assert!(names.contains(&"title"));
+        assert!(names.contains(&"tags"));
+        assert!(names.contains(&"date"));
+        assert!(names.contains(&"include"));
+        assert!(names.contains(&"notes"));
     }
 
     #[test]
@@ -462,9 +652,6 @@ mod tests {
 
     #[test]
     fn rewrite_preserves_label_location() {
-        // Range info must round-trip — the LSP relies on label location
-        // for goto-definition and similar features. Rewrite mutates
-        // `label.value` in place without touching `label.location`.
         let src = ":: title :: T\n\nBody.\n";
         let doc = parse(src);
         let first = doc
@@ -486,15 +673,10 @@ mod tests {
 
     #[test]
     fn rewrite_recurses_into_table_cell_block_children() {
-        // Regression for Copilot's PR 576 callout: `ContentItem::Table`
-        // returns `None` from `children_mut()` (its structure lives in
-        // rows/cells), so the generic walker won't reach legacy labels
-        // nested inside a cell's block content. Today's parser does
-        // not emit block children in cells — cell annotations land in
-        // the inline `content: TextContent` — but the AST surface
-        // allows it via `TableCell::with_children`, and Phase 3's
-        // wire-up may begin using that slot. Test the contract
-        // directly by building the AST programmatically.
+        // Same regression as PR 576's Copilot callout — walker must
+        // reach annotations nested inside a cell's block content
+        // (TableCell::with_children path) since
+        // ContentItem::children_mut returns None for Tables.
         use crate::lex::ast::elements::annotation::Annotation;
         use crate::lex::ast::elements::label::Label;
         use crate::lex::ast::elements::table::{Table, TableCell, TableRow};
@@ -521,8 +703,6 @@ mod tests {
 
         let doc = NormalizeLabels::new().run(doc).expect("normalize ok");
 
-        // Reach into the table and confirm the nested annotation got
-        // rewritten.
         let table = doc
             .root
             .children
@@ -533,38 +713,39 @@ mod tests {
             })
             .expect("table present");
         let cell = &table.body_rows[0].cells[0];
-        let nested_label = cell
+        let nested = cell
             .children
             .iter()
             .find_map(|item| match item {
-                ContentItem::Annotation(a) => Some(a.data.label.value.as_str()),
+                ContentItem::Annotation(a) => Some(&a.data.label),
                 _ => None,
             })
             .expect("nested annotation in cell.children");
-        assert_eq!(
-            nested_label, "lex.metadata.title",
-            "legacy label inside a table cell's block children must be rewritten"
-        );
+        assert_eq!(nested.value, "lex.metadata.title");
+        assert_eq!(nested.form, LabelForm::Shortcut);
     }
 
     #[test]
     fn rewrite_recurses_into_annotation_children() {
-        // The walker must reach annotations nested inside another
-        // annotation's content body — `rewrite_annotation` calls
-        // `rewrite_in_item` on each child, which in turn handles inline
-        // `ContentItem::Annotation` labels.
-        let src = ":: outer ::\n    :: author :: Alice\n";
+        // The walker reaches annotations nested inside another
+        // annotation's body content. The outer label must itself be
+        // an accepted form — `frontmatter` was an ad-hoc legacy name
+        // and is rejected today, so use `metadata.front-matter`
+        // (Stripped) as the outer to verify nested resolution.
+        let src = ":: metadata.front-matter ::\n    :: author :: Alice\n";
         let doc = parse(src);
         let outer = doc.annotations.first().expect("outer annotation parsed");
-        // Find the inner annotation in outer's children.
-        let inner_label = outer.children.iter().find_map(|item| match item {
-            ContentItem::Annotation(a) => Some(a.data.label.value.clone()),
-            _ => None,
-        });
-        assert_eq!(
-            inner_label.as_deref(),
-            Some("lex.metadata.author"),
-            "nested annotation inside outer must be rewritten"
-        );
+        assert_eq!(outer.data.label.value, "lex.metadata.front-matter");
+        assert_eq!(outer.data.label.form, LabelForm::Stripped);
+        let inner = outer
+            .children
+            .iter()
+            .find_map(|item| match item {
+                ContentItem::Annotation(a) => Some(&a.data.label),
+                _ => None,
+            })
+            .expect("nested annotation");
+        assert_eq!(inner.value, "lex.metadata.author");
+        assert_eq!(inner.form, LabelForm::Shortcut);
     }
 }

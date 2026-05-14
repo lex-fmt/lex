@@ -939,7 +939,7 @@ mod tests {
     #[test]
     fn structural_markers_with_quoted_marker() {
         use crate::lex::token::Token;
-        // :: note foo=":: value" ::
+        // :: test.note foo=":: value" ::
         let tokens = vec![
             Token::LexMarker, // 0: structural
             Token::Whitespace(1),
@@ -961,7 +961,7 @@ mod tests {
     #[test]
     fn structural_markers_data_line_with_quoted_marker() {
         use crate::lex::token::Token;
-        // :: note foo=":: value"  (no closing ::)
+        // :: test.note foo=":: value"  (no closing ::)
         let tokens = vec![
             Token::LexMarker, // 0: structural
             Token::Whitespace(1),
@@ -979,7 +979,7 @@ mod tests {
     #[test]
     fn structural_markers_escaped_quote_does_not_toggle() {
         use crate::lex::token::Token;
-        // :: note foo="value with \" inside" ::
+        // :: test.note foo="value with \" inside" ::
         // The \" should NOT toggle quote state
         let tokens = vec![
             Token::LexMarker, // 0: structural
@@ -1002,7 +1002,7 @@ mod tests {
     #[test]
     fn structural_markers_double_backslash_before_quote_not_escaped() {
         use crate::lex::token::Token;
-        // :: note foo="val\\" ::
+        // :: test.note foo="val\\" ::
         // \\\\ (double backslash) before quote means the backslashes escape each other,
         // so the quote IS a real closing quote
         let tokens = vec![

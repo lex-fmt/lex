@@ -559,7 +559,7 @@ mod tests {
 
     #[test]
     fn test_annotation_attaches_to_list() {
-        let source = "Intro paragraph.\n\n:: note ::\n- Bread\n- Milk\n";
+        let source = "Intro paragraph.\n\n:: test.note ::\n- Bread\n- Milk\n";
         let doc = parse_without_annotation_attachment(source).unwrap();
 
         let stage = AttachAnnotations::new();
@@ -716,7 +716,7 @@ mod tests {
     }
     #[test]
     fn test_benchmark_50_repro() {
-        let source = ":: doc.note severity=info :: Document preface.\n\n1. Intro\n";
+        let source = ":: test.note severity=info :: Document preface.\n\n1. Intro\n";
         let doc = parse_without_annotation_attachment(source).unwrap();
         let stage = AttachAnnotations::new();
         let result = stage.run(doc).unwrap();
@@ -726,6 +726,6 @@ mod tests {
             1,
             "Should have 1 document-level annotation"
         );
-        assert_eq!(result.annotations[0].data.label.value, "doc.note");
+        assert_eq!(result.annotations[0].data.label.value, "test.note");
     }
 }

@@ -75,9 +75,6 @@ It contains a paragraph and a list. {{paragraph}}
 
 <!-- /lex:todo -->
 
-**Image Reference (Marker Verbatim Block)**
-
-``` image
-```
+!["Lex Logo"]("logo.png")
 
 Final paragraph at the end of the document. {{paragraph}}

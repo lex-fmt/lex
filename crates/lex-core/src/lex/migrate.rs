@@ -28,13 +28,39 @@
 //! and rewrite the source in reverse byte order. No re-parsing, no
 //! regex heuristics, no ambiguity.
 
-use crate::lex::assembling::stages::normalize_labels::LEGACY_TO_CANONICAL;
+use crate::lex::assembling::stages::{
+    ApplyTableConfig, AttachAnnotations, AttachRoot, NormalizeLabels,
+};
 use crate::lex::ast::elements::annotation::Annotation;
 use crate::lex::ast::elements::content_item::ContentItem;
 use crate::lex::ast::elements::label::Label;
 use crate::lex::ast::elements::verbatim::Verbatim;
 use crate::lex::ast::Document;
-use crate::lex::transforms::standard::STRING_TO_AST;
+use crate::lex::transforms::stages::ParseInlines;
+use crate::lex::transforms::standard::LEXING;
+use crate::lex::transforms::Runnable;
+
+/// Mapping of legacy label inputs to the canonical they migrate to.
+/// Local to the migration tool — the parse-time `NormalizeLabels` no
+/// longer carries any "legacy" concept since PR 2 of #584: it only
+/// resolves accepted forms. Anything in this table is what the
+/// migration tool recognizes as needing a source-level rewrite.
+///
+/// `doc.*` entries map to the prefix-stripped form of the corresponding
+/// canonical (so `:: doc.table ::` rewrites to `:: table ::`, the
+/// blessed shortcut). The non-shortcut metadata labels (`category`,
+/// `template`, etc.) rewrite to their prefix-stripped form (e.g.
+/// `:: category ::` → `:: metadata.category ::`).
+const LEGACY_TO_BLESSED: &[(&str, &str)] = &[
+    ("category", "metadata.category"),
+    ("template", "metadata.template"),
+    ("publishing-date", "metadata.publishing-date"),
+    ("front-matter", "metadata.front-matter"),
+    ("doc.table", "table"),
+    ("doc.image", "image"),
+    ("doc.video", "video"),
+    ("doc.audio", "audio"),
+];
 
 /// One legacy-label rewrite site.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,11 +102,13 @@ impl MigrationOutcome {
 /// pass needs a clean parse to locate label spans. Soft diagnostics
 /// from the parser are ignored; only hard parse errors abort.
 pub fn migrate_labels_in_source(src: &str) -> Result<MigrationOutcome, MigrationError> {
-    let doc = STRING_TO_AST
-        .run(src.to_string())
-        .map_err(|e| MigrationError::ParseFailed {
-            message: e.to_string(),
-        })?;
+    // Strict-mode parse rejects legacy `doc.*` and bare non-shortcuts —
+    // exactly the inputs the migration tool needs to rewrite. Run a
+    // permissive pipeline so legacy spellings survive into the AST,
+    // then walk it to map source spans onto the rewrite table.
+    let doc = parse_permissive(src).map_err(|e| MigrationError::ParseFailed {
+        message: e.to_string(),
+    })?;
 
     let mut sites = Vec::new();
     collect_sites(&doc, src, &mut sites);
@@ -90,6 +118,35 @@ pub fn migrate_labels_in_source(src: &str) -> Result<MigrationOutcome, Migration
         rewritten,
         migrations: sites,
     })
+}
+
+/// Run the parse + assembly stages with NormalizeLabels in permissive
+/// mode so legacy label spellings (`doc.*`, bare non-shortcut metadata)
+/// flow through unchanged. Mirrors `STRING_TO_AST` exactly except for
+/// the NormalizeLabels constructor.
+fn parse_permissive(src: &str) -> Result<Document, crate::lex::transforms::TransformError> {
+    let source = if !src.is_empty() && !src.ends_with('\n') {
+        format!("{src}\n")
+    } else {
+        src.to_string()
+    };
+    let tokens = LEXING.run(source.clone())?;
+    let mut output =
+        crate::lex::parsing::engine::parse_from_flat_tokens(tokens, &source).map_err(|e| {
+            crate::lex::transforms::TransformError::StageFailed {
+                stage: "Parser".to_string(),
+                message: e.to_string(),
+            }
+        })?;
+    output.root = ParseInlines::new().run(output.root)?;
+    if let Some(ref mut title) = output.title {
+        title.content.ensure_inline_parsed();
+    }
+    let mut doc = AttachRoot::new().run(output)?;
+    doc = AttachAnnotations::new().run(doc)?;
+    doc = NormalizeLabels::permissive().run(doc)?;
+    doc = ApplyTableConfig::new().run(doc)?;
+    Ok(doc)
 }
 
 /// Errors surfaced by [`migrate_labels_in_source`].
@@ -229,24 +286,21 @@ fn check_label(label: &Label, src: &str, sites: &mut Vec<LabelMigration>) {
         return;
     }
     let slice = &src[trim_start..trim_end];
-    // Single pass through the table — keep the `'static` legacy slice
-    // for the migration record alongside the canonical and (unused
-    // here) form classification, so we don't pay for a second lookup.
-    if let Some((from, canonical, _form)) = LEGACY_TO_CANONICAL
+    if let Some((from, to)) = LEGACY_TO_BLESSED
         .iter()
-        .find(|(legacy, _, _)| *legacy == slice)
+        .find(|(legacy, _)| *legacy == slice)
     {
-        // Sanity check: the AST value should be the canonical form
-        // NormalizeLabels rewrote it to.
+        // Permissive parse keeps the legacy spelling on the AST too;
+        // the source slice and label.value should agree.
         debug_assert_eq!(
-            label.value, *canonical,
-            "NormalizeLabels should have rewritten {slice} to {canonical}, got {} in AST",
+            label.value, *from,
+            "permissive parse must preserve legacy spelling; got {} for source {slice}",
             label.value
         );
         sites.push(LabelMigration {
             byte_range: trim_start..trim_end,
             from,
-            to: canonical,
+            to,
         });
     }
 }
@@ -281,78 +335,73 @@ mod tests {
     }
 
     #[test]
-    fn single_legacy_metadata_label_is_rewritten() {
-        let src = ":: title :: My Document\n\nBody.\n";
-        let out = migrate_labels_in_source(src).expect("migrate ok");
-        assert!(out.is_modified());
-        assert_eq!(out.migrations.len(), 1);
-        assert_eq!(out.migrations[0].from, "title");
-        assert_eq!(out.migrations[0].to, "lex.metadata.title");
-        assert!(
-            out.rewritten.contains(":: lex.metadata.title ::"),
-            "rewritten source must contain the canonical label: {}",
-            out.rewritten
-        );
-        assert!(
-            !out.rewritten.contains(":: title ::"),
-            "legacy label must be replaced: {}",
-            out.rewritten
-        );
+    fn blessed_shortcuts_are_not_migrated() {
+        // Under #584, `:: title ::` and `:: author ::` are the blessed
+        // forms — no migration needed.
+        for shortcut in ["title", "author", "date", "tags"] {
+            let src = format!(":: {shortcut} :: value\n\nBody.\n");
+            let out = migrate_labels_in_source(&src).expect("migrate ok");
+            assert!(
+                !out.is_modified(),
+                "shortcut :: {shortcut} :: is the blessed form; must not migrate"
+            );
+            assert_eq!(out.rewritten, src);
+        }
     }
 
     #[test]
-    fn every_legacy_label_round_trips_through_migration() {
-        // Each legacy label, when used in source, produces exactly one
-        // migration entry with the right canonical replacement.
-        for (legacy, canonical, _form) in LEGACY_TO_CANONICAL
-            .iter()
-            .filter(|(_, c, _)| c.starts_with("lex.metadata."))
-        {
+    fn non_shortcut_bare_metadata_migrates_to_stripped_form() {
+        // The four metadata labels with no shortcut alias migrate to
+        // their prefix-stripped form (`metadata.<name>`), which is the
+        // shortest accepted form for them.
+        for (legacy, blessed) in [
+            ("category", "metadata.category"),
+            ("template", "metadata.template"),
+            ("publishing-date", "metadata.publishing-date"),
+            ("front-matter", "metadata.front-matter"),
+        ] {
             let src = format!(":: {legacy} :: value\n\nBody.\n");
             let out = migrate_labels_in_source(&src).unwrap_or_else(|e| {
                 panic!("migrate failed for {legacy}: {e}");
             });
+            assert!(out.is_modified(), "{legacy} must trigger migration");
+            assert_eq!(out.migrations[0].from, legacy);
+            assert_eq!(out.migrations[0].to, blessed);
             assert!(
-                out.is_modified(),
-                "migration must rewrite :: {legacy} :: ..."
-            );
-            assert_eq!(out.migrations[0].from, *legacy);
-            assert_eq!(out.migrations[0].to, *canonical);
-            assert!(
-                out.rewritten.contains(&format!(":: {canonical} ::")),
-                "rewritten source must contain :: {canonical} ::, got: {}",
+                out.rewritten.contains(&format!(":: {blessed} ::")),
+                "rewritten must contain :: {blessed} ::, got: {}",
                 out.rewritten
             );
         }
     }
 
     #[test]
-    fn verbatim_doc_table_label_is_rewritten() {
+    fn doc_table_migrates_to_blessed_table_shortcut() {
         let src = "Table:\n\n    | a | b |\n    |---|---|\n    | 1 | 2 |\n:: doc.table ::\n";
         let out = migrate_labels_in_source(src).expect("migrate ok");
         assert!(out.is_modified());
         assert_eq!(out.migrations.len(), 1);
         assert_eq!(out.migrations[0].from, "doc.table");
-        assert_eq!(out.migrations[0].to, "lex.tabular.table");
-        assert!(out.rewritten.contains(":: lex.tabular.table ::"));
+        assert_eq!(out.migrations[0].to, "table");
+        assert!(out.rewritten.contains(":: table ::"));
         assert!(!out.rewritten.contains(":: doc.table ::"));
     }
 
     #[test]
-    fn verbatim_doc_image_video_audio_labels_rewrite() {
-        for (legacy, canonical) in [
-            ("doc.image", "lex.media.image"),
-            ("doc.video", "lex.media.video"),
-            ("doc.audio", "lex.media.audio"),
+    fn doc_image_video_audio_migrate_to_blessed_shortcuts() {
+        for (legacy, blessed) in [
+            ("doc.image", "image"),
+            ("doc.video", "video"),
+            ("doc.audio", "audio"),
         ] {
             let src = format!("Media:\n    caption\n:: {legacy} src=file ::\n");
             let out = migrate_labels_in_source(&src).expect("migrate ok");
             assert!(out.is_modified(), ":: {legacy} :: must trigger migration");
             assert_eq!(out.migrations[0].from, legacy);
-            assert_eq!(out.migrations[0].to, canonical);
+            assert_eq!(out.migrations[0].to, blessed);
             assert!(
-                out.rewritten.contains(&format!(":: {canonical} ")),
-                "expected canonical :: {canonical} :: in {}",
+                out.rewritten.contains(&format!(":: {blessed} ")),
+                "expected blessed :: {blessed} :: in {}",
                 out.rewritten
             );
         }
@@ -360,7 +409,7 @@ mod tests {
 
     #[test]
     fn multiple_legacy_labels_all_rewrite_with_correct_offsets() {
-        let src = ":: title :: My Doc\n:: author :: Alice\n\nBody.\n";
+        let src = ":: category :: tech\n:: template :: x\n\nBody.\n";
         let out = migrate_labels_in_source(src).expect("migrate ok");
         assert_eq!(
             out.migrations.len(),
@@ -368,10 +417,10 @@ mod tests {
             "two legacy labels must produce two migrations: {:?}",
             out.migrations
         );
-        assert!(out.rewritten.contains(":: lex.metadata.title ::"));
-        assert!(out.rewritten.contains(":: lex.metadata.author ::"));
-        assert!(!out.rewritten.contains(":: title ::"));
-        assert!(!out.rewritten.contains(":: author ::"));
+        assert!(out.rewritten.contains(":: metadata.category ::"));
+        assert!(out.rewritten.contains(":: metadata.template ::"));
+        assert!(!out.rewritten.contains(":: category ::"));
+        assert!(!out.rewritten.contains(":: template ::"));
     }
 
     #[test]
@@ -392,9 +441,9 @@ mod tests {
 
     #[test]
     fn body_text_containing_legacy_words_is_not_rewritten() {
-        // Important: "title" inside paragraph body text isn't a label
-        // and must not be touched.
-        let src = "This paragraph mentions the title and author words.\n";
+        // Important: "category" inside paragraph body text isn't a
+        // label and must not be touched.
+        let src = "This paragraph mentions the category and template words.\n";
         let out = migrate_labels_in_source(src).expect("migrate ok");
         assert!(!out.is_modified(), "body words must not be rewritten");
         assert_eq!(out.rewritten, src);
@@ -402,18 +451,16 @@ mod tests {
 
     #[test]
     fn collect_in_table_recurses_into_cell_block_children() {
-        // Regression for Copilot's PR 581 callout, mirroring the Phase 2
-        // `normalize_labels` regression: `ContentItem::Table` returns
-        // `None` from `children()`, so the generic walker doesn't reach
-        // a legacy annotation that lives in a cell's block-content
-        // `children` slot. Today's parser doesn't emit block children
-        // in cells (annotations in cells live in inline `content`),
-        // but the AST surface allows it via `TableCell::with_children`,
-        // and a future parser change must not silently lose migrations.
+        // Regression for Copilot's PR 581 callout: `ContentItem::Table`
+        // returns `None` from `children()`, so the generic walker
+        // doesn't reach a legacy annotation that lives in a cell's
+        // block-content `children` slot. Today's parser doesn't emit
+        // block children in cells, but the AST surface allows it via
+        // `TableCell::with_children`, and a future parser change must
+        // not silently lose migrations.
         //
-        // The check_label byte-range lookup requires the src string to
-        // contain the legacy label at the right offset, so we use a
-        // crafted src string and a hand-built AST with matching span.
+        // Permissive mode preserves the original spelling, so the AST
+        // label value matches the source slice (no canonical rewrite).
         use crate::lex::ast::elements::annotation::Annotation;
         use crate::lex::ast::elements::data::Data;
         use crate::lex::ast::elements::label::Label;
@@ -424,12 +471,12 @@ mod tests {
         use crate::lex::ast::text_content::TextContent;
         use crate::lex::ast::Document as LexDocument;
 
-        // The crafted src places `title` at bytes 3..8 (after `:: `).
-        let src = ":: title ::\n";
-        let label_span = std::ops::Range { start: 3, end: 8 };
+        // The crafted src places `category` at bytes 3..11 (after `:: `).
+        let src = ":: category ::\n";
+        let label_span = std::ops::Range { start: 3, end: 11 };
         let label = Label {
-            value: "lex.metadata.title".to_string(),
-            location: AstRange::new(label_span, Position::new(0, 3), Position::new(0, 8)),
+            value: "category".to_string(),
+            location: AstRange::new(label_span, Position::new(0, 3), Position::new(0, 11)),
             form: crate::lex::ast::elements::label::LabelForm::Canonical,
         };
         let inner_annotation = Annotation::from_data(Data::new(label, Vec::new()), Vec::new());
@@ -458,16 +505,16 @@ mod tests {
             1,
             "legacy annotation inside a table cell's block children must be discovered"
         );
-        assert_eq!(sites[0].from, "title");
-        assert_eq!(sites[0].to, "lex.metadata.title");
-        assert_eq!(sites[0].byte_range, 3..8);
+        assert_eq!(sites[0].from, "category");
+        assert_eq!(sites[0].to, "metadata.category");
+        assert_eq!(sites[0].byte_range, 3..11);
     }
 
     #[test]
     fn migrations_have_correct_byte_ranges() {
         // Span sanity: `from` slice from the input at the migration's
         // byte range must equal the legacy label string.
-        let src = ":: title :: My Doc\n\nBody.\n";
+        let src = ":: category :: foo\n\nBody.\n";
         let out = migrate_labels_in_source(src).expect("migrate ok");
         let m = &out.migrations[0];
         let slice = &src[m.byte_range.clone()];

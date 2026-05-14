@@ -47,11 +47,15 @@ fn apply_config_in_children(children: &mut [ContentItem]) {
 
 /// Apply configuration from :: table :: annotations to a single table.
 fn apply_table_config(table: &mut Table) {
-    // Find the first annotation with label "table"
-    let config = table
-        .annotations
-        .iter()
-        .find(|a| a.data.label.value == "table");
+    // Find the first annotation whose label resolves to the canonical
+    // tabular-table label. `NormalizeLabels` (PR 2 of #584) rewrites
+    // the source-level `:: table ::` shortcut to `lex.tabular.table`
+    // before ApplyTableConfig runs; we accept both spellings to keep
+    // out-of-band callers that build ASTs by hand working.
+    let config = table.annotations.iter().find(|a| {
+        let v = a.data.label.value.as_str();
+        v == "lex.tabular.table" || v == "table"
+    });
 
     let config = match config {
         Some(c) => c,

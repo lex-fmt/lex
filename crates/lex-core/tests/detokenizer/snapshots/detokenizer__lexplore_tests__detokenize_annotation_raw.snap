@@ -1,5 +1,5 @@
 ---
-source: lex-parser/tests/detokenizer/main.rs
+source: crates/lex-core/tests/detokenizer/main.rs
 expression: detokenized
 ---
 :: note ::

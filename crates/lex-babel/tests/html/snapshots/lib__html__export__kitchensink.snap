@@ -32,7 +32,7 @@ function example() {
     return "lex";
 }</code></pre></div></section><section class="lex-session lex-session-2"><h2>2. Second Root Session {{session}}</h2><div class="lex-content"><p class="lex-paragraph">This session tests annotations with block content and marker-style verbatim blocks. {{paragraph}}</p><!-- lex:todo status="open" assignee="team" --><div class="lex-content"><p class="lex-paragraph">This is a block annotation. {{paragraph}}</p><p class="lex-paragraph">It contains a paragraph and a list. {{paragraph}}</p><ul class="lex-list"><li class="lex-list-item">Task 1 to complete. {{list-item}}
 </li><li class="lex-list-item">Task 2 to complete. {{list-item}}
-</li></ul></div><!-- /lex:todo --><div class="lex-verbatim-subject">Image Reference (Marker Verbatim Block)</div><pre class="lex-verbatim" data-language="image"><code class="language-image"></code></pre></div></section><p class="lex-paragraph">Final paragraph at the end of the document. {{paragraph}}</p>
+</li></ul></div><!-- /lex:todo --><figure class="lex-image"><img src="&quot;logo.png&quot;" alt="&quot;Lex Logo&quot;"><figcaption>"Lex Logo"</figcaption></figure></div></section><p class="lex-paragraph">Final paragraph at the end of the document. {{paragraph}}</p>
 </div>
 </body>
 </html>

@@ -2,6 +2,60 @@
 
 ## [Unreleased]
 
+### Changed — strict `NormalizeLabels` + structural-Table emit ([#584](https://github.com/lex-fmt/lex/issues/584) PR 2 of 5)
+
+Second of five PRs for the bare-as-blessed label namespace model. PR 1 added the form-tagging infrastructure; this PR replaces `NormalizeLabels`'s legacy whitelist with the resolution rules from `comms/specs/general.lex` §4.2 and rejects forbidden forms at parse time.
+
+**Resolution rules:**
+
+- Shortcut table → `LabelForm::Shortcut`. The 10 normative shortcuts are `table`, `image`, `video`, `audio`, `author`, `title`, `tags`, `date`, `include`, `notes`.
+- `lex.*` literal (registered canonical) → `LabelForm::Canonical`.
+- Prefix-strip (`metadata.author` → `lex.metadata.author`) when `lex.<input>` exists in the canonical set → `LabelForm::Stripped`.
+- Dotted non-reserved (`acme.task`) → `LabelForm::Community`; registry validation deferred to analysis.
+- Bare unknown (`foobar`, `42`, `^name`, `spec2025`) → `LabelForm::Community`; PR 4 of #584 adds a typo-prevention lint in analysis. The parser is deliberately permissive here so document-scoped reference identifiers (footnote IDs, citation keys, language hints on verbatim closers) parse without each needing a carve-out.
+
+**Hard rejections (TransformError at parse time):**
+
+- `doc.*` — reserved-forbidden under §4.1.
+- `lex.*` literals that aren't in the registered canonical set.
+
+**New strict / permissive modes** — `NormalizeLabels::new()` is strict (used by `STRING_TO_AST`); `NormalizeLabels::permissive()` skips rejection (used by `lexd migrate-labels`'s `parse_permissive` so legacy `doc.*` source can be parsed and rewritten).
+
+**New canonical: `lex.notes`** — registered alongside `lex.include` / `lex.metadata.*` / `lex.tabular.*` / `lex.media.*`. The label is the canonical footnote-definition-list marker. Promotion to a core canonical (rather than `metadata.notes` via prefix-strip) lets the source-level form stay `:: notes ::` and aligns with the spec's blessed-shortcut tier.
+
+**New `CANONICAL_LABELS` slice in `crates/lex-core/src/lex/builtins/mod.rs`** — single source of truth for which `lex.*` labels exist. `register_into` and `NormalizeLabels`'s `classify_label` both consume it; a parity test in `builtins::tests` enforces that the slice stays in sync with `register_into`'s schema set.
+
+**Structural-Table emit in `LexSerializer`** — `visit_table` / `leave_table` now emit a markdown-style pipe table with per-column alignment, padded for width. Previously `LexSerializer` had no Table visitor and tables resulting from the bare `:: table ::` closer serialized to an empty `:: lex.tabular.table ::` block.
+
+**Migration tool refactor** — `lex-core::migrate` now uses `parse_permissive` instead of `STRING_TO_AST` so legacy `doc.*` source can still be parsed for rewriting. The legacy-label table moved into `migrate.rs` (now scoped to migration use only; `NormalizeLabels` doesn't carry a "legacy" concept). `doc.table` → `table`, `doc.image` → `image`, `category` → `metadata.category`, etc.
+
+**Production callers flipped off legacy forms:**
+
+- `crates/lex-babel/src/templates/asset.rs` — `AssetKind::label()` emits `image`/`video`/`audio` (blessed shortcuts); `Data` falls back to `asset.data` (community-shape; no canonical for generic data assets today).
+- `crates/lex-analysis/src/completion.rs` — `STANDARD_VERBATIM_LABELS` list shrunk to blessed shortcuts only.
+- `crates/lex-analysis/src/utils.rs::is_notes_list` — accepts both `notes` (shortcut) and `lex.notes` (canonical) since callers may hand-build ASTs.
+- `crates/lex-core/src/lex/assembling/stages/apply_table_config.rs` — the `:: table ::` config annotation lookup accepts both spellings.
+
+**Test fixture migrations:**
+
+- Bare `note` / `info` / `warning` (test-only stand-ins) replaced with `test.note` / `test.info` / `test.warning` (community-shape) in ~20 files where the test was exercising parser/LSP plumbing, not label semantics.
+- `doc.note` / `doc.data` in test fixtures replaced with `test.note` / `test.data`.
+- Tests asserting specific label spellings (`closing_label("image")`) updated to expect the canonical (`closing_label("lex.media.image")`) since `NormalizeLabels` resolves at parse time.
+- The `verbatim_03_table_formatting` and `verbatim_04_user_repro` tests in `formats/lex/serializer.rs` now exercise the structural-Table emit path (no longer the legacy verbatim-with-markdown reformatter).
+- Snapshot fixtures (kitchensink markdown + html, detokenizer outputs) regenerated to match the new output.
+
+**Comms-side sibling**: `lex-fmt/comms` PR 43 adds `notes` to §4.2's normative shortcut table and flips three benchmark fixtures off `doc.*`.
+
+### Deferred follow-up
+
+The legacy verbatim-markdown reformatter code (`common/verbatim/table.rs::TableHandler` + `parse_pipe_table`, `VerbatimRegistry`'s `format_content` path, `LexSerializer::verbatim_registry` field) remains in the tree but is unreachable from user input now that:
+
+1. `doc.table` is hard-rejected, so no source-level path triggers the reformatter through NormalizeLabels.
+2. `:: table ::` parses as a structural Table and is serialized by `visit_table`.
+3. `lex.tabular.table` and `tabular.table` source also parse as Verbatim today, but no tests exercise that path; PR 3 of #584 retires it.
+
+A tidy-up PR after PR 3 can delete the dead modules and the `verbatim_registry` field on `LexSerializer`.
+
 ### Added — `LabelForm` infrastructure ([#584](https://github.com/lex-fmt/lex/issues/584) PR 1 of 5)
 
 First of five PRs implementing the bare-as-blessed label namespace model spelled out in `comms/specs/general.lex` §4. This PR is the lex-core foundation: it adds the `LabelForm` enum (`Canonical | Stripped | Shortcut | Community`) and a `form: LabelForm` field on `Label`. `NormalizeLabels` now tags every rewrite with the matching form so downstream formatters can preserve the user's choice of spelling on roundtrip. No emission behavior changes yet — formatters still emit `label.value` verbatim; PR 3 wires `form` through.

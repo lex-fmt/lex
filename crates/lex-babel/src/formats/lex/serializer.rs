@@ -5,7 +5,8 @@ use lex_core::lex::ast::{
         verbatim::VerbatimGroupItemRef, VerbatimLine,
     },
     traits::{AstNode, Visitor},
-    Annotation, Definition, Document, List, ListItem, Paragraph, Session, Verbatim,
+    Annotation, Definition, Document, List, ListItem, Paragraph, Session, Table,
+    TableCellAlignment, TableRow, Verbatim,
 };
 
 use lex_core::lex::ast::elements::sequence_marker::DecorationStyle;
@@ -420,6 +421,211 @@ impl Visitor for LexSerializer {
         footer.push_str(" ::");
         self.write_line(&footer);
     }
+
+    fn visit_table(&mut self, table: &Table) {
+        // Tables share the outer verbatim shape: leading blank line,
+        // subject line ending in `:`, indented body of pipe rows,
+        // dedented `:: table ::` closer.
+        if !self.last_emission_ended_with_container_opener_colon() {
+            self.ensure_blank_lines(1);
+        }
+
+        let subject = table.subject.as_string();
+        if !subject.is_empty() {
+            self.write_line(&format!("{subject}:"));
+        }
+
+        self.indent_level += 1;
+        emit_pipe_table(self, table);
+        self.indent_level -= 1;
+
+        // The closing `:: lex.tabular.table ::` annotation is part of
+        // `table.annotations` — emitted by the standard annotation
+        // walk after `leave_table` returns. Until form-preserving
+        // emit lands (PR 3 of #584), the annotation walker emits
+        // `label.value` verbatim; that's the canonical for now.
+    }
+
+    fn leave_table(&mut self, _table: &Table) {
+        // No-op; annotations carry the closer.
+    }
+}
+
+/// Emit a structural Table as a markdown-style pipe table, padded for
+/// column alignment. The column count is the max-width row; shorter
+/// rows pad with empty cells. Alignment follows the per-cell `align`
+/// attribute, which the parser sets from the markdown alignment row
+/// (`:---`, `:---:`, `---:`).
+fn emit_pipe_table(serializer: &mut LexSerializer, table: &Table) {
+    let all_rows: Vec<&TableRow> = table
+        .header_rows
+        .iter()
+        .chain(table.body_rows.iter())
+        .collect();
+    if all_rows.is_empty() {
+        return;
+    }
+
+    // Determine column count from the widest row.
+    let col_count = all_rows
+        .iter()
+        .map(|r| r.cells.iter().map(|c| c.colspan).sum::<usize>())
+        .max()
+        .unwrap_or(0);
+    if col_count == 0 {
+        return;
+    }
+
+    // Compute per-column alignment: first non-`None` cell wins.
+    let aligns = compute_column_aligns(&all_rows, col_count);
+
+    // Compute per-column widths from cell text content. The
+    // separator-row cells use `---` (or longer to match content
+    // width), so include their natural width in the calc too.
+    let widths = compute_column_widths(&all_rows, col_count, &aligns);
+
+    // Emit header rows.
+    for row in &table.header_rows {
+        serializer.write_line(&format_pipe_row(row, &widths, col_count));
+    }
+    // Emit separator row (between header and body).
+    if !table.header_rows.is_empty() {
+        serializer.write_line(&format_separator_row(&widths, &aligns));
+    }
+    // Emit body rows.
+    for row in &table.body_rows {
+        serializer.write_line(&format_pipe_row(row, &widths, col_count));
+    }
+}
+
+fn compute_column_aligns(rows: &[&TableRow], col_count: usize) -> Vec<TableCellAlignment> {
+    let mut aligns = vec![TableCellAlignment::None; col_count];
+    for row in rows {
+        let mut col = 0;
+        for cell in &row.cells {
+            if col >= col_count {
+                break;
+            }
+            if aligns[col] == TableCellAlignment::None && cell.align != TableCellAlignment::None {
+                aligns[col] = cell.align;
+            }
+            col += cell.colspan.max(1);
+        }
+    }
+    aligns
+}
+
+fn compute_column_widths(
+    rows: &[&TableRow],
+    col_count: usize,
+    aligns: &[TableCellAlignment],
+) -> Vec<usize> {
+    let mut widths = vec![0usize; col_count];
+    for row in rows {
+        let mut col = 0;
+        for cell in &row.cells {
+            if col >= col_count {
+                break;
+            }
+            let text_len = cell.content.as_string().trim().chars().count();
+            widths[col] = widths[col].max(text_len);
+            col += cell.colspan.max(1);
+        }
+    }
+    // Separator widths need a minimum of 3 (`---`) plus 1 for each
+    // colon a `:left`/`right:`/`:center:` marker adds. Round up so the
+    // separator row's `---` segment is at least as wide as the content.
+    for (col, w) in widths.iter_mut().enumerate() {
+        let min = match aligns.get(col).copied().unwrap_or(TableCellAlignment::None) {
+            TableCellAlignment::Center => 5,                           // `:---:`
+            TableCellAlignment::Left | TableCellAlignment::Right => 4, // `:---` / `---:`
+            TableCellAlignment::None => 3,
+        };
+        if *w < min {
+            *w = min;
+        }
+    }
+    widths
+}
+
+fn format_pipe_row(row: &TableRow, widths: &[usize], col_count: usize) -> String {
+    let mut out = String::from("|");
+    let mut col = 0;
+    for cell in &row.cells {
+        if col >= col_count {
+            break;
+        }
+        let span = cell.colspan.max(1);
+        let span_width: usize = widths[col..(col + span).min(widths.len())]
+            .iter()
+            .sum::<usize>()
+            + (span.saturating_sub(1)) * 3; // `| ` + ` ` between cells
+        let text = cell.content.as_string().trim();
+        out.push(' ');
+        // Padding to the spanned width (1 cell uses widths[col]).
+        let pad_target = if span == 1 {
+            widths.get(col).copied().unwrap_or(0)
+        } else {
+            span_width
+        };
+        let visible_len = text.chars().count();
+        out.push_str(text);
+        for _ in visible_len..pad_target {
+            out.push(' ');
+        }
+        out.push(' ');
+        out.push('|');
+        col += span;
+    }
+    // Pad trailing empty cells.
+    while col < col_count {
+        out.push(' ');
+        let w = widths.get(col).copied().unwrap_or(0);
+        for _ in 0..w {
+            out.push(' ');
+        }
+        out.push(' ');
+        out.push('|');
+        col += 1;
+    }
+    out
+}
+
+fn format_separator_row(widths: &[usize], aligns: &[TableCellAlignment]) -> String {
+    let mut out = String::from("|");
+    for (i, &w) in widths.iter().enumerate() {
+        out.push(' ');
+        let align = aligns.get(i).copied().unwrap_or(TableCellAlignment::None);
+        match align {
+            TableCellAlignment::Left => {
+                out.push(':');
+                for _ in 1..w {
+                    out.push('-');
+                }
+            }
+            TableCellAlignment::Right => {
+                for _ in 0..w.saturating_sub(1) {
+                    out.push('-');
+                }
+                out.push(':');
+            }
+            TableCellAlignment::Center => {
+                out.push(':');
+                for _ in 0..w.saturating_sub(2) {
+                    out.push('-');
+                }
+                out.push(':');
+            }
+            TableCellAlignment::None => {
+                for _ in 0..w {
+                    out.push('-');
+                }
+            }
+        }
+        out.push(' ');
+        out.push('|');
+    }
+    out
 }
 
 #[cfg(test)]
@@ -751,21 +957,23 @@ mod tests {
 
     #[test]
     fn test_verbatim_03_table_formatting() {
-        // Use standard verbatim syntax: Subject + indented content + closing marker (dedented)
-        let source =
-            "Table Example:\n    | A | B |\n    |---|---|\n    | 1 | 2 |\n:: doc.table ::\n";
-        // The serializer should format this table
+        // PR 2 of #584 retired the legacy verbatim-with-markdown-body
+        // path: `:: doc.table ::` is forbidden, and `:: lex.tabular.table ::`
+        // / `:: tabular.table ::` source no longer round-trips through
+        // a markdown reformatter. The only surviving path is the
+        // structural Table element triggered by the bare `:: table ::`
+        // closer — `LexSerializer::visit_table` emits the pipe table
+        // directly with column alignment.
+        let source = "Table Example:\n    | A | B |\n    |---|---|\n    | 1 | 2 |\n:: table ::\n";
         let formatted = format_source(source);
 
-        // Check that it's formatted (aligned)
-        // Note: The exact spacing depends on the markdown serializer, but it should be consistent
-        // Markdown serializer adds padding for alignment
+        // Column-aligned pipe-table output from visit_table.
         assert!(formatted.contains("| A   | B   |"));
         assert!(formatted.contains("| --- | --- |"));
         assert!(formatted.contains("| 1   | 2   |"));
 
-        // Also test with unformatted input
-        let unformatted = "Table Example:\n    |A|B|\n    |-|-|\n    |1|2|\n:: doc.table ::\n";
+        // Also test with unformatted input — visit_table normalises.
+        let unformatted = "Table Example:\n    |A|B|\n    |-|-|\n    |1|2|\n:: table ::\n";
         let formatted_2 = format_source(unformatted);
 
         // Should be formatted nicely
@@ -799,23 +1007,16 @@ mod tests {
 
     #[test]
     fn test_verbatim_04_user_repro() {
-        // NOTE: The user's original input had dedented marker "::  doc.table ::".
-        // This caused it to be parsed as Definition + Document Annotation.
-        // The fix is to indent the marker to match the subject.
-        //
-        // #570 Phase 3b activated `NormalizeLabels`, so the document
-        // annotation's label `doc.table` is rewritten to its canonical
-        // form `lex.tabular.table` before serialization. The footer
-        // assertion looks for the canonical form. Phase 5 ships
-        // `lexd migrate-labels` for source-level migration; this is
-        // the parser-side equivalent for files that already flow
-        // through `format`.
-        let source = "  The Table:\n    | Markup Language | Great |\n    |--------------------|--------|\n    | Markdown | No |\n    | Lex | Yes |\n  ::  doc.table ::\n";
+        // The original user input had dedented marker "::  doc.table ::"
+        // which caused parse-as-Definition + Document Annotation. The
+        // fix is to indent the marker to match the subject. Updated
+        // for PR 2 of #584: source uses the blessed `table` closer
+        // which triggers structural-Table parsing; the legacy verbatim
+        // path with markdown reformat is gone.
+        let source = "  The Table:\n    | Markup Language | Great |\n    |--------------------|--------|\n    | Markdown | No |\n    | Lex | Yes |\n  ::  table ::\n";
 
         let formatted = format_source(source);
 
-        // Check for formatting
-        // Markdown serializer adds padding for alignment
         let table_start = formatted
             .find("| Markup Language | Great |")
             .expect("Table start not found");

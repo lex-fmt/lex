@@ -239,7 +239,7 @@ mod tests {
         let rules = FormattingRules::default();
         let request = VerbatimSnippetRequest::new(file.as_path(), &rules);
         let snippet = build_verbatim_snippet(&request).unwrap();
-        assert_eq!(snippet.language, "doc.image");
-        assert!(snippet.text.contains(":: doc.image"));
+        assert_eq!(snippet.language, "image");
+        assert!(snippet.text.contains(":: image"));
     }
 }

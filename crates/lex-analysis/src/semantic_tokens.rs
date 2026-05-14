@@ -610,7 +610,7 @@ mod tests {
         let annotation_labels = snippets(&tokens, LexSemanticTokenKind::AnnotationLabel, source);
         assert!(annotation_labels
             .iter()
-            .any(|snippet| snippet.contains("doc.note")));
+            .any(|snippet| snippet.contains("test.note")));
         let parameters = snippets(&tokens, LexSemanticTokenKind::AnnotationParameter, source);
         assert!(parameters
             .iter()
@@ -687,7 +687,7 @@ mod tests {
         let tokens = collect_semantic_tokens(&document);
         let source = sample_source();
 
-        // The fixture starts with `:: doc.note severity=info :: Document preface.`
+        // The fixture starts with `:: test.note severity=info :: Document preface.`
         // "Document preface." is inline annotation content — plain text inside annotation context.
         let annotation_content = snippets(&tokens, LexSemanticTokenKind::AnnotationContent, source);
         assert!(
@@ -702,7 +702,7 @@ mod tests {
     fn annotation_content_excludes_formatted_text() {
         // Inline formatting within annotation context should get its own token type,
         // not AnnotationContent — only Plain nodes emit AnnotationContent.
-        let source = ":: note :: Some *bold* text.\n";
+        let source = ":: test.note :: Some *bold* text.\n";
         let document = lex_core::lex::parsing::parse_document(source).expect("failed to parse");
         let tokens = collect_semantic_tokens(&document);
 

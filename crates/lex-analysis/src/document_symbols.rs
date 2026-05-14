@@ -299,7 +299,7 @@ mod tests {
     fn builds_session_tree() {
         let document = sample_document();
         let symbols = collect_document_symbols(&document);
-        assert!(symbols.iter().any(|s| s.name == ":: doc.note ::"));
+        assert!(symbols.iter().any(|s| s.name == ":: test.note ::"));
         let session = find_symbol(&symbols, "1. Intro");
         let child_names: Vec<_> = session
             .children
@@ -425,7 +425,9 @@ mod tests {
     fn includes_document_level_annotations() {
         let document = sample_document();
         let symbols = collect_document_symbols(&document);
-        assert!(symbols.iter().any(|symbol| symbol.name == ":: doc.note ::"));
+        assert!(symbols
+            .iter()
+            .any(|symbol| symbol.name == ":: test.note ::"));
         // callout is consumed as the footer of the Cache verbatim block
     }
 }

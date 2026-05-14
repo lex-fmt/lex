@@ -239,7 +239,7 @@ pub fn workspace_path(relative_path: &str) -> std::path::PathBuf {
 /// ```rust,ignore
 /// use crate::lex::testing::parse_without_annotation_attachment;
 ///
-/// let source = ":: note ::\nSome paragraph\n";
+/// let source = ":: test.note ::\nSome paragraph\n";
 /// let doc = parse_without_annotation_attachment(source).unwrap();
 ///
 /// // Annotation is still in content tree, not attached as metadata
