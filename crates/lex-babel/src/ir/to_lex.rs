@@ -139,7 +139,7 @@ pub fn to_lex_document(doc: &Document) -> LexDocument {
 /// shape.
 #[allow(dead_code)]
 fn to_lex_annotation_raw(ann: &Annotation) -> LexAnnotation {
-    let label = Label::new(ann.label.clone());
+    let label = Label::new(ann.label.clone()).with_form(ann.form);
     let parameters: Vec<Parameter> = ann
         .parameters
         .iter()
@@ -491,7 +491,7 @@ fn to_lex_verbatim(verb: &Verbatim) -> LexContentItem {
 
 /// Converts an IR Annotation to a Lex Annotation.
 fn to_lex_annotation(ann: &Annotation, level: usize) -> LexContentItem {
-    let label = Label::new(ann.label.clone());
+    let label = Label::new(ann.label.clone()).with_form(ann.form);
     let parameters: Vec<Parameter> = ann
         .parameters
         .iter()
@@ -800,6 +800,7 @@ mod tests {
                 label: "lex.metadata.author".to_string(),
                 parameters: vec![("name".to_string(), "Alice".to_string())],
                 content: vec![],
+                form: crate::ir::nodes::LabelForm::Canonical,
             }],
         };
 
@@ -813,5 +814,45 @@ mod tests {
         // Phase 3b uses it.
         let raw = to_lex_annotation_raw(&ir_doc.document_annotations[0]);
         assert_eq!(raw.data.label.value, "lex.metadata.author");
+    }
+
+    /// Issue #593 regression: the IR Annotation's `form` field must
+    /// carry through `to_lex_annotation` and `to_lex_annotation_raw`
+    /// so downstream `LexSerializer::source_spelling` emits the
+    /// blessed shortcut form (`:: title :: ...`) rather than the
+    /// verbose canonical (`:: lex.metadata.title :: ...`) for a
+    /// markdown→lex roundtrip.
+    #[test]
+    fn annotation_form_propagates_through_to_lex_annotation() {
+        let ann = Annotation {
+            label: "lex.metadata.title".to_string(),
+            parameters: vec![],
+            content: vec![],
+            form: crate::ir::nodes::LabelForm::Shortcut,
+        };
+        match to_lex_annotation(&ann, 1) {
+            LexContentItem::Annotation(a) => {
+                assert_eq!(a.data.label.value, "lex.metadata.title");
+                assert_eq!(
+                    a.data.label.form,
+                    crate::ir::nodes::LabelForm::Shortcut,
+                    "to_lex_annotation must preserve the IR `form` field"
+                );
+            }
+            _ => panic!("expected LexContentItem::Annotation"),
+        }
+    }
+
+    #[test]
+    fn annotation_form_propagates_through_to_lex_annotation_raw() {
+        let ann = Annotation {
+            label: "lex.metadata.author".to_string(),
+            parameters: vec![],
+            content: vec![],
+            form: crate::ir::nodes::LabelForm::Stripped,
+        };
+        let raw = to_lex_annotation_raw(&ann);
+        assert_eq!(raw.data.label.value, "lex.metadata.author");
+        assert_eq!(raw.data.label.form, crate::ir::nodes::LabelForm::Stripped);
     }
 }

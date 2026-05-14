@@ -9,8 +9,10 @@
 //! Level mapping: root session children start at heading level 2 (the document
 //! title occupies level 1). Each nested session increments the level.
 //!
-//! Verbatim blocks with registered labels (e.g. `doc.table`, `doc.image`) are
-//! hydrated into first-class IR nodes (Table, Image) via the VerbatimRegistry.
+//! Verbatim blocks with built-in labels (`lex.tabular.table`,
+//! `lex.media.{image,video,audio}`) are hydrated into first-class IR
+//! nodes (Table, Image, Video, Audio) via the extension registry's
+//! `on_resolve` dispatch (#583) — see [`from_lex_verbatim`].
 
 use lex_core::lex::ast::elements::{
     inlines::InlineNode, Annotation as LexAnnotation, ContentItem as LexContentItem,
@@ -20,7 +22,7 @@ use lex_core::lex::ast::elements::{
 };
 use lex_core::lex::ast::TextContent;
 use lex_core::lex::wire::{from_wire_node, origin_string, range_to_wire};
-use lex_extension::wire::{AnnotationBody, HostNodeKind, LabelCtx, NodeRef};
+use lex_extension::wire::{AnnotationBody, HostNodeKind, LabelCtx, NodeRef, WireNode};
 use lex_extension_host::registry::Registry;
 
 use super::nodes::{
@@ -86,6 +88,7 @@ pub fn from_lex_document(doc: &LexDocument, registry: &Registry) -> Document {
 /// by [`from_lex_document`] to populate `Document::document_annotations`.
 fn ir_annotation_from_lex(annotation: &LexAnnotation, registry: &Registry) -> Annotation {
     let label = annotation.data.label.value.clone();
+    let form = annotation.data.label.form;
     let parameters = annotation
         .data
         .parameters
@@ -97,6 +100,7 @@ fn ir_annotation_from_lex(annotation: &LexAnnotation, registry: &Registry) -> An
         label,
         parameters,
         content,
+        form,
     }
 }
 
@@ -351,7 +355,18 @@ fn from_lex_verbatim(verbatim: &LexVerbatim, registry: &Registry) -> DocNode {
             origin: origin_string(&verbatim.location),
         },
     };
-    if let Ok(Some(wire_node)) = registry.dispatch_resolve(&ctx) {
+    if let Ok(Some(mut wire_node)) = registry.dispatch_resolve(&ctx) {
+        // The subject line on a verbatim is part of the host's context,
+        // not the resolved wire payload — built-in `resolve_*` handlers
+        // (and well-behaved third-party ones) read params + body only.
+        // Restore it host-side so downstream renderers have a default
+        // caption / title / alt when the source carried a subject but
+        // the handler emitted an empty value.
+        if let Some(s) = subject.as_deref() {
+            if !s.is_empty() {
+                inject_subject_into_wire_node(&mut wire_node, s);
+            }
+        }
         if let Ok(items) = from_wire_node(&wire_node) {
             if let Some(first) = items.into_iter().next() {
                 match first {
@@ -379,6 +394,42 @@ fn from_lex_verbatim(verbatim: &LexVerbatim, registry: &Registry) -> DocNode {
         language,
         content,
     })
+}
+
+/// Restore the verbatim subject as a default caption / title / alt on
+/// resolved media + tabular wire nodes when the handler emitted an
+/// empty field. Built-in `resolve_*` handlers read `ctx.params` + body
+/// only and have no visibility into the subject line — without this
+/// injection a `.lex` source like
+///
+/// ```text
+/// Sunset Photo:
+///     ...
+/// :: image src=sunset.jpg ::
+/// ```
+///
+/// loses `"Sunset Photo"` in the resulting `WireNode::Image`. Issue #595.
+fn inject_subject_into_wire_node(wire_node: &mut WireNode, subject: &str) {
+    match wire_node {
+        WireNode::Table { caption, .. } if caption.is_empty() => {
+            *caption = subject.to_string();
+        }
+        WireNode::Image { title, alt, .. } => {
+            if title.is_none() {
+                *title = Some(subject.to_string());
+            }
+            if alt.is_empty() {
+                *alt = subject.to_string();
+            }
+        }
+        WireNode::Video { title, .. } if title.is_none() => {
+            *title = Some(subject.to_string());
+        }
+        WireNode::Audio { title, .. } if title.is_none() => {
+            *title = Some(subject.to_string());
+        }
+        _ => {}
+    }
 }
 
 /// Decode a media verbatim (canonical label `lex.media.{image,video,audio}`)
@@ -412,6 +463,7 @@ fn from_lex_media_verbatim(verbatim: &LexVerbatim, original_content: &str) -> Do
 /// Converts a lex annotation to an IR annotation.
 fn from_lex_annotation(annotation: &LexAnnotation, level: usize, registry: &Registry) -> DocNode {
     let label = annotation.data.label.value.clone();
+    let form = annotation.data.label.form;
     let parameters = annotation
         .data
         .parameters
@@ -423,6 +475,7 @@ fn from_lex_annotation(annotation: &LexAnnotation, level: usize, registry: &Regi
         label,
         parameters,
         content,
+        form,
     })
 }
 
@@ -772,6 +825,119 @@ mod tests {
             !frontmatter_in_children,
             "frontmatter must no longer be synthesized in children"
         );
+    }
+
+    /// Issue #595 regression: the subject line on a media / tabular
+    /// verbatim must survive the `on_resolve` dispatch as a default
+    /// caption / title / alt. Built-in resolve handlers don't read
+    /// `ctx.subject` (it isn't on the ctx), so the host has to inject
+    /// it after the wire roundtrip.
+    #[test]
+    fn verbatim_subject_becomes_image_title_when_handler_left_it_empty() {
+        let subject = TextContent::from_string("Sunset Photo".to_string(), None);
+        let label = lex_core::lex::ast::elements::Label::new("lex.media.image".to_string());
+        let parameters = vec![lex_core::lex::ast::Parameter {
+            key: "src".to_string(),
+            value: "sunset.jpg".to_string(),
+            location: lex_core::lex::ast::Range::default(),
+        }];
+        let closing_data = lex_core::lex::ast::Data::new(label, parameters);
+        let verb = LexVerbatim::new(
+            subject,
+            Vec::new(),
+            closing_data,
+            lex_core::lex::ast::elements::verbatim::VerbatimBlockMode::Inflow,
+        );
+        let ir_node = from_lex_verbatim(&verb, test_registry());
+        match ir_node {
+            DocNode::Image(image) => {
+                assert_eq!(image.src, "sunset.jpg");
+                assert_eq!(
+                    image.title.as_deref(),
+                    Some("Sunset Photo"),
+                    "subject must be restored as the image title"
+                );
+            }
+            other => panic!("expected DocNode::Image, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn verbatim_subject_becomes_table_caption_when_handler_left_it_empty() {
+        let subject = TextContent::from_string("Quarterly results".to_string(), None);
+        let content = vec![
+            VerbatimContent::VerbatimLine(LexVerbatimLine::new("| Q1 | Q2 |".to_string())),
+            VerbatimContent::VerbatimLine(LexVerbatimLine::new("| -- | -- |".to_string())),
+            VerbatimContent::VerbatimLine(LexVerbatimLine::new("| 10 | 20 |".to_string())),
+        ];
+        let closing_data = lex_core::lex::ast::Data::new(
+            lex_core::lex::ast::elements::Label::new("lex.tabular.table".to_string()),
+            Vec::new(),
+        );
+        let verb = LexVerbatim::new(
+            subject,
+            content,
+            closing_data,
+            lex_core::lex::ast::elements::verbatim::VerbatimBlockMode::Inflow,
+        );
+        let ir_node = from_lex_verbatim(&verb, test_registry());
+        match ir_node {
+            DocNode::Table(table) => {
+                let caption = table
+                    .caption
+                    .as_ref()
+                    .map(|inlines| {
+                        inlines
+                            .iter()
+                            .filter_map(|inline| match inline {
+                                crate::ir::nodes::InlineContent::Text(t) => Some(t.as_str()),
+                                _ => None,
+                            })
+                            .collect::<String>()
+                    })
+                    .unwrap_or_default();
+                assert_eq!(
+                    caption, "Quarterly results",
+                    "subject must be restored as the table caption"
+                );
+            }
+            other => panic!("expected DocNode::Table, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn verbatim_subject_does_not_overwrite_handler_set_image_title() {
+        // When the user wrote both a subject AND an explicit `title=`
+        // parameter, the param wins — the subject is only a fallback
+        // for empty fields.
+        let subject = TextContent::from_string("Subject Wins?".to_string(), None);
+        let label = lex_core::lex::ast::elements::Label::new("lex.media.image".to_string());
+        let parameters = vec![
+            lex_core::lex::ast::Parameter {
+                key: "src".to_string(),
+                value: "x.jpg".to_string(),
+                location: lex_core::lex::ast::Range::default(),
+            },
+            lex_core::lex::ast::Parameter {
+                key: "title".to_string(),
+                value: "Param Wins".to_string(),
+                location: lex_core::lex::ast::Range::default(),
+            },
+        ];
+        let closing_data = lex_core::lex::ast::Data::new(label, parameters);
+        let verb = LexVerbatim::new(
+            subject,
+            Vec::new(),
+            closing_data,
+            lex_core::lex::ast::elements::verbatim::VerbatimBlockMode::Inflow,
+        );
+        let ir_node = from_lex_verbatim(&verb, test_registry());
+        match ir_node {
+            DocNode::Image(image) => {
+                assert_eq!(image.title.as_deref(), Some("Param Wins"));
+            }
+            other => panic!("expected DocNode::Image, got {other:?}"),
+        }
     }
 
     #[test]

@@ -77,17 +77,12 @@ fn to_roman_upper(n: usize) -> String {
     }
 }
 
-use crate::common::verbatim::VerbatimRegistry;
-
 pub struct LexSerializer {
     rules: FormattingRules,
     output: String,
     indent_level: usize,
     consecutive_newlines: usize,
     list_stack: Vec<ListContext>,
-    verbatim_registry: VerbatimRegistry,
-    skip_verbatim_lines: bool,
-    formatted_verbatim_content: Option<String>,
 }
 
 impl LexSerializer {
@@ -98,9 +93,6 @@ impl LexSerializer {
             indent_level: 0,
             consecutive_newlines: 2, // Start as if we have blank lines
             list_stack: Vec::new(),
-            verbatim_registry: VerbatimRegistry::default_with_standard(),
-            skip_verbatim_lines: false,
-            formatted_verbatim_content: None,
         }
     }
 
@@ -347,7 +339,7 @@ impl Visitor for LexSerializer {
         }
     }
 
-    fn visit_verbatim_block(&mut self, verbatim: &Verbatim) {
+    fn visit_verbatim_block(&mut self, _verbatim: &Verbatim) {
         // Lex requires a blank line between a preceding paragraph and the
         // subject line that opens a verbatim block — without one, the
         // re-parser merges the subject into the preceding paragraph and
@@ -364,23 +356,6 @@ impl Visitor for LexSerializer {
         if !self.last_emission_ended_with_container_opener_colon() {
             self.ensure_blank_lines(1);
         }
-
-        let label = &verbatim.closing_data.label.value;
-
-        // Try to get formatted content from handler
-        if let Some(handler) = self.verbatim_registry.get(label) {
-            // We ignore errors here for now as the visitor trait doesn't support Result
-            if let Ok(Some(content)) = handler.format_content(verbatim) {
-                self.formatted_verbatim_content = Some(content);
-                self.skip_verbatim_lines = true;
-            } else {
-                self.formatted_verbatim_content = None;
-                self.skip_verbatim_lines = false;
-            }
-        } else {
-            self.formatted_verbatim_content = None;
-            self.skip_verbatim_lines = false;
-        }
     }
 
     fn visit_verbatim_group(&mut self, group: &VerbatimGroupItemRef) {
@@ -394,21 +369,10 @@ impl Visitor for LexSerializer {
     }
 
     fn visit_verbatim_line(&mut self, verbatim_line: &VerbatimLine) {
-        if !self.skip_verbatim_lines {
-            self.write_line(verbatim_line.content.as_string());
-        }
+        self.write_line(verbatim_line.content.as_string());
     }
 
     fn leave_verbatim_block(&mut self, verbatim: &Verbatim) {
-        // If we have formatted content, print it now (before the closing marker)
-        if let Some(content) = self.formatted_verbatim_content.take() {
-            self.output.push_str(&content);
-            // Ensure newline after content if not present (though TableHandler adds it)
-            if !content.ends_with('\n') {
-                self.output.push('\n');
-            }
-        }
-
         let label = source_spelling(&verbatim.closing_data.label);
         let mut footer = format!(":: {label}");
         if !verbatim.closing_data.parameters.is_empty() {
