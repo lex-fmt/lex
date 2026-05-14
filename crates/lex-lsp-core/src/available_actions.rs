@@ -68,11 +68,20 @@ pub fn compute_actions(
     // 1b. `forbidden-label-prefix` quickfix.
     //
     // Each `:: doc.X ::` diagnostic gets its own QuickFix that
-    // replaces the label text with the blessed shortcut/stripped
-    // form via `lex_core::lex::migrate::blessed_for_legacy`. The
-    // diagnostic range points at the label token; the replacement
-    // operates on that exact slice so surrounding `::` markers and
-    // parameters survive unchanged. PR 4 of #584.
+    // rewrites the label. First try the curated legacy table —
+    // `doc.table` → `table` (blessed shortcut), `doc.image` →
+    // `image`, etc. via `lex_core::lex::migrate::blessed_for_legacy`.
+    // If that lookup misses (the user wrote `doc.foo` /
+    // `doc.unknown-thing` / etc.), fall back to a generic "strip
+    // `doc.` prefix" rewrite so every `forbidden-label-prefix`
+    // diagnostic has a quickfix attached. The fallback produces a
+    // bare-name label that the parser then re-classifies via the
+    // namespace policy (shortcut → Shortcut, registered Canonical →
+    // resolved, etc., or Community if nothing matches).
+    //
+    // The diagnostic range points at the label token; the
+    // replacement operates on that exact slice so surrounding `::`
+    // markers and parameters survive unchanged. PR 4 of #584.
     for diagnostic in &params.context.diagnostics {
         let Some(lsp_types::NumberOrString::String(code)) = &diagnostic.code else {
             continue;
@@ -80,10 +89,29 @@ pub fn compute_actions(
         if code.as_str() != "forbidden-label-prefix" {
             continue;
         }
-        let Some(label) = label_text_at_range(source, &diagnostic.range) else {
+        // The parser-emitted label location bounding-box can include
+        // trailing whitespace (the separator between the label and the
+        // first param). Read the raw slice, split off any leading +
+        // trailing whitespace, then reconstruct `new_text` with the
+        // same whitespace around the rewritten label — otherwise the
+        // edit would produce e.g. `:: tableheader=1 ::` (no space
+        // between label and param) which is malformed.
+        let Some((leading_ws, label, trailing_ws)) =
+            label_slice_at_range(source, &diagnostic.range)
+        else {
             continue;
         };
-        let Some(blessed) = blessed_for_legacy(&label) else {
+        let blessed: String = if let Some(curated) = blessed_for_legacy(&label) {
+            curated.to_string()
+        } else if let Some(stripped) = label.strip_prefix("doc.") {
+            // Generic fallback. Empty-after-strip (`doc.`) shouldn't
+            // appear in practice (the parser rejects empty labels
+            // earlier) but guard against it anyway.
+            if stripped.is_empty() {
+                continue;
+            }
+            stripped.to_string()
+        } else {
             continue;
         };
         actions.push(CodeAction {
@@ -95,7 +123,7 @@ pub fn compute_actions(
                     params.text_document.uri.clone(),
                     vec![TextEdit {
                         range: diagnostic.range,
-                        new_text: blessed.to_string(),
+                        new_text: format!("{leading_ws}{blessed}{trailing_ws}"),
                     }],
                 )])),
                 ..Default::default()
@@ -161,14 +189,18 @@ pub fn compute_actions(
     actions
 }
 
-/// Reads the source text spanned by the diagnostic range and returns
-/// it with whitespace trimmed. Used by the `forbidden-label-prefix`
-/// quickfix: the diagnostic range covers the label token, which the
-/// parser-emitted location may pad with surrounding whitespace; we
-/// want the bare label string to feed into
-/// `blessed_for_legacy(...)`. Same multi-byte safety constraints as
-/// `label_from_diagnostic_range`.
-fn label_text_at_range(source: &str, range: &Range) -> Option<String> {
+/// Reads the source text spanned by the diagnostic range and splits
+/// it into `(leading_ws, trimmed_label, trailing_ws)`. The
+/// `forbidden-label-prefix` quickfix uses the trimmed label for the
+/// `blessed_for_legacy(...)` lookup and re-applies the leading +
+/// trailing whitespace to the replacement text so the separator
+/// between the label and any following parameters is preserved —
+/// the parser-emitted label location bounding-box includes that
+/// trailing space.
+///
+/// Returns `None` for cross-line ranges, ranges that fall on non-
+/// UTF-8 byte boundaries, or ranges where the trimmed slice is empty.
+fn label_slice_at_range(source: &str, range: &Range) -> Option<(String, String, String)> {
     if range.start.line != range.end.line {
         return None;
     }
@@ -178,10 +210,18 @@ fn label_text_at_range(source: &str, range: &Range) -> Option<String> {
     let slice = line.get(start_byte..end_byte)?;
     let trimmed = slice.trim();
     if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
+        return None;
     }
+    // `trim` returns a sub-slice; compute the byte offsets of the
+    // trimmed view inside the original slice so the leading / trailing
+    // bookends are exact byte slices (not assumed to be ASCII spaces).
+    let trim_start = trimmed.as_ptr() as usize - slice.as_ptr() as usize;
+    let trim_end = trim_start + trimmed.len();
+    Some((
+        slice[..trim_start].to_string(),
+        trimmed.to_string(),
+        slice[trim_end..].to_string(),
+    ))
 }
 
 /// Reads the source text spanned by the diagnostic range and extracts the
@@ -781,5 +821,86 @@ mod tests {
         assert_eq!(action.is_preferred, Some(true));
         // Diagnostic is attached so clients can resolve which diag the fix addresses.
         assert_eq!(action.diagnostics.as_ref().map(|v| v.len()), Some(1));
+    }
+
+    // --- forbidden-label-prefix quickfix ---
+
+    fn forbidden_label_diag(line: u32, start_col: u32, end_col: u32, label: &str) -> Diagnostic {
+        Diagnostic {
+            range: Range {
+                start: Position {
+                    line,
+                    character: start_col,
+                },
+                end: Position {
+                    line,
+                    character: end_col,
+                },
+            },
+            severity: Some(DiagnosticSeverity::ERROR),
+            code: Some(NumberOrString::String("forbidden-label-prefix".to_string())),
+            code_description: None,
+            source: Some("lex".to_string()),
+            message: format!(
+                "label `{label}` uses the reserved `doc.*` prefix (forbidden under namespace \
+                 policy; see general.lex §4.1)"
+            ),
+            related_information: None,
+            tags: None,
+            data: None,
+        }
+    }
+
+    fn parse_permissive(source: &str) -> Document {
+        lex_core::lex::parsing::process_full_permissive(source).expect("permissive parse")
+    }
+
+    #[test]
+    fn forbidden_label_quickfix_preserves_trailing_whitespace_before_params() {
+        // Regression for Copilot's PR 590 callout. The parser-emitted
+        // label location can include the separator whitespace between
+        // the label and the next param. Replacing the full diagnostic
+        // range with just `blessed` would produce malformed
+        // `:: tableheader=1 ::`; the fix preserves the trailing space.
+        // Permissive parse so the `doc.*` label flows through to the
+        // AST instead of failing the parse.
+        let src = ":: doc.table header=1 :: My Table\n";
+        let doc = parse_permissive(src);
+        // Label spans `doc.table ` (10 cols: 3 → 13, including trailing space).
+        let diag = forbidden_label_diag(0, 3, 13, "doc.table");
+        let params = make_params(src, vec![diag]);
+        let actions = compute_actions(&doc, src, &params);
+        let action = actions
+            .iter()
+            .find(|a| a.title.starts_with("Rewrite `doc.table`"))
+            .expect("forbidden-label quickfix should be present");
+        let edit = quickfix_edit(action);
+        // After the edit, the header must still separate label from param.
+        let after = apply_edit(src, edit);
+        assert!(
+            after.starts_with(":: table header=1 ::"),
+            "edit should preserve the space between label and param; got: {after:?}"
+        );
+    }
+
+    #[test]
+    fn forbidden_label_quickfix_falls_back_to_strip_doc_prefix_for_unknown_legacy() {
+        // `doc.random` isn't in the LEGACY_TO_BLESSED curated table;
+        // the generic "strip `doc.` prefix" fallback should still
+        // produce a quickfix.
+        let src = ":: doc.random ::\nBody.\n";
+        let doc = parse_permissive(src);
+        let diag = forbidden_label_diag(0, 3, 13, "doc.random");
+        let params = make_params(src, vec![diag]);
+        let actions = compute_actions(&doc, src, &params);
+        let action = actions
+            .iter()
+            .find(|a| a.title.starts_with("Rewrite `doc.random`"))
+            .expect("fallback quickfix should be present");
+        assert!(
+            action.title.contains("`random`"),
+            "title should name the stripped form; got: {}",
+            action.title
+        );
     }
 }

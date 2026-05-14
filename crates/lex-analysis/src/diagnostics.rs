@@ -115,22 +115,18 @@ fn check_labels(document: &Document, diagnostics: &mut Vec<AnalysisDiagnostic>) 
     use lex_core::lex::assembling::stages::normalize_labels::{
         classify_label, RejectReason, Resolution,
     };
-    use lex_core::lex::ast::{Label, Verbatim};
+    use lex_core::lex::ast::Label;
 
     fn emit(label: &Label, diagnostics: &mut Vec<AnalysisDiagnostic>) {
         if let Resolution::Rejected(reason) = classify_label(&label.value) {
-            let (kind, message) = match reason {
-                RejectReason::Forbidden { input } => (
-                    DiagnosticKind::ForbiddenLabelPrefix,
-                    format!(
-                        "label `{input}` uses the reserved `doc.*` prefix (forbidden under \
-                         namespace policy; see general.lex §4.1)"
-                    ),
-                ),
-                RejectReason::UnknownCanonical { input } => (
-                    DiagnosticKind::UnknownLexCanonical,
-                    format!("label `{input}` is not a registered `lex.*` canonical"),
-                ),
+            // Reuse the normative wording from `RejectReason::message()`
+            // so the strict-mode parser error and the permissive-mode
+            // analysis diagnostic stay literally identical — no chance
+            // of wording drift between the two surfaces.
+            let message = reason.message();
+            let kind = match reason {
+                RejectReason::Forbidden { .. } => DiagnosticKind::ForbiddenLabelPrefix,
+                RejectReason::UnknownCanonical { .. } => DiagnosticKind::UnknownLexCanonical,
             };
             diagnostics.push(AnalysisDiagnostic {
                 range: label.location.clone(),
@@ -141,58 +137,58 @@ fn check_labels(document: &Document, diagnostics: &mut Vec<AnalysisDiagnostic>) 
         }
     }
 
-    fn walk_annotation(annotation: &Annotation, diagnostics: &mut Vec<AnalysisDiagnostic>) {
-        emit(&annotation.data.label, diagnostics);
-        for child in annotation.children.iter() {
-            walk_item(child, diagnostics);
-        }
-    }
-
-    fn walk_verbatim(verbatim: &Verbatim, diagnostics: &mut Vec<AnalysisDiagnostic>) {
-        emit(&verbatim.closing_data.label, diagnostics);
-        for annotation in verbatim.annotations() {
-            walk_annotation(annotation, diagnostics);
-        }
-    }
-
-    fn walk_table(table: &Table, diagnostics: &mut Vec<AnalysisDiagnostic>) {
-        for annotation in table.annotations() {
-            walk_annotation(annotation, diagnostics);
-        }
-        for row in table.header_rows.iter().chain(table.body_rows.iter()) {
-            for cell in &row.cells {
-                for child in cell.children.iter() {
-                    walk_item(child, diagnostics);
-                }
-            }
-        }
-        if let Some(footnotes) = table.footnotes.as_ref() {
-            for annotation in footnotes.annotations() {
-                walk_annotation(annotation, diagnostics);
-            }
-            for item in footnotes.items.iter() {
-                walk_item(item, diagnostics);
-            }
-        }
-    }
-
+    // Unified dispatch: every ContentItem flows through `walk_item`,
+    // which emits the type-specific label sites (annotation label,
+    // verbatim closer label, table cells/footnotes) exactly once and
+    // then defers to `attached_annotations` + `item.children()` for
+    // the uniform recursion. The earlier shape had type-specific
+    // walkers (`walk_annotation`, `walk_verbatim`, `walk_table`) that
+    // descended on their own and then `walk_item` descended again —
+    // duplicate-walk regression caught by Copilot's review on PR 589.
     fn walk_item(item: &ContentItem, diagnostics: &mut Vec<AnalysisDiagnostic>) {
         match item {
-            ContentItem::Annotation(a) => walk_annotation(a, diagnostics),
-            ContentItem::VerbatimBlock(v) => walk_verbatim(v, diagnostics),
-            ContentItem::Table(t) => walk_table(t, diagnostics),
+            ContentItem::Annotation(a) => emit(&a.data.label, diagnostics),
+            ContentItem::VerbatimBlock(v) => emit(&v.closing_data.label, diagnostics),
+            ContentItem::Table(t) => {
+                for row in t.header_rows.iter().chain(t.body_rows.iter()) {
+                    for cell in &row.cells {
+                        for child in cell.children.iter() {
+                            walk_item(child, diagnostics);
+                        }
+                    }
+                }
+                if let Some(footnotes) = t.footnotes.as_ref() {
+                    for ann in footnotes.annotations() {
+                        walk_annotation(ann, diagnostics);
+                    }
+                    for fn_item in footnotes.items.iter() {
+                        walk_item(fn_item, diagnostics);
+                    }
+                }
+            }
             _ => {}
         }
-        // Walk attached annotations (sessions, paragraphs, lists, etc.).
+        // Attached annotations (sessions, paragraphs, lists, list
+        // items, verbatim blocks, tables — see `attached_annotations`).
         if let Some(attached) = attached_annotations(item) {
             for annotation in attached {
                 walk_annotation(annotation, diagnostics);
             }
         }
+        // Generic child descent. For ContentItem::Annotation,
+        // `item.children()` returns the annotation's body children, so
+        // type-specific walking of nested annotations is not needed.
         if let Some(children) = item.children() {
             for child in children {
                 walk_item(child, diagnostics);
             }
+        }
+    }
+
+    fn walk_annotation(annotation: &Annotation, diagnostics: &mut Vec<AnalysisDiagnostic>) {
+        emit(&annotation.data.label, diagnostics);
+        for child in annotation.children.iter() {
+            walk_item(child, diagnostics);
         }
     }
 
@@ -584,6 +580,27 @@ mod tests {
             label_diags("Table:\n    | a | b |\n    |---|---|\n    | 1 | 2 |\n:: doc.table ::\n");
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].kind, DiagnosticKind::ForbiddenLabelPrefix);
+    }
+
+    #[test]
+    fn check_labels_emits_each_offending_site_exactly_once() {
+        // Regression for Copilot's PR 589 callout: the earlier
+        // walker shape descended into a node's children twice (once
+        // via the type-specific helper, once via the generic
+        // `walk_item` fallback), which produced duplicate
+        // diagnostics for any forbidden label nested inside another
+        // label-bearing site. Three nested + adjacent forbidden
+        // labels should produce exactly three diagnostics, not six.
+        let src = ":: doc.outer ::\n    :: doc.inner :: nested body\n\n:: doc.sibling :: x\n";
+        let diags = label_diags(src);
+        assert_eq!(
+            diags.len(),
+            3,
+            "exactly one diagnostic per offending site: {diags:?}"
+        );
+        for d in &diags {
+            assert_eq!(d.kind, DiagnosticKind::ForbiddenLabelPrefix);
+        }
     }
 
     #[test]

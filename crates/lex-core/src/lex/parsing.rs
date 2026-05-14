@@ -127,45 +127,15 @@ pub fn process_full(source: &str) -> ProcessResult {
 /// tokens, hover, completion, etc. Re-classify with
 /// [`crate::lex::assembling::stages::normalize_labels::classify_label`]
 /// to determine which sites would have errored in strict mode.
+///
+/// Routes through [`crate::lex::transforms::standard::run_string_to_ast`]
+/// with `Mode::Permissive` so strict + permissive parses share a
+/// single pipeline definition — no risk of the LSP parsing
+/// differently from `lexd format` when the pipeline grows new stages.
 pub fn process_full_permissive(source: &str) -> ProcessResult {
-    use crate::lex::assembling::stages::{
-        ApplyTableConfig, AttachAnnotations, AttachRoot, NormalizeLabels,
-    };
-    use crate::lex::transforms::stages::ParseInlines;
-    use crate::lex::transforms::standard::LEXING;
-    use crate::lex::transforms::Runnable;
-
-    let normalized = if !source.is_empty() && !source.ends_with('\n') {
-        format!("{source}\n")
-    } else {
-        source.to_string()
-    };
-
-    let tokens = LEXING.run(normalized.clone()).map_err(|e| e.to_string())?;
-    let mut output = crate::lex::parsing::engine::parse_from_flat_tokens(tokens, &normalized)
-        .map_err(|e| {
-            format!(
-                "Stage 'Parser' failed: {}",
-                e.to_string().replace('\n', " ")
-            )
-        })?;
-    output.root = ParseInlines::new()
-        .run(output.root)
-        .map_err(|e| e.to_string())?;
-    if let Some(ref mut title) = output.title {
-        title.content.ensure_inline_parsed();
-    }
-    let mut doc = AttachRoot::new().run(output).map_err(|e| e.to_string())?;
-    doc = AttachAnnotations::new()
-        .run(doc)
-        .map_err(|e| e.to_string())?;
-    doc = NormalizeLabels::permissive()
-        .run(doc)
-        .map_err(|e| e.to_string())?;
-    doc = ApplyTableConfig::new()
-        .run(doc)
-        .map_err(|e| e.to_string())?;
-    Ok(doc)
+    use crate::lex::assembling::stages::normalize_labels::Mode;
+    use crate::lex::transforms::standard::run_string_to_ast;
+    run_string_to_ast(source.to_string(), Mode::Permissive).map_err(|e| e.to_string())
 }
 
 /// Alias for `process_full` to maintain backward compatibility.
