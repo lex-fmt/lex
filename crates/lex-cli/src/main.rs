@@ -565,6 +565,18 @@ fn main() {
                 std::process::exit(1);
             });
         }
+        // `check-labels` doesn't need workspace config — only the
+        // built-in `lex.*` canonical set, which the analysis pass
+        // consults through compile-in constants. Short-circuiting
+        // before `builder.load()` keeps the documented exit-code
+        // contract (0/1/2 only) — a config load failure inside this
+        // subcommand would otherwise exit with code 1 instead of 2.
+        Some(("check-labels", sub_matches)) => {
+            let exit = handle_check_labels_command(sub_matches);
+            if exit != 0 {
+                std::process::exit(exit);
+            }
+        }
         _ => {
             let config = builder.load().unwrap_or_else(|e| {
                 eprintln!("Failed to load configuration: {e}");
@@ -658,12 +670,6 @@ fn main() {
                 }
                 Some(("migrate-labels", sub_matches)) => {
                     let exit = handle_migrate_labels_command(sub_matches);
-                    if exit != 0 {
-                        std::process::exit(exit);
-                    }
-                }
-                Some(("check-labels", sub_matches)) => {
-                    let exit = handle_check_labels_command(sub_matches);
                     if exit != 0 {
                         std::process::exit(exit);
                     }

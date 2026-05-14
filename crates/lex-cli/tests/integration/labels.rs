@@ -224,3 +224,31 @@ fn check_labels_exits_two_on_missing_file() {
         .code(2)
         .stderr(predicates::str::contains("failed to read"));
 }
+
+#[test]
+fn check_labels_short_circuits_before_config_load() {
+    // Regression for Copilot's PR 591 callout: the documented
+    // exit-code contract is 0/1/2 only. A workspace with a broken
+    // `.lex.toml` would have exited with code 1 from `builder.load()`
+    // before reaching `handle_check_labels_command` — violating the
+    // contract. `check-labels` now short-circuits before config
+    // load, so a malformed `.lex.toml` doesn't pollute the exit
+    // code: a clean doc still exits 0, a doc with violations exits 1
+    // (not 1-from-broken-config-load-conflated-with-1-from-violation).
+    let dir = TempDir::new().unwrap();
+    // Deliberately broken .lex.toml — `[labels]` block with a value
+    // that triggers a load error (reserved namespace).
+    fs::write(
+        dir.path().join(".lex.toml"),
+        "[labels]\nlex = \"github:fake/lex-labels\"\n",
+    )
+    .unwrap();
+    let doc = dir.path().join("clean.lex");
+    fs::write(&doc, ":: author :: Alice\n\n1. Intro\n\n    Body.\n").unwrap();
+    Command::cargo_bin("lexd")
+        .unwrap()
+        .current_dir(dir.path())
+        .args(["check-labels", doc.to_str().unwrap()])
+        .assert()
+        .success(); // exits 0 despite the broken workspace config
+}
