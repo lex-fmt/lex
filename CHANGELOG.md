@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Fixed — PR 589 review fixups ([#584](https://github.com/lex-fmt/lex/issues/584) follow-up)
+
+Five issues caught in review of [#589](https://github.com/lex-fmt/lex/pull/589) — fixes shipped as a follow-up since PR 589 merged before the fixups landed.
+
+- **Hover form-classification was a no-op.** `label_form_hover_line` re-classified `annotation.data.label.value`, but `NormalizeLabels` had already rewritten it to canonical — `classify_label` always returned `Canonical` form. As a result, the "Shortcut for `lex.metadata.author`" / "Prefix-stripped form" / "Community label" hover lines PR 4 advertised never actually fired. Fixed to consult `Label.form` directly (the parser-recorded source classification) and pair it with `label.value` as the canonical.
+- **Walker double-walked attached annotations + child content.** `check_labels` had per-type walkers (`walk_annotation`/`walk_verbatim`/`walk_table`) that descended into a node's children, then `walk_item` *also* descended via `attached_annotations` + `item.children()` on the same node — duplicate diagnostics for any forbidden label nested inside another label-bearing site. Restructured into a single `walk_item` dispatcher that emits type-specific labels and defers to a uniform attached/children walk. New regression test `check_labels_emits_each_offending_site_exactly_once`.
+- **`process_full_permissive` duplicated the standard pipeline.** Hand-rolled lexing → parsing → assembling so any future stage addition / reordering would have to be mirrored. Introduced `lex_core::lex::transforms::standard::run_string_to_ast(s, mode)` so strict (`STRING_TO_AST`) and permissive (`process_full_permissive`) share a single pipeline definition.
+- **`doc.*` quickfix only fired for the 4 curated mappings.** `doc.foo` / `doc.random` produced a `forbidden-label-prefix` diagnostic with no code action. Added a generic "strip `doc.` prefix" fallback so every diagnostic has an attached quickfix.
+- **Diagnostic message text duplicated `RejectReason::message()`.** Strict-mode parser errors and permissive-mode analysis diagnostics carried near-identical wording in two places that had to stay in sync. `check_labels` now delegates message construction to `RejectReason::message()` so the wording is literally identical across both surfaces.
+
 ### Added — label-policy diagnostics, hover info, quickfix ([#584](https://github.com/lex-fmt/lex/issues/584) PR 4 of 5)
 
 Fourth of five PRs for the bare-as-blessed label namespace model. PRs 1–3 added the form-tagging infrastructure, strict resolution, and form-preserving emit. This PR wires the **user-facing surface** so editors can show what's going wrong and fix it.

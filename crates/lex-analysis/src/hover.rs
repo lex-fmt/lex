@@ -135,7 +135,7 @@ fn annotation_hover(document: &Document, position: Position) -> Option<HoverResu
 
 fn annotation_hover_result(annotation: &Annotation) -> HoverResult {
     let mut parts = Vec::new();
-    if let Some(form_line) = label_form_hover_line(&annotation.data.label.value) {
+    if let Some(form_line) = label_form_hover_line(&annotation.data.label) {
         parts.push(form_line);
     }
     if !annotation.data.parameters.is_empty() {
@@ -164,23 +164,22 @@ fn annotation_hover_result(annotation: &Annotation) -> HoverResult {
     }
 }
 
-/// Build a one-liner explaining what alias form `input` resolves to,
-/// for hover content. Re-classifies the source spelling (the AST may
-/// carry an already-normalized canonical when strict parse ran, or
-/// the original spelling when the LSP's permissive parse ran). For
-/// `Canonical` form there's nothing extra to say. PR 4 of #584.
-fn label_form_hover_line(input: &str) -> Option<String> {
-    use lex_core::lex::assembling::stages::normalize_labels::{classify_label, Resolution};
+/// Build a one-liner explaining what alias form a label was authored
+/// in, for hover content. Consults the parser-recorded
+/// [`Label.form`](lex_core::lex::ast::elements::label::Label) field
+/// directly — by the time hover runs, `NormalizeLabels` has already
+/// rewritten `label.value` to the canonical for accepted labels, so
+/// re-classifying the value would always return `Canonical`. The
+/// `form` field is the source of truth for what the user wrote;
+/// `label.value` is the resolved canonical to pair it with. PR 4 of
+/// #584.
+fn label_form_hover_line(label: &lex_core::lex::ast::Label) -> Option<String> {
     use lex_core::lex::ast::elements::label::LabelForm;
-    match classify_label(input) {
-        Resolution::Resolved(canonical, LabelForm::Shortcut) => {
-            Some(format!("Shortcut for `{canonical}`"))
-        }
-        Resolution::Resolved(canonical, LabelForm::Stripped) => {
-            Some(format!("Prefix-stripped form of `{canonical}`"))
-        }
-        Resolution::Resolved(_, LabelForm::Community) => Some("Community label".to_string()),
-        Resolution::Resolved(_, LabelForm::Canonical) | Resolution::Rejected(_) => None,
+    match label.form {
+        LabelForm::Shortcut => Some(format!("Shortcut for `{}`", label.value)),
+        LabelForm::Stripped => Some(format!("Prefix-stripped form of `{}`", label.value)),
+        LabelForm::Community => Some("Community label".to_string()),
+        LabelForm::Canonical => None,
     }
 }
 

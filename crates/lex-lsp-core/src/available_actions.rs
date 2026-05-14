@@ -68,11 +68,20 @@ pub fn compute_actions(
     // 1b. `forbidden-label-prefix` quickfix.
     //
     // Each `:: doc.X ::` diagnostic gets its own QuickFix that
-    // replaces the label text with the blessed shortcut/stripped
-    // form via `lex_core::lex::migrate::blessed_for_legacy`. The
-    // diagnostic range points at the label token; the replacement
-    // operates on that exact slice so surrounding `::` markers and
-    // parameters survive unchanged. PR 4 of #584.
+    // rewrites the label. First try the curated legacy table —
+    // `doc.table` → `table` (blessed shortcut), `doc.image` →
+    // `image`, etc. via `lex_core::lex::migrate::blessed_for_legacy`.
+    // If that lookup misses (the user wrote `doc.foo` /
+    // `doc.unknown-thing` / etc.), fall back to a generic "strip
+    // `doc.` prefix" rewrite so every `forbidden-label-prefix`
+    // diagnostic has a quickfix attached. The fallback produces a
+    // bare-name label that the parser then re-classifies via the
+    // namespace policy (shortcut → Shortcut, registered Canonical →
+    // resolved, etc., or Community if nothing matches).
+    //
+    // The diagnostic range points at the label token; the
+    // replacement operates on that exact slice so surrounding `::`
+    // markers and parameters survive unchanged. PR 4 of #584.
     for diagnostic in &params.context.diagnostics {
         let Some(lsp_types::NumberOrString::String(code)) = &diagnostic.code else {
             continue;
@@ -83,7 +92,17 @@ pub fn compute_actions(
         let Some(label) = label_text_at_range(source, &diagnostic.range) else {
             continue;
         };
-        let Some(blessed) = blessed_for_legacy(&label) else {
+        let blessed: String = if let Some(curated) = blessed_for_legacy(&label) {
+            curated.to_string()
+        } else if let Some(stripped) = label.strip_prefix("doc.") {
+            // Generic fallback. Empty-after-strip (`doc.`) shouldn't
+            // appear in practice (the parser rejects empty labels
+            // earlier) but guard against it anyway.
+            if stripped.is_empty() {
+                continue;
+            }
+            stripped.to_string()
+        } else {
             continue;
         };
         actions.push(CodeAction {
@@ -95,7 +114,7 @@ pub fn compute_actions(
                     params.text_document.uri.clone(),
                     vec![TextEdit {
                         range: diagnostic.range,
-                        new_text: blessed.to_string(),
+                        new_text: blessed,
                     }],
                 )])),
                 ..Default::default()
