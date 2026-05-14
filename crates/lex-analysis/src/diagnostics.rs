@@ -112,7 +112,9 @@ pub fn analyze_with_registry(document: &Document, registry: &Registry) -> Vec<An
 /// AST building so these surface as in-place diagnostics rather than
 /// as a wholesale parse failure.
 fn check_labels(document: &Document, diagnostics: &mut Vec<AnalysisDiagnostic>) {
-    use lex_core::lex::assembling::stages::normalize_labels::{classify_label, Resolution};
+    use lex_core::lex::assembling::stages::normalize_labels::{
+        classify_label, RejectReason, Resolution,
+    };
     use lex_core::lex::ast::Label;
 
     fn emit(label: &Label, diagnostics: &mut Vec<AnalysisDiagnostic>) {
@@ -123,12 +125,8 @@ fn check_labels(document: &Document, diagnostics: &mut Vec<AnalysisDiagnostic>) 
             // of wording drift between the two surfaces.
             let message = reason.message();
             let kind = match reason {
-                lex_core::lex::assembling::stages::normalize_labels::RejectReason::Forbidden {
-                    ..
-                } => DiagnosticKind::ForbiddenLabelPrefix,
-                lex_core::lex::assembling::stages::normalize_labels::RejectReason::UnknownCanonical {
-                    ..
-                } => DiagnosticKind::UnknownLexCanonical,
+                RejectReason::Forbidden { .. } => DiagnosticKind::ForbiddenLabelPrefix,
+                RejectReason::UnknownCanonical { .. } => DiagnosticKind::UnknownLexCanonical,
             };
             diagnostics.push(AnalysisDiagnostic {
                 range: label.location.clone(),
