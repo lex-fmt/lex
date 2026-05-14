@@ -119,7 +119,7 @@ fn kitchensink_primary_session_structure() {
                 child
                     .assert_list()
                     .item_count(2)
-                    .annotation_count(1) // :: warning severity=high :: attached to list
+                    .annotation_count(1) // :: test.warning severity=high :: attached to list
                     .annotation(0, |ann| {
                         ann.label("warning")
                             .has_parameter_with_value("severity", "high")
@@ -265,7 +265,7 @@ fn kitchensink_second_session() {
                 child
                     .assert_verbatim_block()
                     .subject("Image Reference (Marker Verbatim Block)")
-                    .closing_label("image")
+                    .closing_label("lex.media.image")
                     .has_closing_parameter_with_value("src", "\"logo.png\"")
                     .has_closing_parameter_with_value("alt", "\"Lex Logo\"")
                     .annotation_count(1)

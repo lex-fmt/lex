@@ -43,6 +43,7 @@ fn create_test_tree() -> DocNode {
                 ],
             }),
         ],
+        document_annotations: vec![],
     })
 }
 

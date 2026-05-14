@@ -298,7 +298,7 @@ mod tests {
     #[test]
     fn test_parse_annotation() {
         // Use tokens from the lexer pipeline
-        let source = ":: note ::\n";
+        let source = ":: test.note ::\n";
         let tokens = lex_helper(source).expect("Failed to tokenize");
 
         let result = parse_from_flat_tokens(tokens, source);
@@ -318,13 +318,13 @@ mod tests {
         // Test annotations combined with paragraphs, lists, and sessions
         let source = r#"Document with annotations and trifecta
 
-:: info ::
+:: test.info ::
 
 Paragraph before session.
 
 1. Session with annotation inside
 
-    :: note author="system" ::
+    :: test.note author="system" ::
         This is an annotated note within a session
 
     - List item 1
@@ -332,7 +332,7 @@ Paragraph before session.
 
     Another paragraph in session.
 
-:: warning severity=high ::
+:: test.warning severity=high ::
     - Item in annotated warning
     - Important item
 
@@ -417,7 +417,7 @@ Final paragraph.
     #[test]
     fn test_parse_incomplete_annotation_block() {
         let source = r#"
-:: warning ::
+:: test.warning ::
     This is content
 
 No closing marker

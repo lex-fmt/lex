@@ -1,5 +1,7 @@
 //! Core data structures for the Intermediate Representation (IR).
 
+pub use lex_core::lex::ast::elements::label::LabelForm;
+
 /// A universal, semantic representation of a document node.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DocNode {
@@ -24,6 +26,21 @@ pub struct Document {
     pub title: Option<Vec<InlineContent>>,
     pub subtitle: Option<Vec<InlineContent>>,
     pub children: Vec<DocNode>,
+    /// Document-scope annotations (i.e. annotations attached directly
+    /// to the document, not nested inside any block).
+    ///
+    /// Phase 3a of #570 added this slot as a first-class home for them.
+    /// The slot is populated **one-way** from `from_lex_document`
+    /// (lex → IR direction); `to_lex_document`, `tree_to_events`, and
+    /// `events_to_tree` do **not** consume or emit it today. The
+    /// legacy frontmatter promotion in `from_lex_document` continues
+    /// to synthesize a `frontmatter` annotation into
+    /// [`children`](Self::children), and downstream serializers keep
+    /// reading from there — emitting both would double-write.
+    /// A follow-up phase (after #570 Phase 4's render hooks land)
+    /// retires the promotion and wires the new slot through every
+    /// consumer atomically.
+    pub document_annotations: Vec<Annotation>,
 }
 
 /// Represents a heading with a specific level.
@@ -109,6 +126,14 @@ pub struct Annotation {
     pub label: String,
     pub parameters: Vec<(String, String)>,
     pub content: Vec<DocNode>,
+    /// Which input form the user wrote, mirroring `Label::form` from
+    /// lex-core. Carried across `from_lex` → IR → `to_lex` so the
+    /// `lexd format` roundtrip preserves the source spelling. Set by
+    /// `from_lex_annotation` from the AST and by the markdown parser
+    /// from `classify_label` so `markdown → lex` conversions emit the
+    /// blessed shortcut form (e.g. `:: title ::` rather than
+    /// `:: lex.metadata.title ::`). Issue #593.
+    pub form: LabelForm,
 }
 
 /// Represents a table.

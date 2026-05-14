@@ -414,7 +414,10 @@ fn test_kitchensink_round_trip() {
     // Import back to Lex
     let lex_doc2 = md_to_lex(&md);
 
-    // Count element types recursively
+    // Count element types recursively. Walks every container that
+    // can carry children — Session, List, ListItem, Definition,
+    // Annotation — so deeply-nested verbatims (e.g. a code fence
+    // inside a list item inside a session) are counted too.
     fn count_elements(elements: &[ContentItem]) -> (usize, usize, usize, usize) {
         let mut counts = (0usize, 0usize, 0usize, 0usize); // paragraphs, sessions, lists, verbatims
         for el in elements {
@@ -428,7 +431,32 @@ fn test_kitchensink_round_trip() {
                     counts.2 += inner.2;
                     counts.3 += inner.3;
                 }
-                ContentItem::List(_) => counts.2 += 1,
+                ContentItem::List(l) => {
+                    counts.2 += 1;
+                    for item in l.items.iter() {
+                        if let ContentItem::ListItem(li) = item {
+                            let inner = count_elements(&li.children);
+                            counts.0 += inner.0;
+                            counts.1 += inner.1;
+                            counts.2 += inner.2;
+                            counts.3 += inner.3;
+                        }
+                    }
+                }
+                ContentItem::Definition(d) => {
+                    let inner = count_elements(&d.children);
+                    counts.0 += inner.0;
+                    counts.1 += inner.1;
+                    counts.2 += inner.2;
+                    counts.3 += inner.3;
+                }
+                ContentItem::Annotation(a) => {
+                    let inner = count_elements(&a.children);
+                    counts.0 += inner.0;
+                    counts.1 += inner.1;
+                    counts.2 += inner.2;
+                    counts.3 += inner.3;
+                }
                 ContentItem::VerbatimBlock(_) => counts.3 += 1,
                 _ => {}
             }

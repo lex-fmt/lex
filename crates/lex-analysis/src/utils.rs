@@ -739,20 +739,24 @@ fn extract_session_identifier(title: &str) -> Option<String> {
     }
 }
 
-/// Checks whether a list is annotated with `:: notes ::`.
+/// Checks whether a list is annotated with `:: notes ::`. The
+/// parser's `NormalizeLabels` stage resolves the shortcut to its
+/// canonical (`lex.notes`); both forms are accepted here in case a
+/// caller hands an un-normalized AST.
 fn is_notes_list(list: &lex_core::lex::ast::List) -> bool {
-    list.annotations()
-        .iter()
-        .any(|a| a.data.label.value.trim().eq_ignore_ascii_case("notes"))
+    list.annotations().iter().any(label_is_notes)
 }
 
 /// Checks whether a container has a `:: notes ::` annotation (which may
 /// attach to the container itself rather than to the list, depending on
 /// blank line distance).
 fn has_notes_annotation(annotations: &[Annotation]) -> bool {
-    annotations
-        .iter()
-        .any(|a| a.data.label.value.trim().eq_ignore_ascii_case("notes"))
+    annotations.iter().any(label_is_notes)
+}
+
+fn label_is_notes(a: &Annotation) -> bool {
+    let v = a.data.label.value.trim();
+    v.eq_ignore_ascii_case("lex.notes") || v.eq_ignore_ascii_case("notes")
 }
 
 /// Collects all footnote definitions from a document.

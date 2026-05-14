@@ -356,7 +356,7 @@ mod tests {
 
     #[test]
     fn test_valid_structure_no_warnings() {
-        let source = ":: note :: A valid annotation.\n\n";
+        let source = ":: test.note :: A valid annotation.\n\n";
         let doc = parse_document(source).unwrap();
 
         let diagnostics = validate_structure(&doc);

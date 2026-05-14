@@ -96,10 +96,54 @@ pub enum WireNode {
         origin: Option<String>,
         caption: String,
         header_rows: u32,
-        align: String,
+        /// Per-column alignment. One entry per column; values are
+        /// `"left"`, `"center"`, `"right"`, or `""` (no alignment).
+        /// `column_aligns.length` defines the table's column count
+        /// and MUST equal the longest row in `rows`; rows MUST NOT
+        /// exceed this length. See `lex-extension-wire.lex` §2.2.
+        ///
+        /// Replaces the single whole-table `align: String` from
+        /// `wire_version: 1`. The old shape collapsed mixed-alignment
+        /// tables (e.g. a markdown pipe-table with `| :--- | :---: |`)
+        /// to a single alignment on the reverse codec.
+        column_aligns: Vec<String>,
         rows: Vec<WireRow>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         footnotes: Vec<WireFootnote>,
+    },
+    /// Image media node. Produced by `on_resolve` for
+    /// `lex.media.image`-class verbatim labels; carries the same
+    /// data the host would otherwise flatten into `verbatim.params`.
+    /// New in `wire_version: 2` — see `lex-extension-wire.lex` §2.2.
+    Image {
+        range: Range,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        origin: Option<String>,
+        src: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        alt: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+    },
+    /// Video media node. New in `wire_version: 2`.
+    Video {
+        range: Range,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        origin: Option<String>,
+        src: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        poster: Option<String>,
+    },
+    /// Audio media node. New in `wire_version: 2`.
+    Audio {
+        range: Range,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        origin: Option<String>,
+        src: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
     },
     Annotation {
         range: Range,
@@ -118,6 +162,29 @@ pub enum WireNode {
         #[serde(skip_serializing_if = "Option::is_none")]
         origin: Option<String>,
     },
+}
+
+impl WireNode {
+    /// The byte range this node spans in its origin source. Useful for
+    /// diagnostic attribution when the host only has the wire node
+    /// (e.g., the `on_format` dispatch path doesn't carry a separate
+    /// `NodeRef`).
+    pub fn range(&self) -> Range {
+        match self {
+            Self::Document { range, .. }
+            | Self::Session { range, .. }
+            | Self::Definition { range, .. }
+            | Self::Paragraph { range, .. }
+            | Self::List { range, .. }
+            | Self::Verbatim { range, .. }
+            | Self::Table { range, .. }
+            | Self::Image { range, .. }
+            | Self::Video { range, .. }
+            | Self::Audio { range, .. }
+            | Self::Annotation { range, .. }
+            | Self::Blank { range, .. } => *range,
+        }
+    }
 }
 
 /// One item inside a [`WireNode::List`].
@@ -270,6 +337,130 @@ mod tests {
             }
             _ => panic!("expected Verbatim"),
         }
+    }
+
+    #[test]
+    fn table_round_trips_with_per_column_aligns() {
+        // Wire_version 2 (#583): `column_aligns` carries per-column
+        // alignment as a `Vec<String>` instead of the single-string
+        // whole-table summary of v1. Test the round-trip preserves
+        // mixed alignments — that was the regression that motivated
+        // the bump.
+        let t = WireNode::Table {
+            range: r(0, 0, 3, 0),
+            origin: None,
+            caption: "Demo".into(),
+            header_rows: 1,
+            column_aligns: vec!["left".into(), "center".into(), "right".into()],
+            rows: vec![
+                WireRow {
+                    cells: vec![
+                        WireTableCell {
+                            inlines: vec![WireInline::Text { text: "h1".into() }],
+                            colspan: 1,
+                            rowspan: 1,
+                        },
+                        WireTableCell {
+                            inlines: vec![WireInline::Text { text: "h2".into() }],
+                            colspan: 1,
+                            rowspan: 1,
+                        },
+                        WireTableCell {
+                            inlines: vec![WireInline::Text { text: "h3".into() }],
+                            colspan: 1,
+                            rowspan: 1,
+                        },
+                    ],
+                },
+                WireRow {
+                    cells: vec![
+                        WireTableCell {
+                            inlines: vec![WireInline::Text { text: "c1".into() }],
+                            colspan: 1,
+                            rowspan: 1,
+                        },
+                        WireTableCell {
+                            inlines: vec![WireInline::Text { text: "c2".into() }],
+                            colspan: 1,
+                            rowspan: 1,
+                        },
+                        WireTableCell {
+                            inlines: vec![WireInline::Text { text: "c3".into() }],
+                            colspan: 1,
+                            rowspan: 1,
+                        },
+                    ],
+                },
+            ],
+            footnotes: vec![],
+        };
+        let s = serde_json::to_string(&t).unwrap();
+        assert!(
+            s.contains(r#""column_aligns":["left","center","right"]"#),
+            "column_aligns must serialize as an array of per-column strings, got: {s}"
+        );
+        let back: WireNode = serde_json::from_str(&s).unwrap();
+        assert_eq!(back, t);
+    }
+
+    #[test]
+    fn image_round_trips() {
+        let i = WireNode::Image {
+            range: r(2, 0, 2, 30),
+            origin: None,
+            src: "chart.png".into(),
+            alt: "Q4 chart".into(),
+            title: Some("Quarter".into()),
+        };
+        let s = serde_json::to_string(&i).unwrap();
+        assert!(s.contains(r#""kind":"image""#));
+        assert!(s.contains(r#""src":"chart.png""#));
+        let back: WireNode = serde_json::from_str(&s).unwrap();
+        assert_eq!(back, i);
+    }
+
+    #[test]
+    fn image_marker_form_omits_empty_alt() {
+        let i = WireNode::Image {
+            range: r(0, 0, 0, 0),
+            origin: None,
+            src: "x.png".into(),
+            alt: String::new(),
+            title: None,
+        };
+        let s = serde_json::to_string(&i).unwrap();
+        assert!(!s.contains("alt"), "empty alt must be omitted: {s}");
+        assert!(!s.contains("title"), "None title must be omitted: {s}");
+    }
+
+    #[test]
+    fn video_round_trips_with_poster() {
+        let v = WireNode::Video {
+            range: r(0, 0, 0, 0),
+            origin: None,
+            src: "demo.mp4".into(),
+            title: Some("Demo".into()),
+            poster: Some("frame.png".into()),
+        };
+        let s = serde_json::to_string(&v).unwrap();
+        assert!(s.contains(r#""kind":"video""#));
+        assert!(s.contains(r#""poster":"frame.png""#));
+        let back: WireNode = serde_json::from_str(&s).unwrap();
+        assert_eq!(back, v);
+    }
+
+    #[test]
+    fn audio_round_trips() {
+        let a = WireNode::Audio {
+            range: r(0, 0, 0, 0),
+            origin: None,
+            src: "track.mp3".into(),
+            title: None,
+        };
+        let s = serde_json::to_string(&a).unwrap();
+        assert!(s.contains(r#""kind":"audio""#));
+        let back: WireNode = serde_json::from_str(&s).unwrap();
+        assert_eq!(back, a);
     }
 
     #[test]

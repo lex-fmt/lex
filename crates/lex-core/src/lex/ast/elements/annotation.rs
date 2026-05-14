@@ -33,7 +33,7 @@
 //!      Label only:
 //!         :: image ::  
 //!      Label and parameters:
-//!         :: note severity=high :: Check this carefully
+//!         :: test.note severity=high :: Check this carefully
 //!      Marker form (no content):
 //!         :: debug ::
 //!      Parameters augmenting the label:

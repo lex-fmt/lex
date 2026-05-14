@@ -403,7 +403,9 @@ fn build_comrak_ast<'a>(
                 }
             }
 
-            Event::StartAnnotation { label, parameters } if label == "frontmatter" => {
+            Event::StartAnnotation {
+                label, parameters, ..
+            } if label == "frontmatter" => {
                 // Serialize as YAML frontmatter
                 let mut yaml = String::from("---\n");
                 for (key, value) in parameters {
@@ -421,7 +423,9 @@ fn build_comrak_ast<'a>(
                 // No need to push to stack or change current_parent as FrontMatter is a leaf block
             }
 
-            Event::StartAnnotation { label, parameters } => {
+            Event::StartAnnotation {
+                label, parameters, ..
+            } => {
                 current_heading = None;
 
                 // Check if this is a metadata annotation that should be serialized as a comment with content inside

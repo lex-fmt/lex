@@ -33,8 +33,8 @@
 
 use crate::ir::events::Event;
 use crate::ir::nodes::{
-    Annotation, Definition, DocNode, Document, Heading, InlineContent, List, ListItem, Paragraph,
-    Table, TableCell, TableRow, Verbatim,
+    Annotation, Definition, DocNode, Document, Heading, InlineContent, LabelForm, List, ListItem,
+    Paragraph, Table, TableCell, TableRow, Verbatim,
 };
 
 /// Converts a `DocNode` tree to a flat vector of `Event`s.
@@ -46,8 +46,21 @@ pub fn tree_to_events(root_node: &DocNode) -> Vec<Event> {
 
 fn walk_node(node: &DocNode, events: &mut Vec<Event>) {
     match node {
-        DocNode::Document(Document { children, .. }) => {
+        DocNode::Document(Document {
+            children,
+            document_annotations,
+            ..
+        }) => {
             events.push(Event::StartDocument);
+            // Post-refac/label cleanup: synthesize the `frontmatter`
+            // annotation event from `document_annotations` here, at
+            // the events-emission layer. The IR Document no longer
+            // carries a synthetic `frontmatter` annotation in
+            // `children` (that was the legacy `from_lex_document`
+            // promotion). Downstream HTML/Markdown serializers still
+            // match on `Event::StartAnnotation { label: "frontmatter", .. }`
+            // unchanged — the event shape is preserved.
+            emit_frontmatter_event(document_annotations, events);
             for child in children {
                 walk_node(child, events);
             }
@@ -128,53 +141,24 @@ fn walk_node(node: &DocNode, events: &mut Vec<Event>) {
             label,
             parameters,
             content,
+            form,
         }) => {
-            // Check if this is a metadata annotation that should be serialized as a single HTML block
-            let metadata_labels = [
-                "author", "note", "title", "date", "tags", "category", "template",
-            ];
-            if metadata_labels.contains(&label.as_str()) {
-                // Serialize content to text
-                // This is a simplification: we assume content is mostly text paragraphs
-                let mut text_content = String::new();
-                for child in content {
-                    if let DocNode::Paragraph(p) = child {
-                        for inline in &p.content {
-                            if let InlineContent::Text(t) = inline {
-                                text_content.push_str(t);
-                            } else if let InlineContent::Reference(r) = inline {
-                                text_content.push_str(r);
-                            } else if let InlineContent::Link { text, .. } = inline {
-                                text_content.push_str(text);
-                            }
-                            // Ignore other inline types for now or implement full serialization
-                        }
-                        text_content.push('\n');
-                    }
-                }
-
-                // Let's construct the full comment string here.
-                let mut comment_body = String::new();
-                for (key, value) in parameters {
-                    comment_body.push_str(&format!(" {key}={value}"));
-                }
-                if !text_content.is_empty() {
-                    comment_body.push('\n');
-                    comment_body.push_str(&text_content);
-                }
-
-                events.push(Event::StartVerbatim {
-                    language: Some(format!("lex-metadata:{label}")),
-                    subject: None,
-                });
-                events.push(Event::Inline(InlineContent::Text(comment_body)));
-                events.push(Event::EndVerbatim);
-                return;
-            }
-
+            // Post-refac/label cleanup: the bare-label metadata
+            // whitelist (`author`, `title`, …) that used to live here
+            // and synthesize `lex-metadata:<label>` verbatim events is
+            // gone. After #570 Phase 3b activated `NormalizeLabels`,
+            // no production path produces IR annotations with those
+            // bare labels — they're either rewritten to canonical
+            // `lex.metadata.*` and promoted into the `frontmatter`
+            // annotation by `from_lex_document`, or they come from
+            // markdown imports as a single packed `frontmatter`
+            // annotation. The HTML/Markdown serializers handle the
+            // `frontmatter` label directly in their `StartAnnotation`
+            // arms.
             events.push(Event::StartAnnotation {
                 label: label.clone(),
                 parameters: parameters.clone(),
+                form: *form,
             });
             if !content.is_empty() {
                 events.push(Event::StartContent);
@@ -245,6 +229,82 @@ fn walk_table_cell(cell: &TableCell, events: &mut Vec<Event>) {
     events.push(Event::EndTableCell);
 }
 
+/// Synthesize the `frontmatter` annotation event from a document's
+/// `document_annotations` slot. Each annotation's `lex.metadata.<key>`
+/// label is stripped to the short form (`key`); annotations with text
+/// body become `(key, body_text)` params; annotations with structured
+/// parameters become `(key.subkey, value)` params. The legacy
+/// `from_lex_document` promotion produced the same flat-params shape
+/// the downstream serializers expect.
+fn emit_frontmatter_event(document_annotations: &[Annotation], events: &mut Vec<Event>) {
+    if document_annotations.is_empty() {
+        return;
+    }
+    let mut parameters: Vec<(String, String)> = Vec::new();
+    for ann in document_annotations {
+        let key = ann
+            .label
+            .strip_prefix("lex.metadata.")
+            .unwrap_or(ann.label.as_str())
+            .to_string();
+        let body_text = flatten_paragraph_text(&ann.content);
+        if !body_text.is_empty() {
+            parameters.push((key, body_text));
+        } else if !ann.parameters.is_empty() {
+            for (k, v) in &ann.parameters {
+                parameters.push((format!("{key}.{k}"), v.clone()));
+            }
+        }
+        // Marker-form annotation (no body, no params): contribute
+        // nothing — matches the legacy `from_lex_document` promotion
+        // behaviour, which only pushed entries for annotations that
+        // carried a value or structured params.
+    }
+    // Don't emit the frontmatter event at all if every document
+    // annotation was a marker-form. Matches legacy behaviour: a
+    // synthesized `frontmatter` annotation was only inserted when
+    // `parameters` was non-empty.
+    if parameters.is_empty() {
+        return;
+    }
+    events.push(Event::StartAnnotation {
+        label: "frontmatter".to_string(),
+        parameters,
+        // The synthesized `frontmatter` annotation never appears in
+        // source form — it's a virtual marker the downstream
+        // serializers consume. Tagging `Canonical` keeps emitters
+        // that look at `form` from rewriting it.
+        form: LabelForm::Canonical,
+    });
+    events.push(Event::EndAnnotation {
+        label: "frontmatter".to_string(),
+    });
+}
+
+/// Flatten the text content of an annotation's paragraph children into
+/// a single string. Used by `emit_frontmatter_event` to derive the
+/// metadata value when the annotation has a body but no structured
+/// parameters. Mirrors what `from_lex_document` used to do in its
+/// children-scan promotion logic.
+fn flatten_paragraph_text(content: &[DocNode]) -> String {
+    let mut text = String::new();
+    for child in content {
+        if let DocNode::Paragraph(p) = child {
+            for inline in &p.content {
+                match inline {
+                    InlineContent::Text(t) | InlineContent::Code(t) | InlineContent::Math(t) => {
+                        text.push_str(t)
+                    }
+                    InlineContent::Reference(r) => text.push_str(r),
+                    InlineContent::Link { text: t, .. } => text.push_str(t),
+                    _ => {}
+                }
+            }
+        }
+    }
+    text
+}
+
 fn walk_list_item(item: &ListItem, events: &mut Vec<Event>) {
     events.push(Event::StartListItem);
     emit_inlines(&item.content, events);
@@ -307,8 +367,10 @@ mod tests {
                     content: vec![DocNode::Paragraph(Paragraph {
                         content: vec![InlineContent::Text("Body".to_string())],
                     })],
+                    form: LabelForm::Canonical,
                 }),
             ],
+            document_annotations: vec![],
         })
     }
 
@@ -355,12 +417,23 @@ mod tests {
             Event::EndContent,
             Event::EndDefinitionDescription,
             Event::EndDefinition,
-            Event::StartVerbatim {
-                language: Some("lex-metadata:note".to_string()),
-                subject: None,
+            // Post-refac/label cleanup: the bare-label metadata
+            // path that used to emit a `lex-metadata:note` verbatim
+            // is gone. The `:: note ::` annotation now flows through
+            // the normal annotation events.
+            Event::StartAnnotation {
+                label: "note".to_string(),
+                parameters: vec![("key".to_string(), "value".to_string())],
+                form: LabelForm::Canonical,
             },
-            Event::Inline(InlineContent::Text(" key=value\nBody\n".to_string())),
-            Event::EndVerbatim,
+            Event::StartContent,
+            Event::StartParagraph,
+            Event::Inline(InlineContent::Text("Body".to_string())),
+            Event::EndParagraph,
+            Event::EndContent,
+            Event::EndAnnotation {
+                label: "note".to_string(),
+            },
             Event::EndDocument,
         ];
 
@@ -374,5 +447,108 @@ mod tests {
         let rebuilt = events_to_tree(&events).expect("failed to rebuild");
 
         assert_eq!(DocNode::Document(rebuilt), original);
+    }
+
+    /// Issue #596 regression: `flatten_paragraph_text` must read
+    /// `Reference` and `Link` inlines, not only `Text`. Pre-#570
+    /// Phase 3b the walker handled all three branches; the refactor
+    /// preserved only `Text`, silently dropping link / reference text
+    /// from the synthesised `frontmatter` event.
+    #[test]
+    fn frontmatter_event_includes_link_and_reference_inlines() {
+        let doc_with_link = DocNode::Document(Document {
+            title: None,
+            subtitle: None,
+            children: vec![],
+            document_annotations: vec![Annotation {
+                label: "lex.metadata.author".to_string(),
+                parameters: vec![],
+                content: vec![DocNode::Paragraph(Paragraph {
+                    content: vec![
+                        InlineContent::Text("Alice ".to_string()),
+                        InlineContent::Link {
+                            text: "https://alice.example".to_string(),
+                            href: "https://alice.example".to_string(),
+                        },
+                    ],
+                })],
+                form: LabelForm::Canonical,
+            }],
+        });
+        let events = tree_to_events(&doc_with_link);
+        let value = events.iter().find_map(|e| match e {
+            Event::StartAnnotation {
+                label, parameters, ..
+            } if label == "frontmatter" => parameters
+                .iter()
+                .find(|(k, _)| k == "author")
+                .map(|(_, v)| v.clone()),
+            _ => None,
+        });
+        assert_eq!(value.as_deref(), Some("Alice https://alice.example"));
+
+        let doc_with_ref = DocNode::Document(Document {
+            title: None,
+            subtitle: None,
+            children: vec![],
+            document_annotations: vec![Annotation {
+                label: "lex.metadata.tags".to_string(),
+                parameters: vec![],
+                content: vec![DocNode::Paragraph(Paragraph {
+                    content: vec![
+                        InlineContent::Text("rust ".to_string()),
+                        InlineContent::Reference("@manning".to_string()),
+                    ],
+                })],
+                form: LabelForm::Canonical,
+            }],
+        });
+        let events = tree_to_events(&doc_with_ref);
+        let value = events.iter().find_map(|e| match e {
+            Event::StartAnnotation {
+                label, parameters, ..
+            } if label == "frontmatter" => parameters
+                .iter()
+                .find(|(k, _)| k == "tags")
+                .map(|(_, v)| v.clone()),
+            _ => None,
+        });
+        assert_eq!(value.as_deref(), Some("rust @manning"));
+    }
+
+    /// Gemini review on PR #597: `flatten_paragraph_text` was also
+    /// dropping `Code` and `Math` inline content from metadata bodies.
+    /// Extend the regression coverage to lock the additive fix in.
+    #[test]
+    fn frontmatter_event_includes_code_and_math_inlines() {
+        let doc = DocNode::Document(Document {
+            title: None,
+            subtitle: None,
+            children: vec![],
+            document_annotations: vec![Annotation {
+                label: "lex.metadata.title".to_string(),
+                parameters: vec![],
+                content: vec![DocNode::Paragraph(Paragraph {
+                    content: vec![
+                        InlineContent::Text("Doc with ".to_string()),
+                        InlineContent::Code("snippet".to_string()),
+                        InlineContent::Text(" and ".to_string()),
+                        InlineContent::Math("E=mc^2".to_string()),
+                    ],
+                })],
+                form: LabelForm::Canonical,
+            }],
+        });
+        let events = tree_to_events(&doc);
+        let value = events.iter().find_map(|e| match e {
+            Event::StartAnnotation {
+                label, parameters, ..
+            } if label == "frontmatter" => parameters
+                .iter()
+                .find(|(k, _)| k == "title")
+                .map(|(_, v)| v.clone()),
+            _ => None,
+        });
+        assert_eq!(value.as_deref(), Some("Doc with snippet and E=mc^2"));
     }
 }

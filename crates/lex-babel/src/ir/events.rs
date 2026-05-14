@@ -1,6 +1,6 @@
 //! Defines the flat event stream representation of a document.
 
-use crate::ir::nodes::{InlineContent, ListForm, ListStyle};
+use crate::ir::nodes::{InlineContent, LabelForm, ListForm, ListStyle};
 
 /// Represents a single event in the document stream.
 ///
@@ -40,6 +40,11 @@ pub enum Event {
     StartAnnotation {
         label: String,
         parameters: Vec<(String, String)>,
+        /// Source form of the label (canonical, stripped, shortcut, or
+        /// community). Round-trips the user's input spelling through
+        /// the IR → AST flow so `lexd format` doesn't silently rewrite.
+        /// Issue #593.
+        form: LabelForm,
     },
     EndAnnotation {
         label: String,

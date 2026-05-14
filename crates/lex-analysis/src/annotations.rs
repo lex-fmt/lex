@@ -232,7 +232,7 @@ mod tests {
     use lex_core::lex::ast::SourceLocation;
     use lex_core::lex::parsing;
 
-    const SAMPLE: &str = r#":: note ::
+    const SAMPLE: &str = r#":: test.note ::
     Doc note.
 
 Intro:
@@ -242,7 +242,7 @@ Intro:
 
 Paragraph text.
 
-:: info ::
+:: test.info ::
     Extra details.
 "#;
 
@@ -264,38 +264,42 @@ Paragraph text.
 
         let within_second = position_of("Paragraph");
         let second = next_annotation(&document, within_second).expect("next");
-        assert_eq!(second.label, "info");
+        assert_eq!(second.label, "test.info");
 
         let after_last = position_of("Extra details");
         let wrap = next_annotation(&document, after_last).expect("wrap");
-        assert_eq!(wrap.label, "note");
+        assert_eq!(wrap.label, "test.note");
     }
 
     #[test]
     fn navigates_backward_including_wrap() {
         let document = parse();
-        let start = position_of(":: info");
+        let start = position_of(":: test.info");
         let prev = previous_annotation(&document, start).expect("previous");
         assert_eq!(prev.label, "todo");
 
-        let wrap = previous_annotation(&document, position_of(":: note")).expect("wrap");
-        assert_eq!(wrap.label, "info");
+        let wrap = previous_annotation(&document, position_of(":: test.note")).expect("wrap");
+        assert_eq!(wrap.label, "test.info");
     }
 
     #[test]
     fn adds_status_parameter_when_resolving() {
-        let source = ":: note ::\n";
+        let source = ":: test.note ::\n";
         let document = parsing::parse_document(source).unwrap();
         let position = SourceLocation::new(source).byte_to_position(source.find("note").unwrap());
         let edit = toggle_annotation_resolution(&document, position, true).expect("edit");
-        assert_eq!(edit.new_text, ":: note status=resolved ::");
+        assert_eq!(edit.new_text, ":: test.note status=resolved ::");
     }
 
     #[test]
     fn removes_status_parameter_when_unresolving() {
+        // Programmatic AST construction — doesn't go through
+        // NormalizeLabels, so the label.value flows through to
+        // resolution_edit verbatim. Use a bare community-shape label
+        // so the assertion mirrors the input.
         use lex_core::lex::ast::{Data, Label};
         let data = Data::new(
-            Label::new("note".to_string()),
+            Label::new("test.note".to_string()),
             vec![
                 Parameter::new("priority".to_string(), "high".to_string()),
                 Parameter::new("status".to_string(), "resolved".to_string()),
@@ -307,15 +311,15 @@ Paragraph text.
             Position::new(0, 0),
         ));
         let edit = resolution_edit(&annotation, false).expect("edit");
-        assert_eq!(edit.new_text, ":: note priority=high ::");
+        assert_eq!(edit.new_text, ":: test.note priority=high ::");
     }
 
     #[test]
     fn resolves_when_cursor_at_line_start() {
-        let source = ":: note ::\n";
+        let source = ":: test.note ::\n";
         let document = parsing::parse_document(source).unwrap();
         let edit =
             toggle_annotation_resolution(&document, Position::new(0, 0), true).expect("edit");
-        assert_eq!(edit.new_text, ":: note status=resolved ::");
+        assert_eq!(edit.new_text, ":: test.note status=resolved ::");
     }
 }

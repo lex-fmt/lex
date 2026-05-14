@@ -21,8 +21,8 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::RwLock;
 
 use lex_extension::{
-    CodeAction, Completion, Diagnostic, DiagnosticSeverity, Format, HandlerError, Hover, LabelCtx,
-    LexHandler, Range, RenderOut, Schema, WireNode,
+    CodeAction, Completion, Diagnostic, DiagnosticSeverity, Format, FormatCtx, HandlerError, Hover,
+    LabelCtx, LexAnnotationOut, LexHandler, Range, RenderOut, Schema, WireNode,
 };
 
 /// The namespace registry.
@@ -287,6 +287,43 @@ impl Registry {
             Ok(Some(items)) => items,
             Ok(None) => Vec::new(),
             Err(_) => Vec::new(),
+        }
+    }
+
+    /// Dispatch [`LexHandler::on_format`] — the reverse hook
+    /// introduced by #570 Phase 4 (see
+    /// `comms/specs/proposals/lex-extension-wire.lex` §4.8).
+    ///
+    /// Returns `Ok(Some(LexAnnotationOut))` when a handler produced
+    /// structured output, `Ok(None)` when no handler is registered for
+    /// the label / the handler returned its default fallback / the
+    /// namespace is unhealthy, and `Err(diag)` when the handler errored
+    /// or panicked. The caller decides whether to retry through a
+    /// built-in formatter when `Ok(None)` comes back — that's the
+    /// "host falls back" path documented in the spec.
+    pub fn dispatch_format(&self, ctx: &FormatCtx) -> Result<Option<LexAnnotationOut>, Diagnostic> {
+        // The shared `dispatch` helper expects a `LabelCtx`; the
+        // format hook uses `FormatCtx`. The only fields `dispatch`
+        // reads off `LabelCtx` are `.label` (to route to the right
+        // namespace) and `.node.range` (for diagnostic attribution
+        // when something errors). Synthesise a minimal `LabelCtx` from
+        // the `FormatCtx` so this path can reuse the panic-isolation
+        // and namespace-health bookkeeping the other hooks already
+        // share.
+        let synthetic = LabelCtx {
+            label: ctx.label.clone(),
+            params: serde_json::Value::Null,
+            body: lex_extension::AnnotationBody::None,
+            node: lex_extension::NodeRef {
+                kind: "format".into(),
+                range: ctx.node.range(),
+                origin: None,
+            },
+        };
+        match self.dispatch(&synthetic, |h| h.on_format(ctx)) {
+            Ok(Some(out)) => Ok(out),
+            Ok(None) => Ok(None),
+            Err(diag) => Err(diag),
         }
     }
 
@@ -731,6 +768,109 @@ mod tests {
         assert!(
             panicking_threads >= 1,
             "at least one thread should have observed the panic before namespace was disabled"
+        );
+    }
+
+    #[test]
+    fn dispatch_format_routes_to_handler_and_returns_annotation() {
+        // #570 Phase 4a: a handler that implements `on_format` for a
+        // registered label produces structured output via
+        // `Registry::dispatch_format`.
+        use lex_extension::wire::{FormatCtx, LexAnnotationOut};
+
+        struct FormatHandler;
+        impl LexHandler for FormatHandler {
+            fn on_format(&self, ctx: &FormatCtx) -> Result<Option<LexAnnotationOut>, HandlerError> {
+                Ok(Some(LexAnnotationOut {
+                    label: ctx.label.clone(),
+                    params: ctx.params.clone(),
+                    body: "formatted body".into(),
+                    verbatim_label: true,
+                }))
+            }
+        }
+
+        let r = Registry::new();
+        r.register_namespace("acme", vec![schema("acme.thing")], Box::new(FormatHandler))
+            .expect("register ok");
+
+        let fctx = FormatCtx {
+            label: "acme.thing".into(),
+            params: vec![("size".into(), "large".into())],
+            node: WireNode::Paragraph {
+                range: Range {
+                    start: Position(0, 0),
+                    end: Position(0, 0),
+                },
+                origin: None,
+                inlines: vec![],
+            },
+            format_options: None,
+        };
+
+        let out = r
+            .dispatch_format(&fctx)
+            .expect("dispatch_format ok")
+            .expect("handler returned Some");
+        assert_eq!(out.label, "acme.thing");
+        assert_eq!(out.params, vec![("size".into(), "large".into())]);
+        assert_eq!(out.body, "formatted body");
+        assert!(out.verbatim_label);
+    }
+
+    #[test]
+    fn dispatch_format_returns_none_for_unregistered_label() {
+        // Unrouted labels yield `Ok(None)` — same fallback signal as
+        // every other dispatch path, no error.
+        use lex_extension::wire::FormatCtx;
+
+        let r = Registry::new();
+        let fctx = FormatCtx {
+            label: "nobody.knows".into(),
+            params: vec![],
+            node: WireNode::Paragraph {
+                range: Range {
+                    start: Position(0, 0),
+                    end: Position(0, 0),
+                },
+                origin: None,
+                inlines: vec![],
+            },
+            format_options: None,
+        };
+        let out = r.dispatch_format(&fctx).expect("dispatch_format ok");
+        assert!(out.is_none(), "unrouted label must fall back");
+    }
+
+    #[test]
+    fn dispatch_format_returns_none_when_handler_falls_back() {
+        // A handler that returns `Ok(None)` from `on_format` (the
+        // default impl, or an explicit decision) makes
+        // `dispatch_format` surface `Ok(None)` so the caller can fall
+        // back to the host's built-in formatter.
+        use lex_extension::wire::FormatCtx;
+
+        let r = Registry::new();
+        r.register_namespace("acme", vec![schema("acme.silent")], Box::new(NoOp))
+            .expect("register ok");
+
+        let fctx = FormatCtx {
+            label: "acme.silent".into(),
+            params: vec![],
+            node: WireNode::Paragraph {
+                range: Range {
+                    start: Position(0, 0),
+                    end: Position(0, 0),
+                },
+                origin: None,
+                inlines: vec![],
+            },
+            format_options: None,
+        };
+        let out = r.dispatch_format(&fctx).expect("dispatch_format ok");
+        assert!(
+            out.is_none(),
+            "NoOp handler must let `dispatch_format` surface None"
         );
     }
 }

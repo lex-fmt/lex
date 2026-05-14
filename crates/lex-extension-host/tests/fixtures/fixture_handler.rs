@@ -179,7 +179,7 @@ fn run(mode: Mode) -> ExitCode {
 fn initialize_result(mode: &Mode) -> Value {
     let wire_version = match mode {
         Mode::VersionMismatch { version } => *version,
-        _ => 1,
+        _ => lex_extension::WIRE_VERSION,
     };
     let implements = match mode {
         Mode::Malformed => vec!["on_validate"],

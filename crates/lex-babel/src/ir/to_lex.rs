@@ -11,13 +11,93 @@ use lex_core::lex::ast::elements::{
 };
 use lex_core::lex::ast::range::Position;
 use lex_core::lex::ast::{Data, Document as LexDocument, Parameter, Range, TextContent};
+use lex_extension::wire::{FormatCtx, LexAnnotationOut, WireNode};
+use lex_extension::wire::{Position as WirePosition, Range as WireRange};
 
 use super::nodes::{
     Annotation, Definition, DocNode, Document, Heading, InlineContent, List, ListItem, Paragraph,
     Table, TableCell, TableRow, Verbatim,
 };
 
+/// The to_lex direction shares the same default registry as the
+/// from_lex direction — see [`crate::default_registry`].
+fn to_lex_registry() -> &'static lex_extension_host::registry::Registry {
+    crate::default_registry()
+}
+
+fn default_wire_range() -> WireRange {
+    WireRange {
+        start: WirePosition(0, 0),
+        end: WirePosition(0, 0),
+    }
+}
+
+/// Build a `WireNode::Verbatim` carrying `body` + `params` under the
+/// given canonical label. Used to feed `dispatch_format` for the
+/// built-in `lex.tabular.*` and `lex.media.*` handlers.
+fn wire_verbatim(label: &str, body: String, params: Vec<(String, String)>) -> WireNode {
+    let params_json = serde_json::Value::Object(
+        params
+            .iter()
+            .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+            .collect(),
+    );
+    WireNode::Verbatim {
+        range: default_wire_range(),
+        origin: None,
+        label: label.to_string(),
+        params: params_json,
+        body_text: body,
+        subject: String::new(),
+        mode: "inflow".to_string(),
+    }
+}
+
+/// Build a `LexContentItem::VerbatimBlock` from a `LexAnnotationOut`
+/// produced by `Registry::dispatch_format`.
+fn lex_verbatim_from_annotation_out(out: LexAnnotationOut) -> LexContentItem {
+    let label = Label::new(out.label.clone());
+    let parameters: Vec<Parameter> = out
+        .params
+        .into_iter()
+        .map(|(k, v)| Parameter {
+            key: k,
+            value: v,
+            location: default_range(),
+        })
+        .collect();
+
+    let subject = TextContent::from_string(String::new(), None);
+    let lines: Vec<VerbatimContent> = out
+        .body
+        .lines()
+        .map(|l| VerbatimContent::VerbatimLine(LexVerbatimLine::new(l.to_string())))
+        .collect();
+
+    let closing_data = Data::new(label, parameters);
+
+    LexContentItem::VerbatimBlock(Box::new(LexVerbatim::new(
+        subject,
+        lines,
+        closing_data,
+        VerbatimBlockMode::Inflow,
+    )))
+}
+
 /// Converts an IR document to a Lex document.
+///
+/// **`document_annotations` note (#570):** the new IR slot is *not*
+/// emitted back into `lex_doc.annotations` on this path. The legacy
+/// frontmatter promotion in `from_lex_document` still synthesizes a
+/// `frontmatter` annotation into `children`, and downstream Lex
+/// serializers expect to see it there — emitting both would
+/// double-write. A follow-up to Phase 3b retires the promotion and
+/// flips the source-of-truth to `document_annotations` atomically;
+/// the [`to_lex_annotation_raw`] helper introduced in Phase 3a is
+/// wired into production then. Until that flip,
+/// `document_annotations` is a one-way slot: populated by
+/// `from_lex_document`, consumed only by embedders that read it
+/// directly.
 pub fn to_lex_document(doc: &Document) -> LexDocument {
     let mut children = Vec::new();
 
@@ -44,6 +124,39 @@ pub fn to_lex_document(doc: &Document) -> LexDocument {
     }
 
     lex_doc
+}
+
+/// Build a `LexAnnotation` directly from an IR `Annotation`, mirroring
+/// what [`to_lex_annotation`] does but without wrapping the result in
+/// [`LexContentItem::Annotation`].
+///
+/// Shipped in Phase 3a (#570) ready for Phase 3b to wire it into
+/// [`to_lex_document`]: when that PR retires the legacy frontmatter
+/// promotion, `to_lex_document` will iterate `document_annotations`
+/// through this helper to populate `lex_doc.annotations`. Until then
+/// it is dead code in production, exercised only by the Phase-3a
+/// contract test that confirms the helper produces the expected
+/// shape.
+#[allow(dead_code)]
+fn to_lex_annotation_raw(ann: &Annotation) -> LexAnnotation {
+    let label = Label::new(ann.label.clone()).with_form(ann.form);
+    let parameters: Vec<Parameter> = ann
+        .parameters
+        .iter()
+        .map(|(k, v)| Parameter {
+            key: k.clone(),
+            value: v.clone(),
+            location: default_range(),
+        })
+        .collect();
+
+    let mut child_items = Vec::new();
+    for child in &ann.content {
+        child_items.extend(to_lex_content_items(child, 1));
+    }
+
+    let children = to_content_elements(child_items);
+    LexAnnotation::new(label, parameters, children)
 }
 
 /// Converts an IR DocNode to one or more Lex ContentItems.
@@ -90,39 +203,44 @@ fn to_lex_session(heading: &Heading, level: usize) -> LexContentItem {
 /// Converts an IR Table to a Lex VerbatimBlock via the verbatim registry,
 /// falling back to a nested Annotation structure if the registry has no handler.
 fn to_lex_table(table: &Table, level: usize) -> LexContentItem {
-    let registry = crate::common::verbatim::VerbatimRegistry::default_with_standard();
-    let node = DocNode::Table(table.clone());
-
-    if let Some(handler) = registry.get("doc.table") {
-        if let Some((content, params)) = handler.convert_from_ir(&node) {
-            let label = Label::new("doc.table".to_string());
-            let parameters = params
-                .into_iter()
-                .map(|(k, v)| Parameter {
-                    key: k,
-                    value: v,
-                    location: default_range(),
-                })
-                .collect();
-
-            let subject = TextContent::from_string("".to_string(), None);
-            let lines = content
-                .lines()
-                .map(|l| VerbatimContent::VerbatimLine(LexVerbatimLine::new(l.to_string())))
-                .collect();
-
-            let closing_data = Data::new(label, parameters);
-
-            return LexContentItem::VerbatimBlock(Box::new(LexVerbatim::new(
-                subject,
-                lines,
-                closing_data,
-                VerbatimBlockMode::Inflow,
-            )));
+    // Serialize the typed IR Table into pipe-table source. The
+    // serialization logic still lives in
+    // `crate::common::verbatim::table::serialize_pipe_table`, but
+    // we now feed the result through `Registry::dispatch_format` so
+    // the built-in `lex.tabular.table` handler (#570 Phase 4b) owns
+    // the IR→Lex contract.
+    let body = crate::common::verbatim::table::serialize_pipe_table(table);
+    let ctx = FormatCtx {
+        label: "lex.tabular.table".to_string(),
+        params: Vec::new(),
+        node: wire_verbatim("lex.tabular.table", body, Vec::new()),
+        format_options: None,
+    };
+    match to_lex_registry().dispatch_format(&ctx) {
+        Ok(Some(out)) => return lex_verbatim_from_annotation_out(out),
+        Ok(None) => {
+            // The built-in `lex.tabular.table` handler is registered
+            // by `to_lex_registry()` and always returns Some for this
+            // canonical label. None here means the registry was
+            // mutated unexpectedly — fall through to the nested-
+            // annotation fallback below so the table content isn't
+            // dropped, but log so the divergence is visible.
+            eprintln!(
+                "to_lex_table: dispatch_format returned None for `lex.tabular.table`; \
+                 falling back to nested-annotation form"
+            );
+        }
+        Err(diag) => {
+            eprintln!(
+                "to_lex_table: dispatch_format errored: {diag:?}; falling back to nested-annotation form"
+            );
         }
     }
 
-    // Fallback to annotation if registry fails (though TableHandler should handle it)
+    // Fallback to annotation if dispatch_format somehow fails (the
+    // built-in handler must always return Some for the canonical
+    // verbatim labels, so this path should be unreachable in
+    // production — kept defensive against future handler changes).
     let label = Label::new("table".to_string());
     let parameters = Vec::new(); // Could add caption here if needed
 
@@ -373,7 +491,7 @@ fn to_lex_verbatim(verb: &Verbatim) -> LexContentItem {
 
 /// Converts an IR Annotation to a Lex Annotation.
 fn to_lex_annotation(ann: &Annotation, level: usize) -> LexContentItem {
-    let label = Label::new(ann.label.clone());
+    let label = Label::new(ann.label.clone()).with_form(ann.form);
     let parameters: Vec<Parameter> = ann
         .parameters
         .iter()
@@ -436,45 +554,77 @@ fn default_range() -> Range {
 }
 
 fn to_lex_media(node: &DocNode) -> LexContentItem {
-    let registry = crate::common::verbatim::VerbatimRegistry::default_with_standard();
-
-    let label = match node {
-        DocNode::Image(_) => "doc.image",
-        DocNode::Video(_) => "doc.video",
-        DocNode::Audio(_) => "doc.audio",
+    // Each media node serializes to a verbatim with the (src, alt|title|
+    // poster, …) params canonical to its kind. Extract the params from
+    // the typed IR node, then dispatch through the registry to let the
+    // built-in `lex.media.*` handler (#570 Phase 4b) produce the
+    // LexAnnotationOut.
+    let (label, params) = match node {
+        DocNode::Image(image) => {
+            let mut params = Vec::new();
+            params.push(("src".to_string(), image.src.clone()));
+            if !image.alt.is_empty() {
+                params.push(("alt".to_string(), image.alt.clone()));
+            }
+            if let Some(title) = &image.title {
+                params.push(("title".to_string(), title.clone()));
+            }
+            ("lex.media.image", params)
+        }
+        DocNode::Video(video) => {
+            let mut params = Vec::new();
+            params.push(("src".to_string(), video.src.clone()));
+            if let Some(title) = &video.title {
+                params.push(("title".to_string(), title.clone()));
+            }
+            if let Some(poster) = &video.poster {
+                params.push(("poster".to_string(), poster.clone()));
+            }
+            ("lex.media.video", params)
+        }
+        DocNode::Audio(audio) => {
+            let mut params = Vec::new();
+            params.push(("src".to_string(), audio.src.clone()));
+            if let Some(title) = &audio.title {
+                params.push(("title".to_string(), title.clone()));
+            }
+            ("lex.media.audio", params)
+        }
         _ => return LexContentItem::Paragraph(LexParagraph::new(vec![])),
     };
 
-    if let Some(handler) = registry.get(label) {
-        if let Some((content, params)) = handler.convert_from_ir(node) {
-            let label = Label::new(label.to_string());
-            let parameters = params
-                .into_iter()
-                .map(|(k, v)| Parameter {
-                    key: k,
-                    value: v,
-                    location: default_range(),
-                })
-                .collect();
-
-            let subject = TextContent::from_string("".to_string(), None);
-            let lines = content
-                .lines()
-                .map(|l| VerbatimContent::VerbatimLine(LexVerbatimLine::new(l.to_string())))
-                .collect();
-
-            let closing_data = Data::new(label, parameters);
-
-            return LexContentItem::VerbatimBlock(Box::new(LexVerbatim::new(
-                subject,
-                lines,
-                closing_data,
-                VerbatimBlockMode::Inflow,
-            )));
+    let ctx = FormatCtx {
+        label: label.to_string(),
+        params: params.clone(),
+        node: wire_verbatim(label, String::new(), params.clone()),
+        format_options: None,
+    };
+    match to_lex_registry().dispatch_format(&ctx) {
+        Ok(Some(out)) => return lex_verbatim_from_annotation_out(out),
+        Ok(None) => {
+            eprintln!(
+                "to_lex_media: dispatch_format returned None for `{label}`; \
+                 falling back to a labelled verbatim that preserves params"
+            );
+        }
+        Err(diag) => {
+            eprintln!(
+                "to_lex_media: dispatch_format errored for `{label}`: {diag:?}; \
+                 falling back to a labelled verbatim that preserves params"
+            );
         }
     }
 
-    LexContentItem::Paragraph(LexParagraph::new(vec![]))
+    // Fallback: emit the verbatim directly with the canonical label
+    // and the same params we tried to dispatch. Preserves `src`/
+    // `alt`/`title`/`poster` rather than silently dropping the node's
+    // contents on the unreachable-in-production failure path.
+    lex_verbatim_from_annotation_out(LexAnnotationOut {
+        label: label.to_string(),
+        params,
+        body: String::new(),
+        verbatim_label: true,
+    })
 }
 
 #[cfg(test)]
@@ -618,11 +768,91 @@ mod tests {
                     content: vec![InlineContent::Text("Second paragraph".to_string())],
                 }),
             ],
+            document_annotations: vec![],
         };
 
         let lex_doc = to_lex_document(&ir_doc);
 
         // Document should have root session with our content
         assert!(!lex_doc.root.children.is_empty());
+    }
+
+    #[test]
+    fn to_lex_document_drops_document_annotations_in_phase_3a() {
+        // Phase 3a of #570 is *additive*. `document_annotations` is
+        // populated on the lex → IR direction (via `from_lex_document`)
+        // but consumed only by embedders that read the slot directly;
+        // `to_lex_document` deliberately ignores it, because the
+        // legacy frontmatter promotion that runs *before* this stage
+        // already synthesizes a `frontmatter` annotation into
+        // `children`, and downstream Lex serializers expect exactly
+        // one copy. Phase 3b retires the legacy promotion and wires
+        // `to_lex_annotation_raw` into `to_lex_document` atomically.
+        // This test locks the Phase 3a behaviour so a premature flip
+        // can't sneak in.
+        use crate::ir::nodes::Annotation;
+
+        let ir_doc = Document {
+            title: None,
+            subtitle: None,
+            children: vec![],
+            document_annotations: vec![Annotation {
+                label: "lex.metadata.author".to_string(),
+                parameters: vec![("name".to_string(), "Alice".to_string())],
+                content: vec![],
+                form: crate::ir::nodes::LabelForm::Canonical,
+            }],
+        };
+
+        let lex_doc = to_lex_document(&ir_doc);
+        assert!(
+            lex_doc.annotations.is_empty(),
+            "Phase 3a contract: to_lex_document leaves lex_doc.annotations empty"
+        );
+
+        // Sanity: the helper exists and produces a non-empty result —
+        // Phase 3b uses it.
+        let raw = to_lex_annotation_raw(&ir_doc.document_annotations[0]);
+        assert_eq!(raw.data.label.value, "lex.metadata.author");
+    }
+
+    /// Issue #593 regression: the IR Annotation's `form` field must
+    /// carry through `to_lex_annotation` and `to_lex_annotation_raw`
+    /// so downstream `LexSerializer::source_spelling` emits the
+    /// blessed shortcut form (`:: title :: ...`) rather than the
+    /// verbose canonical (`:: lex.metadata.title :: ...`) for a
+    /// markdown→lex roundtrip.
+    #[test]
+    fn annotation_form_propagates_through_to_lex_annotation() {
+        let ann = Annotation {
+            label: "lex.metadata.title".to_string(),
+            parameters: vec![],
+            content: vec![],
+            form: crate::ir::nodes::LabelForm::Shortcut,
+        };
+        match to_lex_annotation(&ann, 1) {
+            LexContentItem::Annotation(a) => {
+                assert_eq!(a.data.label.value, "lex.metadata.title");
+                assert_eq!(
+                    a.data.label.form,
+                    crate::ir::nodes::LabelForm::Shortcut,
+                    "to_lex_annotation must preserve the IR `form` field"
+                );
+            }
+            _ => panic!("expected LexContentItem::Annotation"),
+        }
+    }
+
+    #[test]
+    fn annotation_form_propagates_through_to_lex_annotation_raw() {
+        let ann = Annotation {
+            label: "lex.metadata.author".to_string(),
+            parameters: vec![],
+            content: vec![],
+            form: crate::ir::nodes::LabelForm::Stripped,
+        };
+        let raw = to_lex_annotation_raw(&ann);
+        assert_eq!(raw.data.label.value, "lex.metadata.author");
+        assert_eq!(raw.data.label.form, crate::ir::nodes::LabelForm::Stripped);
     }
 }

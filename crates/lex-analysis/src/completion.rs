@@ -139,10 +139,10 @@ fn macro_completions(_document: &Document) -> Vec<CompletionCandidate> {
     vec![
         CompletionCandidate::new("@table", CompletionItemKind::SNIPPET)
             .with_detail("Insert table snippet")
-            .with_insert_text(":: doc.table ::\n| Header 1 | Header 2 |\n| -------- | -------- |\n| Cell 1   | Cell 2   |\n::\n"),
+            .with_insert_text(":: table ::\n| Header 1 | Header 2 |\n| -------- | -------- |\n| Cell 1   | Cell 2   |\n::\n"),
         CompletionCandidate::new("@image", CompletionItemKind::SNIPPET)
             .with_detail("Insert image snippet")
-            .with_insert_text(":: doc.image src=\"$1\" ::\n"),
+            .with_insert_text(":: image src=\"$1\" ::\n"),
         CompletionCandidate::new("@note", CompletionItemKind::SNIPPET)
             .with_detail("Insert annotation reference")
             .with_insert_text("[::$1]"),
@@ -545,15 +545,10 @@ fn is_inside_verbatim_src_parameter(document: &Document, position: Position) -> 
     })
 }
 
-const STANDARD_VERBATIM_LABELS: &[&str] = &[
-    "doc.code",
-    "doc.data",
-    "doc.image",
-    "doc.table",
-    "doc.video",
-    "doc.audio",
-    "doc.note",
-];
+/// Verbatim labels offered as completion suggestions. Mirrors the
+/// blessed shortcut set in `comms/specs/general.lex` §4.2 — completions
+/// suggest the shortest accepted form per the documentation-voice rule.
+const STANDARD_VERBATIM_LABELS: &[&str] = &["table", "image", "video", "audio", "include"];
 
 const COMMON_CODE_LANGUAGES: &[&str] = &[
     "bash",
@@ -589,7 +584,7 @@ mod tests {
     use std::fs;
     use tempfile::tempdir;
 
-    const SAMPLE_DOC: &str = r#":: note ::
+    const SAMPLE_DOC: &str = r#":: test.note ::
     Document level note.
 
 Cache:
@@ -602,7 +597,7 @@ Cache:
 Image placeholder:
 
     diagram placeholder
-:: doc.image src=./images/chart.png title="Usage" ::
+:: image src=./images/chart.png title="Usage" ::
 
 Code sample:
 
@@ -636,7 +631,7 @@ Code sample:
         let completions = completion_items(&document, position_at(cursor), None, None, None);
         let labels: BTreeSet<_> = completions.iter().map(|c| c.label.as_str()).collect();
         assert!(labels.contains("Cache"));
-        assert!(labels.contains("note"));
+        assert!(labels.contains("test.note"));
         assert!(labels.contains("1"));
         assert!(labels.contains("./images/chart.png"));
     }
@@ -648,14 +643,17 @@ Code sample:
         let mut pos = verbatim.closing_data.label.location.start;
         pos.column += 1; // inside the label text
         let completions = completion_items(&document, pos, None, None, None);
-        assert!(completions.iter().any(|c| c.label == "doc.image"));
+        assert!(completions.iter().any(|c| c.label == "image"));
         assert!(completions.iter().any(|c| c.label == "rust"));
     }
 
     #[test]
     fn verbatim_src_completion_offers_known_paths() {
+        // NormalizeLabels rewrites the source-level `:: image ::`
+        // shortcut to its canonical `lex.media.image` form before
+        // this test sees the parsed AST.
         let document = parse_sample();
-        let verbatim = find_verbatim(&document, "doc.image");
+        let verbatim = find_verbatim(&document, "lex.media.image");
         let param = verbatim
             .closing_data
             .parameters
@@ -788,7 +786,11 @@ Code sample:
         // Pass "::" as current line content
         let completions = completion_items(&document, pos, Some("::"), None, Some(":"));
 
-        assert!(completions.iter().any(|c| c.label == "doc.code"));
+        // STANDARD_VERBATIM_LABELS now ships the blessed shortcuts;
+        // `table` is the most stable check (it's the verbatim closer
+        // for tables). Language hints like `rust` come from
+        // COMMON_CODE_LANGUAGES regardless.
+        assert!(completions.iter().any(|c| c.label == "table"));
         assert!(completions.iter().any(|c| c.label == "rust"));
     }
 

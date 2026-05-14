@@ -177,7 +177,7 @@ mod tests {
     use lex_core::lex::parsing;
 
     fn fixture() -> (Document, String) {
-        let source = r#":: note ::
+        let source = r#":: test.note ::
     Something.
 
 Cache:

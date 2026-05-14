@@ -116,6 +116,28 @@ pub fn process_full(source: &str) -> ProcessResult {
         .map_err(|e| e.to_string())
 }
 
+/// Same as [`process_full`] but runs `NormalizeLabels` in permissive
+/// mode so labels that strict mode would reject (`doc.*`,
+/// unrecognised `lex.*`) flow through into the AST instead of failing
+/// the parse. Intended for hosts that want to surface label-policy
+/// violations as in-place diagnostics rather than as a parse failure
+/// — `lex-lsp` is the primary consumer; PR 4 of #584 added the entry
+/// point so the analysis stage can emit a diagnostic on the offending
+/// label while the rest of the document keeps providing semantic
+/// tokens, hover, completion, etc. Re-classify with
+/// [`crate::lex::assembling::stages::normalize_labels::classify_label`]
+/// to determine which sites would have errored in strict mode.
+///
+/// Routes through [`crate::lex::transforms::standard::run_string_to_ast`]
+/// with `Mode::Permissive` so strict + permissive parses share a
+/// single pipeline definition — no risk of the LSP parsing
+/// differently from `lexd format` when the pipeline grows new stages.
+pub fn process_full_permissive(source: &str) -> ProcessResult {
+    use crate::lex::assembling::stages::normalize_labels::Mode;
+    use crate::lex::transforms::standard::run_string_to_ast;
+    run_string_to_ast(source.to_string(), Mode::Permissive).map_err(|e| e.to_string())
+}
+
 /// Alias for `process_full` to maintain backward compatibility.
 ///
 /// The term "parse" colloquially refers to the entire processing pipeline

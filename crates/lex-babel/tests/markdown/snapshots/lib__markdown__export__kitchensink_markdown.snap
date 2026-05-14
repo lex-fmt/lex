@@ -1,5 +1,6 @@
 ---
 source: crates/lex-babel/tests/markdown/export.rs
+assertion_line: 299
 expression: md
 ---
 # Kitchensink Test Document
@@ -75,9 +76,6 @@ It contains a paragraph and a list. {{paragraph}}
 
 <!-- /lex:todo -->
 
-**Image Reference (Marker Verbatim Block)**
-
-``` image
-```
+!["Lex Logo"]("logo.png" "Image Reference (Marker Verbatim Block)")
 
 Final paragraph at the end of the document. {{paragraph}}

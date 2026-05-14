@@ -6,10 +6,25 @@
 use crate::common::flat_to_nested::events_to_tree;
 use crate::error::FormatError;
 use crate::ir::events::Event;
-use crate::ir::nodes::{InlineContent, TableCellAlignment};
+use crate::ir::nodes::{InlineContent, LabelForm, TableCellAlignment};
 use comrak::nodes::{AstNode, NodeValue, TableAlignment};
 use comrak::{parse_document, Arena, ComrakOptions};
+use lex_core::lex::assembling::stages::normalize_labels::{classify_label, Resolution};
 use lex_core::lex::ast::Document;
+
+/// Classify a label spelling captured from markdown source (or any
+/// non-lex format that lifts annotations into the IR directly) into
+/// its `(canonical_value, form)` pair. Unrecognised / rejected
+/// spellings fall back to `(input, Community)` so the markdown text
+/// round-trips losslessly through `to_lex` — the resulting AST will
+/// then run through `NormalizeLabels` on a subsequent parse if the
+/// `.lex` output is re-read in strict mode.
+fn resolve_label_form(label: &str) -> (String, LabelForm) {
+    match classify_label(label) {
+        Resolution::Resolved(canonical, form) => (canonical, form),
+        Resolution::Rejected(_) => (label.to_string(), LabelForm::Community),
+    }
+}
 
 /// Parse Markdown string to Lex document
 pub fn parse_from_markdown(source: &str) -> Result<Document, FormatError> {
@@ -184,10 +199,18 @@ fn collect_events_from_node<'a>(
 
         NodeValue::HtmlBlock(html) => {
             // Try to parse as Lex annotation
-            if let Some((label, parameters, content)) = parse_lex_annotation(&html.literal) {
+            if let Some((source_label, parameters, content)) = parse_lex_annotation(&html.literal) {
+                // Tag the resolved canonical + form so `to_lex` emits
+                // the blessed source spelling on the way out. A `<title>`
+                // html block in the markdown source then round-trips to
+                // `:: title :: ...` (shortcut form) rather than the
+                // verbose canonical `:: lex.metadata.title :: ...`.
+                // Issue #593.
+                let (canonical_label, form) = resolve_label_form(&source_label);
                 events.push(Event::StartAnnotation {
-                    label: label.clone(),
+                    label: canonical_label.clone(),
                     parameters,
+                    form,
                 });
 
                 if let Some(text) = content {
@@ -195,11 +218,19 @@ fn collect_events_from_node<'a>(
                     events.push(Event::Inline(InlineContent::Text(text)));
                     events.push(Event::EndParagraph);
                     // If it had content, it's a self-contained annotation block, so we close it immediately
-                    events.push(Event::EndAnnotation { label });
+                    events.push(Event::EndAnnotation {
+                        label: canonical_label,
+                    });
                 }
                 // If no content, it's a start tag, closing tag will be found later
             } else if let Some(label) = parse_lex_annotation_close(&html.literal) {
-                events.push(Event::EndAnnotation { label });
+                // Closing tag: resolve to the same canonical so the
+                // events_to_tree state machine matches it against the
+                // opener that was stored under the canonical label.
+                let (canonical_label, _) = resolve_label_form(&label);
+                events.push(Event::EndAnnotation {
+                    label: canonical_label,
+                });
             }
             // Otherwise skip HTML blocks
         }
@@ -239,6 +270,11 @@ fn collect_events_from_node<'a>(
             events.push(Event::StartAnnotation {
                 label: "frontmatter".to_string(),
                 parameters,
+                // `frontmatter` is a synthetic label the markdown
+                // import layer uses to convey YAML key/value pairs
+                // to downstream serializers — there is no
+                // user-typed lex spelling to preserve here.
+                form: LabelForm::Canonical,
             });
             events.push(Event::EndAnnotation {
                 label: "frontmatter".to_string(),

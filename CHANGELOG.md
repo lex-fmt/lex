@@ -2,6 +2,157 @@
 
 ## [Unreleased]
 
+### Added — `lexd check-labels` pre-flight validator ([#584](https://github.com/lex-fmt/lex/issues/584) PR 5 of 5)
+
+Final PR of the bare-as-blessed label namespace model. PRs 1–4 added the form-tagging infrastructure, strict resolution, form-preserving emit, and the LSP-side label-policy surface. This PR ships the CLI equivalent for batch / CI use.
+
+- **New subcommand `lexd check-labels <path>`** in `crates/lex-cli/src/main.rs`. Parses the file permissively (so `doc.*` and unknown `lex.*` labels flow through into the AST), runs the analysis pass, and reports any `forbidden-label-prefix` / `unknown-lex-canonical` diagnostics with `path:line:col: error[<code>]: <message>` formatting. Exits `0` on a clean file, `1` if any violations are found, `2` on I/O or fatal parse error.
+- **Designed for CI use** — permissive parse means every violation surfaces in one invocation; you don't have to fix one and re-run to see the next.
+- **Out of scope** — the originally-planned `lexd migrate-labels` UX rework was dropped (nothing in the wild needs migrating; the existing command already covers the rare cases). Per #584's reduced PR 5 scope: just the label-check pre-flight.
+
+### Fixed — PR 589 review fixups ([#584](https://github.com/lex-fmt/lex/issues/584) follow-up)
+
+Five issues caught in review of [#589](https://github.com/lex-fmt/lex/pull/589) — fixes shipped as a follow-up since PR 589 merged before the fixups landed.
+
+- **Hover form-classification was a no-op.** `label_form_hover_line` re-classified `annotation.data.label.value`, but `NormalizeLabels` had already rewritten it to canonical — `classify_label` always returned `Canonical` form. As a result, the "Shortcut for `lex.metadata.author`" / "Prefix-stripped form" / "Community label" hover lines PR 4 advertised never actually fired. Fixed to consult `Label.form` directly (the parser-recorded source classification) and pair it with `label.value` as the canonical.
+- **Walker double-walked attached annotations + child content.** `check_labels` had per-type walkers (`walk_annotation`/`walk_verbatim`/`walk_table`) that descended into a node's children, then `walk_item` *also* descended via `attached_annotations` + `item.children()` on the same node — duplicate diagnostics for any forbidden label nested inside another label-bearing site. Restructured into a single `walk_item` dispatcher that emits type-specific labels and defers to a uniform attached/children walk. New regression test `check_labels_emits_each_offending_site_exactly_once`.
+- **`process_full_permissive` duplicated the standard pipeline.** Hand-rolled lexing → parsing → assembling so any future stage addition / reordering would have to be mirrored. Introduced `lex_core::lex::transforms::standard::run_string_to_ast(s, mode)` so strict (`STRING_TO_AST`) and permissive (`process_full_permissive`) share a single pipeline definition.
+- **`doc.*` quickfix only fired for the 4 curated mappings.** `doc.foo` / `doc.random` produced a `forbidden-label-prefix` diagnostic with no code action. Added a generic "strip `doc.` prefix" fallback so every diagnostic has an attached quickfix.
+- **Diagnostic message text duplicated `RejectReason::message()`.** Strict-mode parser errors and permissive-mode analysis diagnostics carried near-identical wording in two places that had to stay in sync. `check_labels` now delegates message construction to `RejectReason::message()` so the wording is literally identical across both surfaces.
+
+### Added — label-policy diagnostics, hover info, quickfix ([#584](https://github.com/lex-fmt/lex/issues/584) PR 4 of 5)
+
+Fourth of five PRs for the bare-as-blessed label namespace model. PRs 1–3 added the form-tagging infrastructure, strict resolution, and form-preserving emit. This PR wires the **user-facing surface** so editors can show what's going wrong and fix it.
+
+- **New `process_full_permissive` parse entry point** in `crates/lex-core/src/lex/parsing.rs`. Mirrors `process_full` but runs `NormalizeLabels` in permissive mode so `doc.*` and unknown `lex.*` labels flow through into the AST instead of failing the parse. Intended for hosts (the LSP) that want to surface label-policy violations as in-place diagnostics rather than as wholesale parse failures.
+
+- **LSP parse switched to permissive mode** (`crates/lex-lsp/src/server.rs::DocumentStore::upsert`). A `:: doc.table ::` in a file no longer blanks out every LSP feature (semantic tokens, hover, completion, goto-def) — the rest of the file keeps working and the offending label gets a diagnostic.
+
+- **New `check_labels` analysis pass** (`crates/lex-analysis/src/diagnostics.rs`). Walks every label site (annotation, verbatim closer, table closer, nested annotation) and re-classifies via `classify_label`. Emits:
+  - `DiagnosticKind::ForbiddenLabelPrefix` (Error, code `forbidden-label-prefix`) for `doc.*` labels.
+  - `DiagnosticKind::UnknownLexCanonical` (Error, code `unknown-lex-canonical`) for `lex.*` literals not in the registered canonical set.
+
+- **Hover shows form classification** (`crates/lex-analysis/src/hover.rs::annotation_hover_result`). For `Shortcut`-form labels: "Shortcut for `lex.metadata.author`". For `Stripped`: "Prefix-stripped form of `lex.metadata.author`". For `Community`: "Community label". `Canonical` form gets no extra line (already the natural reading).
+
+- **Quickfix for `doc.*` labels** (`crates/lex-lsp-core/src/available_actions.rs`). When a `forbidden-label-prefix` diagnostic is on a known legacy spelling (`doc.table`, `doc.image`, `doc.video`, `doc.audio`), offers "Rewrite `doc.table` to `table`" as a `QUICKFIX`-kind code action. Reuses the legacy→blessed map newly exposed as `lex_core::lex::migrate::blessed_for_legacy`.
+
+### Wire `on_resolve` for tabular + media ([#583](https://github.com/lex-fmt/lex/issues/583))
+
+Closing follow-up to #570. The `lex.tabular.table` and `lex.media.{image,video,audio}` labels now go through `Registry::dispatch_resolve` at IR construction time rather than being pattern-matched on `DocNode` variants by the legacy `VerbatimRegistry` lookup. This is the load-bearing piece of the refactor: third-party namespaces can now intercept verbatim labels through the same code path the built-ins use.
+
+**Wire format bumped to `wire_version: 2`.** Two shape changes; both are breaking for handlers that decoded the wire format directly.
+
+- `WireNode::Table` carries per-column alignment via `column_aligns: Vec<String>` (was a single `align: String` summary in v1). Mixed-alignment tables — e.g. left-aligned first column, right-aligned numeric second column — now round-trip losslessly. `column_aligns.length` equals the widest row in the table.
+- New typed `WireNode::{Image, Video, Audio}` variants for media. Resolve dispatch for `lex.media.*` produces these directly instead of a generic `Verbatim` node with reconstructed params.
+
+`lex-extension v0.12.0`'s `WIRE_VERSION` const ticks to 2. The reusable subprocess fixture handler picks up the bump automatically (it forwards `lex_extension::WIRE_VERSION`).
+
+**Registry parameter on `from_lex_document`.** `lex-babel::ir::from_lex::from_lex_document` and the recursive helpers it dispatches through (`convert_children`, `from_lex_session`, `from_lex_list`, `from_lex_definition`, `from_lex_annotation`, `from_lex_table`, `from_lex_verbatim`, …) now take `registry: &Registry`. The public `lex_babel::to_ir(doc)` still works — it delegates to the new `to_ir_with_registry(doc, registry)` using a process-wide `default_registry()` populated with the built-in `lex.*` schemas. Callers that boot a custom registry (`lex-cli`, `lex-lsp`, embedders) plumb theirs through `to_ir_with_registry`. Same `default_registry()` is reused by `to_lex_document` so verbatim labels round-trip through `Registry::dispatch_format` regardless of which direction kicks the conversion off.
+
+`Schema::hooks.resolve` is now `true` on `lex.tabular.table` and the three `lex.media.*` schemas. The legacy `parse_pipe_table` helper in `lex-babel/src/common/verbatim/table.rs` is gone — the canonical parser is `lex_core::lex::builtins::tabular::parse_pipe_table_to_wire`, which emits a typed `WireNode::Table`. The reverse path (`from_wire_node`) decodes the typed media wire kinds back into `ContentItem::Verbatim` with reconstructed params so lex-core's untyped AST shape is preserved.
+
+### Added — form-preserving emit ([#584](https://github.com/lex-fmt/lex/issues/584) PR 3 of 5)
+
+Third of five PRs for the bare-as-blessed label namespace model. PRs 1 + 2 added `LabelForm` and tagged every label site at parse time; this PR wires that tag through `LexSerializer` so emit preserves the user's source spelling.
+
+- New `source_spelling(&Label) -> String` and `shortcut_for_canonical(&str) -> Option<&'static str>` in `crates/lex-core/src/lex/assembling/stages/normalize_labels.rs`. Pure functions; reverse-lookup `SHORTCUT_TABLE` for Shortcut-tagged labels, strip the `lex.` prefix for Stripped-tagged labels, return `value` verbatim for Canonical / Community.
+- `LexSerializer::visit_annotation` and `LexSerializer::leave_verbatim_block` now call `source_spelling` instead of emitting `label.value` directly. Tables inherit the same behavior because the `:: table ::` closer is itself an annotation walked through `visit_annotation`.
+- Roundtrip contract from `comms/specs/general.lex` §4.3 is now live: `:: author ::` → AST canonical `lex.metadata.author` (form=Shortcut) → emit `:: author ::`. Same for `metadata.author` (Stripped), `lex.metadata.author` (Canonical), `acme.task` (Community).
+- New round-trip tests in `formats/lex/serializer.rs` for all four forms, plus a verbatim closer test (`image src=…`). `test_verbatim_04_user_repro` was updated to expect the shortcut closer (`:: table ::`) instead of the canonical (`:: lex.tabular.table ::`).
+- New unit tests in `normalize_labels.rs` covering `source_spelling` for each form variant and `shortcut_for_canonical` for both hit + miss.
+
+### Changed — strict `NormalizeLabels` + structural-Table emit ([#584](https://github.com/lex-fmt/lex/issues/584) PR 2 of 5)
+
+Second of five PRs for the bare-as-blessed label namespace model. PR 1 added the form-tagging infrastructure; this PR replaces `NormalizeLabels`'s legacy whitelist with the resolution rules from `comms/specs/general.lex` §4.2 and rejects forbidden forms at parse time.
+
+**Resolution rules:**
+
+- Shortcut table → `LabelForm::Shortcut`. The 10 normative shortcuts are `table`, `image`, `video`, `audio`, `author`, `title`, `tags`, `date`, `include`, `notes`.
+- `lex.*` literal (registered canonical) → `LabelForm::Canonical`.
+- Prefix-strip (`metadata.author` → `lex.metadata.author`) when `lex.<input>` exists in the canonical set → `LabelForm::Stripped`.
+- Dotted non-reserved (`acme.task`) → `LabelForm::Community`; registry validation deferred to analysis.
+- Bare unknown (`foobar`, `42`, `^name`, `spec2025`) → `LabelForm::Community`; PR 4 of #584 adds a typo-prevention lint in analysis. The parser is deliberately permissive here so document-scoped reference identifiers (footnote IDs, citation keys, language hints on verbatim closers) parse without each needing a carve-out.
+
+**Hard rejections (TransformError at parse time):**
+
+- `doc.*` — reserved-forbidden under §4.1.
+- `lex.*` literals that aren't in the registered canonical set.
+
+**New strict / permissive modes** — `NormalizeLabels::new()` is strict (used by `STRING_TO_AST`); `NormalizeLabels::permissive()` skips rejection (used by `lexd migrate-labels`'s `parse_permissive` so legacy `doc.*` source can be parsed and rewritten).
+
+**New canonical: `lex.notes`** — registered alongside `lex.include` / `lex.metadata.*` / `lex.tabular.*` / `lex.media.*`. The label is the canonical footnote-definition-list marker. Promotion to a core canonical (rather than `metadata.notes` via prefix-strip) lets the source-level form stay `:: notes ::` and aligns with the spec's blessed-shortcut tier.
+
+**New `CANONICAL_LABELS` slice in `crates/lex-core/src/lex/builtins/mod.rs`** — single source of truth for which `lex.*` labels exist. `register_into` and `NormalizeLabels`'s `classify_label` both consume it; a parity test in `builtins::tests` enforces that the slice stays in sync with `register_into`'s schema set.
+
+**Structural-Table emit in `LexSerializer`** — `visit_table` / `leave_table` now emit a markdown-style pipe table with per-column alignment, padded for width. Previously `LexSerializer` had no Table visitor and tables resulting from the bare `:: table ::` closer serialized to an empty `:: lex.tabular.table ::` block.
+
+**Migration tool refactor** — `lex-core::migrate` now uses `parse_permissive` instead of `STRING_TO_AST` so legacy `doc.*` source can still be parsed for rewriting. The legacy-label table moved into `migrate.rs` (now scoped to migration use only; `NormalizeLabels` doesn't carry a "legacy" concept). `doc.table` → `table`, `doc.image` → `image`, `category` → `metadata.category`, etc.
+
+**Production callers flipped off legacy forms:**
+
+- `crates/lex-babel/src/templates/asset.rs` — `AssetKind::label()` emits `image`/`video`/`audio` (blessed shortcuts); `Data` falls back to `asset.data` (community-shape; no canonical for generic data assets today).
+- `crates/lex-analysis/src/completion.rs` — `STANDARD_VERBATIM_LABELS` list shrunk to blessed shortcuts only.
+- `crates/lex-analysis/src/utils.rs::is_notes_list` — accepts both `notes` (shortcut) and `lex.notes` (canonical) since callers may hand-build ASTs.
+- `crates/lex-core/src/lex/assembling/stages/apply_table_config.rs` — the `:: table ::` config annotation lookup accepts both spellings.
+
+**Test fixture migrations:**
+
+- Bare `note` / `info` / `warning` (test-only stand-ins) replaced with `test.note` / `test.info` / `test.warning` (community-shape) in ~20 files where the test was exercising parser/LSP plumbing, not label semantics.
+- `doc.note` / `doc.data` in test fixtures replaced with `test.note` / `test.data`.
+- Tests asserting specific label spellings (`closing_label("image")`) updated to expect the canonical (`closing_label("lex.media.image")`) since `NormalizeLabels` resolves at parse time.
+- The `verbatim_03_table_formatting` and `verbatim_04_user_repro` tests in `formats/lex/serializer.rs` now exercise the structural-Table emit path (no longer the legacy verbatim-with-markdown reformatter).
+- Snapshot fixtures (kitchensink markdown + html, detokenizer outputs) regenerated to match the new output.
+
+**Comms-side sibling**: `lex-fmt/comms` PR 43 adds `notes` to §4.2's normative shortcut table and flips three benchmark fixtures off `doc.*`.
+
+### Deferred follow-up
+
+The legacy verbatim-markdown reformatter code (`common/verbatim/table.rs::TableHandler` + `parse_pipe_table`, `VerbatimRegistry`'s `format_content` path, `LexSerializer::verbatim_registry` field) remains in the tree but is unreachable from user input now that:
+
+1. `doc.table` is hard-rejected, so no source-level path triggers the reformatter through NormalizeLabels.
+2. `:: table ::` parses as a structural Table and is serialized by `visit_table`.
+3. `lex.tabular.table` and `tabular.table` source also parse as Verbatim today, but no tests exercise that path; PR 3 of #584 retires it.
+
+A tidy-up PR after PR 3 can delete the dead modules and the `verbatim_registry` field on `LexSerializer`.
+
+### Added — `LabelForm` infrastructure ([#584](https://github.com/lex-fmt/lex/issues/584) PR 1 of 5)
+
+First of five PRs implementing the bare-as-blessed label namespace model spelled out in `comms/specs/general.lex` §4. This PR is the lex-core foundation: it adds the `LabelForm` enum (`Canonical | Stripped | Shortcut | Community`) and a `form: LabelForm` field on `Label`. `NormalizeLabels` now tags every rewrite with the matching form so downstream formatters can preserve the user's choice of spelling on roundtrip. No emission behavior changes yet — formatters still emit `label.value` verbatim; PR 3 wires `form` through.
+
+- New `comms` submodule pin: includes `specs/general.lex` §4 (Label Namespaces) and the bare-form flip in `specs/elements/lex.include.lex`.
+- `LEGACY_TO_CANONICAL` table grew a third tuple element: `(legacy, canonical, form)`. The four new-shortcut entries (`title`, `author`, `date`, `tags`) tag as `Shortcut`; the four non-shortcut metadata entries (`category`, `template`, `publishing-date`, `front-matter`) and the four `doc.*` entries tag as `Stripped`. Today these classifications are forward-looking; PR 2 of #584 hard-rejects `doc.*` and bare non-shortcut names, and PR 3 wires the form into the formatter.
+
+### Refactored — label semantics ([#570](https://github.com/lex-fmt/lex/issues/570))
+
+Multi-phase refactor moving label-semantic decisions out of the IR layer and through the extension registry. Eight PRs (#575–#581) landed via the `refac/label` integration branch, followed by a legacy-code cleanup pass.
+
+**New built-in `lex.*` schemas** registered alongside `lex.include`:
+
+- `lex.metadata.{title, author, date, tags, category, template, publishing-date, front-matter}`
+- `lex.tabular.table`
+- `lex.media.{image, video, audio}`
+
+**New parse-time pass** (`NormalizeLabels`) rewrites bare labels to their canonical `lex.*` form during `STRING_TO_AST`. Source `:: title ::` becomes `:: lex.metadata.title ::` in the AST; source `:: doc.table ::` (verbatim) becomes `:: lex.tabular.table ::`.
+
+**New `on_format` reverse hook** in the extension wire spec (`lex-extension-wire.lex` §4.8) and the `LexHandler` trait. Given a typed AST subtree, a handler returns a `LexAnnotationOut` describing the label, parameters, body, and verbatim flag the host emits as Lex source. `Registry::dispatch_format` is the entry point. The four built-in verbatim handlers implement it.
+
+**`to_lex.rs` now dispatches through `Registry::dispatch_format`** for `lex.tabular.table` and `lex.media.{image,video,audio}` instead of pattern-matching on `DocNode` variants through the local `VerbatimRegistry`. Output now carries canonical labels (`:: lex.tabular.table ::`, not `:: doc.table ::`).
+
+**`document_annotations` field on `DocNode::Document`** is the source of truth for document-scope metadata. `nested_to_flat` synthesizes the `frontmatter` event from it at emission time — the IR no longer carries a synthetic `frontmatter` annotation in children.
+
+**New `lexd migrate-labels <path>` subcommand** for source-level migration. Default mode prints the rewritten source to stdout; `--in-place` overwrites; `--check` exits non-zero if any migrations are pending.
+
+#### Breaking changes (pre-release, documented)
+
+- **Bare labels in source are silently rewritten at parse time.** This is observable in `lexd format` output: a file containing `:: title :: My Doc` will format to `:: lex.metadata.title :: My Doc`. Use `lexd migrate-labels` for explicit batch migration.
+- **`doc.table`, `doc.image`, `doc.video`, `doc.audio` verbatim labels in `to_lex` output are now canonical:** `lex.tabular.table` / `lex.media.{image,video,audio}`.
+- **The `VerbatimRegistry::default_with_standard()` registry no longer carries `doc.*` legacy aliases.** Embedders hand-building IR `Verbatim` nodes with the legacy labels and feeding them through `from_lex_verbatim` will hit a `None` lookup. Use the canonical names.
+- **The `VerbatimHandler` trait shrunk:** `to_ir` and `convert_from_ir` methods removed. `label()` and `format_content()` remain. The IR-construction path now goes through `from_lex_verbatim` calling free helpers directly (`table::parse_pipe_table`, `media::image_from_params`, etc.); the IR→Lex path goes through `Registry::dispatch_format`.
+- **Inline `:: lex.metadata.title :: ...` in the document body is no longer promoted to document metadata.** Inline annotations stay inline. Document-scope metadata must be attached at the document level (the lex-core `Document.annotations` slot, i.e. annotations at the very top of the source before any content). This was a behavioural quirk of the legacy whitelist.
+- **`lex-babel::ir::nodes::Document` gained a `document_annotations: Vec<Annotation>` field.** Code constructing `Document` via struct-literal syntax must add `document_annotations: vec![]` (or populate as needed).
+- **`lex-babel::common::nested_to_flat`'s legacy bare-label metadata whitelist (`["author", "note", "title", ...]`) is gone.** It synthesized `lex-metadata:<label>` verbatim events; after the refactor, document metadata flows through the `frontmatter` annotation event synthesized at the document boundary instead.
+- **`lex-extension` trait `LexHandler` gained a default-impl `on_format` method.** Existing impls compile unchanged; new method is non-breaking per the wire-spec versioning policy.
+
 ## [0.12.0] - 2026-05-12
 
 

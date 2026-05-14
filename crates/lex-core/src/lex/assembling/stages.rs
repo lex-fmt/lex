@@ -6,7 +6,9 @@
 pub mod apply_table_config;
 pub mod attach_annotations;
 pub mod attach_root;
+pub mod normalize_labels;
 
 pub use apply_table_config::ApplyTableConfig;
 pub use attach_annotations::AttachAnnotations;
 pub use attach_root::AttachRoot;
+pub use normalize_labels::NormalizeLabels;

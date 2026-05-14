@@ -104,43 +104,75 @@ pub static TO_IR: Lazy<IrTransform> = Lazy::new(|| Transform::from_fn(Ok).then(P
 /// ```
 pub static STRING_TO_AST: Lazy<AstTransform> = Lazy::new(|| {
     Transform::from_fn(|s: String| {
-        // Ensure source ends with newline (required for parsing)
-        let source = if !s.is_empty() && !s.ends_with('\n') {
-            format!("{s}\n")
-        } else {
-            s
-        };
-
-        // Run lexing
-        let tokens = LEXING.run(source.clone())?;
-
-        // Parse to AST
-        let mut output = crate::lex::parsing::engine::parse_from_flat_tokens(tokens, &source)
-            .map_err(|e| crate::lex::transforms::TransformError::StageFailed {
-                stage: "Parser".to_string(),
-                message: e.to_string(),
-            })?;
-
-        // Parse inline elements in root session before assembly
-        output.root = ParseInlines::new().run(output.root)?;
-
-        // Parse inlines in document title if present
-        if let Some(ref mut title) = output.title {
-            title.content.ensure_inline_parsed();
-        }
-
-        // Attach root session and title to a document
-        let mut doc = AttachRoot::new().run(output)?;
-
-        // Attach annotations as metadata
-        doc = AttachAnnotations::new().run(doc)?;
-
-        // Apply table config from :: table :: annotations (header, align)
-        doc = crate::lex::assembling::stages::ApplyTableConfig::new().run(doc)?;
-
-        Ok(doc)
+        run_string_to_ast(
+            s,
+            crate::lex::assembling::stages::normalize_labels::Mode::Strict,
+        )
     })
 });
+
+/// Run the full source→AST pipeline with a chosen
+/// [`NormalizeLabels`](crate::lex::assembling::stages::NormalizeLabels)
+/// mode. The standard pipeline ([`STRING_TO_AST`]) is the strict-mode
+/// instantiation of this; the LSP's permissive parse path
+/// ([`crate::lex::parsing::process_full_permissive`]) is the
+/// permissive-mode instantiation.
+///
+/// Keeping both modes routed through a single pipeline function
+/// avoids the maintenance hazard of forking the lexing / parsing /
+/// assembling sequence — adding a new stage or reordering existing
+/// ones only needs to happen here.
+pub fn run_string_to_ast(
+    s: String,
+    label_mode: crate::lex::assembling::stages::normalize_labels::Mode,
+) -> Result<crate::lex::ast::Document, crate::lex::transforms::TransformError> {
+    use crate::lex::assembling::stages::normalize_labels::Mode;
+
+    // Ensure source ends with newline (required for parsing)
+    let source = if !s.is_empty() && !s.ends_with('\n') {
+        format!("{s}\n")
+    } else {
+        s
+    };
+
+    // Run lexing
+    let tokens = LEXING.run(source.clone())?;
+
+    // Parse to AST
+    let mut output =
+        crate::lex::parsing::engine::parse_from_flat_tokens(tokens, &source).map_err(|e| {
+            crate::lex::transforms::TransformError::StageFailed {
+                stage: "Parser".to_string(),
+                message: e.to_string(),
+            }
+        })?;
+
+    // Parse inline elements in root session before assembly
+    output.root = ParseInlines::new().run(output.root)?;
+
+    // Parse inlines in document title if present
+    if let Some(ref mut title) = output.title {
+        title.content.ensure_inline_parsed();
+    }
+
+    // Attach root session and title to a document
+    let mut doc = AttachRoot::new().run(output)?;
+
+    // Attach annotations as metadata
+    doc = AttachAnnotations::new().run(doc)?;
+
+    // Normalize labels under the requested mode.
+    let normalize = match label_mode {
+        Mode::Strict => crate::lex::assembling::stages::NormalizeLabels::new(),
+        Mode::Permissive => crate::lex::assembling::stages::NormalizeLabels::permissive(),
+    };
+    doc = normalize.run(doc)?;
+
+    // Apply table config from :: table :: annotations (header, align)
+    doc = crate::lex::assembling::stages::ApplyTableConfig::new().run(doc)?;
+
+    Ok(doc)
+}
 
 #[cfg(test)]
 mod tests {

@@ -125,6 +125,7 @@ enum StackNode {
         label: String,
         parameters: Vec<(String, String)>,
         content: Vec<DocNode>,
+        form: LabelForm,
     },
     Table {
         rows: Vec<TableRow>,
@@ -219,6 +220,7 @@ impl StackNode {
                             label: label.to_string(),
                             parameters,
                             content: content_nodes,
+                            form: LabelForm::Canonical,
                         });
                     }
                 }
@@ -232,10 +234,12 @@ impl StackNode {
                 label,
                 parameters,
                 content,
+                form,
             } => DocNode::Annotation(Annotation {
                 label,
                 parameters,
                 content,
+                form,
             }),
             StackNode::Table {
                 rows,
@@ -528,6 +532,7 @@ pub fn events_to_tree(events: &[Event]) -> Result<Document, ConversionError> {
             title: None,
             subtitle: None,
             children: vec![],
+            document_annotations: vec![],
         });
     }
 
@@ -541,6 +546,7 @@ pub fn events_to_tree(events: &[Event]) -> Result<Document, ConversionError> {
                 title: None,
                 subtitle: None,
                 children: vec![],
+                document_annotations: vec![],
             }));
         }
         Some(other) => {
@@ -554,6 +560,7 @@ pub fn events_to_tree(events: &[Event]) -> Result<Document, ConversionError> {
                 title: None,
                 subtitle: None,
                 children: vec![],
+                document_annotations: vec![],
             })
         }
     }
@@ -583,6 +590,15 @@ pub fn events_to_tree(events: &[Event]) -> Result<Document, ConversionError> {
                     if event_iter.peek().is_some() {
                         return Err(ConversionError::ExtraEvents);
                     }
+                    // Phase 3a of #570: `Document::document_annotations`
+                    // stays empty on this path. The event stream
+                    // doesn't yet distinguish document-scope
+                    // annotations from inline ones — every
+                    // StartAnnotation under StartDocument lands in
+                    // `children` as today. Phase 3b adds the
+                    // scope marker (or formalises a position
+                    // contract) atomically with the legacy-path
+                    // retirement.
                     return Ok(doc);
                 } else {
                     return Err(ConversionError::MismatchedEvents {
@@ -760,11 +776,16 @@ pub fn events_to_tree(events: &[Event]) -> Result<Document, ConversionError> {
                 })?;
             }
 
-            Event::StartAnnotation { label, parameters } => {
+            Event::StartAnnotation {
+                label,
+                parameters,
+                form,
+            } => {
                 stack.push(StackNode::Annotation {
                     label: label.clone(),
                     parameters: parameters.clone(),
                     content: vec![],
+                    form: *form,
                 });
             }
 
@@ -1165,6 +1186,7 @@ mod tests {
             Event::StartAnnotation {
                 label: "note".to_string(),
                 parameters: vec![("type".to_string(), "warning".to_string())],
+                form: LabelForm::Canonical,
             },
             Event::StartParagraph,
             Event::Inline(InlineContent::Text("Warning text".to_string())),
@@ -1292,6 +1314,50 @@ mod tests {
     }
 
     #[test]
+    fn document_annotations_synthesize_frontmatter_event() {
+        // Post-refac/label cleanup: `tree_to_events` synthesizes a
+        // single `frontmatter` annotation event from
+        // `document_annotations`. The synthesis is what downstream
+        // HTML/Markdown serializers consume; the IR no longer carries
+        // a redundant `frontmatter` annotation in children.
+        use crate::ir::nodes::Annotation;
+        use crate::ir::to_events::tree_to_events;
+
+        let original = Document {
+            title: None,
+            subtitle: None,
+            children: vec![DocNode::Paragraph(Paragraph {
+                content: vec![InlineContent::Text("Body.".to_string())],
+            })],
+            document_annotations: vec![Annotation {
+                label: "lex.metadata.author".to_string(),
+                parameters: vec![],
+                content: vec![DocNode::Paragraph(Paragraph {
+                    content: vec![InlineContent::Text("Alice".to_string())],
+                })],
+                form: LabelForm::Canonical,
+            }],
+        };
+
+        let events = tree_to_events(&DocNode::Document(original.clone()));
+
+        // The frontmatter event must be present and carry the
+        // prefix-stripped `author` key with the body text as value.
+        let frontmatter = events.iter().find_map(|e| match e {
+            Event::StartAnnotation {
+                label, parameters, ..
+            } if label == "frontmatter" => Some(parameters.clone()),
+            _ => None,
+        });
+        let parameters = frontmatter.expect("frontmatter event must be synthesized");
+        let author = parameters
+            .iter()
+            .find(|(k, _)| k == "author")
+            .map(|(_, v)| v.as_str());
+        assert_eq!(author, Some("Alice"));
+    }
+
+    #[test]
     fn test_round_trip() {
         use crate::ir::to_events::tree_to_events;
 
@@ -1305,6 +1371,7 @@ mod tests {
                     content: vec![InlineContent::Text("Content".to_string())],
                 })],
             })],
+            document_annotations: vec![],
         };
 
         // Convert to events
@@ -1356,6 +1423,7 @@ mod tests {
                     }),
                 ],
             })],
+            document_annotations: vec![],
         };
 
         let events = tree_to_events(&DocNode::Document(original_doc.clone()));

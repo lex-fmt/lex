@@ -76,6 +76,7 @@ pub mod includes;
 pub mod inlines;
 pub mod lexing;
 pub mod loader;
+pub mod migrate;
 pub mod parsing;
 pub mod testing;
 pub mod token;
