@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added — `lexd check-labels` pre-flight validator ([#584](https://github.com/lex-fmt/lex/issues/584) PR 5 of 5)
+
+Final PR of the bare-as-blessed label namespace model. PRs 1–4 added the form-tagging infrastructure, strict resolution, form-preserving emit, and the LSP-side label-policy surface. This PR ships the CLI equivalent for batch / CI use.
+
+- **New subcommand `lexd check-labels <path>`** in `crates/lex-cli/src/main.rs`. Parses the file permissively (so `doc.*` and unknown `lex.*` labels flow through into the AST), runs the analysis pass, and reports any `forbidden-label-prefix` / `unknown-lex-canonical` diagnostics with `path:line:col: error[<code>]: <message>` formatting. Exits `0` on a clean file, `1` if any violations are found, `2` on I/O or fatal parse error.
+- **Designed for CI use** — permissive parse means every violation surfaces in one invocation; you don't have to fix one and re-run to see the next.
+- **Out of scope** — the originally-planned `lexd migrate-labels` UX rework was dropped (nothing in the wild needs migrating; the existing command already covers the rare cases). Per #584's reduced PR 5 scope: just the label-check pre-flight.
+
 ### Fixed — PR 589 review fixups ([#584](https://github.com/lex-fmt/lex/issues/584) follow-up)
 
 Five issues caught in review of [#589](https://github.com/lex-fmt/lex/pull/589) — fixes shipped as a follow-up since PR 589 merged before the fixups landed.
