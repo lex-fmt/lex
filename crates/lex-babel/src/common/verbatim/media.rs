@@ -1,4 +1,3 @@
-use super::VerbatimHandler;
 use crate::ir::nodes::{Audio, DocNode, Image, Video};
 use std::collections::HashMap;
 
@@ -32,31 +31,4 @@ pub(crate) fn audio_from_params(params: &HashMap<String, String>) -> DocNode {
     let src = params.get("src").cloned().unwrap_or_default();
     let title = params.get("title").cloned();
     DocNode::Audio(Audio { src, title })
-}
-
-/// Handler for `doc.image` verbatim blocks.
-pub struct ImageHandler;
-
-impl VerbatimHandler for ImageHandler {
-    fn label(&self) -> &str {
-        "lex.media.image"
-    }
-}
-
-/// Handler for `lex.media.video` verbatim blocks.
-pub struct VideoHandler;
-
-impl VerbatimHandler for VideoHandler {
-    fn label(&self) -> &str {
-        "lex.media.video"
-    }
-}
-
-/// Handler for `lex.media.audio` verbatim blocks.
-pub struct AudioHandler;
-
-impl VerbatimHandler for AudioHandler {
-    fn label(&self) -> &str {
-        "lex.media.audio"
-    }
 }

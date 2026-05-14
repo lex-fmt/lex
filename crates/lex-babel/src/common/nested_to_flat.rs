@@ -33,8 +33,8 @@
 
 use crate::ir::events::Event;
 use crate::ir::nodes::{
-    Annotation, Definition, DocNode, Document, Heading, InlineContent, List, ListItem, Paragraph,
-    Table, TableCell, TableRow, Verbatim,
+    Annotation, Definition, DocNode, Document, Heading, InlineContent, LabelForm, List, ListItem,
+    Paragraph, Table, TableCell, TableRow, Verbatim,
 };
 
 /// Converts a `DocNode` tree to a flat vector of `Event`s.
@@ -141,6 +141,7 @@ fn walk_node(node: &DocNode, events: &mut Vec<Event>) {
             label,
             parameters,
             content,
+            form,
         }) => {
             // Post-refac/label cleanup: the bare-label metadata
             // whitelist (`author`, `title`, …) that used to live here
@@ -157,6 +158,7 @@ fn walk_node(node: &DocNode, events: &mut Vec<Event>) {
             events.push(Event::StartAnnotation {
                 label: label.clone(),
                 parameters: parameters.clone(),
+                form: *form,
             });
             if !content.is_empty() {
                 events.push(Event::StartContent);
@@ -268,6 +270,11 @@ fn emit_frontmatter_event(document_annotations: &[Annotation], events: &mut Vec<
     events.push(Event::StartAnnotation {
         label: "frontmatter".to_string(),
         parameters,
+        // The synthesized `frontmatter` annotation never appears in
+        // source form — it's a virtual marker the downstream
+        // serializers consume. Tagging `Canonical` keeps emitters
+        // that look at `form` from rewriting it.
+        form: LabelForm::Canonical,
     });
     events.push(Event::EndAnnotation {
         label: "frontmatter".to_string(),
@@ -284,8 +291,11 @@ fn flatten_paragraph_text(content: &[DocNode]) -> String {
     for child in content {
         if let DocNode::Paragraph(p) = child {
             for inline in &p.content {
-                if let InlineContent::Text(t) = inline {
-                    text.push_str(t);
+                match inline {
+                    InlineContent::Text(t) => text.push_str(t),
+                    InlineContent::Reference(r) => text.push_str(r),
+                    InlineContent::Link { text: t, .. } => text.push_str(t),
+                    _ => {}
                 }
             }
         }
@@ -355,6 +365,7 @@ mod tests {
                     content: vec![DocNode::Paragraph(Paragraph {
                         content: vec![InlineContent::Text("Body".to_string())],
                     })],
+                    form: LabelForm::Canonical,
                 }),
             ],
             document_annotations: vec![],
@@ -411,6 +422,7 @@ mod tests {
             Event::StartAnnotation {
                 label: "note".to_string(),
                 parameters: vec![("key".to_string(), "value".to_string())],
+                form: LabelForm::Canonical,
             },
             Event::StartContent,
             Event::StartParagraph,
@@ -433,5 +445,72 @@ mod tests {
         let rebuilt = events_to_tree(&events).expect("failed to rebuild");
 
         assert_eq!(DocNode::Document(rebuilt), original);
+    }
+
+    /// Issue #596 regression: `flatten_paragraph_text` must read
+    /// `Reference` and `Link` inlines, not only `Text`. Pre-#570
+    /// Phase 3b the walker handled all three branches; the refactor
+    /// preserved only `Text`, silently dropping link / reference text
+    /// from the synthesised `frontmatter` event.
+    #[test]
+    fn frontmatter_event_includes_link_and_reference_inlines() {
+        let doc_with_link = DocNode::Document(Document {
+            title: None,
+            subtitle: None,
+            children: vec![],
+            document_annotations: vec![Annotation {
+                label: "lex.metadata.author".to_string(),
+                parameters: vec![],
+                content: vec![DocNode::Paragraph(Paragraph {
+                    content: vec![
+                        InlineContent::Text("Alice ".to_string()),
+                        InlineContent::Link {
+                            text: "https://alice.example".to_string(),
+                            href: "https://alice.example".to_string(),
+                        },
+                    ],
+                })],
+                form: LabelForm::Canonical,
+            }],
+        });
+        let events = tree_to_events(&doc_with_link);
+        let value = events.iter().find_map(|e| match e {
+            Event::StartAnnotation {
+                label, parameters, ..
+            } if label == "frontmatter" => parameters
+                .iter()
+                .find(|(k, _)| k == "author")
+                .map(|(_, v)| v.clone()),
+            _ => None,
+        });
+        assert_eq!(value.as_deref(), Some("Alice https://alice.example"));
+
+        let doc_with_ref = DocNode::Document(Document {
+            title: None,
+            subtitle: None,
+            children: vec![],
+            document_annotations: vec![Annotation {
+                label: "lex.metadata.tags".to_string(),
+                parameters: vec![],
+                content: vec![DocNode::Paragraph(Paragraph {
+                    content: vec![
+                        InlineContent::Text("rust ".to_string()),
+                        InlineContent::Reference("@manning".to_string()),
+                    ],
+                })],
+                form: LabelForm::Canonical,
+            }],
+        });
+        let events = tree_to_events(&doc_with_ref);
+        let value = events.iter().find_map(|e| match e {
+            Event::StartAnnotation {
+                label, parameters, ..
+            } if label == "frontmatter" => parameters
+                .iter()
+                .find(|(k, _)| k == "tags")
+                .map(|(_, v)| v.clone()),
+            _ => None,
+        });
+        assert_eq!(value.as_deref(), Some("rust @manning"));
     }
 }

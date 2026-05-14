@@ -125,6 +125,7 @@ enum StackNode {
         label: String,
         parameters: Vec<(String, String)>,
         content: Vec<DocNode>,
+        form: LabelForm,
     },
     Table {
         rows: Vec<TableRow>,
@@ -219,6 +220,7 @@ impl StackNode {
                             label: label.to_string(),
                             parameters,
                             content: content_nodes,
+                            form: LabelForm::Canonical,
                         });
                     }
                 }
@@ -232,10 +234,12 @@ impl StackNode {
                 label,
                 parameters,
                 content,
+                form,
             } => DocNode::Annotation(Annotation {
                 label,
                 parameters,
                 content,
+                form,
             }),
             StackNode::Table {
                 rows,
@@ -772,11 +776,16 @@ pub fn events_to_tree(events: &[Event]) -> Result<Document, ConversionError> {
                 })?;
             }
 
-            Event::StartAnnotation { label, parameters } => {
+            Event::StartAnnotation {
+                label,
+                parameters,
+                form,
+            } => {
                 stack.push(StackNode::Annotation {
                     label: label.clone(),
                     parameters: parameters.clone(),
                     content: vec![],
+                    form: *form,
                 });
             }
 
@@ -1177,6 +1186,7 @@ mod tests {
             Event::StartAnnotation {
                 label: "note".to_string(),
                 parameters: vec![("type".to_string(), "warning".to_string())],
+                form: LabelForm::Canonical,
             },
             Event::StartParagraph,
             Event::Inline(InlineContent::Text("Warning text".to_string())),
@@ -1325,6 +1335,7 @@ mod tests {
                 content: vec![DocNode::Paragraph(Paragraph {
                     content: vec![InlineContent::Text("Alice".to_string())],
                 })],
+                form: LabelForm::Canonical,
             }],
         };
 
@@ -1333,9 +1344,9 @@ mod tests {
         // The frontmatter event must be present and carry the
         // prefix-stripped `author` key with the body text as value.
         let frontmatter = events.iter().find_map(|e| match e {
-            Event::StartAnnotation { label, parameters } if label == "frontmatter" => {
-                Some(parameters.clone())
-            }
+            Event::StartAnnotation {
+                label, parameters, ..
+            } if label == "frontmatter" => Some(parameters.clone()),
             _ => None,
         });
         let parameters = frontmatter.expect("frontmatter event must be synthesized");

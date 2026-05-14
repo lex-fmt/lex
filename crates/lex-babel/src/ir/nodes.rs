@@ -1,5 +1,7 @@
 //! Core data structures for the Intermediate Representation (IR).
 
+pub use lex_core::lex::ast::elements::label::LabelForm;
+
 /// A universal, semantic representation of a document node.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DocNode {
@@ -124,6 +126,14 @@ pub struct Annotation {
     pub label: String,
     pub parameters: Vec<(String, String)>,
     pub content: Vec<DocNode>,
+    /// Which input form the user wrote, mirroring `Label::form` from
+    /// lex-core. Carried across `from_lex` → IR → `to_lex` so the
+    /// `lexd format` roundtrip preserves the source spelling. Set by
+    /// `from_lex_annotation` from the AST and by the markdown parser
+    /// from `classify_label` so `markdown → lex` conversions emit the
+    /// blessed shortcut form (e.g. `:: title ::` rather than
+    /// `:: lex.metadata.title ::`). Issue #593.
+    pub form: LabelForm,
 }
 
 /// Represents a table.

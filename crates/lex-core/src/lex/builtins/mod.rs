@@ -18,17 +18,18 @@
 //! |                         |                        | `lex-babel/src/ir/from_lex.rs` still  |
 //! |                         |                        | owns the IR work; on_format returns   |
 //! |                         |                        | None for this family in Phase 4b.     |
-//! | `lex.tabular.table`     | [`LexBuiltinsHandler`] | Schema registered (#570 Phase 1) +    |
-//! |                         |                        | `on_format` implemented (#570 Phase   |
-//! |                         |                        | 4b). The legacy `VerbatimRegistry::`  |
-//! |                         |                        | `TableHandler` still parses pipe-     |
-//! |                         |                        | tables on the from_lex direction; the |
-//! |                         |                        | to_lex production wiring lands in a   |
-//! |                         |                        | Phase 4b follow-up.                   |
-//! | `lex.media.{image,…}`   | [`LexBuiltinsHandler`] | Same shape as `lex.tabular.table`:    |
-//! |                         |                        | schemas + on_format implemented;      |
-//! |                         |                        | legacy `VerbatimRegistry::Image/…`    |
-//! |                         |                        | handlers still build the IR nodes.    |
+//! | `lex.tabular.table`     | [`LexBuiltinsHandler`] | Schemas + on_resolve + on_format      |
+//! |                         |                        | implemented. lex-babel's              |
+//! |                         |                        | `from_lex_verbatim` and `to_lex_table`|
+//! |                         |                        | both route through this handler; the  |
+//! |                         |                        | legacy `VerbatimRegistry::TableHandler|
+//! |                         |                        | ` reformat path is retired (#594).    |
+//! | `lex.media.{image,…}`   | [`LexBuiltinsHandler`] | Same shape as `lex.tabular.table`.    |
+//! |                         |                        | The legacy media `VerbatimHandler`    |
+//! |                         |                        | impls in lex-babel are retired; only  |
+//! |                         |                        | the free `*_from_params` helpers      |
+//! |                         |                        | survive, called from the resolved-    |
+//! |                         |                        | verbatim decode path.                 |
 //!
 //! The single `lex` namespace is shared by every built-in label; the
 //! composite [`LexBuiltinsHandler`] routes each dispatch by

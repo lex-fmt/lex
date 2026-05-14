@@ -586,7 +586,9 @@ fn build_html_dom_with_splice(
                 }
             }
 
-            Event::StartAnnotation { label, parameters } => {
+            Event::StartAnnotation {
+                label, parameters, ..
+            } => {
                 current_heading = None;
                 // The annotation counter advances on every Start
                 // regardless of skip-state. Nested annotations
