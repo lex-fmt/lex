@@ -205,18 +205,11 @@ pub fn shortcut_for_canonical(canonical: &str) -> Option<&'static str> {
 /// Falls back to `value` for any malformed combination (e.g. a
 /// `Shortcut`-tagged label whose canonical isn't in the table —
 /// shouldn't happen but defensively keeps emission lossless).
-pub fn source_spelling(label: &crate::lex::ast::elements::label::Label) -> String {
-    use crate::lex::ast::elements::label::LabelForm;
+pub fn source_spelling(label: &Label) -> &str {
     match label.form {
-        LabelForm::Canonical | LabelForm::Community => label.value.clone(),
-        LabelForm::Stripped => label
-            .value
-            .strip_prefix(LEX_PREFIX)
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| label.value.clone()),
-        LabelForm::Shortcut => shortcut_for_canonical(&label.value)
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| label.value.clone()),
+        LabelForm::Canonical | LabelForm::Community => &label.value,
+        LabelForm::Stripped => label.value.strip_prefix(LEX_PREFIX).unwrap_or(&label.value),
+        LabelForm::Shortcut => shortcut_for_canonical(&label.value).unwrap_or(&label.value),
     }
 }
 
