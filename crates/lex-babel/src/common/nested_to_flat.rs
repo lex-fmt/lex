@@ -292,7 +292,9 @@ fn flatten_paragraph_text(content: &[DocNode]) -> String {
         if let DocNode::Paragraph(p) = child {
             for inline in &p.content {
                 match inline {
-                    InlineContent::Text(t) => text.push_str(t),
+                    InlineContent::Text(t) | InlineContent::Code(t) | InlineContent::Math(t) => {
+                        text.push_str(t)
+                    }
                     InlineContent::Reference(r) => text.push_str(r),
                     InlineContent::Link { text: t, .. } => text.push_str(t),
                     _ => {}
@@ -512,5 +514,41 @@ mod tests {
             _ => None,
         });
         assert_eq!(value.as_deref(), Some("rust @manning"));
+    }
+
+    /// Gemini review on PR #597: `flatten_paragraph_text` was also
+    /// dropping `Code` and `Math` inline content from metadata bodies.
+    /// Extend the regression coverage to lock the additive fix in.
+    #[test]
+    fn frontmatter_event_includes_code_and_math_inlines() {
+        let doc = DocNode::Document(Document {
+            title: None,
+            subtitle: None,
+            children: vec![],
+            document_annotations: vec![Annotation {
+                label: "lex.metadata.title".to_string(),
+                parameters: vec![],
+                content: vec![DocNode::Paragraph(Paragraph {
+                    content: vec![
+                        InlineContent::Text("Doc with ".to_string()),
+                        InlineContent::Code("snippet".to_string()),
+                        InlineContent::Text(" and ".to_string()),
+                        InlineContent::Math("E=mc^2".to_string()),
+                    ],
+                })],
+                form: LabelForm::Canonical,
+            }],
+        });
+        let events = tree_to_events(&doc);
+        let value = events.iter().find_map(|e| match e {
+            Event::StartAnnotation {
+                label, parameters, ..
+            } if label == "frontmatter" => parameters
+                .iter()
+                .find(|(k, _)| k == "title")
+                .map(|(_, v)| v.clone()),
+            _ => None,
+        });
+        assert_eq!(value.as_deref(), Some("Doc with snippet and E=mc^2"));
     }
 }
