@@ -53,13 +53,16 @@ fn test_verbatim_03_flat_with_params() {
 
 #[test]
 fn test_verbatim_04_flat_marker_form() {
-    // verbatim-04-flat-marker-form.lex: Marker-style verbatim with descriptive content
+    // verbatim-04-flat-marker-form.lex: Marker-style verbatim with descriptive content.
+    // PR 2 of #584 added strict-mode NormalizeLabels, which rewrites
+    // the source-level `:: image ::` shortcut to its canonical
+    // `lex.media.image` before the AST reaches assertion code.
     let doc = Lexplore::verbatim(4).parse().unwrap();
 
     assert_ast(&doc).item_count(1).item(0, |item| {
         item.assert_verbatim_block()
             .subject("Sunset Photo")
-            .closing_label("image")
+            .closing_label("lex.media.image")
             .has_closing_parameter_with_value("src", "sunset.jpg")
             .content_contains("As the sun sets over the ocean.")
             .line_count(1);
@@ -626,11 +629,12 @@ fn test_verbatim_12_document_simple() {
             });
     });
 
-    // Verify image marker verbatim block
+    // Verify image marker verbatim block (source-level `:: image ::`
+    // is canonicalized to `lex.media.image` by NormalizeLabels).
     assert_ast(&doc).item(6, |item| {
         item.assert_verbatim_block()
             .subject("This is an Image Verbatim Representation")
-            .closing_label("image")
+            .closing_label("lex.media.image")
             .assert_marker_form()
             .has_closing_parameter_with_value("src", "\"image.jpg\"");
     });

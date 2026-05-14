@@ -2433,7 +2433,7 @@ mod tests {
         };
         let result = server.execute_command(params).await.unwrap();
         let snippet: SnippetResponse = serde_json::from_value(result.unwrap()).unwrap();
-        assert!(snippet.text.contains(":: doc.image"));
+        assert!(snippet.text.contains(":: image"));
         assert!(snippet.text.contains(asset_file.to_string_lossy().as_ref()));
 
         let verbatim_file = temp_dir.path().join("example.py");

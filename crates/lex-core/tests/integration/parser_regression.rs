@@ -128,7 +128,7 @@ fn regression_395_annotations_inside_session_not_dropped() {
 fn regression_395_annotations_with_attachment() {
     // Same as above but WITH attachment — annotations should attach to nearest element
     let source =
-        "1. Session\n\n    Some content.\n\n    :: note :: Annotation text\n\n    More content.\n";
+        "1. Session\n\n    Some content.\n\n    :: test.note :: Annotation text\n\n    More content.\n";
     let doc = parse_document(source).unwrap();
 
     assert_ast(&doc).item_count(1).item(0, |item| {

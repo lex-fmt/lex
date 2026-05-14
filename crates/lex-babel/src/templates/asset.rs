@@ -29,11 +29,17 @@ impl AssetKind {
     }
 
     pub fn label(self) -> &'static str {
+        // Emit the blessed shortcut for the three media canonicals (per
+        // comms/specs/general.lex §4.2). `Data` falls back to a
+        // community-shaped placeholder because there is no canonical
+        // for generic data assets today (the legacy `doc.data` label
+        // was non-canonical under any version of the spec — it never
+        // had a registered schema).
         match self {
-            AssetKind::Image => "doc.image",
-            AssetKind::Video => "doc.video",
-            AssetKind::Audio => "doc.audio",
-            AssetKind::Data => "doc.data",
+            AssetKind::Image => "image",
+            AssetKind::Video => "video",
+            AssetKind::Audio => "audio",
+            AssetKind::Data => "asset.data",
         }
     }
 }
@@ -110,7 +116,7 @@ mod tests {
         let request = AssetSnippetRequest::new(path.as_path(), &rules);
         let snippet = build_asset_snippet(&request);
         assert_eq!(snippet.kind, AssetKind::Image);
-        assert!(snippet.text.contains(":: doc.image"));
+        assert!(snippet.text.contains(":: image"));
     }
 
     #[test]
@@ -153,6 +159,6 @@ mod tests {
         let request = AssetSnippetRequest::new(path, &rules);
         let snippet = build_asset_snippet(&request);
         assert_eq!(snippet.kind, AssetKind::Data);
-        assert!(snippet.text.contains(":: doc.data"));
+        assert!(snippet.text.contains(":: asset.data"));
     }
 }

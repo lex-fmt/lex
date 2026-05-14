@@ -51,6 +51,7 @@ use crate::lex::includes::{Loader, ResolveConfig};
 pub mod include;
 pub mod media;
 pub mod metadata;
+pub mod notes;
 pub mod tabular;
 
 pub use include::LexIncludeHandler;
@@ -59,6 +60,45 @@ pub use include::LexIncludeHandler;
 /// `lex.` (with the trailing dot), so registered labels look like
 /// `lex.include`, `lex.metadata.title`, `lex.tabular.table`, etc.
 pub const NAMESPACE: &str = "lex";
+
+/// Every canonical `lex.*` label the core ships. Aggregated from
+/// `include`, `metadata::METADATA_LABELS`, `tabular::LEX_TABULAR_TABLE`,
+/// and `media::{LEX_MEDIA_IMAGE, LEX_MEDIA_VIDEO, LEX_MEDIA_AUDIO}` so
+/// the parse-time `NormalizeLabels` stage in `assembling::stages` can
+/// resolve user-authored bare and prefix-stripped forms to the
+/// canonical registry without depending on a runtime registry handle.
+///
+/// Adding a new `lex.*` canonical requires adding it here too — the
+/// builtin-tests in each family enforce the corresponding ordering /
+/// presence checks. Order within the slice is informational only;
+/// lookups are unordered.
+pub const CANONICAL_LABELS: &[&str] = &[
+    "lex.include",
+    "lex.notes",
+    // metadata family
+    "lex.metadata.title",
+    "lex.metadata.author",
+    "lex.metadata.date",
+    "lex.metadata.tags",
+    "lex.metadata.category",
+    "lex.metadata.template",
+    "lex.metadata.publishing-date",
+    "lex.metadata.front-matter",
+    // tabular family
+    "lex.tabular.table",
+    // media family
+    "lex.media.image",
+    "lex.media.video",
+    "lex.media.audio",
+];
+
+/// Return `true` if `label` names a canonical built-in. Lookup is a
+/// linear scan of [`CANONICAL_LABELS`]; the slice is small (13 entries
+/// today) so this stays cheaper than a `HashSet` materialised at
+/// startup.
+pub fn is_canonical_label(label: &str) -> bool {
+    CANONICAL_LABELS.contains(&label)
+}
 
 /// Composite handler for the `lex.*` namespace.
 ///
@@ -161,8 +201,9 @@ pub fn register_into(
     loader: Arc<dyn Loader + Send + Sync>,
     config: ResolveConfig,
 ) -> Result<(), RegistryError> {
-    let mut schemas = Vec::with_capacity(13);
+    let mut schemas = Vec::with_capacity(14);
     schemas.push(lex_include_schema());
+    schemas.extend(notes::all_schemas());
     schemas.extend(metadata::all_schemas());
     schemas.extend(tabular::all_schemas());
     schemas.extend(media::all_schemas());
@@ -262,6 +303,45 @@ mod tests {
         )
         .expect("registration ok");
         registry
+    }
+
+    #[test]
+    fn canonical_labels_matches_registered_schemas() {
+        // CANONICAL_LABELS feeds the parse-time NormalizeLabels stage —
+        // it MUST contain exactly the same labels that register_into
+        // registers, in any order. If a new lex.* schema is added without
+        // updating CANONICAL_LABELS, NormalizeLabels will start rejecting
+        // valid documents authored using its canonical or stripped forms.
+        let mut registered: Vec<String> = Vec::new();
+        registered.push(lex_include_schema().label);
+        registered.extend(notes::all_schemas().into_iter().map(|s| s.label));
+        registered.extend(metadata::all_schemas().into_iter().map(|s| s.label));
+        registered.extend(tabular::all_schemas().into_iter().map(|s| s.label));
+        registered.extend(media::all_schemas().into_iter().map(|s| s.label));
+
+        let constant: Vec<String> = CANONICAL_LABELS.iter().map(|s| (*s).to_string()).collect();
+
+        let mut registered_sorted = registered.clone();
+        registered_sorted.sort();
+        let mut constant_sorted = constant.clone();
+        constant_sorted.sort();
+        assert_eq!(
+            registered_sorted, constant_sorted,
+            "CANONICAL_LABELS and registered schemas must match; \
+             registered={registered:?} constant={constant:?}"
+        );
+    }
+
+    #[test]
+    fn is_canonical_label_recognizes_every_constant() {
+        for label in CANONICAL_LABELS {
+            assert!(is_canonical_label(label), "{label} must be canonical");
+        }
+        assert!(!is_canonical_label(""));
+        assert!(!is_canonical_label("title"));
+        assert!(!is_canonical_label("metadata.title"));
+        assert!(!is_canonical_label("doc.table"));
+        assert!(!is_canonical_label("acme.task"));
     }
 
     #[test]

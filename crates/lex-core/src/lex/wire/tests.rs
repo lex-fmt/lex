@@ -202,7 +202,7 @@ fn multi_line_paragraph_round_trips() {
 #[test]
 fn string_body_annotation_becomes_paragraph_child() {
     // A wire annotation with a string body (the single-line form,
-    // e.g. `:: note :: hello`) should round-trip into an Annotation
+    // e.g. `:: test.note :: hello`) should round-trip into an Annotation
     // whose children contain a single Paragraph carrying the text.
     let wire = lex_extension::wire::WireNode::Annotation {
         range: lex_extension::wire::Range::new(

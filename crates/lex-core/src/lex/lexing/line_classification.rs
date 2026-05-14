@@ -121,7 +121,7 @@ fn is_blank_line(tokens: &[Token]) -> bool {
 /// Grammar: <lex-marker><space><label>(<space><parameters>)? <lex-marker> <content>?
 ///
 /// Uses quote-aware marker detection so that `::` inside quoted parameter
-/// values (e.g., `:: note msg=":: value" ::`) is not misidentified as a
+/// values (e.g., `:: test.note msg=":: value" ::`) is not misidentified as a
 /// structural delimiter.
 fn is_data_marker_line(tokens: &[Token]) -> bool {
     if tokens.is_empty() {
@@ -590,7 +590,7 @@ mod tests {
 
     #[test]
     fn test_lex_marker_inside_quoted_value_is_annotation_start() {
-        // :: note foo=":: jane" ::
+        // :: test.note foo=":: jane" ::
         let tokens = vec![
             Token::LexMarker,
             Token::Whitespace(1),
@@ -612,7 +612,7 @@ mod tests {
 
     #[test]
     fn test_lex_marker_inside_quoted_value_data_line() {
-        // :: note foo=":: value"  (no closing ::)
+        // :: test.note foo=":: value"  (no closing ::)
         let tokens = vec![
             Token::LexMarker,
             Token::Whitespace(1),
