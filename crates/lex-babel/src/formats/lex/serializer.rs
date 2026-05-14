@@ -9,6 +9,7 @@ use lex_core::lex::ast::{
     TableCellAlignment, TableRow, Verbatim,
 };
 
+use lex_core::lex::assembling::stages::normalize_labels::source_spelling;
 use lex_core::lex::ast::elements::sequence_marker::DecorationStyle;
 
 struct ListContext {
@@ -315,7 +316,7 @@ impl Visitor for LexSerializer {
     }
 
     fn visit_annotation(&mut self, annotation: &Annotation) {
-        let label = &annotation.data.label.value;
+        let label = source_spelling(&annotation.data.label);
         let params = &annotation.data.parameters;
 
         let mut header = format!(":: {label}");
@@ -408,7 +409,7 @@ impl Visitor for LexSerializer {
             }
         }
 
-        let label = &verbatim.closing_data.label.value;
+        let label = source_spelling(&verbatim.closing_data.label);
         let mut footer = format!(":: {label}");
         if !verbatim.closing_data.parameters.is_empty() {
             for param in &verbatim.closing_data.parameters {
@@ -642,6 +643,77 @@ mod tests {
         let mut serializer = LexSerializer::new(rules);
         doc.accept(&mut serializer);
         serializer.output
+    }
+
+    // ==== Form-preserving roundtrip tests (#584 PR 3) =====================
+
+    #[test]
+    fn shortcut_form_round_trips_to_shortcut_spelling() {
+        // `:: author ::` source classifies as form=Shortcut for
+        // canonical `lex.metadata.author`. The formatter must emit the
+        // shortcut back, not the canonical. (The serializer's
+        // single-line-vs-block emission is a separate concern; this
+        // test focuses on the label-spelling preservation contract.)
+        let formatted = format_source(":: author :: Alice\n\nBody.\n");
+        assert!(
+            formatted.contains(":: author"),
+            "shortcut spelling should round-trip; got: {formatted}"
+        );
+        assert!(
+            !formatted.contains("lex.metadata.author"),
+            "canonical spelling must not leak into output: {formatted}"
+        );
+    }
+
+    #[test]
+    fn stripped_form_round_trips_to_stripped_spelling() {
+        // `:: metadata.category ::` classifies as Stripped — formatter
+        // must emit `metadata.category`, not the canonical.
+        let formatted = format_source(":: metadata.category :: tech\n\nBody.\n");
+        assert!(
+            formatted.contains(":: metadata.category"),
+            "stripped spelling should round-trip; got: {formatted}"
+        );
+        assert!(
+            !formatted.contains("lex.metadata.category"),
+            "canonical spelling must not leak: {formatted}"
+        );
+    }
+
+    #[test]
+    fn canonical_form_round_trips_unchanged() {
+        // `:: lex.metadata.title ::` classifies as Canonical and
+        // formats back as itself.
+        let formatted = format_source(":: lex.metadata.title :: My Doc\n\nBody.\n");
+        assert!(
+            formatted.contains(":: lex.metadata.title"),
+            "canonical spelling should round-trip; got: {formatted}"
+        );
+    }
+
+    #[test]
+    fn community_form_round_trips_unchanged() {
+        let formatted = format_source(":: acme.task id=42 :: foo\n\nBody.\n");
+        assert!(
+            formatted.contains(":: acme.task"),
+            "community label should round-trip; got: {formatted}"
+        );
+    }
+
+    #[test]
+    fn verbatim_shortcut_closer_round_trips() {
+        // `:: image src=x.png ::` (marker form) classifies as
+        // Shortcut for `lex.media.image`. The closing label must
+        // emit as `image`, not canonical.
+        let formatted = format_source("Photo subject:\n    alt text\n:: image src=\"x.png\" ::\n");
+        assert!(
+            formatted.contains(":: image"),
+            "verbatim closer should preserve shortcut: {formatted}"
+        );
+        assert!(
+            !formatted.contains("lex.media.image"),
+            "canonical must not leak: {formatted}"
+        );
     }
 
     // ==== Paragraph Tests ====
@@ -1023,9 +1095,10 @@ mod tests {
         let separator = formatted
             .find("| --------------- | ----- |")
             .expect("Separator not found");
-        let footer_start = formatted
-            .find(":: lex.tabular.table")
-            .expect("Footer not found");
+        // PR 3 of #584 wired form-preserving emission: the `:: table ::`
+        // source classifies as Shortcut, so the emitted closer is also
+        // `:: table ::`, not the canonical `:: lex.tabular.table ::`.
+        let footer_start = formatted.find(":: table ::").expect("Footer not found");
 
         assert!(table_start < separator);
         assert!(separator < footer_start);
