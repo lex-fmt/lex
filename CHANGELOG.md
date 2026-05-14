@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+### Wire `on_resolve` for tabular + media ([#583](https://github.com/lex-fmt/lex/issues/583))
+
+Closing follow-up to #570. The `lex.tabular.table` and `lex.media.{image,video,audio}` labels now go through `Registry::dispatch_resolve` at IR construction time rather than being pattern-matched on `DocNode` variants by the legacy `VerbatimRegistry` lookup. This is the load-bearing piece of the refactor: third-party namespaces can now intercept verbatim labels through the same code path the built-ins use.
+
+**Wire format bumped to `wire_version: 2`.** Two shape changes; both are breaking for handlers that decoded the wire format directly.
+
+- `WireNode::Table` carries per-column alignment via `column_aligns: Vec<String>` (was a single `align: String` summary in v1). Mixed-alignment tables — e.g. left-aligned first column, right-aligned numeric second column — now round-trip losslessly. `column_aligns.length` equals the widest row in the table.
+- New typed `WireNode::{Image, Video, Audio}` variants for media. Resolve dispatch for `lex.media.*` produces these directly instead of a generic `Verbatim` node with reconstructed params.
+
+`lex-extension v0.12.0`'s `WIRE_VERSION` const ticks to 2. The reusable subprocess fixture handler picks up the bump automatically (it forwards `lex_extension::WIRE_VERSION`).
+
+**Registry parameter on `from_lex_document`.** `lex-babel::ir::from_lex::from_lex_document` and the recursive helpers it dispatches through (`convert_children`, `from_lex_session`, `from_lex_list`, `from_lex_definition`, `from_lex_annotation`, `from_lex_table`, `from_lex_verbatim`, …) now take `registry: &Registry`. The public `lex_babel::to_ir(doc)` still works — it delegates to the new `to_ir_with_registry(doc, registry)` using a process-wide `default_registry()` populated with the built-in `lex.*` schemas. Callers that boot a custom registry (`lex-cli`, `lex-lsp`, embedders) plumb theirs through `to_ir_with_registry`. Same `default_registry()` is reused by `to_lex_document` so verbatim labels round-trip through `Registry::dispatch_format` regardless of which direction kicks the conversion off.
+
+`Schema::hooks.resolve` is now `true` on `lex.tabular.table` and the three `lex.media.*` schemas. The legacy `parse_pipe_table` helper in `lex-babel/src/common/verbatim/table.rs` is gone — the canonical parser is `lex_core::lex::builtins::tabular::parse_pipe_table_to_wire`, which emits a typed `WireNode::Table`. The reverse path (`from_wire_node`) decodes the typed media wire kinds back into `ContentItem::Verbatim` with reconstructed params so lex-core's untyped AST shape is preserved.
+
 ### Added — form-preserving emit ([#584](https://github.com/lex-fmt/lex/issues/584) PR 3 of 5)
 
 Third of five PRs for the bare-as-blessed label namespace model. PRs 1 + 2 added `LabelForm` and tagged every label site at parse time; this PR wires that tag through `LexSerializer` so emit preserves the user's source spelling.

@@ -1,7 +1,5 @@
 use super::VerbatimHandler;
-use crate::ir::nodes::{
-    DocNode, InlineContent, Paragraph, Table, TableCell, TableCellAlignment, TableRow,
-};
+use crate::ir::nodes::{DocNode, InlineContent, Table, TableCell, TableCellAlignment};
 use lex_core::lex::ast::Verbatim;
 
 /// Handler for `doc.table` verbatim blocks.
@@ -78,115 +76,6 @@ impl VerbatimHandler for TableHandler {
         }
         Ok(None)
     }
-}
-
-pub(crate) fn parse_pipe_table(content: &str) -> DocNode {
-    let mut header = Vec::new();
-    let mut rows = Vec::new();
-    let mut alignments = Vec::new();
-
-    let lines: Vec<&str> = content
-        .lines()
-        .map(|l| l.trim())
-        .filter(|l| !l.is_empty())
-        .collect();
-
-    if lines.is_empty() {
-        return DocNode::Table(Table {
-            rows,
-            header,
-            caption: None,
-            footnotes: vec![],
-            fullwidth: false,
-        });
-    }
-
-    // Parse header
-    if let Some(header_line) = lines.first() {
-        let cells = parse_table_row(header_line);
-        let mut header_row = TableRow { cells: Vec::new() };
-        for cell_content in cells {
-            header_row.cells.push(TableCell {
-                content: vec![DocNode::Paragraph(Paragraph {
-                    content: vec![InlineContent::Text(cell_content)],
-                })],
-                header: true,
-                align: TableCellAlignment::None,
-                colspan: 1,
-                rowspan: 1,
-            });
-        }
-        header.push(header_row);
-    }
-
-    // Parse separator line to determine alignments
-    if lines.len() > 1 {
-        let separator = lines[1];
-        if separator.contains(['-', '|']) {
-            let parts = parse_table_row(separator);
-            for part in parts {
-                let trimmed = part.trim();
-                if trimmed.starts_with(':') && trimmed.ends_with(':') {
-                    alignments.push(TableCellAlignment::Center);
-                } else if trimmed.ends_with(':') {
-                    alignments.push(TableCellAlignment::Right);
-                } else if trimmed.starts_with(':') {
-                    alignments.push(TableCellAlignment::Left);
-                } else {
-                    alignments.push(TableCellAlignment::None);
-                }
-            }
-        }
-    }
-
-    // Parse body rows
-    for line in lines.iter().skip(2) {
-        let cells = parse_table_row(line);
-        let mut row = TableRow { cells: Vec::new() };
-        for (i, cell_content) in cells.into_iter().enumerate() {
-            let align = if i < alignments.len() {
-                alignments[i]
-            } else {
-                TableCellAlignment::None
-            };
-
-            row.cells.push(TableCell {
-                content: vec![DocNode::Paragraph(Paragraph {
-                    content: vec![InlineContent::Text(cell_content)],
-                })],
-                header: false,
-                align,
-                colspan: 1,
-                rowspan: 1,
-            });
-        }
-        rows.push(row);
-    }
-
-    // Apply alignments to header
-    if !header.is_empty() {
-        for (i, cell) in header[0].cells.iter_mut().enumerate() {
-            if i < alignments.len() {
-                cell.align = alignments[i];
-            }
-        }
-    }
-
-    DocNode::Table(Table {
-        rows,
-        header,
-        caption: None,
-        footnotes: vec![],
-        fullwidth: false,
-    })
-}
-
-fn parse_table_row(line: &str) -> Vec<String> {
-    let line = line.trim();
-    let line = line.strip_prefix('|').unwrap_or(line);
-    let line = line.strip_suffix('|').unwrap_or(line);
-
-    line.split('|').map(|s| s.trim().to_string()).collect()
 }
 
 pub(crate) fn serialize_pipe_table(table: &Table) -> String {

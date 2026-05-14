@@ -21,5 +21,6 @@ mod proptest_nested_lists;
 mod proptest_references;
 mod proptest_table_cells;
 mod proptest_table_config;
+mod proptest_table_wire_align;
 mod proptest_verbatim;
 mod split_respecting_escape_proptest;

@@ -75,4 +75,4 @@ pub use schema::{
 /// down to the highest version both sides support. A host that receives a
 /// lower `wire_version` than this constant refuses the handler with a startup
 /// diagnostic.
-pub const WIRE_VERSION: u32 = 1;
+pub const WIRE_VERSION: u32 = 2;

@@ -139,8 +139,63 @@ pub use registry::FormatRegistry;
 /// - Comment annotations at document level
 ///
 /// For lossless Lex representation, use the AST directly.
+///
+/// Uses the shared default registry ([`default_registry()`]) for
+/// verbatim-label `on_resolve` dispatch. Callers that need to plug
+/// in third-party namespaces (lex-cli with `boot_registry`, lex-lsp,
+/// embedders) should call [`to_ir_with_registry`] directly.
 pub fn to_ir(doc: &lex_core::lex::ast::elements::Document) -> ir::nodes::Document {
-    ir::from_lex::from_lex_document(doc)
+    to_ir_with_registry(doc, default_registry())
+}
+
+/// Converts a Lex AST to its IR representation, dispatching verbatim
+/// labels through the supplied registry's `on_resolve` hooks.
+///
+/// This is the explicit-registry variant of [`to_ir`] — use it when
+/// the caller has its own registry (with third-party namespaces
+/// registered) and wants those handlers to participate in IR
+/// construction.
+pub fn to_ir_with_registry(
+    doc: &lex_core::lex::ast::elements::Document,
+    registry: &lex_extension_host::registry::Registry,
+) -> ir::nodes::Document {
+    ir::from_lex::from_lex_document(doc, registry)
+}
+
+/// Process-wide registry with the built-in `lex.*` schemas
+/// registered. Used by `to_ir` and `to_lex_document` for callers
+/// that don't supply their own. Constructed lazily on first call.
+///
+/// Filesystem access is plumbed through a no-op loader — this
+/// registry doesn't resolve `lex.include` (the to_ir/to_lex paths
+/// never invoke `on_resolve` for that label; includes are resolved
+/// elsewhere in the pipeline).
+pub fn default_registry() -> &'static lex_extension_host::registry::Registry {
+    use lex_core::lex::includes::{LoadError, LoadedFile, Loader, ResolveConfig};
+    use lex_extension_host::registry::Registry;
+    use std::path::Path;
+    use std::sync::{Arc, OnceLock};
+
+    struct NoopLoader;
+    impl Loader for NoopLoader {
+        fn load(&self, path: &Path) -> Result<LoadedFile, LoadError> {
+            Err(LoadError::NotFound {
+                path: path.to_path_buf(),
+            })
+        }
+    }
+
+    static REGISTRY: OnceLock<Registry> = OnceLock::new();
+    REGISTRY.get_or_init(|| {
+        let registry = Registry::new();
+        lex_core::lex::builtins::register_into(
+            &registry,
+            Arc::new(NoopLoader),
+            ResolveConfig::with_root(std::path::PathBuf::from("/")),
+        )
+        .expect("registering built-in lex.* handlers must succeed for a fresh registry");
+        registry
+    })
 }
 
 /// Converts an IR document back to Lex AST.
