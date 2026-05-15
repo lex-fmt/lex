@@ -193,7 +193,8 @@ fn build_cli() -> Command {
                     - rfc_xml:  IETF RFC XML v3                         [experimental, import only]\n  \
                     - tag:      XML-like tag format (diagnostic)\n\n\
                     The source format is auto-detected from the file extension.\n\
-                    Output goes to stdout by default, or use -o to specify a file.\n\n\
+                    Text outputs go to stdout by default, or use -o to specify a file.\n\
+                    Binary outputs (pdf, png) require -o <path>.\n\n\
                     Examples:\n  \
                     lexd convert input.lex --to markdown          # Convert to markdown (stdout)\n  \
                     lexd convert input.md --to lex -o output.lex  # Markdown to lex file\n  \

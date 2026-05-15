@@ -11,8 +11,10 @@
 //!
 //! When Pandoc work starts, it will be the primary bridge for DOCX,
 //! EPUB, RST, Org, and most other formats not worth a bespoke
-//! implementation. See `comms/docs/interop-scope.lex` for the full
-//! interop tiering.
+//! implementation. See the full interop tiering at
+//! `comms/docs/interop-scope.lex` in-repo, or
+//! <https://github.com/lex-fmt/comms/blob/main/docs/interop-scope.lex>
+//! on the web.
 //!
 //! # Planned strategy
 //!

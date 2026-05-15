@@ -39,8 +39,11 @@ impl SerializedDocument {
 /// HTML export with no importer yet, or RFC XML import with no
 /// serializer), implement just that direction — don't add a
 /// half-baked counterpart and inherit the round-trip obligation.
-/// See `comms/docs/interop-scope.lex` for the v1 tiering and which
-/// formats actually carry this expectation.
+/// See the v1 interop tiering for which formats actually carry this
+/// expectation — `comms/docs/interop-scope.lex` in-repo, or
+/// <https://github.com/lex-fmt/comms/blob/main/docs/interop-scope.lex>
+/// for readers on docs.rs (the `comms` directory is a git submodule
+/// and won't be in published crate sources).
 ///
 /// # Examples
 ///

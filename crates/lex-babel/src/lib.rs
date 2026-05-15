@@ -87,19 +87,21 @@
 //! v1 Interop Scope
 //!
 //!     The full contributor-facing version of this lives in
-//!     `comms/docs/interop-scope.lex`. The short version:
+//!     `comms/docs/interop-scope.lex` (browse on GitHub:
+//!     <https://github.com/lex-fmt/comms/blob/main/docs/interop-scope.lex>).
+//!     The short version:
 //!
-//!     | Tier              | Format   | Export | Import | Notes                                                |
-//!     |-------------------|----------|--------|--------|------------------------------------------------------|
-//!     | Core              | Markdown | ✓      | ✓      | Lingua franca. Round-trip is the bar.                |
-//!     | Core              | HTML     | ✓      | —      | Publishing target; PDF and editor previews consume.  |
-//!     | Core              | PDF      | ✓      | —      | Headless Chrome over the HTML output.                |
-//!     | Core              | PNG      | ✓      | —      | Headless Chrome screenshot of the HTML output.       |
-//!     | Stretch           | HTML     | —      | ✓      | After core lands.                                    |
-//!     | Experimental      | RFC XML  | —      | ✓      | Proof-of-concept; no bespoke investment.             |
-//!     | Planned           | Pandoc   | —      | —      | Bridge to DOCX/EPUB/RST/Org/etc. Not started.        |
-//!     | Planned           | LaTeX    | ✓      | —      | Export only, via Pandoc once Pandoc lands.           |
-//!     | Category error    | PDF      | —      | —      | **Will not be implemented.** See below.              |
+//!     | Tier              | Format     | Export | Import | Notes                                                |
+//!     |-------------------|------------|--------|--------|------------------------------------------------------|
+//!     | Core              | Markdown   | ✓      | ✓      | Lingua franca. Round-trip is the bar.                |
+//!     | Core              | HTML       | ✓      | —      | Publishing target; PDF and editor previews consume.  |
+//!     | Core              | PDF        | ✓      | —      | Headless Chrome over the HTML output.                |
+//!     | Core              | PNG        | ✓      | —      | Headless Chrome screenshot of the HTML output.       |
+//!     | Stretch           | HTML       | —      | ✓      | After core lands.                                    |
+//!     | Experimental      | RFC XML    | —      | ✓      | Proof-of-concept; no bespoke investment.             |
+//!     | Planned           | Pandoc     | —      | —      | Bridge to DOCX/EPUB/RST/Org/etc. Not started.        |
+//!     | Planned           | LaTeX      | ✓      | —      | Export only, via Pandoc once Pandoc lands.           |
+//!     | Category error    | PDF import | —      | —      | **Will not be implemented.** See below.              |
 //!
 //!     **PDF import is a category error, not a postponed task.** PDF is a
 //!     presentation format — paragraphs, headings, and lists are

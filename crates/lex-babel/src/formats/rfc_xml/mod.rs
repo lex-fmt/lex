@@ -10,7 +10,10 @@
 //!
 //! Do not invest engineering effort in this format unless the v1
 //! interop bar (Markdown round-trip, HTML/PDF export) is already
-//! solid. See `comms/docs/interop-scope.lex` for the full tiering.
+//! solid. See the full tiering at `comms/docs/interop-scope.lex`
+//! in-repo, or
+//! <https://github.com/lex-fmt/comms/blob/main/docs/interop-scope.lex>
+//! on the web.
 
 use crate::error::FormatError;
 use crate::format::{Format, SerializedDocument};
