@@ -875,24 +875,14 @@ fn add_inline_to_node<'a>(
         }
 
         InlineContent::Math(math_text) => {
-            // Math not supported in CommonMark, render as $...$
-            let dollar_open = arena.alloc(AstNode::new(RefCell::new(Ast::new(
-                NodeValue::Text("$".to_string()),
-                (0, 0).into(),
-            ))));
-            parent.append(dollar_open);
-
+            // Math is emitted as raw `$expr$` via HtmlInline so Comrak's
+            // CommonMark serializer doesn't escape `\` and `_` inside the
+            // expression (which breaks KaTeX/MathJax: `\\` means newline).
             let math_node = arena.alloc(AstNode::new(RefCell::new(Ast::new(
-                NodeValue::Text(math_text.clone()),
+                NodeValue::HtmlInline(format!("${math_text}$")),
                 (0, 0).into(),
             ))));
             parent.append(math_node);
-
-            let dollar_close = arena.alloc(AstNode::new(RefCell::new(Ast::new(
-                NodeValue::Text("$".to_string()),
-                (0, 0).into(),
-            ))));
-            parent.append(dollar_close);
         }
 
         InlineContent::Image(image) => {

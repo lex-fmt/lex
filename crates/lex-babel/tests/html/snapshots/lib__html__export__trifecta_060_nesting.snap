@@ -16,6 +16,7 @@ expression: snapshot_without_styles(&html)
 </head>
 <body>
 <div class="lex-document">
+<header class="lex-doc-header"><h1 class="lex-doc-title">Trifecta Nesting Test {{paragraph}}</h1></header>
 <p class="lex-paragraph">This document tests the combination of all three core elements (sessions, paragraphs, lists) with various levels of nesting. {{paragraph}}</p><section class="lex-session lex-session-2"><h2>1. Root Session {{session-title}}</h2><div class="lex-content"><p class="lex-paragraph">This root session contains various nested elements. {{paragraph}}</p><section class="lex-session lex-session-3"><h3>1.1. Sub-session with Paragraph {{session-title}}</h3><div class="lex-content"><p class="lex-paragraph">This sub-session starts with a paragraph. {{paragraph}}</p><ul class="lex-list"><li class="lex-list-item">Then has a list {{list-item}}
 </li><li class="lex-list-item">With multiple items {{list-item}}
 </li></ul></div></section><section class="lex-session lex-session-3"><h3>1.2. Sub-session with List {{session-title}}</h3><div class="lex-content"><ul class="lex-list"><li class="lex-list-item">Starts with a list {{list-item}}

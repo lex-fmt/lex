@@ -420,4 +420,39 @@ img {
     border: var(--lex-border-thin) solid #ccc;
     page-break-inside: avoid;
   }
+
+  /* Keep definition terms with their descriptions, and don't split a
+   * single definition across pages. */
+  dt {
+    break-after: avoid-page;
+    page-break-after: avoid;
+  }
+
+  dd {
+    break-inside: avoid-page;
+    page-break-inside: avoid;
+  }
+
+  /* Headings shouldn't appear at the bottom of a page orphaned from
+   * their first content paragraph. */
+  h1, h2, h3, h4, h5, h6 {
+    break-after: avoid-page;
+    page-break-after: avoid;
+  }
+
+  /* Figures and tables read poorly when split mid-element. */
+  figure, table {
+    break-inside: avoid-page;
+    page-break-inside: avoid;
+  }
+}
+
+/* Page numbering for paged-media (PDF) rendering. Set on every page;
+ * paged renderers (Chromium headless, weasyprint, etc.) honor it. */
+@page {
+  @bottom-center {
+    content: counter(page) " / " counter(pages);
+    font-size: 9pt;
+    color: #666;
+  }
 }

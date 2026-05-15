@@ -113,15 +113,13 @@ fn serialize_to_html_with_splice(
 ) -> Result<String, FormatError> {
     let ir_doc = crate::to_ir(doc);
 
-    let title = match &ir_doc.title {
-        Some(title_inlines) => {
-            let title_text = ir_inline_to_text(title_inlines);
-            match &ir_doc.subtitle {
-                Some(sub_inlines) => format!("{}: {}", title_text, ir_inline_to_text(sub_inlines)),
-                None => title_text,
-            }
-        }
-        None => "Lex Document".to_string(),
+    let title_text = ir_doc.title.as_ref().map(|t| ir_inline_to_text(t));
+    let subtitle_text = ir_doc.subtitle.as_ref().map(|s| ir_inline_to_text(s));
+
+    let head_title = match (&title_text, &subtitle_text) {
+        (Some(t), Some(s)) => format!("{t}: {s}"),
+        (Some(t), None) => t.clone(),
+        (None, _) => "Lex Document".to_string(),
     };
 
     let events = tree_to_events(&DocNode::Document(ir_doc));
@@ -138,7 +136,16 @@ fn serialize_to_html_with_splice(
     // splicing.
     let html_string = replace_splice_sentinels(&html_string, &splice_outputs);
 
-    wrap_in_document(&html_string, &title, &options)
+    let has_math = html_string.contains("class=\"lex-math\"");
+
+    wrap_in_document(
+        &html_string,
+        &head_title,
+        title_text.as_deref(),
+        subtitle_text.as_deref(),
+        has_math,
+        &options,
+    )
 }
 
 /// Replace every `<!--LEX-RENDER-SPLICE:N-->` sentinel in `html`
@@ -247,6 +254,12 @@ fn build_html_dom_with_splice(
     let mut annotation_idx: usize = 0;
     let mut splice_skip_depth: usize = 0;
 
+    // Consecutive Definition siblings share one `<dl>`. After `EndDefinition`
+    // we leave `current_parent` pointing at the open `<dl>` and set this
+    // flag; the next event either reuses the dl (another Definition) or
+    // closes it (anything else).
+    let mut defer_close_dl: bool = false;
+
     for event in events {
         // Inside a splice skip region, only Start/EndAnnotation
         // events are inspected — for nesting depth and counter
@@ -259,6 +272,14 @@ fn build_html_dom_with_splice(
             )
         {
             continue;
+        }
+        // If we have a `<dl>` waiting to be closed and the next event
+        // isn't another Definition, close it now before handling the event.
+        if defer_close_dl && !matches!(event, Event::StartDefinition) {
+            current_parent = parent_stack.pop().ok_or_else(|| {
+                FormatError::SerializationError("Unbalanced definition end".to_string())
+            })?;
+            defer_close_dl = false;
         }
         match event {
             Event::StartDocument => {
@@ -434,16 +455,22 @@ fn build_html_dom_with_splice(
 
             Event::StartDefinition => {
                 current_heading = None;
-                let dl = create_element("dl", vec![("class", "lex-definition")]);
-                current_parent.children.borrow_mut().push(dl.clone());
-                parent_stack.push(current_parent.clone());
-                current_parent = dl;
+                if defer_close_dl {
+                    // Previous Definition just ended at the same level; keep
+                    // using its `<dl>` so sibling defs share one container.
+                    defer_close_dl = false;
+                } else {
+                    let dl = create_element("dl", vec![("class", "lex-definition")]);
+                    current_parent.children.borrow_mut().push(dl.clone());
+                    parent_stack.push(current_parent.clone());
+                    current_parent = dl;
+                }
             }
 
             Event::EndDefinition => {
-                current_parent = parent_stack.pop().ok_or_else(|| {
-                    FormatError::SerializationError("Unbalanced definition end".to_string())
-                })?;
+                // Defer the `<dl>` close so that an immediately-following
+                // sibling Definition can reuse this container.
+                defer_close_dl = true;
             }
 
             Event::StartDefinitionTerm => {
@@ -695,6 +722,14 @@ fn build_html_dom_with_splice(
         }
     }
 
+    // Close any `<dl>` that was deferred at end-of-events.
+    if defer_close_dl {
+        current_parent = parent_stack.pop().ok_or_else(|| {
+            FormatError::SerializationError("Unbalanced definition end".to_string())
+        })?;
+    }
+    let _ = current_parent;
+
     // Set the document container as the root
     dom.document.children.borrow_mut().push(doc_container);
 
@@ -858,7 +893,10 @@ fn serialize_dom(dom: &RcDom) -> Result<String, FormatError> {
 /// Wrap the content in a complete HTML document with embedded CSS
 fn wrap_in_document(
     body_html: &str,
-    title: &str,
+    head_title: &str,
+    body_title: Option<&str>,
+    body_subtitle: Option<&str>,
+    has_math: bool,
     options: &HtmlOptions,
 ) -> Result<String, FormatError> {
     let baseline_css = include_str!("../../../css/baseline.css");
@@ -870,8 +908,34 @@ fn wrap_in_document(
     // Custom CSS is appended after baseline and theme
     let custom_css = options.custom_css.as_deref().unwrap_or("");
 
-    // Escape HTML entities in title for safety
-    let escaped_title = html_escape(title);
+    let escaped_head_title = html_escape(head_title);
+
+    let header_html = match body_title {
+        Some(t) => {
+            let escaped_t = html_escape(t);
+            match body_subtitle {
+                Some(s) => format!(
+                    "<header class=\"lex-doc-header\"><h1 class=\"lex-doc-title\">{escaped_t}</h1><p class=\"lex-doc-subtitle\">{}</p></header>\n",
+                    html_escape(s)
+                ),
+                None => format!(
+                    "<header class=\"lex-doc-header\"><h1 class=\"lex-doc-title\">{escaped_t}</h1></header>\n"
+                ),
+            }
+        }
+        None => String::new(),
+    };
+
+    // KaTeX is only included when the document contains math spans — saves
+    // ~290 KB on the wire for math-free documents.
+    let katex_html = if has_math {
+        r#"  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" crossorigin="anonymous">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" crossorigin="anonymous"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js" crossorigin="anonymous" onload="renderMathInElement(document.body, {delimiters: [{left: '$', right: '$', display: false}, {left: '$$', right: '$$', display: true}], throwOnError: false});"></script>
+"#
+    } else {
+        ""
+    };
 
     let html = format!(
         r#"<!DOCTYPE html>
@@ -880,9 +944,9 @@ fn wrap_in_document(
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="generator" content="lex-babel">
-  <title>{escaped_title}</title>
+  <title>{escaped_head_title}</title>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/github.min.css">
-  <style>
+{katex_html}  <style>
 {baseline_css}
 {theme_css}
 {custom_css}
@@ -892,7 +956,7 @@ fn wrap_in_document(
 </head>
 <body>
 <div class="lex-document">
-{body_html}
+{header_html}{body_html}
 </div>
 </body>
 </html>"#

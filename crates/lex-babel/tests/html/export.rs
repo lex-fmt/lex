@@ -432,6 +432,136 @@ fn test_document_title_session_without_title() {
     assert!(html.contains("<title>Lex Document</title>"));
 }
 
+#[test]
+fn test_document_title_rendered_in_body() {
+    // Regression test for #601: title was set in <head><title> only,
+    // body had no <h1> for the document title.
+    let lex_src = std::fs::read_to_string(
+        "../../comms/specs/elements/document.docs/document-01-title-explicit.lex",
+    )
+    .expect("document-01 spec file should exist");
+    let html = lex_to_html(&lex_src, HtmlTheme::Modern);
+
+    assert!(
+        html.contains("<header class=\"lex-doc-header\">"),
+        "body should include a doc-header element: {html}"
+    );
+    assert!(
+        html.contains("<h1 class=\"lex-doc-title\">My Document Title</h1>"),
+        "body should include an h1 with the title: {html}"
+    );
+}
+
+#[test]
+fn test_document_title_no_body_header_when_no_title() {
+    // Documents without a title shouldn't emit an empty <header>.
+    let lex_src = std::fs::read_to_string(
+        "../../comms/specs/elements/document.docs/document-05-title-session-hoist.lex",
+    )
+    .expect("document-05 spec file should exist");
+    let html = lex_to_html(&lex_src, HtmlTheme::Modern);
+
+    assert!(
+        !html.contains("lex-doc-header"),
+        "no doc-header should be present when document has no title: {html}"
+    );
+}
+
+#[test]
+fn test_katex_injected_when_math_present() {
+    // Regression test for #602: math spans previously rendered as raw
+    // `$...$` text because no math renderer was loaded.
+    let lex_src = "1. Math\n\n    Inline: #\\log_2# present.\n";
+    let html = lex_to_html(lex_src, HtmlTheme::Modern);
+
+    assert!(
+        html.contains("katex.min.js"),
+        "KaTeX script should be loaded when math is present: {html}"
+    );
+    assert!(
+        html.contains("auto-render.min.js"),
+        "KaTeX auto-render should be loaded: {html}"
+    );
+    assert!(
+        html.contains("renderMathInElement"),
+        "KaTeX auto-render onload trigger expected: {html}"
+    );
+}
+
+#[test]
+fn test_katex_not_injected_when_no_math() {
+    // Math-free documents shouldn't pay the KaTeX cost.
+    let lex_src = "Just a paragraph with no math at all.\n";
+    let html = lex_to_html(lex_src, HtmlTheme::Modern);
+
+    assert!(
+        !html.contains("katex"),
+        "KaTeX must not be loaded for math-free documents: {html}"
+    );
+}
+
+#[test]
+fn test_consecutive_definitions_share_one_dl() {
+    // Regression test for #603: each `Definition` node used to emit its own
+    // `<dl>`. Consecutive sibling Definitions should now share one `<dl>`.
+    let lex_src = concat!(
+        "term-a:\n",
+        "    def a\n\n",
+        "term-b:\n",
+        "    def b\n\n",
+        "term-c:\n",
+        "    def c\n",
+    );
+    let html = lex_to_html(lex_src, HtmlTheme::Modern);
+
+    let dl_count = html.matches("<dl class=\"lex-definition\">").count();
+    let dt_count = html.matches("<dt>").count();
+    assert_eq!(
+        dl_count, 1,
+        "three consecutive defs should share one <dl>, got {dl_count}: {html}"
+    );
+    assert_eq!(dt_count, 3, "three terms expected, got {dt_count}");
+}
+
+#[test]
+fn test_non_definition_between_definitions_breaks_dl_grouping() {
+    // A paragraph between two Definition groups should close the first
+    // `<dl>` and open a new one for the second group.
+    let lex_src = concat!(
+        "term-a:\n",
+        "    def a\n\n",
+        "Just a paragraph between def groups.\n\n",
+        "term-b:\n",
+        "    def b\n",
+    );
+    let html = lex_to_html(lex_src, HtmlTheme::Modern);
+
+    let dl_count = html.matches("<dl class=\"lex-definition\">").count();
+    assert_eq!(
+        dl_count, 2,
+        "a paragraph between def groups should yield two <dl>s, got {dl_count}: {html}"
+    );
+}
+
+#[test]
+fn test_document_subtitle_rendered_in_body() {
+    // Title-with-subtitle uses a trailing colon on the title line + subtitle below.
+    let lex_src = std::fs::read_to_string(
+        "../../comms/specs/elements/document.docs/document-07-title-with-subtitle.lex",
+    )
+    .expect("document-07 spec file should exist");
+    let html = lex_to_html(&lex_src, HtmlTheme::Modern);
+
+    assert!(
+        html.contains("<h1 class=\"lex-doc-title\">The Art of War</h1>"),
+        "title h1 expected: {html}"
+    );
+    assert!(
+        html.contains("<p class=\"lex-doc-subtitle\">A New Translation</p>"),
+        "subtitle paragraph expected: {html}"
+    );
+}
+
 // ============================================================================
 // LIST DECORATION STYLE TESTS
 // ============================================================================
