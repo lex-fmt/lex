@@ -1,12 +1,12 @@
 # Issue #614 — Sub A: Symmetric IR
 
-**Title:** babel/ir: complete IR ↔ Lex symmetry — Phase 3b document annotations, reference sub-types, round-trip audit
+**Title:** babel/ir: advance IR ↔ Lex symmetry — Phase 3b document annotations, reference sub-types, round-trip audit
 
 **Filed:** https://github.com/lex-fmt/lex/issues/614
 
 ---
 
-Part of the interop architecture work-stream — see umbrella #613. The IR is the substrate for nearly every interop path; it must be a reliable round-trip layer before the rest of the work-stream can build on it.
+Part of the interop architecture work-stream — see umbrella #613. The IR is the substrate for nearly every interop path; it must be a reliable round-trip layer (with documented, proptest-anchored accepted losses) before the rest of the work-stream can build on it. The framing here is **advance** rather than "complete" — a small set of losses (heading levels, inline-format nesting, Video/Audio inline) are accepted with explicit documentation and proptest contracts rather than fixed in this work-stream.
 
 ## Three concrete gaps
 
@@ -46,7 +46,8 @@ Every format adapter then re-parses or guesses. The IR should carry the classifi
 | Heading | Level info reconstructed from parent context, not stored | `to_lex.rs:166-201` |
 | Bold/Italic nesting | `Bold([Italic([Text])])` flattens to `*_text_*` text | `to_lex.rs:517-541` |
 | Annotation rich body | OK structurally; semantics depend on dispatch (see umbrella) | — |
-| Image | `DocNode::Image` + `InlineContent::Image` exist; Video/Audio inline missing | `nodes.rs` |
+| Image (block + inline) | `DocNode::Image` + `InlineContent::Image` exist; round-trips | `nodes.rs` |
+| Video / Audio inline | `DocNode::Video` / `DocNode::Audio` exist as block-level; no `InlineContent::Video` / `InlineContent::Audio` variants — inline-positioned video/audio are unrepresentable | `nodes.rs` |
 
 Each needs either a fix or a *documented* accepted-loss with proptest coverage.
 
@@ -62,14 +63,14 @@ Each needs either a fix or a *documented* accepted-loss with proptest coverage.
 
 - Phase 3b PR lands; legacy `frontmatter` synthesis is removed; `document_annotations` is the single source of truth.
 - `InlineContent::Reference` is structured; every format adapter uses the typed variants; `common/links.rs` operates on the typed variants.
-- For every DocNode variant: a round-trip proptest exists. Where the test asserts equivalence-modulo-X, X is named in the doc-comment.
+- For every DocNode variant: a round-trip proptest exists. Where the test asserts equivalence-modulo-X, X is named in the doc-comment. The documented-loss list (heading levels, inline-format nesting, Video/Audio inline) is committed text in the IR module docs, not just inferred from test failures.
 - The "metadata label whitelist" in `formats/markdown/serializer.rs` is unblocked for removal (final removal lands in Sub D once dispatch is unified).
 
 ## Out of scope
 
-- Heading-level reconstruction (accept as documented loss).
-- Inline format nesting normalization (accept as documented loss).
-- Video/Audio inline variants — file a separate small issue if needed.
+- Heading-level reconstruction (accept as documented loss; proptest contract names the loss).
+- Inline format nesting normalization (accept as documented loss; proptest contract names the loss).
+- Video/Audio inline variants — accept as documented loss for v1. File a follow-up issue only if a concrete inline use case emerges.
 
 ## Dependencies
 

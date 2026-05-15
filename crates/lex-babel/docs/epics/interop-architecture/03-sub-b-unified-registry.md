@@ -39,7 +39,7 @@ LabelSchema {
 
 - A schema can register zero, one, or both kinds.
 - IR-build hooks operate on a parsed-verbatim + parameters input and produce an `IrNode` or a fallback `Verbatim`. They do *not* receive the lex-core AST.
-- Render hooks operate on the IR (depends on Sub C migration).
+- Render hooks operate on the IR once Sub C lands. Until then, they continue to read from the lex-core AST while using the unified registry shape introduced here. (Sub B does not depend on Sub C; this bullet describes the post-Sub-C end-state, not a prerequisite.)
 - Schema is the single registration point. Extension authors write one type of handler per kind, against one stable surface.
 
 The existing `Registry` (in `lex-extension-host`) is mostly fine; this issue is about consolidating the *consumer* sides (`from_lex_verbatim` + `render_dispatch.rs`) onto a unified hook-firing pattern with consistent lifecycle naming.

@@ -53,4 +53,4 @@ pub fn dispatch_render(
 
 ## Dependencies
 
-Part of work-stream #613. Depends on Sub A (#614), Sub B (#615); blocks Sub D (#617).
+Part of work-stream #613. Depends on Sub A (#614); blocks Sub D (#617). Can run in parallel with Sub B (#615) after Sub A lands; the ergonomic order is A → B → C → D so that C migrates render-dispatch onto the final unified registry shape rather than the old one.
