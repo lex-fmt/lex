@@ -539,6 +539,47 @@ fn test_numbering_round_trip_lex_md_lex() {
 }
 
 #[test]
+fn test_inline_math_not_escaped() {
+    // Regression test for #600: math content was passed through Comrak Text
+    // nodes, which apply CommonMark escaping (`\` -> `\\`, `_` -> `\_`).
+    // That escaping breaks LaTeX: `\\` means newline in KaTeX/MathJax.
+    let lex_src = "A factor of #\\log_2# bits.\n";
+    let lex_doc = STRING_TO_AST.run(lex_src.to_string()).unwrap();
+    let md = MarkdownFormat.serialize(&lex_doc).unwrap();
+
+    assert!(
+        md.contains("$\\log_2$"),
+        "math content must emit verbatim, got: {md:?}"
+    );
+    assert!(
+        !md.contains("\\\\log"),
+        "backslash must not be double-escaped, got: {md:?}"
+    );
+    assert!(
+        !md.contains("\\_"),
+        "underscore must not be escaped inside math, got: {md:?}"
+    );
+}
+
+#[test]
+fn test_inline_math_complex_expressions() {
+    // A handful of representative LaTeX shapes from real-world technical docs.
+    // Wrapped in a session so the first line isn't interpreted as a title.
+    let lex_src = concat!(
+        "1. Math\n\n",
+        "    Curves are #P_{out} = f(P_{in})# transfer functions.\n\n",
+        "    The #\\Delta E_{OK}# threshold is small.\n\n",
+        "    Dot product is #a \\cdot b# here.\n",
+    );
+    let lex_doc = STRING_TO_AST.run(lex_src.to_string()).unwrap();
+    let md = MarkdownFormat.serialize(&lex_doc).unwrap();
+
+    assert!(md.contains("$P_{out} = f(P_{in})$"), "subscripts: {md:?}");
+    assert!(md.contains("$\\Delta E_{OK}$"), "Delta + subscript: {md:?}");
+    assert!(md.contains("$a \\cdot b$"), "\\cdot: {md:?}");
+}
+
+#[test]
 fn test_nested_numbering_round_trip() {
     let lex_src = concat!(
         "1. Top Level\n\n",

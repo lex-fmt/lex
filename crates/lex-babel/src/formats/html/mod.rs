@@ -264,6 +264,30 @@ mod tests {
     }
 
     #[test]
+    fn test_baseline_css_has_paged_media_rules() {
+        // Regression test for #607: PDF export (and any paged-media renderer)
+        // needs page numbers and break-control rules.
+        let css = get_default_css();
+
+        assert!(
+            css.contains("@page"),
+            "baseline should define @page rules for paged-media output"
+        );
+        assert!(
+            css.contains("counter(page)"),
+            "baseline should emit page-number counter"
+        );
+        assert!(
+            css.contains("break-inside") || css.contains("page-break-inside"),
+            "baseline should declare break-inside rules"
+        );
+        assert!(
+            css.contains("dt {") || css.contains("dt{"),
+            "baseline should style dt for break-after avoid"
+        );
+    }
+
+    #[test]
     fn test_css_path_option_loads_file() {
         let mut temp = NamedTempFile::new().expect("failed to create temp file");
         writeln!(temp, ".from-path {{ color: blue; }}").expect("failed to write temp css");

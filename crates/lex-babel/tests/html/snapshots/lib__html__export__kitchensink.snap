@@ -1,6 +1,5 @@
 ---
 source: crates/lex-babel/tests/html/export.rs
-assertion_line: 547
 expression: snapshot_without_styles(&html)
 ---
 <!DOCTYPE html>
@@ -17,6 +16,7 @@ expression: snapshot_without_styles(&html)
 </head>
 <body>
 <div class="lex-document">
+<header class="lex-doc-header"><h1 class="lex-doc-title">Kitchensink Test Document</h1><p class="lex-doc-subtitle">A Comprehensive Regression Test {{paragraph}}</p></header>
 <p class="lex-paragraph">This document includes <strong>all major features</strong> of the lex language to serve as a comprehensive "kitchensink" regression test for the parser, as noted in <a href="#ref-spec2025, pp. 45-46">@spec2025, pp. 45-46</a>. {{paragraph}}</p><p class="lex-paragraph">This is a two-lined paragraph.
 First, a simple <em>definition</em> at the root level. {{paragraph}}</p><dl class="lex-definition"><dt>Root Definition</dt><dd><div class="lex-content"><p class="lex-paragraph">This definition contains a paragraph and a <code>list</code> to test mixed content at the top level. {{definition}}</p><ul class="lex-list"><li class="lex-list-item">Item 1 in definition referencing <a href="TK-rootlist">TK-rootlist</a>. {{list-item}}
 </li><li class="lex-list-item">Item 2 in definition with note <a href="42">42</a>. {{list-item}}
