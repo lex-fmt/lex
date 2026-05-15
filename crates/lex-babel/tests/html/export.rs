@@ -501,6 +501,28 @@ fn test_katex_not_injected_when_no_math() {
 }
 
 #[test]
+fn test_katex_not_injected_for_verbatim_containing_math_class_text() {
+    // Regression test for a false-positive flagged in PR review: when math
+    // detection was a substring scan over the serialized HTML, a verbatim
+    // block whose author-written text happened to include `class="lex-math"`
+    // would falsely trigger KaTeX injection. Math is now tracked during DOM
+    // construction, so the substring is irrelevant.
+    let lex_src = concat!(
+        "1. Verbatim\n\n",
+        "    Here's an HTML sample.\n\n",
+        "    ===\n",
+        "    <span class=\"lex-math\">$x$</span>\n",
+        "    ===\n",
+    );
+    let html = lex_to_html(lex_src, HtmlTheme::Modern);
+
+    assert!(
+        !html.contains("katex.min.js"),
+        "KaTeX must not load when the only `lex-math` occurrence is inside verbatim text: {html}"
+    );
+}
+
+#[test]
 fn test_consecutive_definitions_share_one_dl() {
     // Regression test for #603: each `Definition` node used to emit its own
     // `<dl>`. Consecutive sibling Definitions should now share one `<dl>`.
