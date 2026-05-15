@@ -127,7 +127,7 @@ fn serialize_to_html_with_splice(
     // Splice outputs are collected during the DOM build so the
     // post-process step has them keyed by the sentinel index.
     let mut splice_outputs: Vec<String> = Vec::new();
-    let dom = build_html_dom_with_splice(&events, splice_plan, &mut splice_outputs)?;
+    let (dom, has_math) = build_html_dom_with_splice(&events, splice_plan, &mut splice_outputs)?;
 
     let html_string = serialize_dom(&dom)?;
     // Replace each sentinel comment with the handler's raw HTML.
@@ -135,8 +135,6 @@ fn serialize_to_html_with_splice(
     // wrap_in_document call so the wrap doesn't have to know about
     // splicing.
     let html_string = replace_splice_sentinels(&html_string, &splice_outputs);
-
-    let has_math = html_string.contains("class=\"lex-math\"");
 
     wrap_in_document(
         &html_string,
@@ -222,11 +220,19 @@ pub fn serialize_to_html_with_options(
 ///
 /// When `splice_plan` is `None`, the builder behaves exactly as
 /// the original `build_html_dom` did before the splice landing.
+/// Build the HTML DOM from a flat event stream.
+///
+/// Returns the constructed DOM and a `has_math` flag indicating whether any
+/// `InlineContent::Math` was encountered during the walk. The caller uses
+/// the flag to decide whether to inject the KaTeX renderer into the document
+/// head — tracking it here is more reliable than scanning the serialized
+/// HTML for the math class string, which can false-positive when a verbatim
+/// code block happens to contain that text.
 fn build_html_dom_with_splice(
     events: &[Event],
     splice_plan: Option<&[crate::render_dispatch::RenderedNode]>,
     splice_outputs: &mut Vec<String>,
-) -> Result<RcDom, FormatError> {
+) -> Result<(RcDom, bool), FormatError> {
     let dom = RcDom::default();
 
     // Create document container
@@ -260,6 +266,13 @@ fn build_html_dom_with_splice(
     // closes it (anything else).
     let mut defer_close_dl: bool = false;
 
+    // Set by `add_inline_to_node` whenever it processes an `InlineContent::Math`.
+    // The outer serializer consults this to decide whether to inject KaTeX into
+    // the document head; tracking it during construction avoids the fragility
+    // of a substring scan over the serialized HTML (which can false-positive on
+    // verbatim code blocks that happen to contain `class="lex-math"`).
+    let mut has_math: bool = false;
+
     for event in events {
         // Inside a splice skip region, only Start/EndAnnotation
         // events are inspected — for nesting depth and counter
@@ -277,7 +290,9 @@ fn build_html_dom_with_splice(
         // isn't another Definition, close it now before handling the event.
         if defer_close_dl && !matches!(event, Event::StartDefinition) {
             current_parent = parent_stack.pop().ok_or_else(|| {
-                FormatError::SerializationError("Unbalanced definition end".to_string())
+                FormatError::SerializationError(
+                    "Failed to close deferred definition list".to_string(),
+                )
             })?;
             defer_close_dl = false;
         }
@@ -515,7 +530,7 @@ fn build_html_dom_with_splice(
                 if let Some(caption_inlines) = caption {
                     let caption_el = create_element("caption", vec![]);
                     for inline in caption_inlines {
-                        add_inline_to_node(&caption_el, inline)?;
+                        add_inline_to_node(&caption_el, inline, &mut has_math)?;
                     }
                     table.children.borrow_mut().push(caption_el);
                 }
@@ -606,10 +621,10 @@ fn build_html_dom_with_splice(
                     }
                 } else if let Some(ref heading) = current_heading {
                     // Add to heading
-                    add_inline_to_node(heading, inline_content)?;
+                    add_inline_to_node(heading, inline_content, &mut has_math)?;
                 } else {
                     // Add to current parent
-                    add_inline_to_node(&current_parent, inline_content)?;
+                    add_inline_to_node(&current_parent, inline_content, &mut has_math)?;
                 }
             }
 
@@ -725,7 +740,9 @@ fn build_html_dom_with_splice(
     // Close any `<dl>` that was deferred at end-of-events.
     if defer_close_dl {
         current_parent = parent_stack.pop().ok_or_else(|| {
-            FormatError::SerializationError("Unbalanced definition end".to_string())
+            FormatError::SerializationError(
+                "Failed to close deferred definition list at end of events".to_string(),
+            )
         })?;
     }
     let _ = current_parent;
@@ -733,11 +750,19 @@ fn build_html_dom_with_splice(
     // Set the document container as the root
     dom.document.children.borrow_mut().push(doc_container);
 
-    Ok(dom)
+    Ok((dom, has_math))
 }
 
-/// Add inline content to an HTML node, handling references → anchors conversion
-fn add_inline_to_node(parent: &Handle, inline: &InlineContent) -> Result<(), FormatError> {
+/// Add inline content to an HTML node, handling references → anchors conversion.
+///
+/// `has_math` is set to true if any `InlineContent::Math` is encountered
+/// (transitively, through nested Bold/Italic/Link children). The caller
+/// uses this to decide whether to inject KaTeX into the document head.
+fn add_inline_to_node(
+    parent: &Handle,
+    inline: &InlineContent,
+    has_math: &mut bool,
+) -> Result<(), FormatError> {
     match inline {
         InlineContent::Text(text) => {
             let text_node = create_text(text);
@@ -748,7 +773,7 @@ fn add_inline_to_node(parent: &Handle, inline: &InlineContent) -> Result<(), For
             let strong = create_element("strong", vec![]);
             parent.children.borrow_mut().push(strong.clone());
             for child in children {
-                add_inline_to_node(&strong, child)?;
+                add_inline_to_node(&strong, child, has_math)?;
             }
         }
 
@@ -756,7 +781,7 @@ fn add_inline_to_node(parent: &Handle, inline: &InlineContent) -> Result<(), For
             let em = create_element("em", vec![]);
             parent.children.borrow_mut().push(em.clone());
             for child in children {
-                add_inline_to_node(&em, child)?;
+                add_inline_to_node(&em, child, has_math)?;
             }
         }
 
@@ -768,7 +793,7 @@ fn add_inline_to_node(parent: &Handle, inline: &InlineContent) -> Result<(), For
         }
 
         InlineContent::Math(math_text) => {
-            // Math rendered in a span with class
+            *has_math = true;
             let math_span = create_element("span", vec![("class", "lex-math")]);
             let dollar_open = create_text("$");
             let math_content = create_text(math_text);
