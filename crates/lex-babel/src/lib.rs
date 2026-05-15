@@ -94,6 +94,7 @@
 //!     | Core              | Markdown | ✓      | ✓      | Lingua franca. Round-trip is the bar.                |
 //!     | Core              | HTML     | ✓      | —      | Publishing target; PDF and editor previews consume.  |
 //!     | Core              | PDF      | ✓      | —      | Headless Chrome over the HTML output.                |
+//!     | Core              | PNG      | ✓      | —      | Headless Chrome screenshot of the HTML output.       |
 //!     | Stretch           | HTML     | —      | ✓      | After core lands.                                    |
 //!     | Experimental      | RFC XML  | —      | ✓      | Proof-of-concept; no bespoke investment.             |
 //!     | Planned           | Pandoc   | —      | —      | Bridge to DOCX/EPUB/RST/Org/etc. Not started.        |

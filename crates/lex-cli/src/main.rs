@@ -189,6 +189,7 @@ fn build_cli() -> Command {
                     - markdown: Markdown (.md)                          [core, both directions]\n  \
                     - html:     HTML with optional themes (.html)       [core, export only]\n  \
                     - pdf:      PDF via headless Chrome                 [core, export only]\n  \
+                    - png:      PNG via headless Chrome screenshot      [core, export only]\n  \
                     - rfc_xml:  IETF RFC XML v3                         [experimental, import only]\n  \
                     - tag:      XML-like tag format (diagnostic)\n\n\
                     The source format is auto-detected from the file extension.\n\
@@ -223,7 +224,7 @@ fn build_cli() -> Command {
                         .help("Target format (required)")
                         .long_help(
                             "Target format to convert to.\n\n\
-                            Interop formats: lex, markdown, html, pdf (core);\n  \
+                            Interop formats: lex, markdown, html, pdf, png (core);\n  \
                                              rfc_xml (experimental, parse-only).\n\
                             Diagnostic formats: tag, treeviz, linetreeviz.\n\
                             Use the format name, not the file extension.\n\

@@ -9,10 +9,10 @@ Before you start, read the v1 interop scope:
 
     The authoritative tiering — which formats are Core, Stretch, Experimental, Planned, or
     explicitly out of scope — lives in `comms/docs/interop-scope.lex`. Read it first. The short
-    version: Markdown (both ways), HTML export, and PDF export are Core. HTML import is Stretch.
-    RFC XML import is Experimental. Pandoc and LaTeX are Planned (not started). PDF import is a
-    category error and will not be implemented, ever. This guide assumes you're working inside
-    that scope.
+    version: Markdown (both ways), HTML export, PDF export, and PNG export are Core. HTML
+    import is Stretch. RFC XML import is Experimental. Pandoc and LaTeX are Planned (not
+    started). PDF import is a category error and will not be implemented, ever. This guide
+    assumes you're working inside that scope.
 
 Read for reference:
     lex-babel/src/format.rs           # Format trait definition
