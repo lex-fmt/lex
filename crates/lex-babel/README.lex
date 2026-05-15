@@ -5,6 +5,15 @@ It covers project setup, implementation approach, testing strategy, and best pra
 
 For brevity, we list spec files from the root spec directory (specs/v1).
 
+Before you start, read the v1 interop scope:
+
+    The authoritative tiering — which formats are Core, Stretch, Experimental, Planned, or
+    explicitly out of scope — lives in `comms/docs/interop-scope.lex`. Read it first. The short
+    version: Markdown (both ways), HTML export, and PDF export are Core. HTML import is Stretch.
+    RFC XML import is Experimental. Pandoc and LaTeX are Planned (not started). PDF import is a
+    category error and will not be implemented, ever. This guide assumes you're working inside
+    that scope.
+
 Read for reference:
     lex-babel/src/format.rs           # Format trait definition
     lex-babel/src/lib.rs              # Architecture overview
@@ -26,8 +35,10 @@ the export implementation for testing.
 
     For other formats, choose appropriate well-maintained crates:
       - HTML: Use a robust HTML parser like `html5ever` or `scraper`
-      - Pandoc: Use `pandoc_ast` or shell out to pandoc binary
-      - LaTeX: Consider `tex-parser` or similar
+      - Pandoc (planned, not started — see interop-scope §5): the plan is `pandoc_ast`,
+        not shelling out
+      - LaTeX (planned, export only via Pandoc — see interop-scope §5): no bespoke
+        LaTeX library; the path is `lex → Pandoc AST → LaTeX`
 
   0.2. File structure to create:
 

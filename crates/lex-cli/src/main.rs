@@ -184,11 +184,13 @@ fn build_cli() -> Command {
                 .about("Convert between document formats (default command)")
                 .long_about(
                     "Convert documents between different formats.\n\n\
-                    Supported formats:\n  \
-                    - lex:      Lex format (.lex)\n  \
-                    - markdown: Markdown (.md)\n  \
-                    - html:     HTML with optional themes (.html)\n  \
-                    - tag:      XML-like tag format\n\n\
+                    Supported formats (see comms/docs/interop-scope.lex for tiering):\n  \
+                    - lex:      Lex format (.lex)                       [core]\n  \
+                    - markdown: Markdown (.md)                          [core, both directions]\n  \
+                    - html:     HTML with optional themes (.html)       [core, export only]\n  \
+                    - pdf:      PDF via headless Chrome                 [core, export only]\n  \
+                    - rfc_xml:  IETF RFC XML v3                         [experimental, import only]\n  \
+                    - tag:      XML-like tag format (diagnostic)\n\n\
                     The source format is auto-detected from the file extension.\n\
                     Output goes to stdout by default, or use -o to specify a file.\n\n\
                     Examples:\n  \
@@ -221,8 +223,11 @@ fn build_cli() -> Command {
                         .help("Target format (required)")
                         .long_help(
                             "Target format to convert to.\n\n\
-                            Available formats: lex, markdown, html, tag\n\
-                            Use the format name, not the file extension."
+                            Interop formats: lex, markdown, html, pdf (core);\n  \
+                                             rfc_xml (experimental, parse-only).\n\
+                            Diagnostic formats: tag, treeviz, linetreeviz.\n\
+                            Use the format name, not the file extension.\n\
+                            See comms/docs/interop-scope.lex for the v1 tiering."
                         )
                         .required(true)
                         .value_hint(ValueHint::Other),
@@ -1442,10 +1447,27 @@ fn handle_list_transforms_command() {
         println!("  {transform_name}");
     }
 
-    println!("\nConversion formats:");
+    println!("\nConversion formats (v1 tiering — see comms/docs/interop-scope.lex):");
     let registry = FormatRegistry::default();
     for format_name in registry.list_formats() {
-        println!("  {format_name}");
+        let tier = format_tier(&format_name);
+        println!("  {format_name:<12} {tier}");
+    }
+}
+
+/// Returns a short tier label for a format name, used by
+/// `lexd --list-transforms` to make the v1 scope visible at a glance.
+/// See `comms/docs/interop-scope.lex` for the full tiering.
+fn format_tier(name: &str) -> &'static str {
+    match name {
+        "lex" => "[core]",
+        "markdown" => "[core, both directions]",
+        "html" => "[core, export only]",
+        "pdf" => "[core, export only]",
+        "png" => "[core, export only]",
+        "rfc_xml" => "[experimental, import only]",
+        "tag" | "treeviz" | "linetreeviz" => "[diagnostic]",
+        _ => "",
     }
 }
 
