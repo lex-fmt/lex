@@ -4,6 +4,7 @@
 //! Pipeline: Lex AST → IR → Events → RcDom → HTML string
 
 use crate::common::nested_to_flat::tree_to_events;
+use crate::common::splice::{SentinelBuffer, SpliceState};
 use crate::error::FormatError;
 use crate::formats::html::HtmlTheme;
 use crate::ir::events::Event;
@@ -60,19 +61,10 @@ pub fn serialize_to_html(doc: &Document, theme: HtmlTheme) -> Result<String, For
 /// `Ok(None)` fall through to the default rendering — wire-AST →
 /// HTML conversion is a follow-up.
 ///
-/// Splice mechanism: post-#616, `dispatch_render` walks the IR and
-/// `tree_to_events` walks the same IR, so both visit **body**
-/// annotations in matching document order. The HTML builder
-/// maintains a counter and indexes into the plan as it sees
-/// `Event::StartAnnotation`. When the plan entry has output, the
-/// builder emits a sentinel comment (`<!--LEX-RENDER-SPLICE:N-->`)
-/// and skips events until the matching `EndAnnotation`; after DOM
-/// serialization, the sentinel is string-replaced with the handler's
-/// raw HTML. The skip-state nests on depth so handlers consume their
-/// full subtree (including any inner labelled annotations — those
-/// handlers fired during the dispatch walk; their results aren't
-/// separately spliced because the outer handler owns the body's
-/// rendering).
+/// Splice mechanism: post-#617 the splice state lives in
+/// [`crate::common::splice::SpliceState`]; this entry point just
+/// constructs one with the body slice of the plan and threads it
+/// through the event walker. Markdown reuses the same helper.
 ///
 /// Phase 3b of #614 made doc-scope annotations IR-only — they don't
 /// flow through the event stream. To keep the body splice aligned,
@@ -107,19 +99,6 @@ pub fn serialize_to_html_with_registry(
     diagnostics.extend(plan.root_diagnostics);
     Ok(HtmlExportOutcome { html, diagnostics })
 }
-
-/// Sentinel comment marker emitted by [`build_html_dom`] when a
-/// render-plan entry has output. After DOM serialization, every
-/// occurrence of this comment (with a numeric ID appended) is
-/// replaced with the raw HTML at the corresponding index in the
-/// splice-output buffer.
-///
-/// Comments are used as sentinels because the html5ever DOM doesn't
-/// have a "raw HTML" text-node concept — every text node is HTML-
-/// escaped at serialization. Comments serialize byte-for-byte
-/// (modulo whitespace inside them), so a unique sentinel is reliably
-/// round-trip-able through the DOM → string pass.
-const SPLICE_SENTINEL_PREFIX: &str = "LEX-RENDER-SPLICE:";
 
 /// Internal helper: serialize with an optional splice plan. When
 /// `splice_plan` is `None` this is identical to
@@ -160,17 +139,16 @@ fn serialize_to_html_with_splice_from_ir(
 
     let events = tree_to_events(&DocNode::Document(ir_doc));
 
-    // Splice outputs are collected during the DOM build so the
-    // post-process step has them keyed by the sentinel index.
-    let mut splice_outputs: Vec<String> = Vec::new();
-    let (dom, has_math) = build_html_dom_with_splice(&events, splice_plan, &mut splice_outputs)?;
+    // rcdom has no raw-HTML node, so the event walker plants sentinel
+    // comments and `SentinelBuffer::replace` substitutes the
+    // handler's raw HTML after `serialize_dom`. Markdown's path
+    // doesn't need this — Comrak's `NodeValue::HtmlBlock` carries
+    // raw passthrough natively.
+    let mut sentinels = SentinelBuffer::new();
+    let (dom, has_math) = build_html_dom_with_splice(&events, splice_plan, &mut sentinels)?;
 
     let html_string = serialize_dom(&dom)?;
-    // Replace each sentinel comment with the handler's raw HTML.
-    // We do the substitution on the inner-body string before the
-    // wrap_in_document call so the wrap doesn't have to know about
-    // splicing.
-    let html_string = replace_splice_sentinels(&html_string, &splice_outputs);
+    let html_string = sentinels.replace(&html_string);
 
     wrap_in_document(
         &html_string,
@@ -180,47 +158,6 @@ fn serialize_to_html_with_splice_from_ir(
         has_math,
         &options,
     )
-}
-
-/// Replace every `<!--LEX-RENDER-SPLICE:N-->` sentinel in `html`
-/// with the raw HTML at `outputs[N]`. Tolerates trailing whitespace
-/// in the comment (html5ever doesn't trim, but markup5ever_rcdom
-/// can normalize on serialize). Non-numeric or out-of-range indices
-/// are left in place — that's a programming bug that would surface
-/// as a visible sentinel in the output rather than silent corruption.
-fn replace_splice_sentinels(html: &str, outputs: &[String]) -> String {
-    if outputs.is_empty() {
-        return html.to_string();
-    }
-    let mut out = String::with_capacity(html.len());
-    let mut remaining = html;
-    let pattern_open = format!("<!--{SPLICE_SENTINEL_PREFIX}");
-    while let Some(start) = remaining.find(&pattern_open) {
-        out.push_str(&remaining[..start]);
-        let after_prefix = &remaining[start + pattern_open.len()..];
-        // The ID is decimal digits until `-->`.
-        let Some(end_marker) = after_prefix.find("-->") else {
-            // Malformed sentinel — copy through and continue.
-            out.push_str(&remaining[start..]);
-            remaining = "";
-            break;
-        };
-        let id_str = after_prefix[..end_marker].trim();
-        match id_str.parse::<usize>() {
-            Ok(idx) if idx < outputs.len() => {
-                out.push_str(&outputs[idx]);
-            }
-            _ => {
-                // Out-of-range or non-numeric — leave the sentinel
-                // visible. Surfaces as a noticeable bug in the
-                // rendered output, easier to spot than silent drop.
-                out.push_str(&remaining[start..start + pattern_open.len() + end_marker + 3]);
-            }
-        }
-        remaining = &after_prefix[end_marker + 3..];
-    }
-    out.push_str(remaining);
-    out
 }
 
 /// Result of [`serialize_to_html_with_registry`]: the rendered HTML
@@ -243,20 +180,15 @@ pub fn serialize_to_html_with_options(
 /// Build an HTML DOM tree from IR events, optionally splicing
 /// handler-rendered HTML in place of default annotation rendering.
 ///
-/// When `splice_plan` is `Some(&plan)`, the builder maintains an
-/// annotation counter that advances on every `Event::StartAnnotation`
-/// (mirroring the dispatch walker's order). On entries with output,
-/// it appends a sentinel comment to the DOM, pushes the output into
-/// `splice_outputs`, and enters a skip-state for content events
-/// until the matching `EndAnnotation`. The skip-state nests on
-/// depth so a handled outer annotation's body — including any
-/// inner labelled annotations — is consumed entirely. The
-/// post-process step in [`serialize_to_html_with_splice`] replaces
-/// each sentinel with the corresponding raw HTML.
+/// When `splice_plan` is `Some(&plan)`, the splice state machine in
+/// [`SpliceState`] tracks the alignment with the dispatch walker's
+/// plan order; on entries with output, the walker registers a
+/// sentinel comment in `sentinels` and the post-process step in
+/// [`serialize_to_html_with_splice_from_ir`] substitutes it for the
+/// handler's raw HTML.
 ///
-/// When `splice_plan` is `None`, the builder behaves exactly as
-/// the original `build_html_dom` did before the splice landing.
-/// Build the HTML DOM from a flat event stream.
+/// When `splice_plan` is `None`, the builder behaves exactly as it
+/// did before the splice landing.
 ///
 /// Returns the constructed DOM and a `has_math` flag indicating whether any
 /// `InlineContent::Math` was encountered during the walk. The caller uses
@@ -267,7 +199,7 @@ pub fn serialize_to_html_with_options(
 fn build_html_dom_with_splice(
     events: &[Event],
     splice_plan: Option<&[crate::render_dispatch::RenderedNode]>,
-    splice_outputs: &mut Vec<String>,
+    sentinels: &mut SentinelBuffer,
 ) -> Result<(RcDom, bool), FormatError> {
     let dom = RcDom::default();
 
@@ -285,16 +217,12 @@ fn build_html_dom_with_splice(
     // State for heading context
     let mut current_heading: Option<Handle> = None;
 
-    // Splice state. `annotation_idx` advances on every
-    // StartAnnotation event regardless of skip-state, so it stays
-    // aligned with the dispatch walker's plan order (both walks
-    // emit annotations in matching document order — see
-    // `serialize_to_html_with_registry`'s docs for the contract).
-    // `splice_skip_depth` is non-zero while we're inside a
-    // handler-consumed annotation; events arriving in that window
-    // are suppressed so the handler's output replaces them entirely.
-    let mut annotation_idx: usize = 0;
-    let mut splice_skip_depth: usize = 0;
+    // Splice state machine — counter + skip-depth — lives in the
+    // shared helper. The HTML callback below converts the helper's
+    // raw-passthrough string into a sentinel comment via `sentinels`,
+    // and `serialize_to_html_with_splice_from_ir` substitutes after
+    // DOM serialization.
+    let mut splice = SpliceState::new(splice_plan);
 
     // Consecutive Definition siblings share one `<dl>`. After `EndDefinition`
     // we leave `current_parent` pointing at the open `<dl>` and set this
@@ -314,7 +242,7 @@ fn build_html_dom_with_splice(
         // events are inspected — for nesting depth and counter
         // bookkeeping. All other events are suppressed so the
         // handler's output stands alone.
-        if splice_skip_depth > 0
+        if splice.should_skip()
             && !matches!(
                 event,
                 Event::StartAnnotation { .. } | Event::EndAnnotation { .. }
@@ -668,39 +596,14 @@ fn build_html_dom_with_splice(
                 label, parameters, ..
             } => {
                 current_heading = None;
-                // The annotation counter advances on every Start
-                // regardless of skip-state. Nested annotations
-                // inside a handler-consumed outer still advance the
-                // counter (so the next non-skipped annotation
-                // indexes correctly into the plan); they also bump
-                // skip-depth so we find the matching outer End.
-                let this_idx = annotation_idx;
-                annotation_idx += 1;
-
-                if splice_skip_depth > 0 {
-                    splice_skip_depth += 1;
-                    continue;
-                }
-
-                // Check the plan: does this annotation have a
-                // handler-rendered output ready to splice? We match
-                // on label too as a sanity check — if the plan's
-                // entry doesn't agree on the label, the walks have
-                // diverged and we fall through to default rendering
-                // rather than splice the wrong output.
-                let splice_target = splice_plan
-                    .and_then(|plan| plan.get(this_idx))
-                    .filter(|entry| entry.label == *label)
-                    .and_then(|entry| entry.output.as_ref());
-
-                if let Some(rendered_html) = splice_target {
-                    let sentinel_idx = splice_outputs.len();
-                    splice_outputs.push(rendered_html.clone());
-                    let sentinel = format!("{SPLICE_SENTINEL_PREFIX}{sentinel_idx}");
+                if let Some(rendered_html) = splice.advance_at_start(label) {
+                    // rcdom has no raw-HTML node; emit a sentinel
+                    // comment that the post-process replacement
+                    // expands. The skip-state is owned by `splice`.
+                    let sentinel = sentinels.push(rendered_html.to_string());
                     let comment_node = create_comment(&sentinel);
                     current_parent.children.borrow_mut().push(comment_node);
-                    splice_skip_depth = 1;
-                } else {
+                } else if !splice.should_skip() {
                     // No splice — emit the default lex:label start
                     // comment as before.
                     let mut comment = format!(" lex:{label}");
@@ -714,8 +617,8 @@ fn build_html_dom_with_splice(
             }
 
             Event::EndAnnotation { label } => {
-                if splice_skip_depth > 0 {
-                    splice_skip_depth -= 1;
+                if splice.should_skip() {
+                    splice.advance_at_end();
                     continue;
                 }
                 // Not in splice — emit the default lex:label end

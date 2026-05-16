@@ -40,10 +40,13 @@
 //! (#614 / Sub A territory), not the render-dispatch migration.
 
 use lex_extension::wire::{Format, HostNodeKind};
-use lex_extension::{schema::Schema, AnnotationBody, LabelCtx, NodeRef, RenderOut};
+use lex_extension::{
+    schema::{BodyKind, Schema},
+    AnnotationBody, LabelCtx, NodeRef, RenderOut,
+};
 use lex_extension_host::Registry;
 
-use crate::ir::nodes::{Annotation, DocNode, Document, Verbatim};
+use crate::ir::nodes::{Annotation, DocNode, Document, InlineContent, Verbatim};
 use crate::ir::to_wire::{ir_annotation_body, ir_params_to_json};
 
 /// One render result for a labelled node, captured during the IR
@@ -211,10 +214,11 @@ fn visit_annotation(annotation: &Annotation, attached_to: HostNodeKind, ctx: &mu
     let label = annotation.label.clone();
     if let Some(schema) = ctx.registry.schema_for(&label) {
         if schema_has_render(&schema, ctx.format.as_str()) {
+            let body = body_for_schema(&annotation.content, &schema);
             let label_ctx = LabelCtx {
                 label: label.clone(),
                 params: ir_params_to_json(&annotation.parameters),
-                body: ir_annotation_body(&annotation.content),
+                body,
                 node: NodeRef {
                     kind: attached_to.as_str().to_string(),
                     range: zero_range(),
@@ -308,6 +312,57 @@ fn schema_has_render(schema: &Schema, format_name: &str) -> bool {
         .render
         .iter()
         .any(|h| h.0.eq_ignore_ascii_case(format_name))
+}
+
+/// Build an [`AnnotationBody`] from the IR annotation's children,
+/// honouring the schema's declared `body.kind`. A schema that declares
+/// `BodyKind::Text` (the `doc.*` family) expects the body as a flat
+/// string — without this, `ir_annotation_body` would always pack a
+/// non-empty body as `AnnotationBody::Lex` and the handler's text-only
+/// branch would never fire. For `Lex` / `None` body kinds the standard
+/// IR → Wire packing applies.
+fn body_for_schema(content: &[DocNode], schema: &Schema) -> AnnotationBody {
+    if schema.body.kind == BodyKind::Text {
+        let flat = flatten_text_body(content);
+        if flat.is_empty() {
+            AnnotationBody::None
+        } else {
+            AnnotationBody::Text(flat)
+        }
+    } else {
+        ir_annotation_body(content)
+    }
+}
+
+/// Flatten an annotation's IR body into a single string. Mirrors the
+/// markdown serializer's metadata-flatten contract (`Text`, `Code`,
+/// `Math`, `Reference`, `Link` are included; `Bold`/`Italic`/`Image`
+/// are skipped as YAML values are leaf strings, not rich content).
+/// Multi-paragraph bodies are joined with `\n` so a downstream
+/// formatter can decide how to fold them.
+fn flatten_text_body(content: &[DocNode]) -> String {
+    let mut buf = String::new();
+    let mut first = true;
+    for node in content {
+        if let DocNode::Paragraph(p) = node {
+            if !first {
+                buf.push('\n');
+            }
+            first = false;
+            for inline in &p.content {
+                match inline {
+                    InlineContent::Text(t)
+                    | InlineContent::Code(t)
+                    | InlineContent::Math(t)
+                    | InlineContent::Reference(t) => buf.push_str(t),
+                    InlineContent::Link { text, .. } => buf.push_str(text),
+                    InlineContent::Bold(_) | InlineContent::Italic(_) | InlineContent::Image(_) => {
+                    }
+                }
+            }
+        }
+    }
+    buf
 }
 
 fn zero_range() -> lex_extension::wire::Range {
