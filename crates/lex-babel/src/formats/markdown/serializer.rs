@@ -86,8 +86,13 @@ fn render_document_annotations_as_yaml(annotations: &[IrAnnotation]) -> Option<S
             .to_string();
         // Trim whitespace lex picks up after the closing `::`
         // separator (e.g. `:: title :: My Doc` produces a paragraph
-        // whose first inline is `" My Doc"`).
+        // whose first inline is `" My Doc"`). Collapse internal
+        // newlines to spaces — multi-line annotation bodies emit
+        // `InlineContent::Text("\n")` between lines (see
+        // `from_lex_paragraph`), and a literal `\n` inside a YAML
+        // scalar would orphan the trailing lines from the key.
         let body_text = flatten_annotation_body_text(&ann.content)
+            .replace('\n', " ")
             .trim()
             .to_string();
         if !body_text.is_empty() {
@@ -1109,6 +1114,43 @@ mod tests {
         }])
         .expect("yaml block synthesized");
         assert!(yaml.contains("tags: rust @manning"), "{yaml}");
+    }
+
+    /// Gemini review on PR #621: a multi-line annotation body emits
+    /// `InlineContent::Text("\n")` separators between lines (see
+    /// `from_lex_paragraph`). A literal `\n` inside a YAML scalar
+    /// orphans the trailing lines — the YAML parser reads them as
+    /// keyless content. Collapse internal newlines to spaces so the
+    /// preamble stays valid.
+    #[test]
+    fn yaml_synthesis_collapses_internal_newlines_to_spaces() {
+        use crate::ir::nodes::{Annotation as IrAnn, DocNode, InlineContent, LabelForm, Paragraph};
+
+        let yaml = render_document_annotations_as_yaml(&[IrAnn {
+            label: "lex.metadata.note".to_string(),
+            parameters: vec![],
+            content: vec![DocNode::Paragraph(Paragraph {
+                content: vec![
+                    InlineContent::Text("Line one.".to_string()),
+                    InlineContent::Text("\n".to_string()),
+                    InlineContent::Text("Line two.".to_string()),
+                ],
+            })],
+            form: LabelForm::Canonical,
+        }])
+        .expect("yaml block synthesized");
+
+        assert!(
+            yaml.contains("note: Line one. Line two.\n"),
+            "internal newlines must collapse to spaces; got:\n{yaml}"
+        );
+        // Defensive: the value line itself must not contain a raw
+        // newline character that would break YAML scalar parsing.
+        let value_line = yaml.lines().find(|l| l.starts_with("note:")).unwrap();
+        assert!(
+            !value_line.contains('\n'),
+            "value line must be single-line in YAML"
+        );
     }
 
     /// Gemini review on PR #597: the body flatten must also cover

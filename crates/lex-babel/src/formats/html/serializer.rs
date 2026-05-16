@@ -61,24 +61,44 @@ pub fn serialize_to_html(doc: &Document, theme: HtmlTheme) -> Result<String, For
 /// HTML conversion is a follow-up.
 ///
 /// Splice mechanism: the AST walker (`dispatch_render`) and the
-/// event walker (`tree_to_events`) visit annotations in matching
-/// document order, so the HTML builder maintains a counter and
-/// indexes into the plan as it sees `Event::StartAnnotation`. When
-/// the plan entry has output, the builder emits a sentinel comment
-/// (`<!--LEX-RENDER-SPLICE:N-->`) and skips events until the
+/// event walker (`tree_to_events`) visit **body** annotations in
+/// matching document order, so the HTML builder maintains a counter
+/// and indexes into the plan as it sees `Event::StartAnnotation`.
+/// When the plan entry has output, the builder emits a sentinel
+/// comment (`<!--LEX-RENDER-SPLICE:N-->`) and skips events until the
 /// matching `EndAnnotation`; after DOM serialization, the sentinel
 /// is string-replaced with the handler's raw HTML. The skip-state
 /// nests on depth so handlers consume their full subtree (including
 /// any inner labelled annotations — those handlers fired during the
 /// dispatch walk; their results aren't separately spliced because
 /// the outer handler owns the body's rendering).
+///
+/// Phase 3b of #614 made doc-scope annotations IR-only — they don't
+/// flow through the event stream as a synthetic `frontmatter`
+/// `StartAnnotation` any more. To keep the body splice aligned,
+/// this entry point slices `plan.doc_scope_count` entries off the
+/// front before handing the plan to the splice walker. Doc-scope
+/// handler outputs are therefore unspliced today; their diagnostics
+/// still surface in the returned `HtmlExportOutcome`. Routing them
+/// back into the rendered HTML is a follow-up under #616's
+/// render-dispatch IR migration.
 pub fn serialize_to_html_with_registry(
     doc: &Document,
     options: HtmlOptions,
     registry: &lex_extension_host::Registry,
 ) -> Result<HtmlExportOutcome, FormatError> {
     let plan = crate::render_dispatch::dispatch_render(doc, registry, "html");
-    let html = serialize_to_html_with_splice(doc, options, Some(&plan.nodes))?;
+    // Phase 3b of #614: skip the doc-scope prefix of the plan when
+    // feeding the event-indexed splice walker. The event stream no
+    // longer contains a synthetic `frontmatter` `StartAnnotation`
+    // event for `document.annotations()`, so doc-scope plan entries
+    // would otherwise shift the index and route their handler HTML
+    // into the wrong body-annotation slot. Doc-scope handler outputs
+    // are unspliced for now (their diagnostics still surface below);
+    // a follow-up under #616 will rewire render dispatch onto the IR
+    // walk and address this end-to-end.
+    let body_plan = &plan.nodes[plan.doc_scope_count..];
+    let html = serialize_to_html_with_splice(doc, options, Some(body_plan))?;
     let mut diagnostics = plan
         .nodes
         .iter()
