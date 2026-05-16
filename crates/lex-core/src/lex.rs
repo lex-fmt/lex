@@ -77,6 +77,7 @@ pub mod inlines;
 pub mod lexing;
 pub mod loader;
 pub mod migrate;
+pub mod mojibake;
 pub mod parsing;
 pub mod testing;
 pub mod token;
