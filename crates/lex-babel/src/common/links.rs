@@ -9,7 +9,7 @@
 //!
 //! See README.lex section 0.6.1 for the full specification.
 
-use crate::ir::nodes::InlineContent;
+use crate::ir::nodes::{InlineContent, ReferenceType};
 
 /// Extract anchor text and href from inline content for a reference at the given position.
 ///
@@ -22,13 +22,16 @@ use crate::ir::nodes::InlineContent;
 ///
 /// ```
 /// use lex_babel::common::links::extract_anchor_for_reference;
-/// use lex_babel::ir::nodes::InlineContent;
+/// use lex_babel::ir::nodes::{InlineContent, ReferenceType};
 ///
 /// let content = vec![
 ///     InlineContent::Text("visit the ".to_string()),
 ///     InlineContent::Text("bahamas".to_string()),
 ///     InlineContent::Text(" ".to_string()),
-///     InlineContent::Reference("bahamas.gov".to_string()),
+///     InlineContent::Reference {
+///         raw: "bahamas.gov".to_string(),
+///         kind: ReferenceType::NotSure,
+///     },
 /// ];
 ///
 /// let result = extract_anchor_for_reference(&content, 3);
@@ -46,7 +49,7 @@ pub fn extract_anchor_for_reference(
     }
 
     let reference = match &content[ref_index] {
-        InlineContent::Reference(href) => href.clone(),
+        InlineContent::Reference { raw, .. } => raw.clone(),
         _ => return None,
     };
 
@@ -185,21 +188,38 @@ pub fn insert_reference_with_anchor(
     // Append space
     content.push(InlineContent::Text(" ".to_string()));
 
-    // Append reference
-    content.push(InlineContent::Reference(href));
+    // Append reference. The kind is left `NotSure` — re-classification
+    // would require a lex-core round-trip and this helper is only
+    // called from markdown-import code paths where the IR layer never
+    // dispatches on `kind` anyway.
+    content.push(InlineContent::Reference {
+        raw: href,
+        kind: ReferenceType::NotSure,
+    });
 
     content
 }
 
-/// Returns true if the reference raw text looks like a linkable target
-/// (URL, file path, or document anchor).
-fn is_linkable_reference(raw: &str) -> bool {
-    raw.starts_with("http://")
-        || raw.starts_with("https://")
-        || raw.starts_with("mailto:")
-        || raw.starts_with("./")
-        || raw.starts_with('/')
-        || raw.starts_with('#')
+/// Returns true if a reference points at a linkable target — typed
+/// dispatch on the lex-core classification with a raw-string fallback
+/// for `General`/`NotSure` (markdown re-import, rfc-xml, or `[#anchor]`
+/// with a non-numeric anchor that lex-core classifies as `General`
+/// rather than `Session`).
+fn is_linkable_reference(raw: &str, kind: &ReferenceType) -> bool {
+    match kind {
+        ReferenceType::Url { .. } | ReferenceType::File { .. } | ReferenceType::Session { .. } => {
+            true
+        }
+        ReferenceType::General { .. } | ReferenceType::NotSure => {
+            raw.starts_with("http://")
+                || raw.starts_with("https://")
+                || raw.starts_with("mailto:")
+                || raw.starts_with("./")
+                || raw.starts_with('/')
+                || raw.starts_with('#')
+        }
+        _ => false,
+    }
 }
 
 /// Resolve implicit anchors in inline content.
@@ -217,7 +237,7 @@ pub fn resolve_implicit_anchors(content: Vec<InlineContent>) -> Vec<InlineConten
         .iter()
         .enumerate()
         .filter_map(|(i, item)| match item {
-            InlineContent::Reference(raw) if is_linkable_reference(raw) => Some(i),
+            InlineContent::Reference { raw, kind } if is_linkable_reference(raw, kind) => Some(i),
             _ => None,
         })
         .collect();
@@ -263,7 +283,10 @@ mod tests {
         let content = vec![
             InlineContent::Text("visit the ".to_string()),
             InlineContent::Text("bahamas ".to_string()),
-            InlineContent::Reference("bahamas.gov".to_string()),
+            InlineContent::Reference {
+                raw: "bahamas.gov".to_string(),
+                kind: ReferenceType::NotSure,
+            },
         ];
 
         let result = extract_anchor_for_reference(&content, 2);
@@ -282,7 +305,10 @@ mod tests {
     #[test]
     fn test_extract_anchor_word_after() {
         let content = vec![
-            InlineContent::Reference("wikipedia.org".to_string()),
+            InlineContent::Reference {
+                raw: "wikipedia.org".to_string(),
+                kind: ReferenceType::NotSure,
+            },
             InlineContent::Text(" Wikipedia is useful".to_string()),
         ];
 
@@ -302,7 +328,10 @@ mod tests {
     fn test_extract_anchor_no_text() {
         let content = vec![
             InlineContent::Bold(vec![InlineContent::Text("bold".to_string())]),
-            InlineContent::Reference("example.com".to_string()),
+            InlineContent::Reference {
+                raw: "example.com".to_string(),
+                kind: ReferenceType::NotSure,
+            },
         ];
 
         let result = extract_anchor_for_reference(&content, 1);
@@ -325,14 +354,21 @@ mod tests {
         assert!(matches!(&modified[0], InlineContent::Text(t) if t == "visit "));
         assert!(matches!(&modified[1], InlineContent::Text(t) if t == "bahamas"));
         assert!(matches!(&modified[2], InlineContent::Text(t) if t == " "));
-        assert!(matches!(&modified[3], InlineContent::Reference(r) if r == "bahamas.gov"));
+        assert!(
+            matches!(&modified[3], InlineContent::Reference { raw, .. } if raw == "bahamas.gov")
+        );
     }
 
     #[test]
     fn test_resolve_implicit_anchors_word_before() {
         let content = vec![
             InlineContent::Text("visit the website ".to_string()),
-            InlineContent::Reference("https://example.com".to_string()),
+            InlineContent::Reference {
+                raw: "https://example.com".to_string(),
+                kind: ReferenceType::Url {
+                    target: "https://example.com".to_string(),
+                },
+            },
         ];
         let resolved = resolve_implicit_anchors(content);
         assert!(resolved
@@ -348,7 +384,12 @@ mod tests {
     #[test]
     fn test_resolve_implicit_anchors_word_after() {
         let content = vec![
-            InlineContent::Reference("https://example.com".to_string()),
+            InlineContent::Reference {
+                raw: "https://example.com".to_string(),
+                kind: ReferenceType::Url {
+                    target: "https://example.com".to_string(),
+                },
+            },
             InlineContent::Text(" Example is great".to_string()),
         ];
         let resolved = resolve_implicit_anchors(content);
@@ -361,7 +402,12 @@ mod tests {
     #[test]
     fn test_resolve_implicit_anchors_only_ref() {
         // Reference is the only content — anchor should be the URL itself
-        let content = vec![InlineContent::Reference("https://example.com".to_string())];
+        let content = vec![InlineContent::Reference {
+            raw: "https://example.com".to_string(),
+            kind: ReferenceType::Url {
+                target: "https://example.com".to_string(),
+            },
+        }];
         let resolved = resolve_implicit_anchors(content);
         assert!(resolved
             .iter()
@@ -374,11 +420,16 @@ mod tests {
         // Non-linkable references (footnotes, citations, etc.) stay as Reference
         let content = vec![
             InlineContent::Text("See ".to_string()),
-            InlineContent::Reference("@smith2023".to_string()),
+            InlineContent::Reference {
+                raw: "@smith2023".to_string(),
+                kind: ReferenceType::NotSure,
+            },
         ];
         let resolved = resolve_implicit_anchors(content);
         assert_eq!(resolved.len(), 2);
-        assert!(matches!(&resolved[1], InlineContent::Reference(r) if r == "@smith2023"));
+        assert!(
+            matches!(&resolved[1], InlineContent::Reference { raw, .. } if raw == "@smith2023")
+        );
     }
 
     #[test]
@@ -386,7 +437,10 @@ mod tests {
         // Session references (#...) are linkable
         let content = vec![
             InlineContent::Text("See section ".to_string()),
-            InlineContent::Reference("#introduction".to_string()),
+            InlineContent::Reference {
+                raw: "#introduction".to_string(),
+                kind: ReferenceType::NotSure,
+            },
         ];
         let resolved = resolve_implicit_anchors(content);
         assert!(resolved

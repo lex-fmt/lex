@@ -175,7 +175,10 @@ fn convert_inline_node(node: &InlineNode) -> InlineContent {
         }
         InlineNode::Code { text, .. } => InlineContent::Code(text.clone()),
         InlineNode::Math { text, .. } => InlineContent::Math(text.clone()),
-        InlineNode::Reference { data, .. } => InlineContent::Reference(data.raw.clone()),
+        InlineNode::Reference { data, .. } => InlineContent::Reference {
+            raw: data.raw.clone(),
+            kind: data.reference_type.clone(),
+        },
     }
 }
 
@@ -380,10 +383,17 @@ fn from_lex_verbatim(verbatim: &LexVerbatim, registry: &Registry) -> DocNode {
         }
     }
 
+    let parameters = verbatim
+        .closing_data
+        .parameters
+        .iter()
+        .map(|p| (p.key.clone(), p.value.clone()))
+        .collect();
     DocNode::Verbatim(Verbatim {
         subject,
         language,
         content,
+        parameters,
     })
 }
 
@@ -585,6 +595,7 @@ fn from_lex_verbatim_line(verbatim_line: &LexVerbatimLine) -> DocNode {
         subject: None,
         language: None,
         content,
+        parameters: Vec::new(),
     })
 }
 

@@ -122,10 +122,12 @@ fn walk_node(node: &DocNode, events: &mut Vec<Event>) {
             subject,
             language,
             content,
+            parameters,
         }) => {
             events.push(Event::StartVerbatim {
                 language: language.clone(),
                 subject: subject.clone(),
+                parameters: parameters.clone(),
             });
             events.push(Event::Inline(InlineContent::Text(content.clone())));
             events.push(Event::EndVerbatim);
@@ -266,6 +268,7 @@ mod tests {
                             subject: None,
                             language: Some("rust".to_string()),
                             content: "fn main() {}".to_string(),
+                            parameters: Vec::new(),
                         })],
                     }],
                     ordered: false,
@@ -316,6 +319,7 @@ mod tests {
             Event::StartVerbatim {
                 language: Some("rust".to_string()),
                 subject: None,
+                parameters: Vec::new(),
             },
             Event::Inline(InlineContent::Text("fn main() {}".to_string())),
             Event::EndVerbatim,

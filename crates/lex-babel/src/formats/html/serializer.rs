@@ -398,7 +398,11 @@ fn build_html_dom_with_splice(
                 })?;
             }
 
-            Event::StartVerbatim { language, subject } => {
+            Event::StartVerbatim {
+                language,
+                subject,
+                parameters: _,
+            } => {
                 current_heading = None;
                 in_verbatim = true;
                 verbatim_language = language.clone();
@@ -768,13 +772,29 @@ fn add_inline_to_node(
             parent.children.borrow_mut().push(math_span);
         }
 
-        InlineContent::Reference(ref_text) => {
-            // Unresolved reference (non-linkable types like citations, footnotes, etc.)
-            // Handle citations (@...) by targeting a reference ID
-            let href = if let Some(citation) = ref_text.strip_prefix('@') {
-                format!("#ref-{citation}")
-            } else {
-                ref_text.to_string()
+        InlineContent::Reference {
+            raw: ref_text,
+            kind,
+        } => {
+            // Unresolved reference (non-linkable types like citations,
+            // footnotes, etc.). Dispatch on the typed kind preserved
+            // from lex-core; fall back to raw-string heuristic only for
+            // `NotSure` (markdown / rfc-xml import paths that didn't
+            // classify against lex's reference grammar).
+            use crate::ir::nodes::ReferenceType;
+            let href = match kind {
+                ReferenceType::Citation(_) => {
+                    let key = ref_text.strip_prefix('@').unwrap_or(ref_text);
+                    format!("#ref-{key}")
+                }
+                ReferenceType::NotSure => {
+                    if let Some(citation) = ref_text.strip_prefix('@') {
+                        format!("#ref-{citation}")
+                    } else {
+                        ref_text.clone()
+                    }
+                }
+                _ => ref_text.clone(),
             };
 
             let anchor = create_element("a", vec![("href", &href)]);

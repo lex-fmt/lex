@@ -19,3 +19,6 @@ mod rfc_xml;
 
 #[cfg(test)]
 mod round_trip_proptest;
+
+#[cfg(test)]
+mod ir_round_trip_proptest;

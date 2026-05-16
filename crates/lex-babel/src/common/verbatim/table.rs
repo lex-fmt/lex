@@ -93,7 +93,7 @@ fn cell_text(cell: &TableCell) -> String {
                 InlineContent::Italic(c) => format!("_{}_", inline_content_to_text(c)),
                 InlineContent::Code(c) => format!("`{c}`"),
                 InlineContent::Math(c) => format!("${c}$"),
-                InlineContent::Reference(c) => format!("[{c}]"),
+                InlineContent::Reference { raw, .. } => format!("[{raw}]"),
                 InlineContent::Link { text, href } => format!("{text} [{href}]"),
                 InlineContent::Image(image) => {
                     let mut text = format!("![{}]({})", image.alt, image.src);
@@ -122,7 +122,7 @@ fn inline_content_to_text(content: &[InlineContent]) -> String {
             InlineContent::Italic(c) => format!("_{}_", inline_content_to_text(c)),
             InlineContent::Code(c) => format!("`{c}`"),
             InlineContent::Math(c) => format!("${c}$"),
-            InlineContent::Reference(c) => format!("[{c}]"),
+            InlineContent::Reference { raw, .. } => format!("[{raw}]"),
             InlineContent::Link { text, href } => format!("{text} [{href}]"),
             InlineContent::Image(image) => {
                 let mut text = format!("![{}]({})", image.alt, image.src);

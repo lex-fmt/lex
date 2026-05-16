@@ -120,6 +120,7 @@ enum StackNode {
         subject: Option<String>,
         language: Option<String>,
         content: String,
+        parameters: Vec<(String, String)>,
     },
     Annotation {
         label: String,
@@ -186,6 +187,7 @@ impl StackNode {
                 subject,
                 language,
                 content,
+                parameters,
             } => {
                 if let Some(lang) = &language {
                     if let Some(label) = lang.strip_prefix("lex-metadata:") {
@@ -228,6 +230,7 @@ impl StackNode {
                     subject,
                     language,
                     content,
+                    parameters,
                 })
             }
             StackNode::Annotation {
@@ -758,11 +761,16 @@ pub fn events_to_tree(events: &[Event]) -> Result<Document, ConversionError> {
                 // Just a marker, no action needed
             }
 
-            Event::StartVerbatim { language, subject } => {
+            Event::StartVerbatim {
+                language,
+                subject,
+                parameters,
+            } => {
                 stack.push(StackNode::Verbatim {
                     subject: subject.clone(),
                     language: language.clone(),
                     content: String::new(),
+                    parameters: parameters.clone(),
                 });
             }
 
@@ -1161,6 +1169,7 @@ mod tests {
             Event::StartVerbatim {
                 language: Some("rust".to_string()),
                 subject: None,
+                parameters: Vec::new(),
             },
             Event::Inline(InlineContent::Text("fn main() {}".to_string())),
             Event::EndVerbatim,

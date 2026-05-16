@@ -1,5 +1,8 @@
 //! Core data structures for the Intermediate Representation (IR).
 
+pub use lex_core::lex::ast::elements::inlines::{
+    CitationData, CitationLocator, PageFormat, PageRange, ReferenceType,
+};
 pub use lex_core::lex::ast::elements::label::LabelForm;
 
 /// A universal, semantic representation of a document node.
@@ -120,6 +123,23 @@ pub struct Verbatim {
     pub subject: Option<String>,
     pub language: Option<String>,
     pub content: String,
+    /// Closing-data parameters from the source, mirroring lex-core's
+    /// `Data.parameters` on a verbatim block's closing marker (e.g.
+    /// `caption=foo` in `:: image src=x caption=foo ::`).
+    ///
+    /// Populated by `from_lex_verbatim` from `closing_data.parameters`
+    /// for verbatim blocks that fall back to `DocNode::Verbatim` (no
+    /// `on_ir_build` handler hydrated them into a typed variant) and
+    /// emitted back by `to_lex_verbatim` so the source round-trips.
+    /// `render_dispatch::visit_verbatim` surfaces them to handlers via
+    /// `LabelCtx.params` so third-party `verbatim_label: true` schemas
+    /// with `on_render` only see the same params they would have under
+    /// the pre-#616 AST walk.
+    ///
+    /// Empty for IR built from non-lex sources (markdown/rfc-xml
+    /// parsers) and for verbatim blocks whose closing data carried no
+    /// parameters.
+    pub parameters: Vec<(String, String)>,
 }
 
 /// Represents an annotation.
@@ -185,7 +205,24 @@ pub enum InlineContent {
     Italic(Vec<InlineContent>),
     Code(String),
     Math(String),
-    Reference(String),
+    /// A bracketed reference carrying both the raw literal (round-trips
+    /// back to `[<raw>]` via `to_lex`) and the lex-core classification.
+    ///
+    /// `kind` is preserved from lex-core's `ReferenceInline` for IR built
+    /// via `from_lex`. For IR built from non-lex sources (markdown
+    /// links go straight to `Link`, rfc-xml `<xref>` etc.) the kind
+    /// defaults to `ReferenceType::NotSure` since those importers don't
+    /// classify against lex's reference grammar.
+    ///
+    /// Format adapters (HTML, markdown) and the anchor-heuristic
+    /// `common/links.rs::resolve_implicit_anchors` dispatch on `kind`
+    /// (Url / File / General → linkable; Citation / FootnoteNumber /
+    /// Session / etc. → format-specific shapes) instead of re-parsing
+    /// the raw string. Issue #614 follow-up.
+    Reference {
+        raw: String,
+        kind: ReferenceType,
+    },
     /// A resolved link with explicit anchor text and href.
     /// Produced by resolving implicit anchors from Lex references,
     /// or by importing from formats that have explicit link anchors (Markdown, HTML).
