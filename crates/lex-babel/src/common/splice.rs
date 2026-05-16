@@ -12,8 +12,10 @@
 //!
 //! `dispatch_render` walks the IR and `tree_to_events` walks the same
 //! IR, so both visit body annotations in matching document order. A
-//! single counter advanced on every `Event::StartAnnotation` keeps the
-//! event walk aligned with the plan. When the plan entry has output,
+//! cursor over the plan advances only when the event walker's label
+//! matches the next plan entry — that way an unregistered annotation
+//! (no plan entry) leaves the cursor parked instead of shifting past
+//! the next registered entry. When the matched plan entry has output,
 //! `advance_at_start` returns it and enters skip-state so the
 //! annotation's children — including any inner labelled annotations —
 //! are suppressed (the handler owns the entire subtree).
