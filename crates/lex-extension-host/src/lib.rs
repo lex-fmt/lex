@@ -13,7 +13,82 @@
 //! the first built-in `LexHandler` — can depend on it. Handler authors
 //! should depend on `lex-extension`, not this crate.
 //!
-//! What's in this crate today:
+//! # Writing a handler — the unified registration pattern (#615)
+//!
+//! Extension authors register one [`lex_extension::Schema`] per label,
+//! attach the lifecycle hooks that label participates in, and provide
+//! one [`lex_extension::LexHandler`] implementation per namespace. The
+//! `Registry` routes each hook to the right method by namespace + label:
+//!
+//! ```ignore
+//! use lex_extension::{LexHandler, Format, RenderOut, WireNode};
+//! use lex_extension::handler::HandlerError;
+//! use lex_extension::wire::LabelCtx;
+//! use lex_extension::schema::{HookSet, RenderHook, Schema};
+//! use lex_extension_host::Registry;
+//!
+//! struct AcmeHandler;
+//! impl LexHandler for AcmeHandler {
+//!     // IR-construction lifecycle: hydrate verbatim payloads
+//!     // (`:: acme.table ::`, `:: acme.image ::`) into typed wire
+//!     // nodes the host's IR builder consumes.
+//!     fn on_ir_build(&self, ctx: &LabelCtx) -> Result<Option<WireNode>, HandlerError> {
+//!         match ctx.label.as_str() {
+//!             "acme.thing" => Ok(Some(WireNode::Verbatim { /* ... */ })),
+//!             _ => Ok(None),
+//!         }
+//!     }
+//!     // Pre-serialisation lifecycle: emit the format-specific
+//!     // representation (markdown, HTML, ...). One handler can
+//!     // participate in both IR-build and render against the same
+//!     // schema — a single registration, both lifecycles.
+//!     fn on_render(&self, ctx: &LabelCtx, fmt: Format) -> Result<Option<RenderOut>, HandlerError> {
+//!         /* ... */
+//!         Ok(None)
+//!     }
+//! }
+//!
+//! let registry = Registry::new();
+//! registry.register_namespace(
+//!     "acme",
+//!     vec![Schema {
+//!         schema_version: 1,
+//!         label: "acme.thing".into(),
+//!         hooks: HookSet {
+//!             ir_build: true,                              // declare IR-build participation
+//!             render: vec![RenderHook::new("html")],       // declare render participation
+//!             ..HookSet::default()
+//!         },
+//!         /* ... rest of Schema ... */
+//! #       description: None, params: Default::default(), attaches_to: vec![],
+//! #       body: Default::default(), verbatim_label: false,
+//! #       capabilities: Default::default(), handler: None,
+//!     }],
+//!     Box::new(AcmeHandler),
+//! ).expect("registration ok");
+//! ```
+//!
+//! ## Lifecycle hooks
+//!
+//! Three hook surfaces, each on its own lifecycle phase:
+//!
+//! | Hook            | Lifecycle phase             | Dispatch entry point          | Built-in example      |
+//! |-----------------|-----------------------------|-------------------------------|-----------------------|
+//! | `on_resolve`    | AST substitution            | [`Registry::dispatch_resolve`]| `lex.include`         |
+//! | `on_ir_build`   | IR construction             | [`Registry::dispatch_ir_build`]| `lex.tabular.table`, `lex.media.*` |
+//! | `on_render`     | Pre-serialisation           | [`Registry::dispatch_render`] | `doc.title`, `doc.author`, ... |
+//!
+//! `on_resolve` and `on_ir_build` have the same shape
+//! (`Result<Option<WireNode>, HandlerError>`); they're separate hooks
+//! because they fire at different lifecycle phases and have different
+//! consumer contracts. `on_resolve` returns a wire node spliced into
+//! the host AST; `on_ir_build` returns a wire node consumed by the IR
+//! builder. Pre-#615 these were a single overloaded hook
+//! (`on_resolve`); the unified registry surface separates them so
+//! extension authors can declare exactly the lifecycle phase they
+//! participate in.
+//!
+//! # What's in this crate
 //!
 //! - [`Registry`] — namespace registration, label lookup, and dispatch
 //!   helpers wrapping every hook event with `HandlerError` folding and

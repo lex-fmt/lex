@@ -272,6 +272,32 @@ impl Registry {
         }
     }
 
+    /// Dispatch [`LexHandler::on_ir_build`] — the IR-construction
+    /// lifecycle hook (#615 unified surface). The host invokes this
+    /// while building its in-memory IR from the parsed source; the
+    /// returned wire node is consumed by the IR builder, not spliced
+    /// into the host AST. `Ok(None)` means "no handler is registered
+    /// for this label, the namespace is unhealthy, or the handler
+    /// declined" — the host falls back to its generic
+    /// verbatim/annotation IR for the label in every case.
+    ///
+    /// The two `dispatch_*` hooks for content-substitution sit on
+    /// different lifecycle phases by design:
+    ///
+    /// - `dispatch_resolve` — AST splice (`lex.include` etc.). Runs
+    ///   during the resolve phase, replaces nodes in the host AST.
+    /// - `dispatch_ir_build` — typed IR hydration (`lex.tabular.table`,
+    ///   `lex.media.*` etc.). Runs during IR build, produces typed
+    ///   wire nodes consumed by the IR builder. Decoupled from
+    ///   parsing, so a buggy or slow handler can't corrupt the parser.
+    pub fn dispatch_ir_build(&self, ctx: &LabelCtx) -> Result<Option<WireNode>, Diagnostic> {
+        match self.dispatch(ctx, |h| h.on_ir_build(ctx)) {
+            Ok(Some(node)) => Ok(node),
+            Ok(None) => Ok(None),
+            Err(diag) => Err(diag),
+        }
+    }
+
     /// Dispatch [`LexHandler::on_hover`].
     pub fn dispatch_hover(&self, ctx: &LabelCtx) -> Result<Option<Hover>, Diagnostic> {
         match self.dispatch(ctx, |h| h.on_hover(ctx)) {
@@ -872,5 +898,120 @@ mod tests {
             out.is_none(),
             "NoOp handler must let `dispatch_format` surface None"
         );
+    }
+
+    /// #615: `dispatch_ir_build` is the IR-construction lifecycle
+    /// dispatch entry point. Same wire shape as `dispatch_resolve`
+    /// but a distinct hook so handlers can declare the exact
+    /// lifecycle phase they participate in.
+    #[test]
+    fn dispatch_ir_build_routes_to_handler_and_returns_wire_node() {
+        struct IrBuildHandler;
+        impl LexHandler for IrBuildHandler {
+            fn on_ir_build(&self, ctx: &LabelCtx) -> Result<Option<WireNode>, HandlerError> {
+                Ok(Some(WireNode::Verbatim {
+                    range: ctx.node.range,
+                    origin: ctx.node.origin.clone(),
+                    label: ctx.label.clone(),
+                    params: serde_json::Value::Null,
+                    body_text: format!("ir_build:{}", ctx.label),
+                    subject: String::new(),
+                    mode: "inflow".into(),
+                }))
+            }
+        }
+        let r = Registry::new();
+        r.register_namespace("acme", vec![schema("acme.thing")], Box::new(IrBuildHandler))
+            .expect("register ok");
+        let wire = r
+            .dispatch_ir_build(&ctx("acme.thing"))
+            .expect("dispatch_ir_build ok")
+            .expect("handler returned Some");
+        match wire {
+            WireNode::Verbatim { body_text, .. } => {
+                assert_eq!(body_text, "ir_build:acme.thing");
+            }
+            other => panic!("expected Verbatim, got {other:?}"),
+        }
+    }
+
+    /// `dispatch_ir_build` must surface `Ok(None)` for unrouted
+    /// labels — same contract as the other dispatch helpers.
+    #[test]
+    fn dispatch_ir_build_returns_none_for_unregistered_label() {
+        let r = Registry::new();
+        let result = r
+            .dispatch_ir_build(&ctx("nobody.knows"))
+            .expect("dispatch_ir_build ok");
+        assert!(result.is_none());
+    }
+
+    /// `dispatch_ir_build` and `dispatch_resolve` are distinct hooks
+    /// even though their wire shape matches. A handler that overrides
+    /// only `on_resolve` must NOT receive `dispatch_ir_build` calls
+    /// (and vice versa). This pins the lifecycle separation that
+    /// motivated #615.
+    #[test]
+    fn dispatch_ir_build_does_not_invoke_on_resolve() {
+        struct ResolveOnly;
+        impl LexHandler for ResolveOnly {
+            fn on_resolve(&self, ctx: &LabelCtx) -> Result<Option<WireNode>, HandlerError> {
+                Ok(Some(WireNode::Verbatim {
+                    range: ctx.node.range,
+                    origin: ctx.node.origin.clone(),
+                    label: ctx.label.clone(),
+                    params: serde_json::Value::Null,
+                    body_text: "ROUTED_TO_RESOLVE".into(),
+                    subject: String::new(),
+                    mode: "inflow".into(),
+                }))
+            }
+        }
+        let r = Registry::new();
+        r.register_namespace("acme", vec![schema("acme.thing")], Box::new(ResolveOnly))
+            .expect("register ok");
+
+        // `dispatch_ir_build` must hit `on_ir_build` (default impl
+        // returns `Ok(None)`), NOT `on_resolve`.
+        let result = r
+            .dispatch_ir_build(&ctx("acme.thing"))
+            .expect("dispatch_ir_build ok");
+        assert!(
+            result.is_none(),
+            "dispatch_ir_build must not invoke on_resolve; \
+             handler that overrides only on_resolve gets default None on ir_build"
+        );
+
+        // Sanity: `dispatch_resolve` still routes correctly.
+        let resolved = r
+            .dispatch_resolve(&ctx("acme.thing"))
+            .expect("dispatch_resolve ok")
+            .expect("on_resolve returned Some");
+        match resolved {
+            WireNode::Verbatim { body_text, .. } => {
+                assert_eq!(body_text, "ROUTED_TO_RESOLVE");
+            }
+            other => panic!("expected Verbatim, got {other:?}"),
+        }
+    }
+
+    /// Errors from `on_ir_build` fold into a synthetic diagnostic via
+    /// the same `dispatch` machinery as the other hooks.
+    #[test]
+    fn dispatch_ir_build_handler_error_becomes_diagnostic() {
+        struct Boom;
+        impl LexHandler for Boom {
+            fn on_ir_build(&self, _: &LabelCtx) -> Result<Option<WireNode>, HandlerError> {
+                Err(HandlerError::internal("ir_build boom"))
+            }
+        }
+        let r = Registry::new();
+        r.register_namespace("acme", vec![schema("acme.thing")], Box::new(Boom))
+            .expect("register ok");
+        let err = r
+            .dispatch_ir_build(&ctx("acme.thing"))
+            .expect_err("must error");
+        assert_eq!(err.code.as_deref(), Some("handler.internal"));
+        assert!(err.message.contains("ir_build boom"));
     }
 }

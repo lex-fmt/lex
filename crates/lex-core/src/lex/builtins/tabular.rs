@@ -1,10 +1,15 @@
 //! Schema for the `lex.tabular.*` family of verbatim labels.
 //!
 //! Today the family has a single member: `lex.tabular.table` — the
-//! canonical pipe-table verbatim. The `on_resolve` body lives in
+//! canonical pipe-table verbatim. The `on_ir_build` body lives in
 //! [`crate::lex::builtins::resolve_tabular_table`] and produces a
 //! typed [`WireNode::Table`] with per-column alignment
 //! (`column_aligns`) preserved losslessly under `wire_version: 2`.
+//!
+//! Pre-#615 this dispatch lived on `on_resolve`; the unified registry
+//! surface (#615) moved it to the IR-build lifecycle hook so the
+//! "verbatim hydration" responsibility doesn't share its hook with
+//! AST-substitution (the `lex.include` lifecycle).
 
 use lex_extension::schema::{BodyKind, BodyPresence, BodyShape, Capabilities, HookSet, Schema};
 use lex_extension::wire::{Position, Range, WireInline, WireNode, WireRow, WireTableCell};
@@ -134,9 +139,9 @@ pub fn lex_tabular_table_schema() -> Schema {
         label: LEX_TABULAR_TABLE.into(),
         description: Some(
             "Pipe-table verbatim. The verbatim body uses markdown-style pipe-table syntax \
-             (`| col1 | col2 |\\n|------|------|\\n| ... |`); the legacy lex-babel path \
-             parses it into a typed table AST node today, and Phase 3b of #570 moves that \
-             work into the schema's `on_resolve` hook."
+             (`| col1 | col2 |\\n|------|------|\\n| ... |`). The schema's `on_ir_build` \
+             hook parses it into a typed `WireNode::Table` consumed by the IR builder \
+             (#615 unified registry surface)."
                 .into(),
         ),
         params: BTreeMap::new(),
@@ -151,7 +156,7 @@ pub fn lex_tabular_table_schema() -> Schema {
         verbatim_label: true,
         capabilities: Capabilities::default(),
         hooks: HookSet {
-            resolve: true,
+            ir_build: true,
             ..HookSet::default()
         },
         handler: None,
@@ -181,13 +186,15 @@ mod tests {
     }
 
     #[test]
-    fn tabular_schema_declares_resolve_hook() {
-        // Phase 3 of #570: `lex.tabular.table` now goes through
-        // `on_resolve` (parse-time dispatch produces the typed wire
-        // `WireNode::Table`). Validate + render are still future
-        // work.
+    fn tabular_schema_declares_ir_build_hook() {
+        // #615: `lex.tabular.table` declares the IR-build lifecycle hook
+        // (verbatim hydration produces typed `WireNode::Table` for the
+        // IR builder). `on_resolve` is no longer used by this label —
+        // that hook is for AST substitution (`lex.include`), a
+        // different lifecycle.
         let schema = lex_tabular_table_schema();
-        assert!(schema.hooks.resolve);
+        assert!(schema.hooks.ir_build);
+        assert!(!schema.hooks.resolve);
         assert!(!schema.hooks.validate);
         assert!(schema.hooks.render.is_empty());
     }

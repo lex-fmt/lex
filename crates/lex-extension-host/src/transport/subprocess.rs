@@ -610,6 +610,21 @@ impl LexHandler for SubprocessHandler {
         Ok(result.replacement)
     }
 
+    fn on_ir_build(&self, ctx: &LabelCtx) -> Result<Option<WireNode>, HandlerError> {
+        if !self.advertised("on_ir_build") {
+            return Ok(None);
+        }
+        #[derive(Deserialize)]
+        struct IrBuildResult {
+            #[serde(default)]
+            node: Option<WireNode>,
+        }
+        let v = self.call("on_ir_build", serde_json::to_value(ctx).expect("LabelCtx"))?;
+        let result: IrBuildResult = serde_json::from_value(v)
+            .map_err(|e| HandlerError::internal(format!("on_ir_build response decode: {e}")))?;
+        Ok(result.node)
+    }
+
     fn on_render(&self, ctx: &LabelCtx, format: Format) -> Result<Option<RenderOut>, HandlerError> {
         if !self.advertised("on_render") {
             return Ok(None);

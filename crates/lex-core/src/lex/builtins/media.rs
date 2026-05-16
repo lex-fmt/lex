@@ -1,11 +1,16 @@
 //! Schemas for the `lex.media.*` family of verbatim labels:
 //! `lex.media.image`, `lex.media.video`, `lex.media.audio`.
 //!
-//! `on_resolve` is declared on all three; resolve bodies live in
+//! `on_ir_build` is declared on all three; the hook bodies live in
 //! [`crate::lex::builtins`] (`resolve_media_image` / `_video` /
 //! `_audio`) and emit the typed [`WireNode::Image`],
 //! [`WireNode::Video`], [`WireNode::Audio`] variants introduced with
 //! `wire_version: 2`.
+//!
+//! Pre-#615 these dispatched through `on_resolve`; the unified
+//! registry surface (#615) moved them onto the IR-construction
+//! lifecycle hook so verbatim-hydration handlers don't share a
+//! lifecycle with AST-substitution handlers (`lex.include`).
 
 use lex_extension::schema::{
     BodyKind, BodyPresence, BodyShape, Capabilities, HookSet, ParamSpec, ParamType, Schema,
@@ -50,7 +55,7 @@ fn media_schema(
         verbatim_label: true,
         capabilities: Capabilities::default(),
         hooks: HookSet {
-            resolve: true,
+            ir_build: true,
             ..HookSet::default()
         },
         handler: None,
@@ -188,15 +193,21 @@ mod tests {
     }
 
     #[test]
-    fn media_schemas_declare_resolve_hook() {
-        // Phase 3 of #570 turned on `on_resolve` for the media labels
-        // so they go through the registry dispatch like
-        // `lex.tabular.table`. Validate + render stay off — those are
-        // future-phase work.
+    fn media_schemas_declare_ir_build_hook() {
+        // #615: media labels declare the IR-build lifecycle hook so
+        // they go through the unified `dispatch_ir_build` surface
+        // alongside `lex.tabular.table`. `on_resolve` is reserved for
+        // AST substitution (`lex.include`); the validate + render
+        // hooks stay off for media — future-phase work.
         for schema in all_schemas() {
             assert!(
-                schema.hooks.resolve,
-                "{} resolve must be on (Phase 3+)",
+                schema.hooks.ir_build,
+                "{} ir_build must be on (#615 unified surface)",
+                schema.label
+            );
+            assert!(
+                !schema.hooks.resolve,
+                "{} resolve must be off after #615 migration",
                 schema.label
             );
             assert!(

@@ -21,13 +21,13 @@ use lex_core::lex::ast::elements::{
     Verbatim as LexVerbatim, VerbatimLine as LexVerbatimLine,
 };
 use lex_core::lex::ast::TextContent;
-use lex_core::lex::wire::{from_wire_node, origin_string, range_to_wire};
+use lex_core::lex::wire::{origin_string, range_to_wire};
 use lex_extension::wire::{AnnotationBody, HostNodeKind, LabelCtx, NodeRef, WireNode};
 use lex_extension_host::registry::Registry;
 
 use super::nodes::{
-    Annotation, Definition, DocNode, Document, Heading, InlineContent, List, ListForm, ListItem,
-    ListStyle, Paragraph, Verbatim,
+    Annotation, Audio, Definition, DocNode, Document, Heading, Image, InlineContent, List,
+    ListForm, ListItem, ListStyle, Paragraph, Verbatim, Video,
 };
 
 /// Converts a lex document to the IR.
@@ -303,19 +303,22 @@ fn from_lex_definition(definition: &LexDefinition, level: usize, registry: &Regi
 
 /// Converts a lex verbatim block to an IR verbatim block.
 ///
-/// #583: dispatches through the registry first. The built-in
+/// #615 unified registry surface: dispatches through
+/// [`Registry::dispatch_ir_build`] (the IR-construction lifecycle hook)
+/// rather than the pre-#615 `dispatch_resolve` path. The built-in
 /// `lex.tabular.table` and `lex.media.{image,video,audio}` handlers
 /// parse the verbatim into a typed `WireNode` (`Table` / `Image` /
-/// `Video` / `Audio` per `wire_version: 2`); we decode that back to
-/// a lex-core AST node via `from_wire_node`, then run the matching
-/// `from_lex_*` converter for the final IR. Third-party namespaces
-/// that register a verbatim handler with `on_resolve` participate
-/// the same way — their registered handler's typed output flows
-/// through this path.
+/// `Video` / `Audio` per `wire_version: 2`); the typed wire output
+/// converts to IR directly via [`from_wire_typed`], without a
+/// wire-→-lex-core-AST round-trip and without dispatching on the
+/// label string a second time. Third-party namespaces that register
+/// a verbatim handler with `on_ir_build` participate the same way.
 ///
 /// Falls back to a generic `DocNode::Verbatim` when no handler is
-/// registered for the label (third-party verbatim labels with no
-/// resolve hook, or unrecognised labels).
+/// registered for the label, when the handler returns `Ok(None)`, or
+/// when the returned wire kind isn't one this builder knows how to
+/// type (third-party verbatim labels without an IR-build hook,
+/// unrecognised labels, future wire variants).
 fn from_lex_verbatim(verbatim: &LexVerbatim, registry: &Registry) -> DocNode {
     let subject_str = verbatim.subject.as_string();
     let subject = if subject_str.is_empty() {
@@ -337,10 +340,10 @@ fn from_lex_verbatim(verbatim: &LexVerbatim, registry: &Registry) -> DocNode {
         .collect::<Vec<_>>()
         .join("\n");
 
-    // Build a LabelCtx and dispatch through the registry. The
-    // handler-returned WireNode goes through `from_wire_node` →
-    // lex-core AST `ContentItem`, then the matching `from_lex_*`
-    // converter produces IR.
+    // Build a LabelCtx from the parsed-verbatim payload (label + params
+    // + body) and fire the IR-build hook. The handler returns a typed
+    // WireNode directly; we convert to IR by switching on the wire
+    // variant — no re-dispatch on the label string.
     let label = verbatim.closing_data.label.value.clone();
     let params_object = serde_json::Value::Object(
         verbatim
@@ -360,9 +363,9 @@ fn from_lex_verbatim(verbatim: &LexVerbatim, registry: &Registry) -> DocNode {
             origin: origin_string(&verbatim.location),
         },
     };
-    if let Ok(Some(mut wire_node)) = registry.dispatch_resolve(&ctx) {
+    if let Ok(Some(mut wire_node)) = registry.dispatch_ir_build(&ctx) {
         // The subject line on a verbatim is part of the host's context,
-        // not the resolved wire payload — built-in `resolve_*` handlers
+        // not the hydrated wire payload — built-in IR-build handlers
         // (and well-behaved third-party ones) read params + body only.
         // Restore it host-side so downstream renderers have a default
         // caption / title / alt when the source carried a subject but
@@ -372,25 +375,8 @@ fn from_lex_verbatim(verbatim: &LexVerbatim, registry: &Registry) -> DocNode {
                 inject_subject_into_wire_node(&mut wire_node, s);
             }
         }
-        if let Ok(items) = from_wire_node(&wire_node) {
-            if let Some(first) = items.into_iter().next() {
-                match first {
-                    LexContentItem::Table(table) => return from_lex_table(&table, registry),
-                    LexContentItem::VerbatimBlock(v) => {
-                        // Image/Video/Audio wire kinds decode to a
-                        // Verbatim with their params reconstructed
-                        // (lex-core's `ContentItem` has no typed
-                        // media variants today). Re-dispatch on the
-                        // canonical label to build the typed IR
-                        // node via the free hydration helpers.
-                        return from_lex_media_verbatim(&v, &content);
-                    }
-                    _ => {
-                        // Unrecognised wire kind for a verbatim
-                        // resolve — fall through to generic Verbatim.
-                    }
-                }
-            }
+        if let Some(node) = from_wire_typed(&wire_node, registry, &content) {
+            return node;
         }
     }
 
@@ -402,8 +388,8 @@ fn from_lex_verbatim(verbatim: &LexVerbatim, registry: &Registry) -> DocNode {
 }
 
 /// Restore the verbatim subject as a default caption / title / alt on
-/// resolved media + tabular wire nodes when the handler emitted an
-/// empty field. Built-in `resolve_*` handlers read `ctx.params` + body
+/// hydrated media + tabular wire nodes when the handler emitted an
+/// empty field. Built-in IR-build handlers read `ctx.params` + body
 /// only and have no visibility into the subject line — without this
 /// injection a `.lex` source like
 ///
@@ -437,31 +423,62 @@ fn inject_subject_into_wire_node(wire_node: &mut WireNode, subject: &str) {
     }
 }
 
-/// Decode a media verbatim (canonical label `lex.media.{image,video,audio}`)
-/// into the matching IR `DocNode::Image` / `Video` / `Audio` by routing
-/// through the existing free helpers. The wire `Image` / `Video` /
-/// `Audio` kinds decode to a lex-core AST `Verbatim` with their
-/// params reconstructed; this helper closes the loop to a typed IR
-/// node.
-fn from_lex_media_verbatim(verbatim: &LexVerbatim, original_content: &str) -> DocNode {
-    let label = verbatim.closing_data.label.value.as_str();
-    let params: std::collections::HashMap<String, String> = verbatim
-        .closing_data
-        .parameters
-        .iter()
-        .map(|p| (p.key.clone(), p.value.clone()))
-        .collect();
-    match label {
-        "lex.media.image" => {
-            crate::common::verbatim::media::image_from_params(original_content, &params)
+/// Convert a typed [`WireNode`] returned from `dispatch_ir_build`
+/// directly into a typed IR `DocNode`, switching on the wire variant
+/// (not on the label string).
+///
+/// Pre-#615 this path went wire → lex-core AST (via `from_wire_node`)
+/// → IR (via `from_lex_table` / `from_lex_media_verbatim`), and the
+/// media branch re-dispatched on the label string to pick the right
+/// hydration helper. The unified registry surface (#615) eliminates
+/// both detours: a `WireNode::Image` becomes a `DocNode::Image`
+/// directly, no label-string switch needed.
+///
+/// Returns `None` when the wire variant isn't one this builder knows
+/// how to type — the caller falls back to a generic `DocNode::Verbatim`.
+fn from_wire_typed(
+    wire_node: &WireNode,
+    registry: &Registry,
+    fallback_content: &str,
+) -> Option<DocNode> {
+    match wire_node {
+        WireNode::Table { .. } => {
+            // Tables hydrate via the lex-core AST round-trip — IR's
+            // Table mirrors the AST shape exactly (cells, alignment,
+            // headers), and the existing `from_lex_table` converter
+            // is the canonical place that knows how to consume it.
+            // Switching on `WireNode::Table` (not on the label string)
+            // keeps third-party `Table`-shaped wire kinds aligned with
+            // the built-in path automatically.
+            let items = lex_core::lex::wire::from_wire_node(wire_node).ok()?;
+            let LexContentItem::Table(table) = items.into_iter().next()? else {
+                return None;
+            };
+            Some(from_lex_table(&table, registry))
         }
-        "lex.media.video" => crate::common::verbatim::media::video_from_params(&params),
-        "lex.media.audio" => crate::common::verbatim::media::audio_from_params(&params),
-        _ => DocNode::Verbatim(Verbatim {
-            subject: None,
-            language: Some(label.to_string()),
-            content: original_content.to_string(),
-        }),
+        WireNode::Image {
+            src, alt, title, ..
+        } => Some(DocNode::Image(Image {
+            src: src.clone(),
+            alt: if alt.is_empty() {
+                fallback_content.trim().to_string()
+            } else {
+                alt.clone()
+            },
+            title: title.clone(),
+        })),
+        WireNode::Video {
+            src, title, poster, ..
+        } => Some(DocNode::Video(Video {
+            src: src.clone(),
+            title: title.clone(),
+            poster: poster.clone(),
+        })),
+        WireNode::Audio { src, title, .. } => Some(DocNode::Audio(Audio {
+            src: src.clone(),
+            title: title.clone(),
+        })),
+        _ => None,
     }
 }
 
@@ -966,5 +983,166 @@ mod tests {
             !frontmatter_in_children,
             "synthetic frontmatter must not appear in children after cleanup"
         );
+    }
+
+    /// #615: `from_lex_verbatim` migrated from `dispatch_resolve` to
+    /// `dispatch_ir_build`. The end-to-end behaviour for built-in
+    /// verbatim labels (table, image, video, audio) must be unchanged
+    /// — same typed IR nodes produced from the same Lex source.
+    #[test]
+    fn ir_build_dispatch_hydrates_table_verbatim_to_typed_table() {
+        let subject = TextContent::from_string("Sales".to_string(), None);
+        let body = vec![
+            VerbatimContent::VerbatimLine(LexVerbatimLine::new("| q | r |".to_string())),
+            VerbatimContent::VerbatimLine(LexVerbatimLine::new("|---|---|".to_string())),
+            VerbatimContent::VerbatimLine(LexVerbatimLine::new("| 7 | 9 |".to_string())),
+        ];
+        let closing_data = lex_core::lex::ast::Data::new(
+            lex_core::lex::ast::elements::Label::new("lex.tabular.table".to_string()),
+            Vec::new(),
+        );
+        let verb = LexVerbatim::new(
+            subject,
+            body,
+            closing_data,
+            lex_core::lex::ast::elements::verbatim::VerbatimBlockMode::Inflow,
+        );
+        match from_lex_verbatim(&verb, test_registry()) {
+            DocNode::Table(_) => {}
+            other => panic!(
+                "table verbatim must hydrate via dispatch_ir_build to DocNode::Table; got {other:?}"
+            ),
+        }
+    }
+
+    /// #615: `from_wire_typed` switches on the WireNode kind directly
+    /// instead of re-dispatching on the label string. A `lex.media.video`
+    /// hydration produces a typed `DocNode::Video`, populated from the
+    /// wire node's typed fields (no params HashMap detour).
+    #[test]
+    fn ir_build_dispatch_hydrates_video_via_wire_kind_switch() {
+        let subject = TextContent::from_string("".to_string(), None);
+        let label = lex_core::lex::ast::elements::Label::new("lex.media.video".to_string());
+        let parameters = vec![
+            lex_core::lex::ast::Parameter {
+                key: "src".to_string(),
+                value: "intro.mp4".to_string(),
+                location: lex_core::lex::ast::Range::default(),
+            },
+            lex_core::lex::ast::Parameter {
+                key: "poster".to_string(),
+                value: "intro.png".to_string(),
+                location: lex_core::lex::ast::Range::default(),
+            },
+        ];
+        let closing_data = lex_core::lex::ast::Data::new(label, parameters);
+        let verb = LexVerbatim::new(
+            subject,
+            Vec::new(),
+            closing_data,
+            lex_core::lex::ast::elements::verbatim::VerbatimBlockMode::Inflow,
+        );
+        match from_lex_verbatim(&verb, test_registry()) {
+            DocNode::Video(video) => {
+                assert_eq!(video.src, "intro.mp4");
+                assert_eq!(video.poster.as_deref(), Some("intro.png"));
+            }
+            other => panic!("expected DocNode::Video, got {other:?}"),
+        }
+    }
+
+    /// #615: `from_wire_typed` returns `None` for wire variants it
+    /// doesn't know how to type (third-party verbatim labels with no
+    /// IR-build hook, or hooks returning non-media/non-table wire
+    /// kinds), and the caller falls back to a generic `DocNode::Verbatim`.
+    /// This pins the fallback path so a future wire-spec addition
+    /// can't silently produce `Verbatim`-with-empty-content.
+    #[test]
+    fn unhandled_label_falls_back_to_generic_verbatim() {
+        let subject = TextContent::from_string("".to_string(), None);
+        let body = vec![VerbatimContent::VerbatimLine(LexVerbatimLine::new(
+            "raw body".to_string(),
+        ))];
+        let closing_data = lex_core::lex::ast::Data::new(
+            // Community-shape label — no built-in handler, no IR-build
+            // dispatch. The from_lex_verbatim path falls through to
+            // the generic Verbatim IR node.
+            lex_core::lex::ast::elements::Label::new("acme.unknown".to_string()),
+            Vec::new(),
+        );
+        let verb = LexVerbatim::new(
+            subject,
+            body,
+            closing_data,
+            lex_core::lex::ast::elements::verbatim::VerbatimBlockMode::Inflow,
+        );
+        match from_lex_verbatim(&verb, test_registry()) {
+            DocNode::Verbatim(v) => {
+                assert_eq!(v.content, "raw body");
+                assert_eq!(v.language.as_deref(), Some("acme.unknown"));
+            }
+            other => {
+                panic!("unrouted verbatim label must fall back to generic Verbatim; got {other:?}")
+            }
+        }
+    }
+
+    /// #615: `doc.*` schemas are registered in the default registry
+    /// and accessible via `schema_for`. End-to-end check that the
+    /// six built-in canonicals all surface via `Registry::schema_for`
+    /// from the lex-babel default registry (the one most callers use).
+    #[test]
+    fn default_registry_carries_doc_metadata_schemas() {
+        let r = test_registry();
+        for label in [
+            "doc.title",
+            "doc.author",
+            "doc.date",
+            "doc.tags",
+            "doc.category",
+            "doc.template",
+        ] {
+            let schema = r
+                .schema_for(label)
+                .unwrap_or_else(|| panic!("default registry must carry {label}"));
+            assert_eq!(schema.label, label);
+            // Each doc.* declares both markdown + html render hooks
+            // so the unified surface can fire them at serialisation
+            // time (Sub D wires the consumer side).
+            let formats: Vec<&str> = schema.hooks.render.iter().map(|h| h.0.as_str()).collect();
+            assert!(
+                formats.contains(&"markdown") && formats.contains(&"html"),
+                "{label} must declare markdown + html render hooks; got {formats:?}"
+            );
+        }
+    }
+
+    /// #615: the `doc.*` namespace dispatches through the unified
+    /// render surface and produces format-specific text.
+    #[test]
+    fn doc_render_dispatch_emits_markdown_yaml_line_via_unified_surface() {
+        use lex_extension::wire::{AnnotationBody, Format, NodeRef, Position, Range, RenderOut};
+        let r = test_registry();
+        let ctx = lex_extension::wire::LabelCtx {
+            label: "doc.author".into(),
+            params: serde_json::Value::Null,
+            body: AnnotationBody::Text("Alice".into()),
+            node: NodeRef {
+                kind: "document".into(),
+                range: Range {
+                    start: Position(0, 0),
+                    end: Position(0, 0),
+                },
+                origin: None,
+            },
+        };
+        let out = r
+            .dispatch_render(&ctx, Format::Markdown)
+            .expect("dispatch_render ok")
+            .expect("doc.author must produce a rendered output");
+        match out {
+            RenderOut::String { string } => assert_eq!(string, "author: \"Alice\"\n"),
+            other => panic!("expected String, got {other:?}"),
+        }
     }
 }
