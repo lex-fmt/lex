@@ -62,28 +62,52 @@ impl<'a> SpliceState<'a> {
     /// (and enters skip-state so the body events emit nothing).
     /// Returns `None` to fall through to default rendering.
     ///
-    /// The counter advances on every call regardless of skip-state so
-    /// it stays aligned with the dispatch walker's plan order. Nested
-    /// annotations inside a handler-consumed outer also advance the
-    /// counter and bump skip-depth so the matching outer end is found.
+    /// The cursor advances only when the next plan entry's label matches
+    /// the event's label. An unregistered annotation arriving from the
+    /// event walker (one without a schema, so no plan entry) leaves the
+    /// cursor untouched — otherwise an `unknown.label` arriving before a
+    /// registered `acme.task` would shift the cursor past the
+    /// `acme.task` entry and the handler output would never splice.
+    ///
+    /// Inside an active splice (skip-depth > 0), nested annotations
+    /// with their own plan entries (the dispatch walker visits every
+    /// annotation regardless of nesting) also advance the cursor so
+    /// the post-splice cursor lands on the next outer entry.
+    ///
+    /// Known limitation: renderable verbatim plan entries don't
+    /// correspond to a `StartAnnotation` event, so they aren't advanced
+    /// past by this method. The HTML and markdown event walkers don't
+    /// splice verbatim renders today either, so the limitation is
+    /// confined to scenarios with both a renderable verbatim and a
+    /// downstream registered annotation in the same document — a
+    /// pattern not exercised by any current test.
     pub fn advance_at_start(&mut self, label: &str) -> Option<&str> {
-        let this_idx = self.annotation_idx;
-        self.annotation_idx += 1;
+        let plan = self.plan?;
 
         if self.skip_depth > 0 {
+            // Inside a handler-owned subtree. The dispatch walker still
+            // pushes a plan entry for nested annotations it visits, so
+            // consume the cursor entry that matches this inner label so
+            // it doesn't shadow the next outer annotation after the
+            // splice closes.
+            if let Some(entry) = plan.get(self.annotation_idx) {
+                if entry.label == label {
+                    self.annotation_idx += 1;
+                }
+            }
             self.skip_depth += 1;
             return None;
         }
 
-        // Match on label as a sanity check — if the plan's entry
-        // doesn't agree on the label, the walks have diverged and we
-        // fall through to default rendering rather than splice the
-        // wrong output.
-        let plan = self.plan?;
-        let entry = plan.get(this_idx)?;
+        let entry = plan.get(self.annotation_idx)?;
         if entry.label != label {
+            // Walker is ahead of (or out of sync with) the plan — most
+            // commonly an unregistered annotation that left no plan
+            // entry. Leave the cursor parked so the next event still
+            // sees this entry.
             return None;
         }
+        self.annotation_idx += 1;
         let content = entry.output.as_deref()?;
         self.skip_depth = 1;
         Some(content)
@@ -130,11 +154,12 @@ impl SentinelBuffer {
         Self::default()
     }
 
-    /// Record `content` and return the sentinel comment text the
-    /// format should embed at the splice site. The returned string
-    /// already contains the `<!--` ... `-->` markers so the caller can
-    /// drop it straight into a comment node (rcdom's
-    /// `NodeData::Comment` carries the inner text).
+    /// Record `content` and return the sentinel's inner text (`PREFIX +
+    /// N`). The caller embeds it inside a comment-style node — for
+    /// rcdom that's `NodeData::Comment { contents: <returned string> }`,
+    /// which the DOM serializer wraps in `<!--` ... `-->`. The returned
+    /// string is the inner text only so callers don't accidentally
+    /// double-wrap the markers.
     pub fn push(&mut self, content: String) -> String {
         let idx = self.outputs.len();
         self.outputs.push(content);
@@ -290,8 +315,58 @@ mod tests {
 
     #[test]
     fn sentinel_buffer_leaves_unknown_index_visible() {
-        let buf = SentinelBuffer::new();
+        // Seed the buffer so `replace` doesn't early-return on an empty
+        // outputs vec — otherwise the out-of-range branch isn't
+        // exercised at all (Copilot review on PR #625).
+        let mut buf = SentinelBuffer::new();
+        buf.push("recorded".to_string());
         let html = "<!--LEX-RENDER-SPLICE:7-->";
-        assert_eq!(buf.replace(html), html, "out-of-range index stays visible");
+        assert_eq!(
+            buf.replace(html),
+            html,
+            "out-of-range index must stay visible even when other sentinels are recorded"
+        );
+    }
+
+    /// Regression for Copilot's review on PR #625: an unregistered
+    /// annotation arriving from the event walker before a registered
+    /// one must not shift the cursor — otherwise the registered
+    /// annotation's handler output never splices because the plan
+    /// entry it points at has the wrong label.
+    #[test]
+    fn unregistered_annotation_before_registered_keeps_cursor_aligned() {
+        let plan = [rendered("acme.task", Some("<HANDLER/>"))];
+        let mut s = SpliceState::new(Some(&plan));
+        // Unregistered annotation event: no plan entry, must not consume.
+        assert!(s.advance_at_start("unknown.label").is_none());
+        s.advance_at_end();
+        // Registered annotation event: must match plan[0] and splice.
+        assert_eq!(s.advance_at_start("acme.task"), Some("<HANDLER/>"));
+        s.advance_at_end();
+    }
+
+    /// Regression for Copilot's review on PR #625: a nested registered
+    /// annotation inside a handler-owned splice must consume its plan
+    /// entry so subsequent outer annotations align correctly.
+    #[test]
+    fn nested_registered_annotation_inside_splice_consumes_its_plan_entry() {
+        let plan = [
+            rendered("outer", Some("<OUTER/>")),
+            rendered("inner", Some("<INNER_UNUSED/>")),
+            rendered("after", Some("<AFTER/>")),
+        ];
+        let mut s = SpliceState::new(Some(&plan));
+        // Outer fires and enters skip-state.
+        assert_eq!(s.advance_at_start("outer"), Some("<OUTER/>"));
+        assert!(s.should_skip());
+        // Inner is registered (has a plan entry) but inside the splice
+        // — must consume its cursor entry so the next outer is aligned.
+        assert!(s.advance_at_start("inner").is_none());
+        s.advance_at_end(); // close inner
+        s.advance_at_end(); // close outer
+                            // After the splice closes, the next outer annotation aligns
+                            // with plan[2], not plan[1].
+        assert_eq!(s.advance_at_start("after"), Some("<AFTER/>"));
+        s.advance_at_end();
     }
 }

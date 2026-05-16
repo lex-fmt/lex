@@ -648,11 +648,15 @@ fn build_comrak_ast<'a>(
                         (0, 0).into(),
                     ))));
                     current_parent.append(html_node);
-                } else {
+                } else if !splice.should_skip() {
                     // No handler — emit the default lex:label start
                     // comment. The annotation's body events render with
                     // their default rendering; the matching
                     // `EndAnnotation` arm emits the closing comment.
+                    // Suppress when we're inside a handler-owned splice
+                    // region so a nested annotation doesn't leak a
+                    // stray `<!-- lex:inner -->` into the handler's
+                    // output (Copilot review on PR #625).
                     let mut comment = format!("<!-- lex:{label}");
                     for (key, value) in parameters {
                         comment.push_str(&format!(" {key}={value}"));

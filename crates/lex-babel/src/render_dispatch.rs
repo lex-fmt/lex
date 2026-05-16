@@ -334,16 +334,19 @@ fn body_for_schema(content: &[DocNode], schema: &Schema) -> AnnotationBody {
     }
 }
 
-/// Flatten an annotation's IR body into a single string. Mirrors the
-/// markdown serializer's metadata-flatten contract (`Text`, `Code`,
-/// `Math`, `Reference`, `Link` are included; `Bold`/`Italic`/`Image`
-/// are skipped as YAML values are leaf strings, not rich content).
+/// Flatten an annotation's IR body into a single plain-text string for
+/// `BodyKind::Text` schemas. Recurses through `Bold`/`Italic` formatting
+/// containers so a metadata value like `:: doc.title :: *Important*
+/// Title` keeps the "Important" text instead of dropping it (Copilot
+/// review on PR #625). `Image` is skipped — its alt text isn't usually
+/// what an author intended as the metadata value.
+///
 /// Multi-paragraph bodies are joined with a single space so the
 /// resulting scalar stays single-line — a literal newline in a YAML
-/// scalar would orphan the trailing text from its key (Gemini review
-/// on PR #625). `DocNode::Inline` siblings (bare inlines outside a
-/// paragraph wrapper) are processed too, so an unusual doc-scope
-/// annotation shape doesn't silently drop content.
+/// scalar would orphan the trailing text from its key. `DocNode::Inline`
+/// siblings (bare inlines outside a paragraph wrapper) are processed
+/// too, so an unusual doc-scope annotation shape doesn't silently drop
+/// content.
 fn flatten_text_body(content: &[DocNode]) -> String {
     fn flatten_inlines(inlines: &[InlineContent], buf: &mut String) {
         for inline in inlines {
@@ -353,7 +356,10 @@ fn flatten_text_body(content: &[DocNode]) -> String {
                 | InlineContent::Math(t)
                 | InlineContent::Reference(t) => buf.push_str(t),
                 InlineContent::Link { text, .. } => buf.push_str(text),
-                InlineContent::Bold(_) | InlineContent::Italic(_) | InlineContent::Image(_) => {}
+                InlineContent::Bold(children) | InlineContent::Italic(children) => {
+                    flatten_inlines(children, buf);
+                }
+                InlineContent::Image(_) => {}
             }
         }
     }
@@ -1181,5 +1187,27 @@ mod tests {
             IrNode::Inline(InlineContent::Text("world.".into())),
         ];
         assert_eq!(flatten_text_body(&body), "Hello, world.");
+    }
+
+    /// Copilot review on PR #625: text inside `Bold` and `Italic`
+    /// formatting containers must be preserved when flattening for a
+    /// `BodyKind::Text` schema. A metadata value like
+    /// `:: doc.title :: *Important* Title` would otherwise reach the
+    /// handler as `" Title"` — user-authored content silently dropped.
+    #[test]
+    fn flatten_text_body_recurses_through_bold_and_italic() {
+        use crate::ir::nodes::{DocNode as IrNode, InlineContent, Paragraph};
+        let body = vec![IrNode::Paragraph(Paragraph {
+            content: vec![
+                InlineContent::Italic(vec![InlineContent::Text("Important".into())]),
+                InlineContent::Text(" ".into()),
+                InlineContent::Bold(vec![
+                    InlineContent::Text("very ".into()),
+                    InlineContent::Italic(vec![InlineContent::Text("bold".into())]),
+                ]),
+                InlineContent::Text(" Title".into()),
+            ],
+        })];
+        assert_eq!(flatten_text_body(&body), "Important very bold Title");
     }
 }
