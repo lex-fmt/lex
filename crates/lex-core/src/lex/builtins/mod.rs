@@ -1,40 +1,58 @@
-//! Built-in `LexHandler` implementations for the `lex.*` namespace.
+//! Built-in `LexHandler` implementations for the `lex.*` and `doc.*`
+//! namespaces.
 //!
 //! Built-ins flow through the same `lex_extension::LexHandler` trait and
 //! `lex_extension_host::Registry` dispatch fabric as third-party namespaces.
 //! Their only privilege is being compiled-in: at host startup, the CLI
 //! and LSP call this module's [`register_into`] helper to attach the
-//! bundled `lex.*` schemas and handlers.
+//! bundled `lex.*` and `doc.*` schemas and handlers.
 //!
 //! # What ships today
 //!
 //! | Label family            | Handler                | Status                                |
 //! |-------------------------|------------------------|---------------------------------------|
-//! | `lex.include`           | [`LexIncludeHandler`]  | Registrable; resolve pass runs        |
-//! |                         |                        | through the legacy inline path until  |
-//! |                         |                        | PR 3d (#533).                         |
+//! | `lex.include`           | [`LexIncludeHandler`]  | `on_resolve` (AST splice).            |
 //! | `lex.metadata.*` (×8)   | [`LexBuiltinsHandler`] | Schemas registered (#570 Phase 1).    |
-//! |                         |                        | Legacy frontmatter promotion in       |
-//! |                         |                        | `lex-babel/src/ir/from_lex.rs` still  |
-//! |                         |                        | owns the IR work; on_format returns   |
-//! |                         |                        | None for this family in Phase 4b.     |
-//! | `lex.tabular.table`     | [`LexBuiltinsHandler`] | Schemas + on_resolve + on_format      |
-//! |                         |                        | implemented. lex-babel's              |
-//! |                         |                        | `from_lex_verbatim` and `to_lex_table`|
-//! |                         |                        | both route through this handler; the  |
-//! |                         |                        | legacy `VerbatimRegistry::TableHandler|
-//! |                         |                        | ` reformat path is retired (#594).    |
+//! |                         |                        | Continues to flow through the         |
+//! |                         |                        | hardcoded markdown frontmatter        |
+//! |                         |                        | whitelist; #617 (Sub D) replaces      |
+//! |                         |                        | that path with the `doc.*`            |
+//! |                         |                        | render-hook dispatch wired here.      |
+//! | `lex.tabular.table`     | [`LexBuiltinsHandler`] | `on_ir_build` + `on_format`. Migrated |
+//! |                         |                        | off `on_resolve` to the unified       |
+//! |                         |                        | dispatch surface (#615) — verbatim    |
+//! |                         |                        | hydration runs at IR build time, not  |
+//! |                         |                        | mixed with AST-substitution lifecycle.|
 //! | `lex.media.{image,…}`   | [`LexBuiltinsHandler`] | Same shape as `lex.tabular.table`.    |
-//! |                         |                        | The legacy media `VerbatimHandler`    |
-//! |                         |                        | impls in lex-babel are retired; only  |
-//! |                         |                        | the free `*_from_params` helpers      |
-//! |                         |                        | survive, called from the resolved-    |
-//! |                         |                        | verbatim decode path.                 |
+//! | `doc.*` (×6)            | [`LexBuiltinsHandler`] | `doc.{title,author,date,tags,         |
+//! |                         |                        | category,template}` (#615). `on_render`|
+//! |                         |                        | hooks emit YAML frontmatter           |
+//! |                         |                        | (markdown) / `<title>` / `<meta>`     |
+//! |                         |                        | (html). Carved out of the strict      |
+//! |                         |                        | `doc.*` rejection in `NormalizeLabels`|
+//! |                         |                        | as the only allowed `doc.*` inputs.   |
 //!
-//! The single `lex` namespace is shared by every built-in label; the
-//! composite [`LexBuiltinsHandler`] routes each dispatch by
+//! The `lex` and `doc` namespaces are shared by every built-in label
+//! in their respective families; the composite [`LexBuiltinsHandler`]
+//! routes each dispatch by
 //! [`LabelCtx::label`](lex_extension::wire::LabelCtx::label) to the right
 //! sub-handler.
+//!
+//! # Lifecycle hooks (#615)
+//!
+//! Schema authors register one schema per label and attach the
+//! lifecycle-phase hooks they participate in:
+//!
+//! - `on_resolve` — AST-substitution phase (`lex.include` splices the
+//!   resolved file into the parent container).
+//! - `on_ir_build` — IR-construction phase (`lex.tabular.table`,
+//!   `lex.media.*` hydrate verbatim payloads into typed wire nodes the
+//!   IR builder consumes).
+//! - `on_render` — pre-serialisation phase (`doc.*` emits per-format
+//!   text; third-party render hooks ditto).
+//!
+//! A schema can register zero, one, or any combination of these. The
+//! built-ins illustrate each shape independently.
 
 use std::sync::Arc;
 
@@ -43,12 +61,16 @@ use lex_extension::{
     schema::{
         BodyKind, BodyPresence, BodyShape, Capabilities, HookSet, ParamSpec, ParamType, Schema,
     },
-    wire::{AnnotationBody, FormatCtx, LabelCtx, LexAnnotationOut, Position, Range, WireNode},
+    wire::{
+        AnnotationBody, Format, FormatCtx, LabelCtx, LexAnnotationOut, Position, Range, RenderOut,
+        WireNode,
+    },
 };
 use lex_extension_host::registry::{Registry, RegistryError};
 
 use crate::lex::includes::{Loader, ResolveConfig};
 
+pub mod doc;
 pub mod include;
 pub mod media;
 pub mod metadata;
@@ -62,14 +84,15 @@ pub use include::LexIncludeHandler;
 /// `lex.include`, `lex.metadata.title`, `lex.tabular.table`, etc.
 pub const NAMESPACE: &str = "lex";
 
-/// Every canonical `lex.*` label the core ships. Aggregated from
-/// `include`, `metadata::METADATA_LABELS`, `tabular::LEX_TABULAR_TABLE`,
-/// and `media::{LEX_MEDIA_IMAGE, LEX_MEDIA_VIDEO, LEX_MEDIA_AUDIO}` so
-/// the parse-time `NormalizeLabels` stage in `assembling::stages` can
-/// resolve user-authored bare and prefix-stripped forms to the
-/// canonical registry without depending on a runtime registry handle.
+/// Every canonical `lex.*` and `doc.*` label the core ships. Aggregated
+/// from `include`, `metadata::METADATA_LABELS`,
+/// `tabular::LEX_TABULAR_TABLE`,
+/// `media::{LEX_MEDIA_IMAGE, LEX_MEDIA_VIDEO, LEX_MEDIA_AUDIO}`, and
+/// `doc::DOC_BUILTIN_LABELS` so the parse-time `NormalizeLabels` stage
+/// in `assembling::stages` can resolve user-authored canonical inputs
+/// without depending on a runtime registry handle.
 ///
-/// Adding a new `lex.*` canonical requires adding it here too — the
+/// Adding a new canonical requires adding it here too — the
 /// builtin-tests in each family enforce the corresponding ordering /
 /// presence checks. Order within the slice is informational only;
 /// lookups are unordered.
@@ -91,32 +114,43 @@ pub const CANONICAL_LABELS: &[&str] = &[
     "lex.media.image",
     "lex.media.video",
     "lex.media.audio",
+    // doc.* document-level metadata family (#615)
+    "doc.title",
+    "doc.author",
+    "doc.date",
+    "doc.tags",
+    "doc.category",
+    "doc.template",
 ];
 
 /// Return `true` if `label` names a canonical built-in. Lookup is a
-/// linear scan of [`CANONICAL_LABELS`]; the slice is small (13 entries
+/// linear scan of [`CANONICAL_LABELS`]; the slice is small (~19 entries
 /// today) so this stays cheaper than a `HashSet` materialised at
 /// startup.
 pub fn is_canonical_label(label: &str) -> bool {
     CANONICAL_LABELS.contains(&label)
 }
 
-/// Composite handler for the `lex.*` namespace.
+/// Composite handler for the `lex.*` built-in namespace.
 ///
 /// `Registry::register_namespace` accepts one handler per namespace; the
 /// composite shape lets every `lex.*` built-in live under a single
-/// namespace registration while keeping per-label logic isolated.
+/// namespace registration while keeping per-label logic isolated. The
+/// `doc.*` family is registered separately with [`DocBuiltinsHandler`]
+/// — see [`register_into`].
 ///
-/// Implementations across hooks:
+/// Implementations across hooks (one per lifecycle phase):
 ///
-/// - `on_resolve`: only [`LexIncludeHandler`] (#532) — the
-///   `lex.tabular.*` / `lex.media.*` / `lex.metadata.*` labels return
-///   the default `Ok(None)` because the legacy `from_lex` direction
-///   in `lex-babel` already hydrates the AST.
-/// - `on_format`: implemented for `lex.tabular.table` and
-///   `lex.media.{image,video,audio}` (#570 Phase 4b). `lex.include` is
-///   resolve-only and falls back; `lex.metadata.*` flows through the
-///   render hook + legacy frontmatter promotion.
+/// - `on_resolve`: only [`LexIncludeHandler`] (#532). `lex.tabular.*`
+///   and `lex.media.*` migrated off `on_resolve` in #615 — verbatim
+///   hydration belongs on the IR-construction lifecycle, not the
+///   AST-substitution lifecycle.
+/// - `on_ir_build`: `lex.tabular.table` (verbatim body → typed
+///   `WireNode::Table`) and `lex.media.{image,video,audio}` (params →
+///   typed `WireNode::Image|Video|Audio`). #615 unified surface.
+/// - `on_format`: `lex.tabular.table` and `lex.media.{image,video,audio}`
+///   round-trip back to `:: lex.<family>.<kind> ::` Lex source. (#570
+///   Phase 4b.)
 pub struct LexBuiltinsHandler {
     include: LexIncludeHandler,
 }
@@ -131,8 +165,24 @@ impl LexBuiltinsHandler {
 
 impl LexHandler for LexBuiltinsHandler {
     fn on_resolve(&self, ctx: &LabelCtx) -> Result<Option<WireNode>, HandlerError> {
+        // Post-#615: `on_resolve` is the AST-substitution lifecycle
+        // only. `lex.include` splices the resolved file's content into
+        // the host AST. The `lex.tabular.*` / `lex.media.*` /
+        // `lex.metadata.*` / `doc.*` labels do NOT participate in this
+        // lifecycle — verbatim hydration moved to `on_ir_build`,
+        // metadata rendering moved to `on_render`.
         match ctx.label.as_str() {
             "lex.include" => self.include.on_resolve(ctx),
+            _ => Ok(None),
+        }
+    }
+
+    fn on_ir_build(&self, ctx: &LabelCtx) -> Result<Option<WireNode>, HandlerError> {
+        // Post-#615: verbatim labels hydrate at IR-build time on this
+        // hook. The wire shapes produced here are the same as the
+        // pre-#615 `on_resolve` outputs; what changed is the lifecycle
+        // phase the host invokes them on.
+        match ctx.label.as_str() {
             "lex.tabular.table" => Ok(Some(resolve_tabular_table(ctx))),
             "lex.media.image" => Ok(Some(resolve_media_image(ctx))),
             "lex.media.video" => Ok(Some(resolve_media_video(ctx))),
@@ -160,6 +210,28 @@ impl LexHandler for LexBuiltinsHandler {
             // label fall back to the host's default formatter.
             _ => Ok(None),
         }
+    }
+}
+
+/// Handler for the `doc.*` document-level metadata namespace (#615).
+///
+/// Owns the `on_render` dispatch for the six built-in `doc.*` canonicals
+/// (`doc.title`, `doc.author`, `doc.date`, `doc.tags`, `doc.category`,
+/// `doc.template`). Per-format text emission lives in
+/// [`doc::render_doc_annotation`]; this struct is the
+/// `Registry::register_namespace`-shaped wrapper.
+///
+/// `doc.*` doesn't participate in any other lifecycle phase today —
+/// these labels carry single-line text values consumed verbatim, with
+/// no resolve/IR-build/format hook to declare. If a downstream
+/// register-time consumer wants `on_format` for `doc.*` (the IR → Lex
+/// reverse direction), Sub D (#617) will wire that up alongside the
+/// markdown HACK retirement.
+pub struct DocBuiltinsHandler;
+
+impl LexHandler for DocBuiltinsHandler {
+    fn on_render(&self, ctx: &LabelCtx, fmt: Format) -> Result<Option<RenderOut>, HandlerError> {
+        doc::render_doc_annotation(ctx, &fmt)
     }
 }
 
@@ -277,27 +349,42 @@ fn verbatim_label_on_format(ctx: &FormatCtx) -> Result<Option<LexAnnotationOut>,
     }))
 }
 
-/// Register every built-in `lex.*` schema and handler into `registry`.
+/// Register every built-in `lex.*` and `doc.*` schema and handler into
+/// `registry`.
 ///
-/// `loader` and `config` are forwarded verbatim to the composite
-/// handler; today they're consumed only by [`LexIncludeHandler`] but
-/// future built-ins may need filesystem access too (e.g. an asset
-/// resolver for `lex.media.*`).
+/// Two namespaces are registered: `lex` (carrying include + metadata +
+/// tabular + media + notes) and `doc` (carrying the six document-level
+/// metadata canonicals from #615). They use separate handler instances
+/// because [`Registry::register_namespace`] is one-handler-per-namespace
+/// and `LexHandler` is dyn-dispatched.
+///
+/// `loader` and `config` are forwarded to the `lex.*` handler; the
+/// `doc.*` handler is stateless. Future built-ins that need filesystem
+/// access can thread the loader into [`DocBuiltinsHandler`] the same
+/// way.
 pub fn register_into(
     registry: &Registry,
     loader: Arc<dyn Loader + Send + Sync>,
     config: ResolveConfig,
 ) -> Result<(), RegistryError> {
-    let mut schemas = Vec::with_capacity(14);
-    schemas.push(lex_include_schema());
-    schemas.extend(notes::all_schemas());
-    schemas.extend(metadata::all_schemas());
-    schemas.extend(tabular::all_schemas());
-    schemas.extend(media::all_schemas());
+    let mut lex_schemas = Vec::with_capacity(14);
+    lex_schemas.push(lex_include_schema());
+    lex_schemas.extend(notes::all_schemas());
+    lex_schemas.extend(metadata::all_schemas());
+    lex_schemas.extend(tabular::all_schemas());
+    lex_schemas.extend(media::all_schemas());
 
-    let handler = Box::new(LexBuiltinsHandler::new(loader, config));
-    registry.register_namespace(NAMESPACE, schemas, handler)
+    let lex_handler = Box::new(LexBuiltinsHandler::new(loader, config));
+    registry.register_namespace(NAMESPACE, lex_schemas, lex_handler)?;
+
+    let doc_handler = Box::new(DocBuiltinsHandler);
+    registry.register_namespace(DOC_NAMESPACE, doc::all_schemas(), doc_handler)
 }
+
+/// Reserved namespace owned by the document-level metadata family.
+/// Prefix is `doc.` (with the trailing dot), so registered labels look
+/// like `doc.title`, `doc.author`, etc. (#615).
+pub const DOC_NAMESPACE: &str = "doc";
 
 /// Schema for the `lex.include` label. Inlined here because v1 has
 /// exactly one built-in label of its kind; once the YAML schema loader
@@ -405,6 +492,7 @@ mod tests {
         registered.extend(metadata::all_schemas().into_iter().map(|s| s.label));
         registered.extend(tabular::all_schemas().into_iter().map(|s| s.label));
         registered.extend(media::all_schemas().into_iter().map(|s| s.label));
+        registered.extend(doc::all_schemas().into_iter().map(|s| s.label));
 
         let constant: Vec<String> = CANONICAL_LABELS.iter().map(|s| (*s).to_string()).collect();
 
@@ -434,8 +522,12 @@ mod tests {
     #[test]
     fn register_into_attaches_namespace_and_schema() {
         let registry = fresh_registry();
-        assert_eq!(registry.namespace_count(), 1);
+        // Two namespaces post-#615: the long-standing `lex` namespace
+        // for `lex.*` built-ins, plus the new `doc` namespace for the
+        // six document-level metadata canonicals.
+        assert_eq!(registry.namespace_count(), 2);
         assert!(registry.is_namespace_healthy(NAMESPACE));
+        assert!(registry.is_namespace_healthy(DOC_NAMESPACE));
         let schema = registry
             .schema_for("lex.include")
             .expect("schema indexed under fully-qualified label");
@@ -578,9 +670,11 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_resolve_media_returns_typed_wire_kinds() {
-        // Phase 3 of #570: `lex.media.*` resolve to typed
-        // `WireNode::{Image, Video, Audio}` variants.
+    fn dispatch_ir_build_media_returns_typed_wire_kinds() {
+        // #615: `lex.media.*` hydrate to typed `WireNode::{Image, Video,
+        // Audio}` variants on the IR-build lifecycle hook (was
+        // `dispatch_resolve` pre-#615; the unified registry surface
+        // routes verbatim hydration through `dispatch_ir_build`).
         let registry = fresh_registry();
         for (label, expect_kind) in [
             (media::LEX_MEDIA_IMAGE, "image"),
@@ -589,26 +683,56 @@ mod tests {
         ] {
             let ctx = make_ctx(label, Some("./asset.media"), None);
             let result = registry
-                .dispatch_resolve(&ctx)
-                .unwrap_or_else(|e| panic!("dispatch_resolve({label}) errored: {e:?}"))
-                .unwrap_or_else(|| panic!("dispatch_resolve({label}) must return Some"));
+                .dispatch_ir_build(&ctx)
+                .unwrap_or_else(|e| panic!("dispatch_ir_build({label}) errored: {e:?}"))
+                .unwrap_or_else(|| panic!("dispatch_ir_build({label}) must return Some"));
             let actual = match result {
                 lex_extension::wire::WireNode::Image { .. } => "image",
                 lex_extension::wire::WireNode::Video { .. } => "video",
                 lex_extension::wire::WireNode::Audio { .. } => "audio",
-                other => panic!("dispatch_resolve({label}) produced unexpected variant {other:?}"),
+                other => {
+                    panic!("dispatch_ir_build({label}) produced unexpected variant {other:?}")
+                }
             };
             assert_eq!(actual, expect_kind, "wire variant for {label}");
         }
     }
 
+    /// Post-#615: `dispatch_resolve` on the migrated media + tabular
+    /// labels is a no-op. The handler returns `Ok(None)` so anything
+    /// still calling the resolve path falls back to the host's generic
+    /// IR. Pinning this contract guards against accidental dual
+    /// implementation of the same logic on both hooks.
     #[test]
-    fn dispatch_resolve_propagates_ctx_range_and_origin() {
-        // Resolve handlers must stamp `ctx.node.range` and
+    fn dispatch_resolve_returns_none_for_migrated_labels() {
+        let registry = fresh_registry();
+        for label in [
+            tabular::LEX_TABULAR_TABLE,
+            media::LEX_MEDIA_IMAGE,
+            media::LEX_MEDIA_VIDEO,
+            media::LEX_MEDIA_AUDIO,
+        ] {
+            let ctx = make_ctx(label, Some("./asset"), None);
+            let result = registry
+                .dispatch_resolve(&ctx)
+                .unwrap_or_else(|e| panic!("dispatch_resolve({label}) errored: {e:?}"));
+            assert!(
+                result.is_none(),
+                "{label} must NOT respond to dispatch_resolve post-#615; got Some(...)"
+            );
+        }
+    }
+
+    #[test]
+    fn dispatch_ir_build_propagates_ctx_range_and_origin() {
+        // IR-build handlers must stamp `ctx.node.range` and
         // `ctx.node.origin` onto the WireNode they return so
         // downstream diagnostics can attribute back to source. Hard-
         // coded `(0,0)` and `origin: None` would silently break LSP
         // hover / go-to-def for handler-emitted nodes.
+        //
+        // (Pre-#615 this test ran via `dispatch_resolve`; #615
+        // migrated tabular/media to `dispatch_ir_build`.)
         let registry = fresh_registry();
         let stamped_range = Range {
             start: Position(12, 4),
@@ -636,15 +760,17 @@ mod tests {
                 },
             };
             let result = registry
-                .dispatch_resolve(&ctx)
-                .unwrap_or_else(|e| panic!("dispatch_resolve({label}) errored: {e:?}"))
-                .unwrap_or_else(|| panic!("dispatch_resolve({label}) must return Some"));
+                .dispatch_ir_build(&ctx)
+                .unwrap_or_else(|e| panic!("dispatch_ir_build({label}) errored: {e:?}"))
+                .unwrap_or_else(|| panic!("dispatch_ir_build({label}) must return Some"));
             let (got_range, got_origin) = match result {
                 lex_extension::wire::WireNode::Table { range, origin, .. }
                 | lex_extension::wire::WireNode::Image { range, origin, .. }
                 | lex_extension::wire::WireNode::Video { range, origin, .. }
                 | lex_extension::wire::WireNode::Audio { range, origin, .. } => (range, origin),
-                other => panic!("dispatch_resolve({label}) produced unexpected variant {other:?}"),
+                other => {
+                    panic!("dispatch_ir_build({label}) produced unexpected variant {other:?}")
+                }
             };
             assert_eq!(
                 got_range, stamped_range,
@@ -658,16 +784,17 @@ mod tests {
     }
 
     #[test]
-    fn namespace_count_is_one_namespace_with_thirteen_labels() {
+    fn namespace_count_is_two_namespaces_with_twenty_labels() {
         let registry = fresh_registry();
         assert_eq!(
             registry.namespace_count(),
-            1,
-            "all built-ins share the single `lex` namespace"
+            2,
+            "post-#615: built-ins occupy two namespaces — `lex` and `doc`"
         );
-        // 1 include + 8 metadata + 1 tabular + 3 media = 13.
+        // 1 include + 1 notes + 8 metadata + 1 tabular + 3 media + 6 doc = 20.
         let expected_labels = [
             "lex.include",
+            "lex.notes",
             "lex.metadata.title",
             "lex.metadata.author",
             "lex.metadata.date",
@@ -680,6 +807,12 @@ mod tests {
             "lex.media.image",
             "lex.media.video",
             "lex.media.audio",
+            "doc.title",
+            "doc.author",
+            "doc.date",
+            "doc.tags",
+            "doc.category",
+            "doc.template",
         ];
         for label in expected_labels {
             assert!(

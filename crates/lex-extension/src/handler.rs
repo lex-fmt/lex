@@ -37,7 +37,37 @@ pub trait LexHandler: Send + Sync {
     /// Returns an AST replacement subtree, which the host splices into the
     /// parent in place of the labelled node. Fires during the resolve phase,
     /// before analyse. `Ok(None)` leaves the original node in place.
+    ///
+    /// `on_resolve` is the AST-substitution lifecycle: the canonical example
+    /// is `lex.include`, which splices the resolved file's content into the
+    /// host document. Verbatim labels that hydrate into typed IR nodes
+    /// (`lex.tabular.table`, `lex.media.*`) belong on
+    /// [`on_ir_build`](Self::on_ir_build) instead — that hook is the
+    /// IR-construction lifecycle and is invoked during `from_lex` IR build.
     fn on_resolve(&self, _ctx: &LabelCtx) -> Result<Option<WireNode>, HandlerError> {
+        Ok(None)
+    }
+
+    /// Returns a typed wire node consumed by the host while building its
+    /// in-memory IR from the parsed source. Fires during IR construction
+    /// (`from_lex`), strictly after parsing and strictly before render.
+    /// `Ok(None)` falls back to the host's generic verbatim/annotation IR.
+    ///
+    /// This is the lifecycle hook for **content-typing** labels — the
+    /// canonical examples are `lex.tabular.table` (verbatim body → typed
+    /// `WireNode::Table`) and `lex.media.{image,video,audio}` (params →
+    /// typed `WireNode::Image|Video|Audio`). Pair an `on_ir_build` hook
+    /// with an [`on_render`](Self::on_render) hook on the same schema to
+    /// give one label both an IR shape and per-format serialization
+    /// behaviour through the unified registry surface (#615).
+    ///
+    /// IR-build hooks do **not** receive the host's lex-core AST: they
+    /// see only the parsed verbatim payload (label + params + body) via
+    /// [`LabelCtx`]. Coupling content-typing to the IR phase rather than
+    /// to parsing keeps a buggy or slow handler from corrupting the
+    /// parser, and gives extension authors a single registration point
+    /// for both lifecycle phases.
+    fn on_ir_build(&self, _ctx: &LabelCtx) -> Result<Option<WireNode>, HandlerError> {
         Ok(None)
     }
 
@@ -187,6 +217,7 @@ mod tests {
         h.on_label(&c);
         assert!(h.on_validate(&c).unwrap().is_empty());
         assert!(h.on_resolve(&c).unwrap().is_none());
+        assert!(h.on_ir_build(&c).unwrap().is_none());
         assert!(h.on_render(&c, Format::Html).unwrap().is_none());
         assert!(h.on_hover(&c).unwrap().is_none());
         assert!(h.on_completion(&c).unwrap().is_empty());

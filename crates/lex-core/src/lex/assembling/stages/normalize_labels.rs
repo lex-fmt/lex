@@ -70,9 +70,17 @@ pub const SHORTCUT_TABLE: &[(&str, &str)] = &[
     ("notes", "lex.notes"),
 ];
 
-/// Reserved prefix the namespace policy forbids third parties (and
-/// users) from authoring. Authoring any `doc.<anything>` label is a
+/// Reserved prefix for the document-level metadata namespace. The
+/// general policy forbids third parties (and users) from authoring
+/// `doc.<anything>` labels, so authoring an arbitrary `doc.*` is a
 /// parse error under [`Mode::Strict`].
+///
+/// The exception (#615) is the curated set of built-in document-scope
+/// metadata canonicals enumerated in
+/// [`builtins::doc::DOC_BUILTIN_LABELS`] — `doc.title`, `doc.author`,
+/// `doc.date`, `doc.tags`, `doc.category`, `doc.template`. Those flow
+/// through the standard `lex.*`-canonical branch (input matches a
+/// registered canonical → `LabelForm::Canonical`).
 const FORBIDDEN_PREFIX: &str = "doc.";
 
 /// Reserved prefix for the core namespace. Inputs starting with this
@@ -140,8 +148,12 @@ pub fn classify_label(input: &str) -> Resolution {
         return Resolution::Resolved((*canonical).to_string(), LabelForm::Shortcut);
     }
 
-    // doc.* is reserved-forbidden — reject before any other branch.
-    if input.starts_with(FORBIDDEN_PREFIX) {
+    // doc.* is reserved-forbidden — reject before any other branch,
+    // EXCEPT for the curated built-in canonicals from #615
+    // (doc.title, doc.author, doc.date, doc.tags, doc.category,
+    // doc.template). Those are part of `CANONICAL_LABELS` and flow
+    // through the standard canonical branch below.
+    if input.starts_with(FORBIDDEN_PREFIX) && !builtins::is_canonical_label(input) {
         return Resolution::Rejected(RejectReason::Forbidden {
             input: input.to_string(),
         });
@@ -155,6 +167,12 @@ pub fn classify_label(input: &str) -> Resolution {
         return Resolution::Rejected(RejectReason::UnknownCanonical {
             input: input.to_string(),
         });
+    }
+
+    // 2b. `doc.*` built-in — already filtered by the rejection branch
+    // above, so any input still reaching here is a registered canonical.
+    if input.starts_with(FORBIDDEN_PREFIX) && builtins::is_canonical_label(input) {
+        return Resolution::Resolved(input.to_string(), LabelForm::Canonical);
     }
 
     // 3. Prefix-strip: `lex.<input>` would be a registered canonical?
@@ -538,8 +556,9 @@ mod tests {
     #[test]
     fn classify_doc_prefix_rejects() {
         // `doc.*` is reserved-forbidden under §4.1; every doc.X input
-        // must reject with Forbidden, including the four legacy
-        // entries (doc.table / doc.image / doc.video / doc.audio).
+        // that ISN'T a registered built-in must reject with Forbidden,
+        // including the four legacy entries (doc.table / doc.image /
+        // doc.video / doc.audio).
         for forbidden in [
             "doc.table",
             "doc.image",
@@ -553,6 +572,29 @@ mod tests {
                     input: forbidden.to_string()
                 }),
                 "{forbidden} must reject as Forbidden"
+            );
+        }
+    }
+
+    #[test]
+    fn classify_doc_builtin_metadata_resolves_as_canonical() {
+        // #615 carves the curated `doc.*` document-metadata canonicals
+        // out of the §4.1 rejection — `doc.title`, `doc.author`,
+        // `doc.date`, `doc.tags`, `doc.category`, `doc.template` flow
+        // through the Canonical branch since they're registered in
+        // `CANONICAL_LABELS`. Any other `doc.*` input still rejects.
+        for canonical in [
+            "doc.title",
+            "doc.author",
+            "doc.date",
+            "doc.tags",
+            "doc.category",
+            "doc.template",
+        ] {
+            assert_eq!(
+                classify_label(canonical),
+                Resolution::Resolved(canonical.to_string(), LabelForm::Canonical),
+                "{canonical} must resolve as Canonical (#615 carve-out)"
             );
         }
     }

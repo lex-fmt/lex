@@ -176,6 +176,16 @@ impl Capabilities {
 }
 
 /// Hook participation. Each field defaults to "not implemented".
+///
+/// `resolve` and `ir_build` form the two lifecycle-phase hooks for
+/// content-substitution: `resolve` runs during the resolve phase and
+/// splices the returned wire node into the host AST (the canonical
+/// example is `lex.include`). `ir_build` runs while the host constructs
+/// its in-memory IR and produces a typed wire node consumed in IR-build
+/// position only — the canonical examples are `lex.tabular.table` and
+/// `lex.media.*`. Pair `ir_build` with `render` on the same schema to
+/// give one label both an IR shape and per-format serialization through
+/// one registration (the unified registry surface for #615).
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HookSet {
@@ -185,6 +195,13 @@ pub struct HookSet {
     pub validate: bool,
     #[serde(default)]
     pub resolve: bool,
+    /// IR-build participation. When `true`, the host invokes
+    /// [`LexHandler::on_ir_build`](crate::handler::LexHandler::on_ir_build)
+    /// during IR construction (the verbatim/IR-hydration lifecycle).
+    /// Distinct from `resolve` (AST-substitution lifecycle) so a schema
+    /// can declare exactly the lifecycle phase it participates in.
+    #[serde(default)]
+    pub ir_build: bool,
     #[serde(default)]
     pub hover: bool,
     #[serde(default)]
@@ -315,7 +332,37 @@ mod tests {
         let hs = HookSet::default();
         assert!(!hs.validate);
         assert!(!hs.resolve);
+        assert!(!hs.ir_build);
         assert!(hs.render.is_empty());
+    }
+
+    /// `ir_build` is a new field added with #615 (unified registry
+    /// surface). Make sure it round-trips through JSON like every other
+    /// hook flag, and that the default-omitted form deserialises with
+    /// `ir_build = false` (back-compat for existing schemas authored
+    /// before the field existed).
+    #[test]
+    fn hookset_ir_build_round_trips_through_json() {
+        let hs = HookSet {
+            ir_build: true,
+            ..HookSet::default()
+        };
+        let serialised = serde_json::to_string(&hs).unwrap();
+        assert!(
+            serialised.contains("\"ir_build\":true"),
+            "ir_build must serialise: {serialised}"
+        );
+        let back: HookSet = serde_json::from_str(&serialised).unwrap();
+        assert!(back.ir_build);
+
+        // Older schema JSON without the field deserialises to false —
+        // the back-compat contract.
+        let legacy = r#"{"label":false,"validate":false,"resolve":false,"hover":false,"completion":false,"code_action":false}"#;
+        let parsed: HookSet = serde_json::from_str(legacy).unwrap();
+        assert!(
+            !parsed.ir_build,
+            "legacy JSON must default ir_build to false"
+        );
     }
 
     #[test]
