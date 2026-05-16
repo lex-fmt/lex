@@ -21,7 +21,16 @@ set -euo pipefail
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "${REPO_ROOT}"
 
-# 1. Project dep cache — pick the right tool based on lockfile / manifest.
+# 1. Git submodules — required before cargo fetch / tests, since some
+# crates pull test fixtures from submodule paths (e.g. comms/specs in
+# this repo). Without this step, `cargo test --workspace` panics with
+# "No such file or directory" when loading lexplore fixtures.
+if [ -f .gitmodules ]; then
+  git submodule update --init --recursive --quiet || \
+    echo "warning: git submodule update failed — fixture-dependent tests may not run" >&2
+fi
+
+# 2. Project dep cache — pick the right tool based on lockfile / manifest.
 
 # Rust: cargo fetch with --locked so we don't silently mutate Cargo.lock
 # in the per-session clone. Stale lockfile produces a non-fatal exit;
@@ -47,7 +56,7 @@ if [ -f Gemfile ] && command -v bundle >/dev/null 2>&1; then
   bundle install --quiet || true
 fi
 
-# 2. Pre-commit hook wiring (lefthook).
+# 3. Pre-commit hook wiring (lefthook).
 # Binary is installed at env-setup time (arthur-debert/release env/setup.sh);
 # this just wires .git/hooks/pre-commit to call it. Errors are surfaced
 # loudly — the whole point of the script is the hook install.
