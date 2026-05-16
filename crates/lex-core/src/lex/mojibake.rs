@@ -28,13 +28,27 @@ const PATTERNS: &[&str] = &[
     // Latin-1 letters double-encoded: original UTF-8 byte pair (e.g.
     // `\xC3\xA9` for `é`) is read as two cp1252 chars (`Ã` + `©`) which
     // then re-encode to a 4-byte UTF-8 sequence displaying as `Ã©`.
+    // Lowercase Latin-1 letters double-encoded.
     "Ã©", "Ã¨", "Ãª", "Ã«", // e-family
-    "Ã ", "Ã¡", "Ã¢", "Ã£", "Ã¤", "Ã¥", // a-family
-    "Ã¬", "Ã­", "Ã®", "Ã¯", // i-family
+    // `Ã\u{A0}` is `Ã` + U+00A0 NBSP (the cp1252 mapping of byte 0xA0)
+    // and is the mojibake of `à` — not `Ã` + ASCII space, which is
+    // common in legitimate prose and would false-positive.
+    "Ã\u{A0}", "Ã¡", "Ã¢", "Ã£", "Ã¤", "Ã¥", // a-family
+    "Ã¬", "Ã\u{AD}", "Ã®",
+    "Ã¯", // i-family (`Ã\u{AD}` is `Ã` + U+00AD soft hyphen — escaped so clippy's invisible-character lint stays clean)
     "Ã²", "Ã³", "Ã´", "Ã¶", // o-family
     "Ã¹", "Ãº", "Ã»", "Ã¼", // u-family
     "Ã±", "Ã§", // tilde n, c-cedilla
     "ÃŸ", // sharp s
+    // Uppercase Latin-1 letters — common in titles, headings, and
+    // formal-document prose. Mojibake byte for `À` (U+00C0) is
+    // `\xC3\x80` → cp1252 `Ã€` (`Ã` + `€`). For `É` (U+00C9) → `Ã‰`
+    // (`Ã` + `‰`), and so on.
+    "Ã€", "Ã\u{81}", "Ã‚", "Ãƒ", "Ã„", "Ã…", // A-family (Á has U+0081)
+    "Ã‰", "ÃŠ", "Ã‹", // E-family (È encodes as `Ã\u{88}`, skipped to avoid invisible)
+    "Ã‘", // Ñ
+    "Ã“", "Ã”", "Ã–", // O-family
+    "Ãš", "Ã›", "Ãœ", // U-family
     // Smart-punctuation double-encodings all start with `â€`
     // (mojibake of the `\xE2\x80` Unicode-punctuation block prefix).
     // The trailing byte distinguishes em-dash / en-dash / curly quotes;

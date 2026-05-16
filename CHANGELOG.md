@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Changed — four babel/CLI interop fixes ([#607](https://github.com/lex-fmt/lex/issues/607), [#608](https://github.com/lex-fmt/lex/issues/608), [#610](https://github.com/lex-fmt/lex/issues/610), [#611](https://github.com/lex-fmt/lex/issues/611))
+
+Four more user-visible converter fixes, continuing the interop work-stream.
+
+- **KaTeX CDN tags carry SRI hashes (#611).** The KaTeX 0.16.11 CSS, core JS, and auto-render JS tags emitted by the HTML serializer now include `integrity="sha384-…"` attributes; browsers reject any CDN payload whose hash doesn't match. Hashes were computed from the official release tarball at github.com/KaTeX/KaTeX/releases/tag/v0.16.11.
+- **`.lex-verbatim` paged-media break-rule modernized (#607).** Every other paged-media element in `@media print` already pairs the legacy `page-break-*` property with its modern `break-*` companion; `.lex-verbatim` only had the legacy form. Chromium's headless paged-media now treats `page-break-inside` as deprecated, so without the modern companion code blocks could split across PDF pages.
+- **Mojibake detection for `lexd convert` / `lexd format` (#608).** A new `lex-core::lex::mojibake::detect_mojibake` helper scans for the two-character signatures of a UTF-8 → cp1252 → UTF-8 round-trip (`Ã©`, `Ã¶`, `â€…`, etc.) and the CLI prints a one-shot stderr warning when ≥3 distinct patterns appear in the entry file or any `:: lex.include ::`-pulled file. The conversion still runs to completion — detection is informational. Suppress with the new `--no-warnings` global flag or `LEX_QUIET=1` env. Auto-correction is out of scope (re-encoding mojibake is lossy in edge cases).
+- **Redundant `<div class="lex-content">` wrapper dropped inside `<section>` (#610, option 1).** Extends the `<dd>`-specific narrow fix (#604) to its broader sibling case: the wrapper is also pure DOM bloat when the immediate parent is a `<section>` (the section IS the content area). Baseline CSS gains a direct-child `margin-left` rule on the section's content children (`p, .lex-list, .lex-verbatim, .lex-verbatim-subject, .lex-definition, .lex-table, blockquote, figure, section.lex-session`) that replaces the wrapper's old padding. `margin-left` (not padding-left) so boxed children like `.lex-verbatim` keep moving as a whole instead of just nudging their inner text. The further targets the issue lists (`<li>`, `<blockquote>` parents) are deferred for a follow-up; each needs its own CSS-compensation pass and snapshot review. Snapshots updated: kitchensink + three trifecta fixtures. No theme changes required (neither `theme-fancy-serif.css` nor `theme-modern.css` references `.lex-content` or `section.lex-session`).
+
 ### Changed — three babel interop fixes ([#604](https://github.com/lex-fmt/lex/issues/604), [#605](https://github.com/lex-fmt/lex/issues/605), [#606](https://github.com/lex-fmt/lex/issues/606))
 
 Three user-visible changes to the markdown / HTML converters, surfaced during the glossary-doc review (deferred from PR #609).

@@ -101,16 +101,23 @@ section.lex-session:first-child {
 /* #610 (option 1): the `<div class="lex-content">` wrapper is now
  * suppressed when the immediate parent is a `<section>` (the section
  * IS the semantic content area, so the wrapper was pure DOM bloat).
- * Compensate by indenting the section's direct content children. */
+ * Compensate by offsetting the section's direct content children with
+ * `margin-left`. `padding-left` is wrong for elements that draw their
+ * own box (`.lex-verbatim` has a background + border) — padding would
+ * leave the box at the section edge and only push the inner text right.
+ * `margin-left` moves the entire box, matching what the wrapper used
+ * to do. The captions emitted before code blocks (`.lex-verbatim-subject`)
+ * are siblings of `.lex-verbatim` and need the same offset. */
 section.lex-session > p,
 section.lex-session > .lex-list,
 section.lex-session > .lex-verbatim,
+section.lex-session > .lex-verbatim-subject,
 section.lex-session > .lex-definition,
 section.lex-session > .lex-table,
 section.lex-session > blockquote,
 section.lex-session > figure,
 section.lex-session > section.lex-session {
-  padding-left: var(--lex-indent-content);
+  margin-left: var(--lex-indent-content);
 }
 
 /* Top-level sessions retain standard content padding */
