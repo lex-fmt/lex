@@ -301,12 +301,23 @@ fn build_html_dom_with_splice(
 
             Event::StartContent => {
                 // Create content wrapper (mirrors AST container structure for indentation).
-                // Inside `<dd>` the wrapper is redundant — the dd is already the
-                // content container — so skip it (#604). Push the dd onto the
-                // stack so EndContent's pop is balanced and leaves current_parent
-                // pointing back at the dd.
+                //
+                // Inside a parent element that is ALREADY a semantic content
+                // area, the wrapper is pure DOM bloat — two stacked containers
+                // carrying the same "this is content" cue. Skip it for those
+                // parents and push the parent onto the stack so EndContent's
+                // pop is balanced and leaves current_parent pointing back at
+                // the same element.
+                //
+                // - `<dd>`      — #604: the dd is already the content holder
+                //                 for a definition body.
+                // - `<section>` — #610 (option 1): after a heading the section
+                //                 is the semantic content container; the
+                //                 wrapper is redundant.
                 current_heading = None;
-                if is_element_with_tag(&current_parent, "dd") {
+                let parent_is_content_area = is_element_with_tag(&current_parent, "dd")
+                    || is_element_with_tag(&current_parent, "section");
+                if parent_is_content_area {
                     parent_stack.push(current_parent.clone());
                 } else {
                     let content = create_element("div", vec![("class", "lex-content")]);
