@@ -9,3 +9,4 @@ pub mod from_lex;
 pub mod nodes;
 pub mod to_events;
 pub mod to_lex;
+pub mod to_wire;
