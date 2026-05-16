@@ -439,12 +439,7 @@ fn test_definition_exports_as_pandoc_style() {
 #[test]
 fn test_multiple_definitions_pandoc_style() {
     // Several siblings should each get their own Term/:   def block.
-    let lex_src = concat!(
-        "term-a:\n",
-        "    def a\n\n",
-        "term-b:\n",
-        "    def b\n",
-    );
+    let lex_src = concat!("term-a:\n", "    def a\n\n", "term-b:\n", "    def b\n",);
     let lex_doc = STRING_TO_AST.run(lex_src.to_string()).unwrap();
     let md = MarkdownFormat.serialize(&lex_doc).unwrap();
 

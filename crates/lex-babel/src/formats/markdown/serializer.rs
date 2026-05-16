@@ -756,14 +756,10 @@ fn build_comrak_ast<'a>(
             Event::EndDefinition => {
                 // Pop DescriptionItem (discard intermediate), then DescriptionList.
                 let _ = parent_stack.pop().ok_or_else(|| {
-                    FormatError::SerializationError(
-                        "Unbalanced definition item end".to_string(),
-                    )
+                    FormatError::SerializationError("Unbalanced definition item end".to_string())
                 })?;
                 current_parent = parent_stack.pop().ok_or_else(|| {
-                    FormatError::SerializationError(
-                        "Unbalanced definition list end".to_string(),
-                    )
+                    FormatError::SerializationError("Unbalanced definition list end".to_string())
                 })?;
             }
 
