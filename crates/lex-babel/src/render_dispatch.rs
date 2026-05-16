@@ -40,10 +40,13 @@
 //! (#614 / Sub A territory), not the render-dispatch migration.
 
 use lex_extension::wire::{Format, HostNodeKind};
-use lex_extension::{schema::Schema, AnnotationBody, LabelCtx, NodeRef, RenderOut};
+use lex_extension::{
+    schema::{BodyKind, Schema},
+    AnnotationBody, LabelCtx, NodeRef, RenderOut,
+};
 use lex_extension_host::Registry;
 
-use crate::ir::nodes::{Annotation, DocNode, Document, Verbatim};
+use crate::ir::nodes::{Annotation, DocNode, Document, InlineContent, Verbatim};
 use crate::ir::to_wire::{ir_annotation_body, ir_params_to_json};
 
 /// One render result for a labelled node, captured during the IR
@@ -211,10 +214,11 @@ fn visit_annotation(annotation: &Annotation, attached_to: HostNodeKind, ctx: &mu
     let label = annotation.label.clone();
     if let Some(schema) = ctx.registry.schema_for(&label) {
         if schema_has_render(&schema, ctx.format.as_str()) {
+            let body = body_for_schema(&annotation.content, &schema);
             let label_ctx = LabelCtx {
                 label: label.clone(),
                 params: ir_params_to_json(&annotation.parameters),
-                body: ir_annotation_body(&annotation.content),
+                body,
                 node: NodeRef {
                     kind: attached_to.as_str().to_string(),
                     range: zero_range(),
@@ -308,6 +312,76 @@ fn schema_has_render(schema: &Schema, format_name: &str) -> bool {
         .render
         .iter()
         .any(|h| h.0.eq_ignore_ascii_case(format_name))
+}
+
+/// Build an [`AnnotationBody`] from the IR annotation's children,
+/// honouring the schema's declared `body.kind`. A schema that declares
+/// `BodyKind::Text` (the `doc.*` family) expects the body as a flat
+/// string — without this, `ir_annotation_body` would always pack a
+/// non-empty body as `AnnotationBody::Lex` and the handler's text-only
+/// branch would never fire. For `Lex` / `None` body kinds the standard
+/// IR → Wire packing applies.
+fn body_for_schema(content: &[DocNode], schema: &Schema) -> AnnotationBody {
+    if schema.body.kind == BodyKind::Text {
+        let flat = flatten_text_body(content);
+        if flat.is_empty() {
+            AnnotationBody::None
+        } else {
+            AnnotationBody::Text(flat)
+        }
+    } else {
+        ir_annotation_body(content)
+    }
+}
+
+/// Flatten an annotation's IR body into a single plain-text string for
+/// `BodyKind::Text` schemas. Recurses through `Bold`/`Italic` formatting
+/// containers so a metadata value like `:: doc.title :: *Important*
+/// Title` keeps the "Important" text instead of dropping it (Copilot
+/// review on PR #625). `Image` is skipped — its alt text isn't usually
+/// what an author intended as the metadata value.
+///
+/// Multi-paragraph bodies are joined with a single space so the
+/// resulting scalar stays single-line — a literal newline in a YAML
+/// scalar would orphan the trailing text from its key. `DocNode::Inline`
+/// siblings (bare inlines outside a paragraph wrapper) are processed
+/// too, so an unusual doc-scope annotation shape doesn't silently drop
+/// content.
+fn flatten_text_body(content: &[DocNode]) -> String {
+    fn flatten_inlines(inlines: &[InlineContent], buf: &mut String) {
+        for inline in inlines {
+            match inline {
+                InlineContent::Text(t)
+                | InlineContent::Code(t)
+                | InlineContent::Math(t)
+                | InlineContent::Reference(t) => buf.push_str(t),
+                InlineContent::Link { text, .. } => buf.push_str(text),
+                InlineContent::Bold(children) | InlineContent::Italic(children) => {
+                    flatten_inlines(children, buf);
+                }
+                InlineContent::Image(_) => {}
+            }
+        }
+    }
+
+    let mut buf = String::new();
+    let mut first = true;
+    for node in content {
+        match node {
+            DocNode::Paragraph(p) => {
+                if !first {
+                    buf.push(' ');
+                }
+                first = false;
+                flatten_inlines(&p.content, &mut buf);
+            }
+            DocNode::Inline(i) => {
+                flatten_inlines(std::slice::from_ref(i), &mut buf);
+            }
+            _ => {}
+        }
+    }
+    buf
 }
 
 fn zero_range() -> lex_extension::wire::Range {
@@ -1077,5 +1151,63 @@ mod tests {
             &["acme.in_header", "acme.in_body"],
             "header cells must be walked before body cells"
         );
+    }
+
+    /// Gemini review on PR #625: multi-paragraph bodies must join with
+    /// a single space (not `\n`) so the resulting YAML scalar stays
+    /// single-line. A literal newline orphans the trailing text from
+    /// its key when the handler embeds the value as `key: "<scalar>"`.
+    #[test]
+    fn flatten_text_body_joins_paragraphs_with_space_not_newline() {
+        use crate::ir::nodes::{DocNode as IrNode, InlineContent, Paragraph};
+        let body = vec![
+            IrNode::Paragraph(Paragraph {
+                content: vec![InlineContent::Text("First line.".into())],
+            }),
+            IrNode::Paragraph(Paragraph {
+                content: vec![InlineContent::Text("Second line.".into())],
+            }),
+        ];
+        let flat = flatten_text_body(&body);
+        assert_eq!(flat, "First line. Second line.");
+        assert!(
+            !flat.contains('\n'),
+            "flattened scalar must not contain raw newlines"
+        );
+    }
+
+    /// Gemini review on PR #625: bare `DocNode::Inline` siblings (inlines
+    /// not wrapped in a Paragraph) are an unusual doc-scope shape, but
+    /// the flatten must include them rather than silently dropping content.
+    #[test]
+    fn flatten_text_body_processes_bare_inline_doc_nodes() {
+        use crate::ir::nodes::{DocNode as IrNode, InlineContent};
+        let body = vec![
+            IrNode::Inline(InlineContent::Text("Hello, ".into())),
+            IrNode::Inline(InlineContent::Text("world.".into())),
+        ];
+        assert_eq!(flatten_text_body(&body), "Hello, world.");
+    }
+
+    /// Copilot review on PR #625: text inside `Bold` and `Italic`
+    /// formatting containers must be preserved when flattening for a
+    /// `BodyKind::Text` schema. A metadata value like
+    /// `:: doc.title :: *Important* Title` would otherwise reach the
+    /// handler as `" Title"` — user-authored content silently dropped.
+    #[test]
+    fn flatten_text_body_recurses_through_bold_and_italic() {
+        use crate::ir::nodes::{DocNode as IrNode, InlineContent, Paragraph};
+        let body = vec![IrNode::Paragraph(Paragraph {
+            content: vec![
+                InlineContent::Italic(vec![InlineContent::Text("Important".into())]),
+                InlineContent::Text(" ".into()),
+                InlineContent::Bold(vec![
+                    InlineContent::Text("very ".into()),
+                    InlineContent::Italic(vec![InlineContent::Text("bold".into())]),
+                ]),
+                InlineContent::Text(" Title".into()),
+            ],
+        })];
+        assert_eq!(flatten_text_body(&body), "Important very bold Title");
     }
 }

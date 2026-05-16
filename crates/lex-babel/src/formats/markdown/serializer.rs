@@ -4,18 +4,49 @@
 //! Pipeline: Lex AST → IR → Events → Comrak AST → Markdown string
 
 use crate::common::nested_to_flat::tree_to_events;
+use crate::common::splice::SpliceState;
 use crate::error::FormatError;
 use crate::ir::events::Event;
 use crate::ir::nodes::{Annotation as IrAnnotation, DocNode, InlineContent, TableCellAlignment};
+use crate::render_dispatch::{dispatch_render, RenderedNode};
 use comrak::nodes::{Ast, AstNode, ListDelimType, ListType, NodeTable, NodeValue, TableAlignment};
 use comrak::{format_commonmark, Arena, ComrakOptions};
 use lex_core::lex::ast::Document;
+use lex_extension_host::Registry;
 use std::cell::RefCell;
 
-/// Serialize a Lex document to Markdown
+/// Result of [`serialize_to_markdown_with_registry`]: the rendered
+/// Markdown plus any handler-emitted diagnostic messages (renderer
+/// errors, format-shape mismatches, namespace disabled).
+#[derive(Debug, Clone, PartialEq)]
+pub struct MarkdownExportOutcome {
+    pub markdown: String,
+    pub diagnostics: Vec<String>,
+}
+
+/// Serialize a Lex document to Markdown, dispatching `on_render`
+/// handlers through [`crate::default_registry()`]. Diagnostics
+/// produced by handlers are discarded; for diagnostic-aware
+/// serialization use [`serialize_to_markdown_with_registry`].
 pub fn serialize_to_markdown(doc: &Document) -> Result<String, FormatError> {
-    // Step 1: Lex AST → IR (title and subtitle are preserved in IR)
-    let ir_doc = crate::to_ir(doc);
+    let outcome = serialize_to_markdown_with_registry(doc, crate::default_registry())?;
+    Ok(outcome.markdown)
+}
+
+/// Serialize with an extension-system [`Registry`] in scope: every
+/// labelled annotation whose schema declares `hooks.render: ["markdown"]`
+/// is dispatched to its handler. Handlers returning `RenderOut::String`
+/// are spliced into the output in place of the annotation's default
+/// rendering. For doc-scope annotations (the `document_annotations` IR
+/// slot), handler output is consumed as a YAML frontmatter line; the
+/// `lex.metadata.*` family without registered handlers falls back to
+/// in-place synthesis.
+pub fn serialize_to_markdown_with_registry(
+    doc: &Document,
+    registry: &Registry,
+) -> Result<MarkdownExportOutcome, FormatError> {
+    let ir_doc = crate::to_ir_with_registry(doc, registry);
+    let plan = dispatch_render(&ir_doc, registry, "markdown");
 
     // Extract title from IR
     let document_title = ir_doc.title.as_ref().map(|title_inlines| {
@@ -27,15 +58,25 @@ pub fn serialize_to_markdown(doc: &Document) -> Result<String, FormatError> {
     // Phase 3b (#614): YAML frontmatter is synthesized directly from
     // `document_annotations` rather than via a `frontmatter` event
     // that `tree_to_events` used to inject. The IR slot is the single
-    // source of truth on the lex → markdown path.
-    let frontmatter_yaml = render_document_annotations_as_yaml(&ir_doc.document_annotations);
+    // source of truth on the lex → markdown path. For doc-scope
+    // annotations with a registered render handler (e.g. `doc.*`), the
+    // handler's YAML line replaces the default synthesis; everything
+    // else (`lex.metadata.*` shortcuts) falls back to the legacy
+    // synthesis path.
+    let doc_scope_plan = &plan.nodes[..plan.doc_scope_count];
+    let body_plan = &plan.nodes[plan.doc_scope_count..];
+    let frontmatter_yaml =
+        render_document_annotations_as_yaml(&ir_doc.document_annotations, doc_scope_plan);
 
     // Step 2: IR → Events
     let events = tree_to_events(&DocNode::Document(ir_doc));
 
-    // Step 3: Events → Comrak AST
+    // Step 3: Events → Comrak AST. SpliceState consumes the body plan
+    // to replace handler-rendered annotations with their raw markdown
+    // output (emitted as a `NodeValue::HtmlBlock` literal so Comrak
+    // passes it through unchanged).
     let arena = Arena::new();
-    let root = build_comrak_ast(&arena, &events)?;
+    let root = build_comrak_ast(&arena, &events, body_plan)?;
 
     // Step 4: Comrak AST → Markdown string (using comrak's serializer)
     let mut output = Vec::new();
@@ -63,55 +104,98 @@ pub fn serialize_to_markdown(doc: &Document) -> Result<String, FormatError> {
         None => with_title,
     };
 
-    Ok(with_frontmatter)
+    let mut diagnostics: Vec<String> = plan
+        .nodes
+        .iter()
+        .filter_map(|n| n.diagnostic.clone())
+        .collect();
+    diagnostics.extend(plan.root_diagnostics);
+
+    Ok(MarkdownExportOutcome {
+        markdown: with_frontmatter,
+        diagnostics,
+    })
 }
 
 /// Build the YAML frontmatter block (`---\n…\n---\n\n`) from an IR
 /// document's `document_annotations`, or `None` if the slot would
-/// produce an empty block. Mirrors the key-flattening logic the
+/// produce an empty block.
+///
+/// `doc_scope_plan` is the doc-scope prefix of the registry's render
+/// plan (the first `plan.doc_scope_count` entries). Annotations whose
+/// handler returned a `RenderOut::String` consume the next plan entry
+/// and emit the handler's text as the YAML line — this is how the
+/// `doc.*` namespace (registered via Sub B) routes through the
+/// markdown pipeline. Annotations without a registered handler — most
+/// notably the `lex.metadata.*` shortcut family — fall back to the
+/// legacy in-place synthesis that mirrors the key-flattening logic the
 /// retired `emit_frontmatter_event` used: `lex.metadata.<key>` →
 /// `<key>`; annotations with a paragraph body produce `<key>: <body>`;
 /// annotations with structured params produce `<key>.<sub>: <value>`;
 /// marker-form annotations contribute nothing.
-fn render_document_annotations_as_yaml(annotations: &[IrAnnotation]) -> Option<String> {
+fn render_document_annotations_as_yaml(
+    annotations: &[IrAnnotation],
+    doc_scope_plan: &[RenderedNode],
+) -> Option<String> {
     if annotations.is_empty() {
         return None;
     }
-    let mut parameters: Vec<(String, String)> = Vec::new();
+    let mut lines = String::new();
+    let mut plan_iter = doc_scope_plan.iter().peekable();
     for ann in annotations {
-        let key = ann
-            .label
-            .strip_prefix("lex.metadata.")
-            .unwrap_or(ann.label.as_str())
-            .to_string();
-        // Trim whitespace lex picks up after the closing `::`
-        // separator (e.g. `:: title :: My Doc` produces a paragraph
-        // whose first inline is `" My Doc"`). Collapse internal
-        // newlines to spaces — multi-line annotation bodies emit
-        // `InlineContent::Text("\n")` between lines (see
-        // `from_lex_paragraph`), and a literal `\n` inside a YAML
-        // scalar would orphan the trailing lines from the key.
-        let body_text = flatten_annotation_body_text(&ann.content)
-            .replace('\n', " ")
-            .trim()
-            .to_string();
-        if !body_text.is_empty() {
-            parameters.push((key, body_text));
-        } else if !ann.parameters.is_empty() {
-            for (k, v) in &ann.parameters {
-                parameters.push((format!("{key}.{k}"), v.clone()));
+        // Lockstep with the plan: `dispatch_render` visits
+        // `document_annotations` in order and emits one plan entry
+        // per registered annotation, so the next plan entry whose
+        // label matches this annotation belongs to it.
+        let plan_entry = match plan_iter.peek() {
+            Some(entry) if entry.label == ann.label => plan_iter.next(),
+            _ => None,
+        };
+        if let Some(entry) = plan_entry {
+            if let Some(out) = &entry.output {
+                lines.push_str(out);
+                continue;
             }
+            // Registered but no output (handler returned None or
+            // errored) — fall through to legacy synthesis.
         }
+        synthesize_yaml_line_from_annotation(&mut lines, ann);
     }
-    if parameters.is_empty() {
+    if lines.is_empty() {
         return None;
     }
-    let mut yaml = String::from("---\n");
-    for (k, v) in &parameters {
-        yaml.push_str(&format!("{k}: {v}\n"));
+    Some(format!("---\n{lines}---\n\n"))
+}
+
+/// Legacy in-place synthesis: append one or more YAML lines for `ann`
+/// to `lines`. Used for annotations whose label isn't registered with a
+/// markdown render handler — primarily the `lex.metadata.*` shortcut
+/// family preserved while the shortcut table still maps `:: title ::`
+/// onto `lex.metadata.title` rather than `doc.title`.
+fn synthesize_yaml_line_from_annotation(lines: &mut String, ann: &IrAnnotation) {
+    let key = ann
+        .label
+        .strip_prefix("lex.metadata.")
+        .unwrap_or(ann.label.as_str())
+        .to_string();
+    // Trim whitespace lex picks up after the closing `::` separator
+    // (e.g. `:: title :: My Doc` produces a paragraph whose first
+    // inline is `" My Doc"`). Collapse internal newlines to spaces —
+    // multi-line annotation bodies emit `InlineContent::Text("\n")`
+    // between lines (see `from_lex_paragraph`), and a literal `\n`
+    // inside a YAML scalar would orphan the trailing lines from the
+    // key.
+    let body_text = flatten_annotation_body_text(&ann.content)
+        .replace('\n', " ")
+        .trim()
+        .to_string();
+    if !body_text.is_empty() {
+        lines.push_str(&format!("{key}: {body_text}\n"));
+    } else if !ann.parameters.is_empty() {
+        for (k, v) in &ann.parameters {
+            lines.push_str(&format!("{key}.{k}: {v}\n"));
+        }
     }
-    yaml.push_str("---\n\n");
-    Some(yaml)
 }
 
 /// Flatten the text content of an annotation's paragraph children
@@ -181,10 +265,19 @@ fn default_comrak_options() -> ComrakOptions<'static> {
     options
 }
 
-/// Build a Comrak AST from IR events
+/// Build a Comrak AST from IR events, optionally splicing
+/// handler-rendered Markdown in place of default annotation rendering.
+///
+/// `body_plan` is the body slice of the registry's render plan
+/// (entries past the doc-scope prefix). When a `StartAnnotation`
+/// matches a plan entry with output, the handler's raw markdown is
+/// emitted as a `NodeValue::HtmlBlock` literal so Comrak passes it
+/// through unchanged, and the annotation's children are skipped via
+/// [`SpliceState`].
 fn build_comrak_ast<'a>(
     arena: &'a Arena<AstNode<'a>>,
     events: &[Event],
+    body_plan: &[RenderedNode],
 ) -> Result<&'a AstNode<'a>, FormatError> {
     // Create document root
     let root = arena.alloc(AstNode::new(RefCell::new(Ast::new(
@@ -212,7 +305,31 @@ fn build_comrak_ast<'a>(
     // State for handling table cells (flatten paragraphs inside cells)
     let mut in_table_cell = false;
 
+    // Splice state for handler-rendered annotations. `body_plan` is
+    // empty for serializers that don't dispatch through a registry,
+    // in which case `SpliceState::advance_at_start` always returns
+    // None and every annotation gets its default comment-pair
+    // rendering.
+    let splice_plan = if body_plan.is_empty() {
+        None
+    } else {
+        Some(body_plan)
+    };
+    let mut splice = SpliceState::new(splice_plan);
+
     for event in events {
+        // Inside a handler-owned splice region, only Start/EndAnnotation
+        // events are inspected — for nesting depth and counter
+        // bookkeeping. Every other event is suppressed so the
+        // handler's output replaces the annotation's subtree entirely.
+        if splice.should_skip()
+            && !matches!(
+                event,
+                Event::StartAnnotation { .. } | Event::EndAnnotation { .. }
+            )
+        {
+            continue;
+        }
         match event {
             Event::StartDocument => {
                 // Already created root
@@ -517,95 +634,44 @@ fn build_comrak_ast<'a>(
             } => {
                 current_heading = None;
 
-                // Check if this is a metadata annotation that should be serialized as a comment with content inside
-                // Whitelist: author, note, etc.
-                let metadata_labels = [
-                    "author", "note", "title", "date", "tags", "category", "template",
-                ];
-                if metadata_labels.contains(&label.as_str()) {
-                    // We need to capture the content of this annotation and put it inside the comment.
-                    // However, we are iterating events. The content events follow this StartAnnotation.
-                    // We can't easily consume them here without changing the architecture.
-                    // BUT, we can emit a special comment start, and then when we see EndAnnotation, emit the comment end.
-                    // The problem is comrak expects a single HtmlBlock for the comment if we want it to be "one block".
-                    // If we emit <!-- lex:author and then content and then -->, comrak might escape the content or treat it as markdown.
+                if let Some(rendered_markdown) = splice.advance_at_start(label) {
+                    // Handler-rendered passthrough — emit as an
+                    // HtmlBlock literal so Comrak hands it through to
+                    // the output without re-escaping. `SpliceState`
+                    // suppresses the annotation's body events until
+                    // the matching `EndAnnotation`.
+                    let html_node = arena.alloc(AstNode::new(RefCell::new(Ast::new(
+                        NodeValue::HtmlBlock(comrak::nodes::NodeHtmlBlock {
+                            block_type: 0,
+                            literal: rendered_markdown.to_string(),
+                        }),
+                        (0, 0).into(),
+                    ))));
+                    current_parent.append(html_node);
+                } else if !splice.should_skip() {
+                    // No handler — emit the default lex:label start
+                    // comment. The annotation's body events render with
+                    // their default rendering; the matching
+                    // `EndAnnotation` arm emits the closing comment.
+                    // Suppress when we're inside a handler-owned splice
+                    // region so a nested annotation doesn't leak a
+                    // stray `<!-- lex:inner -->` into the handler's
+                    // output (Copilot review on PR #625).
+                    let mut comment = format!("<!-- lex:{label}");
+                    for (key, value) in parameters {
+                        comment.push_str(&format!(" {key}={value}"));
+                    }
+                    comment.push_str(" -->");
 
-                    // Alternative: We can emit a raw HTML block that starts the comment, and another that ends it.
-                    // But Comrak's HtmlBlock is for *block* HTML.
-                    // If we emit:
-                    // HtmlBlock("<!-- lex:author")
-                    // Paragraph("Content")
-                    // HtmlBlock("-->")
-                    // The output will be:
-                    // <!-- lex:author -->
-                    // <p>Content</p>
-                    // -->
-                    // Which is not what we want.
-
-                    // We want:
-                    // <!-- lex:author
-                    // Content
-                    // -->
-
-                    // To achieve this in the current architecture (Event -> Comrak AST), we need to know the content *now*.
-                    // But we don't.
-                    // However, `build_comrak_ast` is building a tree.
-                    // If we just emit the start comment, and then the content nodes are added as children of `current_parent`.
-                    // Wait, `current_parent` is the parent of the annotation.
-                    // When we see StartAnnotation, we usually create a wrapper node?
-                    // No, currently we just emit an HTML block and continue.
-
-                    // If we want to wrap the content in a comment, we should probably change how we handle this.
-                    // But since we can't easily change the event stream structure here...
-
-                    // Let's try to emit the comment start WITHOUT the closing -->
-                    // And EndAnnotation emits -->
-                    // AND we need to make sure the content is rendered as raw text, not Markdown.
-                    // But the content events will be processed as Markdown nodes (Paragraph, etc.).
-
-                    // If the user wants the content to be *inside* the comment, it effectively becomes "Raw HTML".
-                    // So the content should be treated as part of the HTML block.
-
-                    // Since we can't easily look ahead, maybe we can rely on `from_lex.rs` to have prepared this?
-                    // But `from_lex.rs` produces `DocNode::Annotation` with children.
-                    // `tree_to_events` flattens it.
-
-                    // HACK: If we are in `build_comrak_ast`, we are consuming events.
-                    // We can peek ahead in `events`!
-                    // But `events` is passed as a slice? No, `build_comrak_ast` takes `&[Event]`.
-                    // We are iterating it.
-
-                    // If I can't change the loop, I can't consume ahead.
-
-                    // Maybe I can change `tree_to_events`?
-                    // If `tree_to_events` sees a metadata annotation, it could emit a `Event::HtmlBlock` containing the full comment?
-                    // Instead of `StartAnnotation` / content / `EndAnnotation`.
-                    // That seems cleaner!
-
-                    // Let's modify `tree_to_events` in `lex-babel/src/ir/events.rs`?
-                    // Or wherever it is defined.
-                    // It is imported in `parser.rs`: `use crate::common::flat_to_nested::events_to_tree;`
-                    // And `serializer.rs`: `let events = tree_to_events(&DocNode::Document(ir_doc));`
-
-                    // I need to find `tree_to_events`. It's likely in `lex-babel/src/ir/events.rs` or similar.
-                    // Let's search for it.
+                    let html_node = arena.alloc(AstNode::new(RefCell::new(Ast::new(
+                        NodeValue::HtmlBlock(comrak::nodes::NodeHtmlBlock {
+                            block_type: 0,
+                            literal: comment,
+                        }),
+                        (0, 0).into(),
+                    ))));
+                    current_parent.append(html_node);
                 }
-
-                // Fallback to existing behavior for non-metadata or if we can't change tree_to_events
-                let mut comment = format!("<!-- lex:{label}");
-                for (key, value) in parameters {
-                    comment.push_str(&format!(" {key}={value}"));
-                }
-                comment.push_str(" -->");
-
-                let html_node = arena.alloc(AstNode::new(RefCell::new(Ast::new(
-                    NodeValue::HtmlBlock(comrak::nodes::NodeHtmlBlock {
-                        block_type: 0,
-                        literal: comment,
-                    }),
-                    (0, 0).into(),
-                ))));
-                current_parent.append(html_node);
             }
 
             Event::EndAnnotation { label } if label == "frontmatter" => {
@@ -613,7 +679,12 @@ fn build_comrak_ast<'a>(
             }
 
             Event::EndAnnotation { label } => {
-                // Closing annotation comment with label-specific tag
+                if splice.should_skip() {
+                    splice.advance_at_end();
+                    continue;
+                }
+                // Not in splice — emit the default lex:label end
+                // comment as before.
                 let closing_tag = format!("<!-- /lex:{label} -->");
                 let html_node = arena.alloc(AstNode::new(RefCell::new(Ast::new(
                     NodeValue::HtmlBlock(comrak::nodes::NodeHtmlBlock {
@@ -1081,37 +1152,43 @@ mod tests {
     fn yaml_synthesis_includes_link_and_reference_inlines() {
         use crate::ir::nodes::{Annotation as IrAnn, DocNode, InlineContent, LabelForm, Paragraph};
 
-        let yaml = render_document_annotations_as_yaml(&[IrAnn {
-            label: "lex.metadata.author".to_string(),
-            parameters: vec![],
-            content: vec![DocNode::Paragraph(Paragraph {
-                content: vec![
-                    InlineContent::Text("Alice ".to_string()),
-                    InlineContent::Link {
-                        text: "https://alice.example".to_string(),
-                        href: "https://alice.example".to_string(),
-                    },
-                ],
-            })],
-            form: LabelForm::Canonical,
-        }])
+        let yaml = render_document_annotations_as_yaml(
+            &[IrAnn {
+                label: "lex.metadata.author".to_string(),
+                parameters: vec![],
+                content: vec![DocNode::Paragraph(Paragraph {
+                    content: vec![
+                        InlineContent::Text("Alice ".to_string()),
+                        InlineContent::Link {
+                            text: "https://alice.example".to_string(),
+                            href: "https://alice.example".to_string(),
+                        },
+                    ],
+                })],
+                form: LabelForm::Canonical,
+            }],
+            &[],
+        )
         .expect("yaml block synthesized");
         assert!(
             yaml.contains("author: Alice https://alice.example"),
             "{yaml}"
         );
 
-        let yaml = render_document_annotations_as_yaml(&[IrAnn {
-            label: "lex.metadata.tags".to_string(),
-            parameters: vec![],
-            content: vec![DocNode::Paragraph(Paragraph {
-                content: vec![
-                    InlineContent::Text("rust ".to_string()),
-                    InlineContent::Reference("@manning".to_string()),
-                ],
-            })],
-            form: LabelForm::Canonical,
-        }])
+        let yaml = render_document_annotations_as_yaml(
+            &[IrAnn {
+                label: "lex.metadata.tags".to_string(),
+                parameters: vec![],
+                content: vec![DocNode::Paragraph(Paragraph {
+                    content: vec![
+                        InlineContent::Text("rust ".to_string()),
+                        InlineContent::Reference("@manning".to_string()),
+                    ],
+                })],
+                form: LabelForm::Canonical,
+            }],
+            &[],
+        )
         .expect("yaml block synthesized");
         assert!(yaml.contains("tags: rust @manning"), "{yaml}");
     }
@@ -1126,18 +1203,21 @@ mod tests {
     fn yaml_synthesis_collapses_internal_newlines_to_spaces() {
         use crate::ir::nodes::{Annotation as IrAnn, DocNode, InlineContent, LabelForm, Paragraph};
 
-        let yaml = render_document_annotations_as_yaml(&[IrAnn {
-            label: "lex.metadata.note".to_string(),
-            parameters: vec![],
-            content: vec![DocNode::Paragraph(Paragraph {
-                content: vec![
-                    InlineContent::Text("Line one.".to_string()),
-                    InlineContent::Text("\n".to_string()),
-                    InlineContent::Text("Line two.".to_string()),
-                ],
-            })],
-            form: LabelForm::Canonical,
-        }])
+        let yaml = render_document_annotations_as_yaml(
+            &[IrAnn {
+                label: "lex.metadata.note".to_string(),
+                parameters: vec![],
+                content: vec![DocNode::Paragraph(Paragraph {
+                    content: vec![
+                        InlineContent::Text("Line one.".to_string()),
+                        InlineContent::Text("\n".to_string()),
+                        InlineContent::Text("Line two.".to_string()),
+                    ],
+                })],
+                form: LabelForm::Canonical,
+            }],
+            &[],
+        )
         .expect("yaml block synthesized");
 
         assert!(
@@ -1161,19 +1241,22 @@ mod tests {
     fn yaml_synthesis_includes_code_and_math_inlines() {
         use crate::ir::nodes::{Annotation as IrAnn, DocNode, InlineContent, LabelForm, Paragraph};
 
-        let yaml = render_document_annotations_as_yaml(&[IrAnn {
-            label: "lex.metadata.title".to_string(),
-            parameters: vec![],
-            content: vec![DocNode::Paragraph(Paragraph {
-                content: vec![
-                    InlineContent::Text("Doc with ".to_string()),
-                    InlineContent::Code("snippet".to_string()),
-                    InlineContent::Text(" and ".to_string()),
-                    InlineContent::Math("E=mc^2".to_string()),
-                ],
-            })],
-            form: LabelForm::Canonical,
-        }])
+        let yaml = render_document_annotations_as_yaml(
+            &[IrAnn {
+                label: "lex.metadata.title".to_string(),
+                parameters: vec![],
+                content: vec![DocNode::Paragraph(Paragraph {
+                    content: vec![
+                        InlineContent::Text("Doc with ".to_string()),
+                        InlineContent::Code("snippet".to_string()),
+                        InlineContent::Text(" and ".to_string()),
+                        InlineContent::Math("E=mc^2".to_string()),
+                    ],
+                })],
+                form: LabelForm::Canonical,
+            }],
+            &[],
+        )
         .expect("yaml block synthesized");
         assert!(
             yaml.contains("title: Doc with snippet and E=mc^2"),
