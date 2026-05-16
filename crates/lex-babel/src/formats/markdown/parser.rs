@@ -54,6 +54,11 @@ fn default_comrak_options() -> ComrakOptions<'static> {
     options.extension.tasklist = true;
     options.extension.superscript = true;
     options.extension.front_matter_delimiter = Some("---".to_string());
+    // Recognize Pandoc-flavored definition lists on import (mirrors the
+    // serializer side — #605). Without this, output written as
+    // `Term\n\n: details` would import back as two paragraphs and the
+    // round-trip would lose the `<dl>` structure.
+    options.extension.description_lists = true;
     options
 }
 
@@ -310,6 +315,47 @@ fn collect_events_from_node<'a>(
                 collect_events_from_node(child, events)?;
             }
             events.push(Event::EndTableRow);
+        }
+
+        // #605 round-trip: recognize Pandoc-style description lists Comrak
+        // parsed via the `description_lists` extension. Each
+        // DescriptionList → DescriptionItem → (DescriptionTerm,
+        // DescriptionDetails) maps to a Definition with term + description.
+        NodeValue::DescriptionList => {
+            for child in node.children() {
+                collect_events_from_node(child, events)?;
+            }
+        }
+
+        NodeValue::DescriptionItem(_) => {
+            events.push(Event::StartDefinition);
+            for child in node.children() {
+                collect_events_from_node(child, events)?;
+            }
+            events.push(Event::EndDefinition);
+        }
+
+        NodeValue::DescriptionTerm => {
+            events.push(Event::StartDefinitionTerm);
+            // Comrak wraps the term content in a Paragraph; flatten to inlines.
+            for child in node.children() {
+                if matches!(child.data.borrow().value, NodeValue::Paragraph) {
+                    for inline in child.children() {
+                        collect_inline_events(inline, events)?;
+                    }
+                } else {
+                    collect_inline_events(child, events)?;
+                }
+            }
+            events.push(Event::EndDefinitionTerm);
+        }
+
+        NodeValue::DescriptionDetails => {
+            events.push(Event::StartDefinitionDescription);
+            for child in node.children() {
+                collect_events_from_node(child, events)?;
+            }
+            events.push(Event::EndDefinitionDescription);
         }
 
         NodeValue::TableCell => {

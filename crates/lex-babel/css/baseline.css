@@ -222,6 +222,26 @@ h6+.lex-paragraph {
   line-height: 1.25;
 }
 
+/* #604: `<dd>` body now emits as `<dd><p>…</p>` (the prior
+ * `<div class="lex-content"><p class="lex-paragraph">…</p></div>` wrapper
+ * is dropped — the dd is already the content container). Compensate for
+ * the removed `.lex-paragraph` margin/line-height and the removed
+ * `.lex-content` padding-left on bare `<p>` and any nested lists/verbatim
+ * children of the dd. */
+.lex-definition dd > p {
+  margin: var(--lex-space-100) 0;
+  line-height: 1.25;
+}
+
+.lex-definition dd > p:first-child {
+  margin-top: 0;
+}
+
+.lex-definition dd > .lex-list,
+.lex-definition dd > .lex-verbatim {
+  padding-left: var(--lex-indent-content);
+}
+
 /* === Verbatim (Code Blocks) === */
 .lex-verbatim {
   background: var(--lex-code-bg);

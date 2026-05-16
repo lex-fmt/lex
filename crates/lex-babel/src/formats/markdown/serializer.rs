@@ -773,8 +773,10 @@ fn build_comrak_ast<'a>(
                 parent_stack.push(current_parent);
                 current_parent = term_node;
 
-                // Comrak's CM formatter wraps the term's inline content in a
-                // paragraph for proper spacing.
+                // Comrak's CM formatter requires the term content to live
+                // inside a Paragraph so it renders with the right line
+                // break. Without it, the term inlines and the description's
+                // `: ` prefix render on the same line.
                 let para_node = arena.alloc(AstNode::new(RefCell::new(Ast::new(
                     NodeValue::Paragraph,
                     (0, 0).into(),
