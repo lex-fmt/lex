@@ -35,6 +35,10 @@ pub enum Event {
     StartVerbatim {
         language: Option<String>,
         subject: Option<String>,
+        /// Closing-data parameters preserved end-to-end through the
+        /// event stream so `IR → events → IR` round-trips losslessly
+        /// (mirrors `StartAnnotation.parameters`).
+        parameters: Vec<(String, String)>,
     },
     EndVerbatim,
     StartAnnotation {

@@ -476,10 +476,22 @@ fn to_lex_verbatim(verb: &Verbatim) -> LexContentItem {
         .map(|line| VerbatimContent::VerbatimLine(LexVerbatimLine::new(line.to_string())))
         .collect();
 
-    // Create closing data with language label
+    // Create closing data with language label + closing parameters.
+    // Parameters round-trip through the IR so third-party verbatim
+    // labels with on_render handlers (and the `lexd format` source
+    // preservation contract) keep their authored shape.
     let label_text = verb.language.clone().unwrap_or_default();
     let label = Label::new(label_text);
-    let closing_data = Data::new(label, Vec::new());
+    let parameters: Vec<Parameter> = verb
+        .parameters
+        .iter()
+        .map(|(k, v)| Parameter {
+            key: k.clone(),
+            value: v.clone(),
+            location: default_range(),
+        })
+        .collect();
+    let closing_data = Data::new(label, parameters);
 
     LexContentItem::VerbatimBlock(Box::new(LexVerbatim::new(
         subject,
@@ -527,7 +539,7 @@ fn inline_content_to_text(content: &[InlineContent]) -> String {
             }
             InlineContent::Code(code) => format!("`{code}`"),
             InlineContent::Math(math) => format!("#{math}#"),
-            InlineContent::Reference(ref_text) => format!("[{ref_text}]"),
+            InlineContent::Reference { raw, .. } => format!("[{raw}]"),
             InlineContent::Link { text, href } => format!("{text} [{href}]"),
             InlineContent::Image(image) => {
                 let mut text = format!("![{}]({})", image.alt, image.src);
@@ -701,6 +713,7 @@ mod tests {
             subject: None,
             language: Some("rust".to_string()),
             content: "fn main() {}\nlet x = 1;".to_string(),
+            parameters: Vec::new(),
         };
 
         let lex_item = to_lex_verbatim(&ir_verb);

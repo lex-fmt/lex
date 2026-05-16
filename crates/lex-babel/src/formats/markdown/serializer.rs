@@ -222,7 +222,7 @@ fn flatten_annotation_body_text(content: &[DocNode]) -> String {
                     InlineContent::Text(t) | InlineContent::Code(t) | InlineContent::Math(t) => {
                         text.push_str(t)
                     }
-                    InlineContent::Reference(r) => text.push_str(r),
+                    InlineContent::Reference { raw, .. } => text.push_str(raw),
                     InlineContent::Link { text: t, .. } => text.push_str(t),
                     _ => {}
                 }
@@ -254,7 +254,7 @@ fn inlines_to_text(content: &[InlineContent]) -> String {
             InlineContent::Italic(c) => inlines_to_text(c),
             InlineContent::Code(c) => c.clone(),
             InlineContent::Math(m) => m.clone(),
-            InlineContent::Reference(r) => r.clone(),
+            InlineContent::Reference { raw, .. } => raw.clone(),
             InlineContent::Link { text, .. } => text.clone(),
             InlineContent::Image(img) => img.alt.clone(),
         })
@@ -488,7 +488,11 @@ fn build_comrak_ast<'a>(
                 list_item_paragraph = None;
             }
 
-            Event::StartVerbatim { language, subject } => {
+            Event::StartVerbatim {
+                language,
+                subject,
+                parameters: _,
+            } => {
                 current_heading = None;
 
                 // Render subject as bold text before the code block
@@ -1044,11 +1048,26 @@ fn add_inline_to_node<'a>(
             parent.append(code_node);
         }
 
-        InlineContent::Reference(ref_text) => {
-            // Unresolved reference (non-linkable types: citations, footnotes, general, etc.)
-            let url = ref_text
-                .strip_prefix('@')
-                .map(|citation| format!("#ref-{citation}"));
+        InlineContent::Reference {
+            raw: ref_text,
+            kind,
+        } => {
+            // Unresolved reference (non-linkable types: citations,
+            // footnotes, general, etc.). Dispatch on the typed kind
+            // preserved from lex-core; fall back to raw-string sniffing
+            // only for `NotSure` (markdown re-import paths that didn't
+            // re-classify against lex's reference grammar).
+            use crate::ir::nodes::ReferenceType;
+            let url = match kind {
+                ReferenceType::Citation(_) => {
+                    let key = ref_text.strip_prefix('@').unwrap_or(ref_text);
+                    Some(format!("#ref-{key}"))
+                }
+                ReferenceType::NotSure => ref_text
+                    .strip_prefix('@')
+                    .map(|citation| format!("#ref-{citation}")),
+                _ => None,
+            };
 
             if let Some(url) = url {
                 let link_node = arena.alloc(AstNode::new(RefCell::new(Ast::new(
@@ -1241,7 +1260,10 @@ mod tests {
                 content: vec![DocNode::Paragraph(Paragraph {
                     content: vec![
                         InlineContent::Text("rust ".to_string()),
-                        InlineContent::Reference("@manning".to_string()),
+                        InlineContent::Reference {
+                            raw: "@manning".to_string(),
+                            kind: crate::ir::nodes::ReferenceType::NotSure,
+                        },
                     ],
                 })],
                 form: LabelForm::Canonical,

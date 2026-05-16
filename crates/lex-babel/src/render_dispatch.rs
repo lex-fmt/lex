@@ -245,14 +245,11 @@ fn visit_verbatim(v: &Verbatim, ctx: &mut WalkCtx<'_>) {
     // reaches here. A labelled verbatim without `on_ir_build` —
     // typical for third-party `verbatim_label: true` schemas that
     // only declare `on_render` — falls back to `DocNode::Verbatim`
-    // with the closing label preserved in `language`. Resurrect
-    // render dispatch for that case via the `language` field.
-    //
-    // Known gap: IR `Verbatim` doesn't carry the closing-data
-    // parameters, so handlers see empty params here. The pre-#616
-    // AST walk had full param access. Restoring this needs an IR-
-    // side `params` field on `Verbatim`; that's IR-symmetry work
-    // (Sub A territory, #614) and out of scope for #616.
+    // with the closing label preserved in `language` and the
+    // closing-data parameters preserved in `parameters` (#614 IR
+    // symmetry follow-up). Resurrect render dispatch for that case
+    // via the `language` field and surface `parameters` to handlers
+    // exactly as the pre-#616 AST walk did.
     let Some(label) = v.language.as_deref() else {
         return;
     };
@@ -265,9 +262,15 @@ fn visit_verbatim(v: &Verbatim, ctx: &mut WalkCtx<'_>) {
     if !schema.verbatim_label || !schema_has_render(&schema, ctx.format.as_str()) {
         return;
     }
+    let params_object = serde_json::Value::Object(
+        v.parameters
+            .iter()
+            .map(|(k, val)| (k.clone(), serde_json::Value::String(val.clone())))
+            .collect(),
+    );
     let label_ctx = LabelCtx {
         label: label.to_string(),
-        params: serde_json::Value::Object(serde_json::Map::new()),
+        params: params_object,
         body: AnnotationBody::Text(v.content.clone()),
         node: NodeRef {
             kind: HostNodeKind::Verbatim.as_str().to_string(),
@@ -354,7 +357,7 @@ fn flatten_text_body(content: &[DocNode]) -> String {
                 InlineContent::Text(t)
                 | InlineContent::Code(t)
                 | InlineContent::Math(t)
-                | InlineContent::Reference(t) => buf.push_str(t),
+                | InlineContent::Reference { raw: t, .. } => buf.push_str(t),
                 InlineContent::Link { text, .. } => buf.push_str(text),
                 InlineContent::Bold(children) | InlineContent::Italic(children) => {
                     flatten_inlines(children, buf);

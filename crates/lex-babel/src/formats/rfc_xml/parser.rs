@@ -189,7 +189,10 @@ fn process_container_children(
             "reference" => {
                 let anchor = child.attribute("anchor").unwrap_or("?");
                 let mut content = vec![
-                    InlineContent::Reference(format!("[{anchor}]")),
+                    InlineContent::Reference {
+                        raw: format!("[{anchor}]"),
+                        kind: crate::ir::nodes::ReferenceType::NotSure,
+                    },
                     InlineContent::Text(" ".to_string()),
                 ];
 
@@ -267,6 +270,7 @@ fn parse_verbatim(node: Node) -> Result<DocNode, FormatError> {
         subject: None,
         language: node.attribute("type").map(|s| s.to_string()),
         content: text,
+        parameters: Vec::new(),
     }))
 }
 
@@ -305,7 +309,10 @@ fn parse_inline_content(node: Node) -> Result<Vec<InlineContent>, FormatError> {
                         target.to_string()
                     };
 
-                    content.push(InlineContent::Reference(text_to_show));
+                    content.push(InlineContent::Reference {
+                        raw: text_to_show,
+                        kind: crate::ir::nodes::ReferenceType::NotSure,
+                    });
                 }
                 "eref" => {
                     let target = child.attribute("target").unwrap_or("?");

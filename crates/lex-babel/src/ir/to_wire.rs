@@ -271,9 +271,9 @@ fn inline_to_wire(inline: &InlineContent) -> WireInline {
         },
         InlineContent::Code(t) => WireInline::Code { text: t.clone() },
         InlineContent::Math(t) => WireInline::Math { text: t.clone() },
-        InlineContent::Reference(s) => WireInline::Reference {
-            ref_kind: RefKind::General,
-            target: s.clone(),
+        InlineContent::Reference { raw, kind } => WireInline::Reference {
+            ref_kind: ref_kind_to_wire(kind),
+            target: raw.clone(),
             label: None,
         },
         InlineContent::Link { text, href } => WireInline::Reference {
@@ -300,7 +300,7 @@ pub fn inlines_to_text(content: &[InlineContent]) -> String {
             InlineContent::Text(t) => t.clone(),
             InlineContent::Bold(c) | InlineContent::Italic(c) => inlines_to_text(c),
             InlineContent::Code(t) | InlineContent::Math(t) => t.clone(),
-            InlineContent::Reference(s) => s.clone(),
+            InlineContent::Reference { raw, .. } => raw.clone(),
             InlineContent::Link { text, .. } => text.clone(),
             InlineContent::Image(img) => img.alt.clone(),
         })
@@ -354,4 +354,23 @@ pub fn ir_annotation_body_to_json(content: &[DocNode]) -> Value {
     obj.insert("kind".into(), Value::String("block".into()));
     obj.insert("children".into(), Value::Array(children));
     Value::Object(obj)
+}
+
+/// Map the lex-core reference classification onto the wire-level
+/// [`RefKind`] used by extension handlers. The wire enum is coarser
+/// than lex-core's: `AnnotationReference` has no direct wire variant
+/// and surfaces as `General`; `NotSure` surfaces as `Unsure`.
+fn ref_kind_to_wire(kind: &crate::ir::nodes::ReferenceType) -> RefKind {
+    use crate::ir::nodes::ReferenceType;
+    match kind {
+        ReferenceType::ToCome { .. } => RefKind::Placeholder,
+        ReferenceType::Citation(_) => RefKind::Citation,
+        ReferenceType::AnnotationReference { .. } => RefKind::General,
+        ReferenceType::FootnoteNumber { .. } => RefKind::Footnote,
+        ReferenceType::Session { .. } => RefKind::Session,
+        ReferenceType::Url { .. } => RefKind::Url,
+        ReferenceType::File { .. } => RefKind::File,
+        ReferenceType::General { .. } => RefKind::General,
+        ReferenceType::NotSure => RefKind::Unsure,
+    }
 }
