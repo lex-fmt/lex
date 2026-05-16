@@ -77,7 +77,8 @@ fn net_probe_succeeds_under_null_sandbox() {
 
 #[cfg(target_os = "linux")]
 fn landlock_available() -> bool {
-    use landlock::{AccessFs, Ruleset, RulesetAttr, ABI};
+    // `Access` trait must be in scope for `AccessFs::from_all`.
+    use landlock::{Access, AccessFs, Ruleset, RulesetAttr, ABI};
     // Probe by creating an unbound ruleset. Doesn't call
     // `restrict_self` so the test process is unaffected. Failure here
     // means the kernel doesn't support landlock.
