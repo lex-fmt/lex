@@ -489,6 +489,39 @@ fn test_katex_injected_when_math_present() {
 }
 
 #[test]
+fn test_katex_tags_have_sri_integrity_hashes() {
+    // Regression test for #611: CDN-loaded KaTeX assets must carry
+    // Subresource Integrity (SRI) hashes so a compromised CDN cannot
+    // substitute malicious bytes. Hashes are for KaTeX 0.16.11 and were
+    // computed from the actual release tarball at
+    // github.com/KaTeX/KaTeX/releases/tag/v0.16.11.
+    let lex_src = "1. Math\n\n    Inline: #\\log_2# present.\n";
+    let html = lex_to_html(lex_src, HtmlTheme::Modern);
+
+    // katex.min.css
+    assert!(
+        html.contains(
+            "integrity=\"sha384-nB0miv6/jRmo5UMMR1wu3Gz6NLsoTkbqJghGIsx//Rlm+ZU03BU6SQNC66uf4l5+\""
+        ),
+        "katex.min.css must carry verified SRI hash: {html}"
+    );
+    // katex.min.js
+    assert!(
+        html.contains(
+            "integrity=\"sha384-7zkQWkzuo3B5mTepMUcHkMB5jZaolc2xDwL6VFqjFALcbeS9Ggm/Yr2r3Dy4lfFg\""
+        ),
+        "katex.min.js must carry verified SRI hash: {html}"
+    );
+    // contrib/auto-render.min.js
+    assert!(
+        html.contains(
+            "integrity=\"sha384-43gviWU0YVjaDtb/GhzOouOXtZMP/7XUzwPTstBeZFe/+rCMvRwr4yROQP43s0Xk\""
+        ),
+        "auto-render.min.js must carry verified SRI hash: {html}"
+    );
+}
+
+#[test]
 fn test_katex_not_injected_when_no_math() {
     // Math-free documents shouldn't pay the KaTeX cost.
     let lex_src = "Just a paragraph with no math at all.\n";
