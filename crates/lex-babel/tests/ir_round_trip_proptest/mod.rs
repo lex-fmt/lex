@@ -256,10 +256,12 @@ prop_compose! {
     {
         // de-dup parameter keys: lex parameter syntax requires unique keys
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-        let parameters: Vec<(String, String)> = params
-            .into_iter()
-            .filter(|(k, _)| seen.insert(k.clone()))
-            .collect();
+        let mut parameters: Vec<(String, String)> = Vec::new();
+        for (k, v) in params {
+            if seen.insert(k.clone()) {
+                parameters.push((k, v));
+            }
+        }
         Verbatim {
             subject: subject.map(|s| s.trim_end().to_string()).filter(|s| !s.is_empty()),
             language: lang.filter(|s| !s.is_empty()),
