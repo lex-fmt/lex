@@ -338,28 +338,41 @@ fn body_for_schema(content: &[DocNode], schema: &Schema) -> AnnotationBody {
 /// markdown serializer's metadata-flatten contract (`Text`, `Code`,
 /// `Math`, `Reference`, `Link` are included; `Bold`/`Italic`/`Image`
 /// are skipped as YAML values are leaf strings, not rich content).
-/// Multi-paragraph bodies are joined with `\n` so a downstream
-/// formatter can decide how to fold them.
+/// Multi-paragraph bodies are joined with a single space so the
+/// resulting scalar stays single-line — a literal newline in a YAML
+/// scalar would orphan the trailing text from its key (Gemini review
+/// on PR #625). `DocNode::Inline` siblings (bare inlines outside a
+/// paragraph wrapper) are processed too, so an unusual doc-scope
+/// annotation shape doesn't silently drop content.
 fn flatten_text_body(content: &[DocNode]) -> String {
+    fn flatten_inlines(inlines: &[InlineContent], buf: &mut String) {
+        for inline in inlines {
+            match inline {
+                InlineContent::Text(t)
+                | InlineContent::Code(t)
+                | InlineContent::Math(t)
+                | InlineContent::Reference(t) => buf.push_str(t),
+                InlineContent::Link { text, .. } => buf.push_str(text),
+                InlineContent::Bold(_) | InlineContent::Italic(_) | InlineContent::Image(_) => {}
+            }
+        }
+    }
+
     let mut buf = String::new();
     let mut first = true;
     for node in content {
-        if let DocNode::Paragraph(p) = node {
-            if !first {
-                buf.push('\n');
-            }
-            first = false;
-            for inline in &p.content {
-                match inline {
-                    InlineContent::Text(t)
-                    | InlineContent::Code(t)
-                    | InlineContent::Math(t)
-                    | InlineContent::Reference(t) => buf.push_str(t),
-                    InlineContent::Link { text, .. } => buf.push_str(text),
-                    InlineContent::Bold(_) | InlineContent::Italic(_) | InlineContent::Image(_) => {
-                    }
+        match node {
+            DocNode::Paragraph(p) => {
+                if !first {
+                    buf.push(' ');
                 }
+                first = false;
+                flatten_inlines(&p.content, &mut buf);
             }
+            DocNode::Inline(i) => {
+                flatten_inlines(std::slice::from_ref(i), &mut buf);
+            }
+            _ => {}
         }
     }
     buf
@@ -1132,5 +1145,41 @@ mod tests {
             &["acme.in_header", "acme.in_body"],
             "header cells must be walked before body cells"
         );
+    }
+
+    /// Gemini review on PR #625: multi-paragraph bodies must join with
+    /// a single space (not `\n`) so the resulting YAML scalar stays
+    /// single-line. A literal newline orphans the trailing text from
+    /// its key when the handler embeds the value as `key: "<scalar>"`.
+    #[test]
+    fn flatten_text_body_joins_paragraphs_with_space_not_newline() {
+        use crate::ir::nodes::{DocNode as IrNode, InlineContent, Paragraph};
+        let body = vec![
+            IrNode::Paragraph(Paragraph {
+                content: vec![InlineContent::Text("First line.".into())],
+            }),
+            IrNode::Paragraph(Paragraph {
+                content: vec![InlineContent::Text("Second line.".into())],
+            }),
+        ];
+        let flat = flatten_text_body(&body);
+        assert_eq!(flat, "First line. Second line.");
+        assert!(
+            !flat.contains('\n'),
+            "flattened scalar must not contain raw newlines"
+        );
+    }
+
+    /// Gemini review on PR #625: bare `DocNode::Inline` siblings (inlines
+    /// not wrapped in a Paragraph) are an unusual doc-scope shape, but
+    /// the flatten must include them rather than silently dropping content.
+    #[test]
+    fn flatten_text_body_processes_bare_inline_doc_nodes() {
+        use crate::ir::nodes::{DocNode as IrNode, InlineContent};
+        let body = vec![
+            IrNode::Inline(InlineContent::Text("Hello, ".into())),
+            IrNode::Inline(InlineContent::Text("world.".into())),
+        ];
+        assert_eq!(flatten_text_body(&body), "Hello, world.");
     }
 }
