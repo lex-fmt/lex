@@ -11,8 +11,7 @@ use predicates::prelude::*;
 
 /// A small lex paragraph with multiple cp1252 → UTF-8 mojibake glyphs,
 /// enough to clear the ≥3-distinct-pattern threshold.
-const MOJIBAKE_LEX: &str =
-    "RÃ©sumÃ© of the MÃ¶bius cafÃ©: Ã¼nique Ã±otes â€\u{201D} indeed.\n";
+const MOJIBAKE_LEX: &str = "RÃ©sumÃ© of the MÃ¶bius cafÃ©: Ã¼nique Ã±otes â€\u{201D} indeed.\n";
 
 const CLEAN_LEX: &str = "A perfectly clean paragraph with no mojibake.\n";
 
@@ -26,11 +25,9 @@ fn convert_warns_on_mojibake_input() {
         .arg("markdown")
         .write_stdin(MOJIBAKE_LEX);
 
-    cmd.assert()
-        .success()
-        .stderr(predicate::str::contains(
-            "appears to be UTF-8-double-encoded",
-        ));
+    cmd.assert().success().stderr(predicate::str::contains(
+        "appears to be UTF-8-double-encoded",
+    ));
 }
 
 #[test]
@@ -85,9 +82,7 @@ fn format_warns_on_mojibake_input() {
     let mut cmd = cargo_bin_cmd!("lexd");
     cmd.arg("format").write_stdin(MOJIBAKE_LEX);
 
-    cmd.assert()
-        .success()
-        .stderr(predicate::str::contains(
-            "appears to be UTF-8-double-encoded",
-        ));
+    cmd.assert().success().stderr(predicate::str::contains(
+        "appears to be UTF-8-double-encoded",
+    ));
 }

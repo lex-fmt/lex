@@ -34,7 +34,7 @@ const PATTERNS: &[&str] = &[
     "Ã²", "Ã³", "Ã´", "Ã¶", // o-family
     "Ã¹", "Ãº", "Ã»", "Ã¼", // u-family
     "Ã±", "Ã§", // tilde n, c-cedilla
-    "ÃŸ",  // sharp s
+    "ÃŸ", // sharp s
     // Smart-punctuation double-encodings all start with `â€`
     // (mojibake of the `\xE2\x80` Unicode-punctuation block prefix).
     // The trailing byte distinguishes em-dash / en-dash / curly quotes;
@@ -49,10 +49,7 @@ const PATTERNS: &[&str] = &[
 /// contains an isolated `â` or `Ã` (e.g. a Spanish or French word) does
 /// not trigger a warning.
 pub fn detect_mojibake(input: &str) -> Option<MojibakeReport> {
-    let distinct = PATTERNS
-        .iter()
-        .filter(|pat| input.contains(*pat))
-        .count();
+    let distinct = PATTERNS.iter().filter(|pat| input.contains(*pat)).count();
     if distinct >= 3 {
         Some(MojibakeReport {
             distinct_patterns: distinct,
