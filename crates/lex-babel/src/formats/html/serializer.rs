@@ -86,7 +86,11 @@ pub fn serialize_to_html_with_registry(
     options: HtmlOptions,
     registry: &lex_extension_host::Registry,
 ) -> Result<HtmlExportOutcome, FormatError> {
-    let ir_doc = crate::to_ir(doc);
+    // Build the IR through the caller's registry so third-party
+    // `on_ir_build` hooks (verbatim-label hydration etc.) participate
+    // in IR construction. Otherwise the IR `dispatch_render` walks
+    // would diverge from what the same registry expects to see.
+    let ir_doc = crate::to_ir_with_registry(doc, registry);
     let plan = crate::render_dispatch::dispatch_render(&ir_doc, registry, "html");
     // Phase 3b of #614: skip the doc-scope prefix of the plan when
     // feeding the event-indexed splice walker. The event stream

@@ -190,7 +190,11 @@ fn walk_doc_node(node: &DocNode, parent_kind: HostNodeKind, ctx: &mut WalkCtx<'_
             visit_verbatim(v, ctx);
         }
         DocNode::Table(t) => {
-            for cell in t.rows.iter().chain(t.header.iter()).flat_map(|r| &r.cells) {
+            // Header rows before body rows — must match
+            // `nested_to_flat::tree_to_events`'s emit order so the
+            // event-indexed splice walker stays aligned with the
+            // dispatch plan.
+            for cell in t.header.iter().chain(t.rows.iter()).flat_map(|r| &r.cells) {
                 for child in &cell.content {
                     walk_doc_node(child, HostNodeKind::Table, ctx);
                 }
@@ -255,12 +259,43 @@ fn visit_annotation(annotation: &Annotation, attached_to: HostNodeKind, ctx: &mu
 }
 
 fn visit_verbatim(v: &Verbatim, ctx: &mut WalkCtx<'_>) {
-    // IR verbatim doesn't carry the closing label — the IR flattens
-    // labelled verbatim blocks into typed nodes (Table, Image, …) at
-    // IR build via `dispatch_ir_build`. A `DocNode::Verbatim` reaching
-    // here is an unlabelled code block, so there's nothing to
-    // dispatch.
-    let _ = (v, ctx);
+    // A labelled verbatim with `on_ir_build` gets hydrated into a
+    // typed `DocNode` (Table / Image / Video / Audio) and never
+    // reaches here. A labelled verbatim without `on_ir_build` —
+    // typical for third-party `verbatim_label: true` schemas that
+    // only declare `on_render` — falls back to `DocNode::Verbatim`
+    // with the closing label preserved in `language`. Resurrect
+    // render dispatch for that case via the `language` field.
+    //
+    // Known gap: IR `Verbatim` doesn't carry the closing-data
+    // parameters, so handlers see empty params here. The pre-#616
+    // AST walk had full param access. Restoring this needs an IR-
+    // side `params` field on `Verbatim`; that's IR-symmetry work
+    // (Sub A territory, #614) and out of scope for #616.
+    let Some(label) = v.language.as_deref() else {
+        return;
+    };
+    if label.is_empty() {
+        return;
+    }
+    let Some(schema) = ctx.registry.schema_for(label) else {
+        return;
+    };
+    if !schema.verbatim_label || !schema_has_render(&schema, ctx.format.as_str()) {
+        return;
+    }
+    let label_ctx = LabelCtx {
+        label: label.to_string(),
+        params: serde_json::Value::Object(serde_json::Map::new()),
+        body: AnnotationBody::Text(v.content.clone()),
+        node: NodeRef {
+            kind: HostNodeKind::Verbatim.as_str().to_string(),
+            range: zero_range(),
+            origin: None,
+        },
+    };
+    ctx.out
+        .push(dispatch_one(label, ctx.registry, &label_ctx, ctx.format));
 }
 
 fn dispatch_one(label: &str, registry: &Registry, ctx: &LabelCtx, format: &Format) -> RenderedNode {
@@ -954,5 +989,124 @@ mod tests {
             }
             other => panic!("expected AnnotationBody::Lex, got {other:?}"),
         }
+    }
+
+    /// Regression for Copilot's review on PR #623: a labelled verbatim
+    /// block without an `on_ir_build` handler still needs render
+    /// dispatch — `from_lex_verbatim` falls back to `DocNode::Verbatim`
+    /// with the closing label preserved in `language`, and
+    /// `visit_verbatim` resurrects dispatch via that field.
+    #[test]
+    fn verbatim_label_with_on_render_only_dispatches_via_language_field() {
+        let registry = Registry::new();
+        // `verbatim_label: true`, html render hook, no `on_ir_build` —
+        // the schema declares the label as a verbatim closer but
+        // doesn't hydrate it into a typed IR node, so it stays a
+        // generic `DocNode::Verbatim`.
+        let mut s = schema("acme.snippet", &["html"]);
+        s.verbatim_label = true;
+        registry
+            .register_namespace("acme", vec![s], Box::new(EchoRender))
+            .unwrap();
+        // Note the closing `::` line — that's the verbatim form's
+        // closer carrying the label.
+        let doc = parse("Code:\n    let x = 1;\n:: acme.snippet ::\n");
+        let plan = dispatch_render(&doc, &registry, "html");
+        assert_eq!(
+            plan.nodes.len(),
+            1,
+            "labelled verbatim with on_render hook should produce a plan entry"
+        );
+        assert_eq!(plan.nodes[0].label, "acme.snippet");
+        assert!(plan.nodes[0]
+            .output
+            .as_deref()
+            .is_some_and(|s| s.contains("acme.snippet")));
+    }
+
+    /// Regression for Copilot's review on PR #623: the dispatch walk
+    /// must visit table header rows before body rows so the plan
+    /// indexing matches `tree_to_events`'s emit order (header-first).
+    /// Otherwise an annotation inside a header cell would get its
+    /// handler output spliced into the wrong cell.
+    #[test]
+    fn table_header_cells_walked_before_body_cells() {
+        use std::sync::Mutex;
+        struct OrderedCapture {
+            seen: std::sync::Arc<Mutex<Vec<String>>>,
+        }
+        impl LexHandler for OrderedCapture {
+            fn on_render(
+                &self,
+                ctx: &LabelCtx,
+                _: Format,
+            ) -> Result<Option<RenderOut>, HandlerError> {
+                self.seen.lock().unwrap().push(ctx.label.clone());
+                Ok(None)
+            }
+        }
+        let seen = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let registry = Registry::new();
+        registry
+            .register_namespace(
+                "acme",
+                vec![
+                    schema("acme.in_header", &["html"]),
+                    schema("acme.in_body", &["html"]),
+                ],
+                Box::new(OrderedCapture { seen: seen.clone() }),
+            )
+            .unwrap();
+        // Synthesise an IR Table with a labelled annotation in a
+        // header cell and another in a body cell. Test the walker
+        // directly rather than parsing — keeps the regression
+        // hermetic to the dispatch order.
+        use crate::ir::nodes::{
+            Annotation as IrAnn, DocNode as IrNode, Document as IrDoc, LabelForm,
+            Paragraph as IrPara, Table as IrTable, TableCell as IrCell, TableCellAlignment,
+            TableRow as IrRow,
+        };
+        fn cell_with_annotation(label: &str) -> IrCell {
+            IrCell {
+                content: vec![
+                    IrNode::Annotation(IrAnn {
+                        label: label.into(),
+                        parameters: Vec::new(),
+                        content: Vec::new(),
+                        form: LabelForm::Canonical,
+                    }),
+                    IrNode::Paragraph(IrPara {
+                        content: vec![crate::ir::nodes::InlineContent::Text("cell".into())],
+                    }),
+                ],
+                header: false,
+                align: TableCellAlignment::None,
+                colspan: 1,
+                rowspan: 1,
+            }
+        }
+        let doc = IrDoc {
+            title: None,
+            subtitle: None,
+            children: vec![IrNode::Table(IrTable {
+                rows: vec![IrRow {
+                    cells: vec![cell_with_annotation("acme.in_body")],
+                }],
+                header: vec![IrRow {
+                    cells: vec![cell_with_annotation("acme.in_header")],
+                }],
+                caption: None,
+                footnotes: Vec::new(),
+                fullwidth: false,
+            })],
+            document_annotations: Vec::new(),
+        };
+        let _ = dispatch_render(&doc, &registry, "html");
+        let kinds = seen.lock().unwrap().clone();
+        assert_eq!(
+            kinds.as_slice(),
+            &["acme.in_header", "acme.in_body"],
+            "header cells must be walked before body cells"
+        );
     }
 }
