@@ -489,6 +489,31 @@ fn test_katex_injected_when_math_present() {
 }
 
 #[test]
+fn test_highlight_js_tags_have_sri_integrity_hashes() {
+    // Follow-up to #611 (Copilot review): every CDN-loaded third-party
+    // asset should carry an SRI hash, not just KaTeX. Hashes are for
+    // highlight.js 11.11.1 and were computed from the official cdn-release
+    // tarball at github.com/highlightjs/cdn-release/releases/tag/11.11.1.
+    let lex_src = "Plain document for the highlight.js tag check.\n";
+    let html = lex_to_html(lex_src, HtmlTheme::Modern);
+
+    // styles/github.min.css
+    assert!(
+        html.contains(
+            "integrity=\"sha384-eFTL69TLRZTkNfYZOLM+G04821K1qZao/4QLJbet1pP4tcF+fdXq/9CdqAbWRl/L\""
+        ),
+        "highlight.js github.min.css must carry verified SRI hash: {html}"
+    );
+    // highlight.min.js
+    assert!(
+        html.contains(
+            "integrity=\"sha384-RH2xi4eIQ/gjtbs9fUXM68sLSi99C7ZWBRX1vDrVv6GQXRibxXLbwO2NGZB74MbU\""
+        ),
+        "highlight.min.js must carry verified SRI hash: {html}"
+    );
+}
+
+#[test]
 fn test_katex_tags_have_sri_integrity_hashes() {
     // Regression test for #611: CDN-loaded KaTeX assets must carry
     // Subresource Integrity (SRI) hashes so a compromised CDN cannot

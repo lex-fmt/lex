@@ -34,7 +34,9 @@ use lex_babel::{
 use lex_config::{LexConfig, PdfPageSize, CONFIG_FILE_NAME};
 use lex_core::lex::ast::{find_node_path_at_position, Position};
 use lex_core::lex::builtins;
-use lex_core::lex::includes::{resolve_from_source, FsLoader, ResolveConfig};
+use lex_core::lex::includes::{
+    resolve_from_source, FsLoader, LoadError, LoadedFile, Loader, ResolveConfig,
+};
 use lex_core::lex::mojibake::detect_mojibake;
 use lex_extension_host::registry::Registry;
 use std::collections::HashMap;
@@ -1222,6 +1224,42 @@ fn expand_includes_to_source(source: &str, entry_path: &str, inc: &IncludeOption
 }
 
 /// Handle the convert command
+/// Loader decorator that records the canonical path of any file whose
+/// source text trips the mojibake detector, then delegates to the
+/// inner loader unchanged. The CLI uses this to surface a per-file
+/// warning for content pulled in by `:: lex.include ::` — content the
+/// entry-source mojibake scan can't see on its own.
+struct MojibakeScanningLoader<L: Loader> {
+    inner: L,
+    scan_enabled: bool,
+    findings: Arc<std::sync::Mutex<Vec<PathBuf>>>,
+}
+
+impl<L: Loader> MojibakeScanningLoader<L> {
+    fn new(inner: L, scan_enabled: bool) -> Self {
+        Self {
+            inner,
+            scan_enabled,
+            findings: Arc::new(std::sync::Mutex::new(Vec::new())),
+        }
+    }
+
+    fn findings(&self) -> Arc<std::sync::Mutex<Vec<PathBuf>>> {
+        Arc::clone(&self.findings)
+    }
+}
+
+impl<L: Loader> Loader for MojibakeScanningLoader<L> {
+    fn load(&self, path: &Path) -> Result<LoadedFile, LoadError> {
+        let loaded = self.inner.load(path)?;
+        if self.scan_enabled && detect_mojibake(&loaded.source).is_some() {
+            let mut findings = self.findings.lock().expect("findings mutex");
+            findings.push(loaded.canonical_path.clone());
+        }
+        Ok(loaded)
+    }
+}
+
 /// Returns true when CLI warnings should be printed to stderr. Off when
 /// either `--no-warnings` was passed or `LEX_QUIET` is set to a
 /// non-empty, non-zero value.
@@ -1229,10 +1267,7 @@ fn warnings_enabled(matches: &ArgMatches) -> bool {
     if matches.get_flag("no-warnings") {
         return false;
     }
-    match std::env::var("LEX_QUIET") {
-        Ok(v) if !v.is_empty() && v != "0" => false,
-        _ => true,
-    }
+    !matches!(std::env::var("LEX_QUIET"), Ok(v) if !v.is_empty() && v != "0")
 }
 
 fn handle_convert_command(
@@ -1283,17 +1318,37 @@ fn handle_convert_command(
             max_depth: inc.max_depth,
             max_total_includes: inc.max_total_includes,
         };
-        let loader = FsLoader::new(root).with_max_file_size(inc.max_file_size);
+        let inner_loader = FsLoader::new(root).with_max_file_size(inc.max_file_size);
+        // Wrap the loader so each included file is scanned for mojibake
+        // too — the entry-source scan above doesn't see content pulled
+        // in by `:: lex.include ::`, so without this an included file
+        // could silently propagate corrupted bytes through the
+        // converter.
+        let scanning_loader = MojibakeScanningLoader::new(inner_loader, warnings_on);
+        let mojibake_paths = scanning_loader.findings();
         let registry = Registry::new();
-        builtins::register_into(&registry, Arc::new(loader), resolve_config.clone())
+        builtins::register_into(&registry, Arc::new(scanning_loader), resolve_config.clone())
             .unwrap_or_else(|e| {
                 eprintln!("Failed to register lex.* built-ins: {e}");
                 std::process::exit(1);
             });
-        resolve_from_source(&source, Some(entry), &resolve_config, &registry).unwrap_or_else(|e| {
-            eprintln!("Include resolution error: {e}");
-            std::process::exit(1);
-        })
+        let resolved = resolve_from_source(&source, Some(entry), &resolve_config, &registry)
+            .unwrap_or_else(|e| {
+                eprintln!("Include resolution error: {e}");
+                std::process::exit(1);
+            });
+        if warnings_on {
+            let paths = mojibake_paths.lock().expect("loader findings mutex");
+            for path in paths.iter() {
+                eprintln!(
+                    "warning: {} appears to be UTF-8-double-encoded.\n  \
+                     em-dashes, accented letters, and curly quotes may be corrupted.\n  \
+                     consider re-saving the file in UTF-8 from a clean source.",
+                    path.display()
+                );
+            }
+        }
+        resolved
     } else {
         registry.parse(&source, from).unwrap_or_else(|e| {
             eprintln!("Parse error: {e}");
