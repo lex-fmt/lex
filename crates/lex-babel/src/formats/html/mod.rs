@@ -308,7 +308,8 @@ mod tests {
         let verbatim_in_print = print_block
             .find(".lex-verbatim")
             .expect("@media print should style .lex-verbatim");
-        let snippet = &print_block[verbatim_in_print..(verbatim_in_print + 250).min(print_block.len())];
+        let snippet =
+            &print_block[verbatim_in_print..(verbatim_in_print + 250).min(print_block.len())];
         assert!(
             snippet.contains("break-inside: avoid"),
             "@media print .lex-verbatim should declare modern `break-inside: avoid[-page]`: {snippet}"
