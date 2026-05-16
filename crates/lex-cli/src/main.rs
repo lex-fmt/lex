@@ -35,6 +35,7 @@ use lex_config::{LexConfig, PdfPageSize, CONFIG_FILE_NAME};
 use lex_core::lex::ast::{find_node_path_at_position, Position};
 use lex_core::lex::builtins;
 use lex_core::lex::includes::{resolve_from_source, FsLoader, ResolveConfig};
+use lex_core::lex::mojibake::detect_mojibake;
 use lex_extension_host::registry::Registry;
 use std::collections::HashMap;
 use std::fs;
@@ -100,6 +101,13 @@ fn build_cli() -> Command {
                 .value_name("PATH")
                 .help("Resolution root for lex.include (default: nearest .lex.toml or entry-file directory)")
                 .value_hint(ValueHint::DirPath)
+                .global(true),
+        )
+        .arg(
+            Arg::new("no-warnings")
+                .long("no-warnings")
+                .help("Suppress non-fatal warnings on stderr (also: LEX_QUIET=1)")
+                .action(ArgAction::SetTrue)
                 .global(true),
         )
         .subcommand(
@@ -632,14 +640,16 @@ fn main() {
 
                     let output = sub_matches.get_one::<String>("output").map(|s| s.as_str());
                     let inc = IncludeOptions::for_expanding_command(&matches, &config);
-                    handle_convert_command(input, &from, to, output, &config, &inc);
+                    let warnings_on = warnings_enabled(&matches);
+                    handle_convert_command(input, &from, to, output, &config, &inc, warnings_on);
                 }
                 Some(("format", sub_matches)) => {
                     let input = sub_matches.get_one::<String>("input").map(|s| s.as_str());
                     // Format command always outputs to stdout (no -o flag) and
                     // never expands includes (per proposal §11.4).
                     let inc = IncludeOptions::for_format_command();
-                    handle_convert_command(input, "lex", "lex", None, &config, &inc);
+                    let warnings_on = warnings_enabled(&matches);
+                    handle_convert_command(input, "lex", "lex", None, &config, &inc, warnings_on);
                 }
                 Some(("element-at", sub_matches)) => {
                     let path = sub_matches
@@ -1212,6 +1222,19 @@ fn expand_includes_to_source(source: &str, entry_path: &str, inc: &IncludeOption
 }
 
 /// Handle the convert command
+/// Returns true when CLI warnings should be printed to stderr. Off when
+/// either `--no-warnings` was passed or `LEX_QUIET` is set to a
+/// non-empty, non-zero value.
+fn warnings_enabled(matches: &ArgMatches) -> bool {
+    if matches.get_flag("no-warnings") {
+        return false;
+    }
+    match std::env::var("LEX_QUIET") {
+        Ok(v) if !v.is_empty() && v != "0" => false,
+        _ => true,
+    }
+}
+
 fn handle_convert_command(
     input: Option<&str>,
     from: &str,
@@ -1219,6 +1242,7 @@ fn handle_convert_command(
     output: Option<&str>,
     config: &LexConfig,
     inc: &IncludeOptions,
+    warnings_on: bool,
 ) {
     let registry = FormatRegistry::default();
 
@@ -1233,6 +1257,17 @@ fn handle_convert_command(
     }
 
     let source = read_source(input);
+
+    if warnings_on && detect_mojibake(&source).is_some() {
+        // Detection-only — never blocks the conversion. The user fixes
+        // it at the source by re-saving from a clean UTF-8 editor.
+        let label = input.unwrap_or("<stdin>");
+        eprintln!(
+            "warning: {label} appears to be UTF-8-double-encoded.\n  \
+             em-dashes, accented letters, and curly quotes may be corrupted.\n  \
+             consider re-saving the file in UTF-8 from a clean source."
+        );
+    }
 
     // Parse — for lex input with includes enabled and a real input
     // path, route through the include resolver so the merged tree is
