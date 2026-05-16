@@ -8,10 +8,11 @@
 //!
 //! `from_lex(to_lex(ir))` and `to_lex(from_lex(ast))` are structurally
 //! lossless for the v1 element set with the explicit exceptions listed
-//! below. Per-`DocNode` round-trip proptests live in
-//! `tests/round_trip_proptest/mod.rs` and are the executable form of
-//! this contract — they pin the behaviour so changes here can't drift
-//! silently.
+//! below. Per-`DocNode` IR round-trip proptests live in
+//! `crates/lex-babel/tests/ir_round_trip_proptest/mod.rs` (the
+//! `tests/round_trip_proptest/` suite is the older AST round-trip
+//! coverage) and are the executable form of this contract — they pin
+//! the behaviour so changes here can't drift silently.
 //!
 //! ## Accepted losses (v1)
 //!
@@ -45,10 +46,13 @@
 //!   `InlineContent::Reference { kind: Url|File|Session, .. }` in a
 //!   paragraph is rewritten to `InlineContent::Link { text, href }` by
 //!   `common/links.rs::resolve_implicit_anchors` on every lex → IR
-//!   conversion. This is documented behaviour (#570 anchor heuristic),
-//!   not a loss — the typed `kind` survives in the `href` payload —
-//!   but round-trip tests asserting "same shape both sides" must
-//!   account for the rewrite.
+//!   conversion. This is a deliberate shape change (#570 anchor
+//!   heuristic), not an information loss in user-visible terms: the
+//!   reference target survives as `Link.href`. But the typed
+//!   `ReferenceType` does *not* survive — `Link` carries only strings,
+//!   and consumers that want the classification back must re-infer it
+//!   from `href`. Round-trip tests asserting "same shape both sides"
+//!   must account for the rewrite.
 //!
 //! Heading, inline-format nesting, table caption / fullwidth, and the
 //! Reference → Link rewrite are the only *content-shape* divergences.
