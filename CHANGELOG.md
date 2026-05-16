@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Changed — three babel interop fixes ([#604](https://github.com/lex-fmt/lex/issues/604), [#605](https://github.com/lex-fmt/lex/issues/605), [#606](https://github.com/lex-fmt/lex/issues/606))
+
+Three user-visible changes to the markdown / HTML converters, surfaced during the glossary-doc review (deferred from PR #609).
+
+- **HTML `<dd>` body shape (#604).** `<dd>` no longer wraps its content in `<div class="lex-content"><p class="lex-paragraph">…</p></div>` — the dd is already the content container and the inner div added bytes without semantic value. Simple bodies render as `<dd><p>…</p></dd>` now. Baseline CSS gains compensating `.lex-definition dd > p` / `.lex-definition dd > .lex-list` rules so the rendered vertical rhythm and nested-content indentation are preserved.
+- **Pandoc-flavored markdown definition lists (#605).** Definitions now serialize as `Term\n\n: details` (via Comrak's native `DescriptionList` nodes; `description_lists` extension enabled in both serializer and parser). The legacy `**Term**:` fallback is replaced. The markdown importer also recognizes Pandoc-style definition lists, so a `lex → markdown → lex` round-trip preserves the `<dl>` structure (regression test ships).
+- **Numeric heading escape (#606).** Comrak's `## 1\. Glossary` (escape on a digit-dot prefix to disambiguate from an ordered-list marker) is post-processed away on heading lines — a `#`-prefixed line can't open a list, so the escape is just visual noise. Paragraph-leading `1\.` keeps Comrak's protection.
+
+`regex` and `once_cell` move from dev-deps to main deps (the post-process in #606 uses them).
+
 ### Changed — symmetric IR for `document_annotations` ([#614](https://github.com/lex-fmt/lex/issues/614), Phase 3b of #570)
 
 `Document::document_annotations` is now the single source of truth for document-scope annotations on the IR → Lex path. `to_lex_document` emits every entry into `lex_doc.annotations` via the `to_lex_annotation_raw` helper (shipped in Phase 3a, previously dead code), so a `lex → IR → lex` roundtrip preserves document metadata structurally.

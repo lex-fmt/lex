@@ -566,6 +566,53 @@ fn test_non_definition_between_definitions_breaks_dl_grouping() {
 }
 
 #[test]
+fn test_dd_body_emits_p_directly_without_content_wrapper() {
+    // Regression test for #604: `<dd>` body used to wrap its content in
+    // `<div class="lex-content"><p class="lex-paragraph">…</p></div>`. The
+    // inner div adds no semantic value inside `<dd>` (the dd is already the
+    // content container). The fix skips the wrapper so a simple definition
+    // body emits as `<dd><p>…</p></dd>`.
+    let lex_src = "term:\n    A simple definition body.\n";
+    let html = lex_to_html(lex_src, HtmlTheme::Modern);
+
+    assert!(
+        html.contains("<dd><p>A simple definition body.</p></dd>"),
+        "dd should emit <p> directly, no inner div.lex-content: {html}"
+    );
+    assert!(
+        !html.contains("<dd><div class=\"lex-content\">"),
+        "dd should not wrap its content in <div class=\"lex-content\">: {html}"
+    );
+}
+
+#[test]
+fn test_dd_body_with_multiple_blocks_no_content_wrapper() {
+    // A multi-block `<dd>` body (paragraph + list) still renders correctly
+    // without the `<div class="lex-content">` wrapper around the dd contents.
+    let lex_src = concat!(
+        "term:\n",
+        "    First paragraph in definition.\n\n",
+        "    - item one\n",
+        "    - item two\n",
+    );
+    let html = lex_to_html(lex_src, HtmlTheme::Modern);
+
+    assert!(
+        !html.contains("<dd><div class=\"lex-content\">"),
+        "dd should not open with <div class=\"lex-content\">: {html}"
+    );
+    // The paragraph and list should be direct children of `<dd>`.
+    assert!(
+        html.contains("<dd><p>First paragraph in definition.</p>"),
+        "first paragraph expected as direct child of dd: {html}"
+    );
+    assert!(
+        html.contains("<ul class=\"lex-list\">"),
+        "list still present: {html}"
+    );
+}
+
+#[test]
 fn test_document_subtitle_rendered_in_body() {
     // Title-with-subtitle uses a trailing colon on the title line + subtitle below.
     let lex_src = std::fs::read_to_string(

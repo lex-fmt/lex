@@ -408,6 +408,72 @@ fn test_list_with_multi_paragraph_items() {
 }
 
 // ============================================================================
+// DEFINITION LIST TESTS (#605)
+// ============================================================================
+
+#[test]
+fn test_definition_exports_as_pandoc_style() {
+    // Regression test for #605: definitions previously emitted as
+    // `**Term**:\n\ndescription`. That loses the `<dl>` structure (no
+    // round-trip can recover it). Switch to Pandoc-flavored definition
+    // list syntax: term on its own line, followed by `:   definition`.
+    let lex_src = "term-a:\n    Definition body for term a.\n";
+    let lex_doc = STRING_TO_AST.run(lex_src.to_string()).unwrap();
+    let md = MarkdownFormat.serialize(&lex_doc).unwrap();
+
+    assert!(
+        !md.contains("**term-a**:"),
+        "should not emit bold-term fallback: {md}"
+    );
+    // Pandoc syntax — term on its own line, then `:` + spaces + description.
+    assert!(
+        md.contains("term-a\n"),
+        "term should be on its own line: {md}"
+    );
+    assert!(
+        md.contains(": Definition body for term a."),
+        "description should be prefixed with `:`: {md}"
+    );
+}
+
+#[test]
+fn test_pandoc_definition_round_trips_lex_to_md_to_lex() {
+    // Round-trip regression for #605: a Lex definition should serialize to
+    // Pandoc-style markdown and import back to a Lex Definition (not two
+    // sibling paragraphs). Without parser-side `description_lists`, the
+    // import would drop the `<dl>` structure.
+    use lex_core::lex::ast::ContentItem;
+    let lex_src = "term-a:\n    Definition body for term a.\n";
+    let lex_doc = STRING_TO_AST.run(lex_src.to_string()).unwrap();
+    let md = MarkdownFormat.serialize(&lex_doc).unwrap();
+    let reparsed = MarkdownFormat.parse(&md).expect("re-parse markdown");
+
+    let definition_count: usize = reparsed
+        .root
+        .children
+        .iter()
+        .filter(|item| matches!(item, ContentItem::Definition(_)))
+        .count();
+    assert_eq!(
+        definition_count, 1,
+        "expected one Definition after round-trip, got {definition_count}; md was: {md}"
+    );
+}
+
+#[test]
+fn test_multiple_definitions_pandoc_style() {
+    // Several siblings should each get their own Term/:   def block.
+    let lex_src = concat!("term-a:\n", "    def a\n\n", "term-b:\n", "    def b\n",);
+    let lex_doc = STRING_TO_AST.run(lex_src.to_string()).unwrap();
+    let md = MarkdownFormat.serialize(&lex_doc).unwrap();
+
+    assert!(md.contains("term-a\n"), "term-a expected: {md}");
+    assert!(md.contains(": def a"), "def a body expected: {md}");
+    assert!(md.contains("term-b\n"), "term-b expected: {md}");
+    assert!(md.contains(": def b"), "def b body expected: {md}");
+}
+
+// ============================================================================
 // DOCUMENT TITLE TESTS
 // ============================================================================
 
@@ -483,6 +549,68 @@ fn test_numbered_session_preserves_numbering() {
         md.contains("Introduction"),
         "Heading must contain title text"
     );
+}
+
+#[test]
+fn test_numeric_heading_no_backslash_escape() {
+    // Regression test for #606: Comrak's `format_commonmark` escapes the
+    // period in `1.` at heading start to disambiguate it from an ordered-
+    // list marker (e.g. `## 1\. Glossary`). The escape is visually noisy
+    // and unnecessary inside a heading line (a `#` heading can't open a
+    // list). Post-process strips the backslash from headings only.
+    let lex_src = "1. Glossary\n\n    Some content.\n";
+    let lex_doc = STRING_TO_AST.run(lex_src.to_string()).unwrap();
+    let md = MarkdownFormat.serialize(&lex_doc).unwrap();
+
+    assert!(
+        md.contains("## 1. Glossary"),
+        "numeric heading should render with unescaped period: {md}"
+    );
+    assert!(
+        !md.contains("## 1\\."),
+        "heading should not contain `1\\.` escape: {md}"
+    );
+}
+
+#[test]
+fn test_dotted_numeric_heading_no_backslash_escape() {
+    // Nested headings like `## 1.1.` should also lose the escape.
+    let lex_src = "1. Parent\n\n    1.1. Child\n\n        Content.\n";
+    let lex_doc = STRING_TO_AST.run(lex_src.to_string()).unwrap();
+    let md = MarkdownFormat.serialize(&lex_doc).unwrap();
+
+    assert!(
+        !md.contains("\\."),
+        "no backslash-escaped period anywhere when only headings have digit-dot: {md}"
+    );
+    assert!(md.contains("## 1. Parent"), "parent heading: {md}");
+    assert!(md.contains("### 1.1. Child"), "child heading: {md}");
+}
+
+#[test]
+fn test_paragraph_starting_with_digit_dot_still_escapes() {
+    // A literal `1.` at the *start* of a paragraph (not a heading) must
+    // remain escaped — Comrak escapes it to keep CommonMark from
+    // interpreting the paragraph as an ordered-list item. The heading
+    // strip in #606 must not over-strip and remove this protection.
+    //
+    // Force-resolved as a paragraph by giving lex two paragraphs: a Lex
+    // single-line input starting with `1. ` would parse as a session, so
+    // we use a two-paragraph shape where the second paragraph starts with
+    // a digit-dot pattern.
+    let lex_src = "Intro paragraph here.\n\n1.5x is the speed.\n";
+    let lex_doc = STRING_TO_AST.run(lex_src.to_string()).unwrap();
+    let md = MarkdownFormat.serialize(&lex_doc).unwrap();
+
+    // `1.5x` should still parse as a paragraph; the digit-dot escape
+    // should still apply if Comrak emits one — and the heading-strip
+    // regex must not touch it (it only matches lines prefixed with `#+ `).
+    assert!(
+        !md.contains("## 1.5x") && !md.contains("# 1.5x"),
+        "non-heading line should not have been hoisted to a heading: {md}"
+    );
+    // Paragraph still present
+    assert!(md.contains("1.5x") || md.contains("1\\.5x"), "{md}");
 }
 
 #[test]

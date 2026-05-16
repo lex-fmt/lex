@@ -9,7 +9,10 @@ use crate::error::FormatError;
 use crate::ir::events::Event;
 use crate::ir::nodes::{Annotation as IrAnnotation, DocNode, InlineContent, TableCellAlignment};
 use crate::render_dispatch::{dispatch_render, RenderedNode};
-use comrak::nodes::{Ast, AstNode, ListDelimType, ListType, NodeTable, NodeValue, TableAlignment};
+use comrak::nodes::{
+    Ast, AstNode, ListDelimType, ListType, NodeDescriptionItem, NodeTable, NodeValue,
+    TableAlignment,
+};
 use comrak::{format_commonmark, Arena, ComrakOptions};
 use lex_core::lex::ast::Document;
 use lex_extension_host::Registry;
@@ -90,6 +93,12 @@ pub fn serialize_to_markdown_with_registry(
 
     // Remove Comrak's "end list" HTML comments which appear between consecutive lists
     let cleaned = markdown.replace("<!-- end list -->\n\n", "");
+
+    // #606: Strip Comrak's backslash-escape on a leading digit-dot inside an
+    // ATX heading. Comrak escapes `1.` at heading start to disambiguate from
+    // an ordered-list marker, but a `#`-headed line can't open a list — the
+    // escape is visually noisy. Only applies at the start of a heading line.
+    let cleaned = strip_heading_digit_dot_escape(&cleaned);
 
     // Prepend document title as H1 heading if present
     let with_title = prepend_title_as_h1(&cleaned, document_title);
@@ -252,6 +261,20 @@ fn inlines_to_text(content: &[InlineContent]) -> String {
         .collect()
 }
 
+/// Strip Comrak's `\.` escape after a leading digit run inside an ATX
+/// heading. Comrak escapes `^(#+ \d+)\.` → `^(#+ \d+)\\.` to keep
+/// pure CommonMark renderers from misreading the line as an ordered list,
+/// but a `#`-prefixed line can't open a list, so the escape is just noise.
+/// Applies per line, headings only — paragraph-leading `1\.` is left
+/// alone since Comrak's protection there is meaningful (#606).
+fn strip_heading_digit_dot_escape(markdown: &str) -> String {
+    static HEADING_DIGIT_DOT: once_cell::sync::Lazy<regex::Regex> =
+        once_cell::sync::Lazy::new(|| {
+            regex::Regex::new(r"(?m)^(#+ \d+(?:\.\d+)*)\\\.").expect("compile heading digit-dot")
+        });
+    HEADING_DIGIT_DOT.replace_all(markdown, "$1.").into_owned()
+}
+
 fn default_comrak_options() -> ComrakOptions<'static> {
     let mut options = ComrakOptions::default();
     options.extension.table = true;
@@ -260,6 +283,12 @@ fn default_comrak_options() -> ComrakOptions<'static> {
     options.extension.tasklist = true;
     options.extension.superscript = true;
     options.extension.front_matter_delimiter = Some("---".to_string());
+    // Pandoc-flavored definition lists — let Comrak emit `Term\n\n: details`
+    // for `DescriptionList` / `DescriptionItem` / `DescriptionTerm` /
+    // `DescriptionDetails` nodes (see `cm.rs::format_description_details`).
+    // Lex emits these instead of the legacy `**Term**:` fallback so the
+    // `<dl>` structure round-trips through Pandoc-aware tools (#605).
+    options.extension.description_lists = true;
     // Allow HTML output for annotations (rendered as HTML comments)
     options.render.unsafe_ = true;
     options
@@ -697,18 +726,57 @@ fn build_comrak_ast<'a>(
             }
 
             Event::StartDefinition => {
+                // #605: Emit Pandoc-flavored definition lists via Comrak's
+                // native DescriptionList / DescriptionItem / DescriptionTerm /
+                // DescriptionDetails nodes. Comrak's CommonMark formatter
+                // writes `: ` in front of the description; the term renders
+                // as a plain paragraph. The `description_lists` option is
+                // enabled in `default_comrak_options`.
                 current_heading = None;
-                // Definitions in Markdown: Term paragraph followed by description content
-                // Don't create wrapper, let content be siblings at document level
+                let dl_node = arena.alloc(AstNode::new(RefCell::new(Ast::new(
+                    NodeValue::DescriptionList,
+                    (0, 0).into(),
+                ))));
+                current_parent.append(dl_node);
+                parent_stack.push(current_parent);
+                current_parent = dl_node;
+
+                let item_node = arena.alloc(AstNode::new(RefCell::new(Ast::new(
+                    NodeValue::DescriptionItem(NodeDescriptionItem {
+                        marker_offset: 0,
+                        padding: 2,
+                    }),
+                    (0, 0).into(),
+                ))));
+                current_parent.append(item_node);
+                parent_stack.push(current_parent);
+                current_parent = item_node;
             }
 
             Event::EndDefinition => {
-                // Nothing needed
+                // Pop DescriptionItem (discard intermediate), then DescriptionList.
+                let _ = parent_stack.pop().ok_or_else(|| {
+                    FormatError::SerializationError("Unbalanced definition item end".to_string())
+                })?;
+                current_parent = parent_stack.pop().ok_or_else(|| {
+                    FormatError::SerializationError("Unbalanced definition list end".to_string())
+                })?;
             }
 
             Event::StartDefinitionTerm => {
                 current_heading = None;
-                // Create paragraph for the term with bold styling
+                let term_node = arena.alloc(AstNode::new(RefCell::new(Ast::new(
+                    NodeValue::DescriptionTerm,
+                    (0, 0).into(),
+                ))));
+                current_parent.append(term_node);
+                parent_stack.push(current_parent);
+                current_parent = term_node;
+
+                // Comrak's CM formatter requires the term content to live
+                // inside a Paragraph so it renders with the right line
+                // break. Without it, the term inlines and the description's
+                // `: ` prefix render on the same line.
                 let para_node = arena.alloc(AstNode::new(RefCell::new(Ast::new(
                     NodeValue::Paragraph,
                     (0, 0).into(),
@@ -716,45 +784,36 @@ fn build_comrak_ast<'a>(
                 current_parent.append(para_node);
                 parent_stack.push(current_parent);
                 current_parent = para_node;
-
-                // Add bold wrapper for term text
-                let strong_node = arena.alloc(AstNode::new(RefCell::new(Ast::new(
-                    NodeValue::Strong,
-                    (0, 0).into(),
-                ))));
-                current_parent.append(strong_node);
-                parent_stack.push(current_parent);
-                current_parent = strong_node;
             }
 
             Event::EndDefinitionTerm => {
-                // Close bold
+                // Close paragraph (discard intermediate), then close DescriptionTerm.
+                let _ = parent_stack.pop().ok_or_else(|| {
+                    FormatError::SerializationError(
+                        "Unbalanced definition term paragraph end".to_string(),
+                    )
+                })?;
                 current_parent = parent_stack.pop().ok_or_else(|| {
                     FormatError::SerializationError("Unbalanced definition term end".to_string())
-                })?;
-
-                // Add colon after term
-                let colon_node = arena.alloc(AstNode::new(RefCell::new(Ast::new(
-                    NodeValue::Text(":".to_string()),
-                    (0, 0).into(),
-                ))));
-                current_parent.append(colon_node);
-
-                // Close term paragraph
-                current_parent = parent_stack.pop().ok_or_else(|| {
-                    FormatError::SerializationError(
-                        "Unbalanced definition term paragraph".to_string(),
-                    )
                 })?;
             }
 
             Event::StartDefinitionDescription => {
-                // Description content will be siblings at document level
-                // No wrapper needed
+                let details_node = arena.alloc(AstNode::new(RefCell::new(Ast::new(
+                    NodeValue::DescriptionDetails,
+                    (0, 0).into(),
+                ))));
+                current_parent.append(details_node);
+                parent_stack.push(current_parent);
+                current_parent = details_node;
             }
 
             Event::EndDefinitionDescription => {
-                // Nothing needed
+                current_parent = parent_stack.pop().ok_or_else(|| {
+                    FormatError::SerializationError(
+                        "Unbalanced definition description end".to_string(),
+                    )
+                })?;
             }
 
             Event::StartTable { caption, .. } => {

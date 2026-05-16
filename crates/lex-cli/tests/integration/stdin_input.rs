@@ -36,7 +36,7 @@ fn convert_reads_from_stdin_when_from_is_set() {
 
     cmd.assert()
         .success()
-        .stdout(predicate::str::contains("**Hello**"));
+        .stdout(predicate::str::contains(": World."));
 }
 
 #[test]
@@ -51,7 +51,7 @@ fn convert_injected_reads_from_stdin_when_from_is_set() {
 
     cmd.assert()
         .success()
-        .stdout(predicate::str::contains("**Hello**"));
+        .stdout(predicate::str::contains(": World."));
 }
 
 #[test]

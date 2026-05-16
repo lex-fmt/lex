@@ -11,16 +11,16 @@ This document includes **all major features** of the lex language to serve as a 
 
 This is a two-lined paragraph. First, a simple *definition* at the root level. {{paragraph}}
 
-**Root Definition**:
+Root Definition
 
-This definition contains a paragraph and a `list` to test mixed content at the top level. {{definition}}
+: This definition contains a paragraph and a `list` to test mixed content at the top level. {{definition}}
 
 - Item 1 in definition referencing \[TK-rootlist\]. {{list-item}} 
 - Item 2 in definition with note \[42\]. {{list-item}} 
 
 This is a marker annotation at the root level, attached to the definition above.
 
-## 1\. Primary Session {{session}}
+## 1. Primary Session {{session}}
 
 This session acts as the main container for testing nested structures. It starts with a simple paragraph. {{paragraph}}
 
@@ -37,9 +37,9 @@ This session acts as the main container for testing nested structures. It starts
 
 This is a second-level session containing a definition and a list with nested content. {{paragraph}}
 
-**Nested Definition**:
+Nested Definition
 
-This definition is inside a nested session and contains a list. {{definition}}
+: This definition is inside a nested session and contains a list. {{definition}}
 
 - List inside a nested definition. {{list-item}} 
 - Second item. {{list-item}} 
@@ -61,7 +61,7 @@ function example() {
 }
 ```
 
-## 2\. Second Root Session {{session}}
+## 2. Second Root Session {{session}}
 
 This session tests annotations with block content and marker-style verbatim blocks. {{paragraph}}
 
