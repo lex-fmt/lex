@@ -408,6 +408,53 @@ fn test_list_with_multi_paragraph_items() {
 }
 
 // ============================================================================
+// DEFINITION LIST TESTS (#605)
+// ============================================================================
+
+#[test]
+fn test_definition_exports_as_pandoc_style() {
+    // Regression test for #605: definitions previously emitted as
+    // `**Term**:\n\ndescription`. That loses the `<dl>` structure (no
+    // round-trip can recover it). Switch to Pandoc-flavored definition
+    // list syntax: term on its own line, followed by `:   definition`.
+    let lex_src = "term-a:\n    Definition body for term a.\n";
+    let lex_doc = STRING_TO_AST.run(lex_src.to_string()).unwrap();
+    let md = MarkdownFormat.serialize(&lex_doc).unwrap();
+
+    assert!(
+        !md.contains("**term-a**:"),
+        "should not emit bold-term fallback: {md}"
+    );
+    // Pandoc syntax — term on its own line, then `:` + spaces + description.
+    assert!(
+        md.contains("term-a\n"),
+        "term should be on its own line: {md}"
+    );
+    assert!(
+        md.contains(": Definition body for term a."),
+        "description should be prefixed with `:`: {md}"
+    );
+}
+
+#[test]
+fn test_multiple_definitions_pandoc_style() {
+    // Several siblings should each get their own Term/:   def block.
+    let lex_src = concat!(
+        "term-a:\n",
+        "    def a\n\n",
+        "term-b:\n",
+        "    def b\n",
+    );
+    let lex_doc = STRING_TO_AST.run(lex_src.to_string()).unwrap();
+    let md = MarkdownFormat.serialize(&lex_doc).unwrap();
+
+    assert!(md.contains("term-a\n"), "term-a expected: {md}");
+    assert!(md.contains(": def a"), "def a body expected: {md}");
+    assert!(md.contains("term-b\n"), "term-b expected: {md}");
+    assert!(md.contains(": def b"), "def b body expected: {md}");
+}
+
+// ============================================================================
 // DOCUMENT TITLE TESTS
 // ============================================================================
 

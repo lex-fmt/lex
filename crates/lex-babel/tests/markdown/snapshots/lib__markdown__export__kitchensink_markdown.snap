@@ -11,9 +11,9 @@ This document includes **all major features** of the lex language to serve as a 
 
 This is a two-lined paragraph. First, a simple *definition* at the root level. {{paragraph}}
 
-**Root Definition**:
+Root Definition
 
-This definition contains a paragraph and a `list` to test mixed content at the top level. {{definition}}
+: This definition contains a paragraph and a `list` to test mixed content at the top level. {{definition}}
 
 - Item 1 in definition referencing \[TK-rootlist\]. {{list-item}} 
 - Item 2 in definition with note \[42\]. {{list-item}} 
@@ -37,9 +37,9 @@ This session acts as the main container for testing nested structures. It starts
 
 This is a second-level session containing a definition and a list with nested content. {{paragraph}}
 
-**Nested Definition**:
+Nested Definition
 
-This definition is inside a nested session and contains a list. {{definition}}
+: This definition is inside a nested session and contains a list. {{definition}}
 
 - List inside a nested definition. {{list-item}} 
 - Second item. {{list-item}} 
