@@ -533,6 +533,59 @@ fn test_numbered_session_preserves_numbering() {
 }
 
 #[test]
+fn test_numeric_heading_no_backslash_escape() {
+    // Regression test for #606: Comrak's `format_commonmark` escapes the
+    // period in `1.` at heading start to disambiguate it from an ordered-
+    // list marker (e.g. `## 1\. Glossary`). The escape is visually noisy
+    // and unnecessary inside a heading line (a `#` heading can't open a
+    // list). Post-process strips the backslash from headings only.
+    let lex_src = "1. Glossary\n\n    Some content.\n";
+    let lex_doc = STRING_TO_AST.run(lex_src.to_string()).unwrap();
+    let md = MarkdownFormat.serialize(&lex_doc).unwrap();
+
+    assert!(
+        md.contains("## 1. Glossary"),
+        "numeric heading should render with unescaped period: {md}"
+    );
+    assert!(
+        !md.contains("## 1\\."),
+        "heading should not contain `1\\.` escape: {md}"
+    );
+}
+
+#[test]
+fn test_dotted_numeric_heading_no_backslash_escape() {
+    // Nested headings like `## 1.1.` should also lose the escape.
+    let lex_src = "1. Parent\n\n    1.1. Child\n\n        Content.\n";
+    let lex_doc = STRING_TO_AST.run(lex_src.to_string()).unwrap();
+    let md = MarkdownFormat.serialize(&lex_doc).unwrap();
+
+    assert!(
+        !md.contains("\\."),
+        "no backslash-escaped period anywhere when only headings have digit-dot: {md}"
+    );
+    assert!(md.contains("## 1. Parent"), "parent heading: {md}");
+    assert!(md.contains("### 1.1. Child"), "child heading: {md}");
+}
+
+#[test]
+fn test_paragraph_starting_with_digit_dot_still_escapes() {
+    // A literal `1.` at the *start* of a paragraph (not a heading) must
+    // remain escaped — Comrak escapes it to keep CommonMark from
+    // interpreting the paragraph as an ordered-list item.
+    let lex_src = "1. is the first item in the manual.\n";
+    let lex_doc = STRING_TO_AST.run(lex_src.to_string()).unwrap();
+    let md = MarkdownFormat.serialize(&lex_doc).unwrap();
+
+    // The paragraph's `1.` should be escaped (or otherwise disambiguated)
+    // — we don't lose Comrak's protection on non-heading lines.
+    assert!(
+        md.contains("1\\.") || !md.starts_with("1."),
+        "paragraph starting with `1.` should not be left as a bare list-marker shape: {md}"
+    );
+}
+
+#[test]
 fn test_dotted_numbering_preserved() {
     let lex_src = "1. Parent\n\n    1.1. Child\n\n        Content.\n";
     let lex_doc = STRING_TO_AST.run(lex_src.to_string()).unwrap();

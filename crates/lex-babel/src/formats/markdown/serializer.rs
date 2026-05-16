@@ -94,6 +94,12 @@ pub fn serialize_to_markdown_with_registry(
     // Remove Comrak's "end list" HTML comments which appear between consecutive lists
     let cleaned = markdown.replace("<!-- end list -->\n\n", "");
 
+    // #606: Strip Comrak's backslash-escape on a leading digit-dot inside an
+    // ATX heading. Comrak escapes `1.` at heading start to disambiguate from
+    // an ordered-list marker, but a `#`-headed line can't open a list — the
+    // escape is visually noisy. Only applies at the start of a heading line.
+    let cleaned = strip_heading_digit_dot_escape(&cleaned);
+
     // Prepend document title as H1 heading if present
     let with_title = prepend_title_as_h1(&cleaned, document_title);
 
@@ -253,6 +259,20 @@ fn inlines_to_text(content: &[InlineContent]) -> String {
             InlineContent::Image(img) => img.alt.clone(),
         })
         .collect()
+}
+
+/// Strip Comrak's `\.` escape after a leading digit run inside an ATX
+/// heading. Comrak escapes `^(#+ \d+)\.` → `^(#+ \d+)\\.` to keep
+/// pure CommonMark renderers from misreading the line as an ordered list,
+/// but a `#`-prefixed line can't open a list, so the escape is just noise.
+/// Applies per line, headings only — paragraph-leading `1\.` is left
+/// alone since Comrak's protection there is meaningful (#606).
+fn strip_heading_digit_dot_escape(markdown: &str) -> String {
+    static HEADING_DIGIT_DOT: once_cell::sync::Lazy<regex::Regex> =
+        once_cell::sync::Lazy::new(|| {
+            regex::Regex::new(r"(?m)^(#+ \d+(?:\.\d+)*)\\\.").expect("compile heading digit-dot")
+        });
+    HEADING_DIGIT_DOT.replace_all(markdown, "$1.").into_owned()
 }
 
 fn default_comrak_options() -> ComrakOptions<'static> {

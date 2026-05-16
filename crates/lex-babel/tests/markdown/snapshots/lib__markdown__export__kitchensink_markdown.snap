@@ -20,7 +20,7 @@ Root Definition
 
 This is a marker annotation at the root level, attached to the definition above.
 
-## 1\. Primary Session {{session}}
+## 1. Primary Session {{session}}
 
 This session acts as the main container for testing nested structures. It starts with a simple paragraph. {{paragraph}}
 
@@ -61,7 +61,7 @@ function example() {
 }
 ```
 
-## 2\. Second Root Session {{session}}
+## 2. Second Root Session {{session}}
 
 This session tests annotations with block content and marker-style verbatim blocks. {{paragraph}}
 
