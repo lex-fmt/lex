@@ -288,6 +288,38 @@ mod tests {
     }
 
     #[test]
+    fn test_baseline_css_keeps_verbatim_blocks_unsplit() {
+        // Follow-up to #607: every other paged-media element pairs the
+        // legacy `page-break-*` property with its modern `break-*`
+        // companion so Chromium's headless paged-media (which now treats
+        // `page-break-inside` as deprecated) keeps honoring the rule.
+        // The `.lex-verbatim` class (emitted on every `<pre>` from a
+        // verbatim block) only had the legacy form, so code blocks could
+        // still split across pages.
+        let css = get_default_css();
+        // The paged-media `.lex-verbatim` rule lives inside the
+        // `@media print` block. Locate the print block, then assert
+        // both companion properties are present on `.lex-verbatim`
+        // within it.
+        let print_idx = css
+            .find("@media print")
+            .expect("baseline should declare an @media print block");
+        let print_block = &css[print_idx..];
+        let verbatim_in_print = print_block
+            .find(".lex-verbatim")
+            .expect("@media print should style .lex-verbatim");
+        let snippet = &print_block[verbatim_in_print..(verbatim_in_print + 250).min(print_block.len())];
+        assert!(
+            snippet.contains("break-inside: avoid"),
+            "@media print .lex-verbatim should declare modern `break-inside: avoid[-page]`: {snippet}"
+        );
+        assert!(
+            snippet.contains("page-break-inside: avoid"),
+            "@media print .lex-verbatim should retain legacy `page-break-inside: avoid`: {snippet}"
+        );
+    }
+
+    #[test]
     fn test_css_path_option_loads_file() {
         let mut temp = NamedTempFile::new().expect("failed to create temp file");
         writeln!(temp, ".from-path {{ color: blue; }}").expect("failed to write temp css");

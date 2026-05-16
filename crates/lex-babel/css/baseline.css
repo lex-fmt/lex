@@ -438,6 +438,7 @@ img {
 
   .lex-verbatim {
     border: var(--lex-border-thin) solid #ccc;
+    break-inside: avoid-page;
     page-break-inside: avoid;
   }
 
