@@ -599,6 +599,58 @@ fn test_non_definition_between_definitions_breaks_dl_grouping() {
 }
 
 #[test]
+fn test_section_body_emits_no_redundant_content_wrapper() {
+    // Regression test for #610 (option 1): after a heading, the
+    // semantic content area is the `<section>` element itself. Wrapping
+    // its body in a further `<div class="lex-content">` is DOM bloat —
+    // two stacked containers carrying the same "this is content" cue.
+    // The fix suppresses `StartContent` when the immediate parent is a
+    // `<section>`, mirroring the existing skip for `<dd>` (#604).
+    let lex_src = concat!(
+        "1. Primary Session\n\n",
+        "    A simple paragraph inside the session.\n",
+    );
+    let html = lex_to_html(lex_src, HtmlTheme::Modern);
+
+    assert!(
+        !html.contains("<section class=\"lex-session lex-session-2\"><h2>Primary Session</h2><div class=\"lex-content\">"),
+        "section body should not open with <div class=\"lex-content\">: {html}"
+    );
+    // The paragraph should be a direct child of the section.
+    assert!(
+        html.contains("</h2><p class=\"lex-paragraph\">A simple paragraph inside the session.</p>"),
+        "section body should emit <p> directly under the heading: {html}"
+    );
+}
+
+#[test]
+fn test_nested_sections_share_no_redundant_wrappers() {
+    // A nested-session document collapses two layers of wrappers — the
+    // outer section's body wrapper AND the inner section's body wrapper —
+    // both of which are redundant under #610.
+    let lex_src = concat!(
+        "1. Outer\n\n",
+        "    Outer paragraph.\n\n",
+        "    1.1. Inner\n\n",
+        "        Inner paragraph.\n",
+    );
+    let html = lex_to_html(lex_src, HtmlTheme::Modern);
+
+    // Zero `<div class="lex-content">` wrappers should appear in the
+    // rendered body: the body of every session is now the section
+    // element itself. We scope the match to the post-`<body>` segment
+    // so the literal CSS-comment string `<div class="lex-content">`
+    // embedded in baseline.css doesn't false-positive.
+    let body_start = html.find("<body>").expect("body tag present");
+    let body = &html[body_start..];
+    let wrapper_count = body.matches("<div class=\"lex-content\">").count();
+    assert_eq!(
+        wrapper_count, 0,
+        "expected zero .lex-content wrappers in nested sessions, got {wrapper_count}: {body}"
+    );
+}
+
+#[test]
 fn test_dd_body_emits_p_directly_without_content_wrapper() {
     // Regression test for #604: `<dd>` body used to wrap its content in
     // `<div class="lex-content"><p class="lex-paragraph">…</p></div>`. The

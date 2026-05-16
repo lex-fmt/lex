@@ -98,6 +98,21 @@ section.lex-session:first-child {
   padding-left: var(--lex-indent-content);
 }
 
+/* #610 (option 1): the `<div class="lex-content">` wrapper is now
+ * suppressed when the immediate parent is a `<section>` (the section
+ * IS the semantic content area, so the wrapper was pure DOM bloat).
+ * Compensate by indenting the section's direct content children. */
+section.lex-session > p,
+section.lex-session > .lex-list,
+section.lex-session > .lex-verbatim,
+section.lex-session > .lex-definition,
+section.lex-session > .lex-table,
+section.lex-session > blockquote,
+section.lex-session > figure,
+section.lex-session > section.lex-session {
+  padding-left: var(--lex-indent-content);
+}
+
 /* Top-level sessions retain standard content padding */
 
 /* === Headings with Scaled Sizes === */
