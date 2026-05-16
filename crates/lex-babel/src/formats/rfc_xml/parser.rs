@@ -188,9 +188,13 @@ fn process_container_children(
             }
             "reference" => {
                 let anchor = child.attribute("anchor").unwrap_or("?");
+                // Store the bare anchor — `InlineContent::Reference`
+                // round-trips through serializers as `[` + raw + `]`,
+                // so wrapping the anchor in brackets here would emit
+                // `[[anchor]]` on the way back out.
                 let mut content = vec![
                     InlineContent::Reference {
-                        raw: format!("[{anchor}]"),
+                        raw: anchor.to_string(),
                         kind: crate::ir::nodes::ReferenceType::NotSure,
                     },
                     InlineContent::Text(" ".to_string()),
