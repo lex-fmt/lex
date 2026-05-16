@@ -45,10 +45,15 @@ use super::nodes::{
 /// a single `frontmatter` IR Annotation into `children[0]`) is retired.
 /// Document-scope metadata now lives exclusively in
 /// `Document::document_annotations`, populated from the lex-core
-/// `doc.annotations` slot. `nested_to_flat` emits the
-/// `Event::StartAnnotation { label: "frontmatter", ... }` events
-/// downstream serializers consume — synthesized at the events layer,
-/// not in the IR tree.
+/// `doc.annotations` slot.
+///
+/// Phase 3b (#614): the IR slot is also the single source of truth
+/// on the way back out. `to_lex_document` emits each entry into
+/// `lex_doc.annotations` via `to_lex_annotation_raw`, and the
+/// `frontmatter` event synthesis at the events-emission layer is
+/// retired — format-specific serializers that need a packed YAML
+/// preamble (currently just markdown) read `document_annotations`
+/// from the IR directly.
 ///
 /// **Behavioural break** (documented in CHANGELOG): an inline
 /// `:: lex.metadata.title :: ...` in the document body is no longer

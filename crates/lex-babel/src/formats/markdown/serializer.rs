@@ -6,7 +6,7 @@
 use crate::common::nested_to_flat::tree_to_events;
 use crate::error::FormatError;
 use crate::ir::events::Event;
-use crate::ir::nodes::{DocNode, InlineContent, TableCellAlignment};
+use crate::ir::nodes::{Annotation as IrAnnotation, DocNode, InlineContent, TableCellAlignment};
 use comrak::nodes::{Ast, AstNode, ListDelimType, ListType, NodeTable, NodeValue, TableAlignment};
 use comrak::{format_commonmark, Arena, ComrakOptions};
 use lex_core::lex::ast::Document;
@@ -23,6 +23,12 @@ pub fn serialize_to_markdown(doc: &Document) -> Result<String, FormatError> {
         let subtitle_text = ir_doc.subtitle.as_ref().map(|sub| inlines_to_text(sub));
         (title_text, subtitle_text)
     });
+
+    // Phase 3b (#614): YAML frontmatter is synthesized directly from
+    // `document_annotations` rather than via a `frontmatter` event
+    // that `tree_to_events` used to inject. The IR slot is the single
+    // source of truth on the lex → markdown path.
+    let frontmatter_yaml = render_document_annotations_as_yaml(&ir_doc.document_annotations);
 
     // Step 2: IR → Events
     let events = tree_to_events(&DocNode::Document(ir_doc));
@@ -47,7 +53,85 @@ pub fn serialize_to_markdown(doc: &Document) -> Result<String, FormatError> {
     // Prepend document title as H1 heading if present
     let with_title = prepend_title_as_h1(&cleaned, document_title);
 
-    Ok(with_title)
+    // Prepend YAML frontmatter from document_annotations, if any.
+    // Markdown imports already place a `frontmatter` annotation in
+    // `children[0]` (handled inside `build_comrak_ast`), so this
+    // branch fires only when the IR was built from a lex source —
+    // the two paths don't double-write.
+    let with_frontmatter = match frontmatter_yaml {
+        Some(yaml) => format!("{yaml}{with_title}"),
+        None => with_title,
+    };
+
+    Ok(with_frontmatter)
+}
+
+/// Build the YAML frontmatter block (`---\n…\n---\n\n`) from an IR
+/// document's `document_annotations`, or `None` if the slot would
+/// produce an empty block. Mirrors the key-flattening logic the
+/// retired `emit_frontmatter_event` used: `lex.metadata.<key>` →
+/// `<key>`; annotations with a paragraph body produce `<key>: <body>`;
+/// annotations with structured params produce `<key>.<sub>: <value>`;
+/// marker-form annotations contribute nothing.
+fn render_document_annotations_as_yaml(annotations: &[IrAnnotation]) -> Option<String> {
+    if annotations.is_empty() {
+        return None;
+    }
+    let mut parameters: Vec<(String, String)> = Vec::new();
+    for ann in annotations {
+        let key = ann
+            .label
+            .strip_prefix("lex.metadata.")
+            .unwrap_or(ann.label.as_str())
+            .to_string();
+        // Trim whitespace lex picks up after the closing `::`
+        // separator (e.g. `:: title :: My Doc` produces a paragraph
+        // whose first inline is `" My Doc"`).
+        let body_text = flatten_annotation_body_text(&ann.content)
+            .trim()
+            .to_string();
+        if !body_text.is_empty() {
+            parameters.push((key, body_text));
+        } else if !ann.parameters.is_empty() {
+            for (k, v) in &ann.parameters {
+                parameters.push((format!("{key}.{k}"), v.clone()));
+            }
+        }
+    }
+    if parameters.is_empty() {
+        return None;
+    }
+    let mut yaml = String::from("---\n");
+    for (k, v) in &parameters {
+        yaml.push_str(&format!("{k}: {v}\n"));
+    }
+    yaml.push_str("---\n\n");
+    Some(yaml)
+}
+
+/// Flatten the text content of an annotation's paragraph children
+/// into a single string. Used for YAML frontmatter synthesis. Covers
+/// every inline shape that can legitimately appear inside metadata
+/// bodies — `Text`, `Code`, `Math`, `Reference`, `Link` (regression
+/// coverage from #596 / #597). Bold / Italic / Image are skipped on
+/// purpose: YAML values are leaf strings, not rich content.
+fn flatten_annotation_body_text(content: &[DocNode]) -> String {
+    let mut text = String::new();
+    for child in content {
+        if let DocNode::Paragraph(p) = child {
+            for inline in &p.content {
+                match inline {
+                    InlineContent::Text(t) | InlineContent::Code(t) | InlineContent::Math(t) => {
+                        text.push_str(t)
+                    }
+                    InlineContent::Reference(r) => text.push_str(r),
+                    InlineContent::Link { text: t, .. } => text.push_str(t),
+                    _ => {}
+                }
+            }
+        }
+    }
+    text
 }
 
 /// Prepend document title as an H1 heading, optionally followed by subtitle as H2
@@ -962,5 +1046,96 @@ mod tests {
             }
         }
         assert!(found_heading, "Should have a heading node");
+    }
+
+    /// Phase 3b (#614): a lex source with `:: lex.metadata.* ::`
+    /// document-scope annotations must surface in the markdown
+    /// output as a YAML frontmatter block. Pre-Phase-3b this worked
+    /// via the `frontmatter` event synthesis in `tree_to_events`;
+    /// after the flip the markdown serializer synthesizes YAML
+    /// directly from `document_annotations`.
+    #[test]
+    fn lex_metadata_annotations_emit_yaml_frontmatter() {
+        let lex_src = ":: title :: My Doc\n\n:: author :: Alice\n\nBody.\n";
+        let lex_doc = STRING_TO_AST.run(lex_src.to_string()).unwrap();
+        let md = serialize_to_markdown(&lex_doc).unwrap();
+
+        assert!(
+            md.starts_with("---\n"),
+            "expected YAML frontmatter at start of markdown, got:\n{md}"
+        );
+        assert!(md.contains("title: My Doc"), "missing title key in:\n{md}");
+        assert!(md.contains("author: Alice"), "missing author key in:\n{md}");
+    }
+
+    /// Phase 3b coverage retained from #596 / #597: the YAML body
+    /// flatten must read `Reference` and `Link` inlines (not only
+    /// `Text`/`Code`/`Math`) so a `:: author :: Alice [https://…]`
+    /// doesn't silently drop the link text in the YAML preamble.
+    #[test]
+    fn yaml_synthesis_includes_link_and_reference_inlines() {
+        use crate::ir::nodes::{Annotation as IrAnn, DocNode, InlineContent, LabelForm, Paragraph};
+
+        let yaml = render_document_annotations_as_yaml(&[IrAnn {
+            label: "lex.metadata.author".to_string(),
+            parameters: vec![],
+            content: vec![DocNode::Paragraph(Paragraph {
+                content: vec![
+                    InlineContent::Text("Alice ".to_string()),
+                    InlineContent::Link {
+                        text: "https://alice.example".to_string(),
+                        href: "https://alice.example".to_string(),
+                    },
+                ],
+            })],
+            form: LabelForm::Canonical,
+        }])
+        .expect("yaml block synthesized");
+        assert!(
+            yaml.contains("author: Alice https://alice.example"),
+            "{yaml}"
+        );
+
+        let yaml = render_document_annotations_as_yaml(&[IrAnn {
+            label: "lex.metadata.tags".to_string(),
+            parameters: vec![],
+            content: vec![DocNode::Paragraph(Paragraph {
+                content: vec![
+                    InlineContent::Text("rust ".to_string()),
+                    InlineContent::Reference("@manning".to_string()),
+                ],
+            })],
+            form: LabelForm::Canonical,
+        }])
+        .expect("yaml block synthesized");
+        assert!(yaml.contains("tags: rust @manning"), "{yaml}");
+    }
+
+    /// Gemini review on PR #597: the body flatten must also cover
+    /// `Code` and `Math` inline content so a metadata body like
+    /// `Doc with \`snippet\` and #E=mc^2#` doesn't silently drop the
+    /// code/math text in the YAML preamble.
+    #[test]
+    fn yaml_synthesis_includes_code_and_math_inlines() {
+        use crate::ir::nodes::{Annotation as IrAnn, DocNode, InlineContent, LabelForm, Paragraph};
+
+        let yaml = render_document_annotations_as_yaml(&[IrAnn {
+            label: "lex.metadata.title".to_string(),
+            parameters: vec![],
+            content: vec![DocNode::Paragraph(Paragraph {
+                content: vec![
+                    InlineContent::Text("Doc with ".to_string()),
+                    InlineContent::Code("snippet".to_string()),
+                    InlineContent::Text(" and ".to_string()),
+                    InlineContent::Math("E=mc^2".to_string()),
+                ],
+            })],
+            form: LabelForm::Canonical,
+        }])
+        .expect("yaml block synthesized");
+        assert!(
+            yaml.contains("title: Doc with snippet and E=mc^2"),
+            "{yaml}"
+        );
     }
 }
