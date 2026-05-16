@@ -300,12 +300,20 @@ fn build_html_dom_with_splice(
             }
 
             Event::StartContent => {
-                // Create content wrapper (mirrors AST container structure for indentation)
+                // Create content wrapper (mirrors AST container structure for indentation).
+                // Inside `<dd>` the wrapper is redundant — the dd is already the
+                // content container — so skip it (#604). Push the dd onto the
+                // stack so EndContent's pop is balanced and leaves current_parent
+                // pointing back at the dd.
                 current_heading = None;
-                let content = create_element("div", vec![("class", "lex-content")]);
-                current_parent.children.borrow_mut().push(content.clone());
-                parent_stack.push(current_parent.clone());
-                current_parent = content;
+                if is_element_with_tag(&current_parent, "dd") {
+                    parent_stack.push(current_parent.clone());
+                } else {
+                    let content = create_element("div", vec![("class", "lex-content")]);
+                    current_parent.children.borrow_mut().push(content.clone());
+                    parent_stack.push(current_parent.clone());
+                    current_parent = content;
+                }
             }
 
             Event::EndContent => {
@@ -316,8 +324,14 @@ fn build_html_dom_with_splice(
             }
 
             Event::StartParagraph => {
+                // Paragraphs directly inside `<dd>` drop the redundant
+                // `class="lex-paragraph"` — CSS can target `dd > p` instead (#604).
                 current_heading = None;
-                let para = create_element("p", vec![("class", "lex-paragraph")]);
+                let para = if is_element_with_tag(&current_parent, "dd") {
+                    create_element("p", vec![])
+                } else {
+                    create_element("p", vec![("class", "lex-paragraph")])
+                };
                 current_parent.children.borrow_mut().push(para.clone());
                 parent_stack.push(current_parent.clone());
                 current_parent = para;
@@ -799,6 +813,15 @@ fn create_element(tag: &str, attrs: Vec<(&str, &str)>) -> Handle {
             mathml_annotation_xml_integration_point: false,
         },
     })
+}
+
+/// Return true if `handle` is an element with the given tag name.
+fn is_element_with_tag(handle: &Handle, tag: &str) -> bool {
+    if let NodeData::Element { name, .. } = &handle.data {
+        name.local.as_ref() == tag
+    } else {
+        false
+    }
 }
 
 /// Create a text node
