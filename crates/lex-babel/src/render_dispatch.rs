@@ -44,7 +44,7 @@ use lex_extension::{schema::Schema, AnnotationBody, LabelCtx, NodeRef, RenderOut
 use lex_extension_host::Registry;
 
 use crate::ir::nodes::{Annotation, DocNode, Document, Verbatim};
-use crate::ir::to_wire::ir_annotation_body_to_json;
+use crate::ir::to_wire::{ir_annotation_body, ir_params_to_json};
 
 /// One render result for a labelled node, captured during the IR
 /// walk so the format-specific serializer can splice it into the
@@ -211,33 +211,10 @@ fn visit_annotation(annotation: &Annotation, attached_to: HostNodeKind, ctx: &mu
     let label = annotation.label.clone();
     if let Some(schema) = ctx.registry.schema_for(&label) {
         if schema_has_render(&schema, ctx.format.as_str()) {
-            let body_json = ir_annotation_body_to_json(&annotation.content);
-            let body = match serde_json::from_value::<AnnotationBody>(body_json) {
-                Ok(b) => b,
-                Err(e) => {
-                    // Codec bug: emit the diagnostic plan entry and
-                    // skip dispatch. The 1:1 plan-entry-per-labelled-
-                    // node invariant matters to the splice site.
-                    ctx.out.push(RenderedNode {
-                        label: label.clone(),
-                        output: None,
-                        diagnostic: Some(format!(
-                            "internal: failed to decode annotation body for `{label}`: {e}"
-                        )),
-                    });
-                    // Children still need walking — a malformed body
-                    // codec doesn't excuse skipping nested labelled
-                    // content.
-                    for child in &annotation.content {
-                        walk_doc_node(child, HostNodeKind::Annotation, ctx);
-                    }
-                    return;
-                }
-            };
             let label_ctx = LabelCtx {
                 label: label.clone(),
                 params: ir_params_to_json(&annotation.parameters),
-                body,
+                body: ir_annotation_body(&annotation.content),
                 node: NodeRef {
                     kind: attached_to.as_str().to_string(),
                     range: zero_range(),
@@ -331,14 +308,6 @@ fn schema_has_render(schema: &Schema, format_name: &str) -> bool {
         .render
         .iter()
         .any(|h| h.0.eq_ignore_ascii_case(format_name))
-}
-
-fn ir_params_to_json(params: &[(String, String)]) -> serde_json::Value {
-    let mut obj = serde_json::Map::with_capacity(params.len());
-    for (k, v) in params {
-        obj.insert(k.clone(), serde_json::Value::String(v.clone()));
-    }
-    serde_json::Value::Object(obj)
 }
 
 fn zero_range() -> lex_extension::wire::Range {

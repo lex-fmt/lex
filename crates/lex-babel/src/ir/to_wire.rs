@@ -5,8 +5,8 @@
 //! `LabelCtx.body` payload handed to render handlers.
 
 use lex_extension::wire::{
-    Position as WirePosition, Range as WireRange, RefKind, WireFootnote, WireInline, WireListItem,
-    WireNode, WireRow, WireTableCell,
+    AnnotationBody, Position as WirePosition, Range as WireRange, RefKind, WireFootnote,
+    WireInline, WireListItem, WireNode, WireRow, WireTableCell,
 };
 use serde_json::{Map, Value};
 
@@ -287,7 +287,13 @@ fn inline_to_wire(inline: &InlineContent) -> WireInline {
     }
 }
 
-pub(crate) fn inlines_to_text(content: &[InlineContent]) -> String {
+/// Flatten IR inline content into a plain text string.
+///
+/// Recurses through `Bold`/`Italic` containers, surfaces `Code`/`Math`
+/// raw text, uses `Reference` targets and `Link` anchor text directly.
+/// Used wherever a renderer needs a plain-text view of inline content
+/// (title flattening, alt-text synthesis, etc.) without HTML markup.
+pub fn inlines_to_text(content: &[InlineContent]) -> String {
     content
         .iter()
         .map(|i| match i {
@@ -301,7 +307,7 @@ pub(crate) fn inlines_to_text(content: &[InlineContent]) -> String {
         .collect()
 }
 
-fn ir_params_to_json(params: &[(String, String)]) -> Value {
+pub fn ir_params_to_json(params: &[(String, String)]) -> Value {
     let mut obj = Map::with_capacity(params.len());
     for (k, v) in params {
         obj.insert(k.clone(), Value::String(v.clone()));
@@ -309,10 +315,29 @@ fn ir_params_to_json(params: &[(String, String)]) -> Value {
     Value::Object(obj)
 }
 
-/// Build the `body` JSON for an IR annotation:
-/// - empty content → `null` (deserialises to `AnnotationBody::None`)
-/// - non-empty → `{"kind":"block","children":[...]}` (deserialises to
-///   `AnnotationBody::Lex { children }`)
+/// Build an [`AnnotationBody`] directly from an IR annotation's content
+/// vector. Skips the JSON serialise → deserialise round-trip the
+/// `ir_annotation_body_to_json` path required.
+///
+/// - empty content → `AnnotationBody::None`
+/// - non-empty IR content with no block-level wire mapping (e.g. only
+///   bare `Inline` nodes) → `AnnotationBody::None`
+/// - non-empty with block wire children → `AnnotationBody::Lex`
+pub fn ir_annotation_body(content: &[DocNode]) -> AnnotationBody {
+    if content.is_empty() {
+        return AnnotationBody::None;
+    }
+    let children: Vec<WireNode> = content.iter().filter_map(ir_to_wire_node).collect();
+    if children.is_empty() {
+        AnnotationBody::None
+    } else {
+        AnnotationBody::Lex { children }
+    }
+}
+
+/// JSON form of [`ir_annotation_body`]. Kept for callers (host-spec
+/// codec, future wire-payload synthesis) that need the on-wire JSON
+/// shape rather than the in-process enum.
 pub fn ir_annotation_body_to_json(content: &[DocNode]) -> Value {
     if content.is_empty() {
         return Value::Null;

@@ -143,8 +143,14 @@ fn serialize_to_html_with_splice_from_ir(
     options: HtmlOptions,
     splice_plan: Option<&[crate::render_dispatch::RenderedNode]>,
 ) -> Result<String, FormatError> {
-    let title_text = ir_doc.title.as_ref().map(|t| ir_inline_to_text(t));
-    let subtitle_text = ir_doc.subtitle.as_ref().map(|s| ir_inline_to_text(s));
+    let title_text = ir_doc
+        .title
+        .as_ref()
+        .map(|t| crate::ir::to_wire::inlines_to_text(t));
+    let subtitle_text = ir_doc
+        .subtitle
+        .as_ref()
+        .map(|s| crate::ir::to_wire::inlines_to_text(s));
 
     let head_title = match (&title_text, &subtitle_text) {
         (Some(t), Some(s)) => format!("{t}: {s}"),
@@ -1037,21 +1043,6 @@ fn normalize_language(lang: &str) -> &str {
         "objc" | "obj-c" => "objectivec",
         other => other,
     }
-}
-
-/// Convert IR inline content to plain text for title rendering
-fn ir_inline_to_text(content: &[InlineContent]) -> String {
-    content
-        .iter()
-        .map(|inline| match inline {
-            InlineContent::Text(t) => t.clone(),
-            InlineContent::Bold(c) | InlineContent::Italic(c) => ir_inline_to_text(c),
-            InlineContent::Code(c) | InlineContent::Math(c) => c.clone(),
-            InlineContent::Reference(r) => r.clone(),
-            InlineContent::Link { text, .. } => text.clone(),
-            InlineContent::Image(img) => img.alt.clone(),
-        })
-        .collect()
 }
 
 /// Escape HTML special characters in text
