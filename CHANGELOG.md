@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-05-16
+
+
 ### Changed — four babel/CLI interop fixes ([#607](https://github.com/lex-fmt/lex/issues/607), [#608](https://github.com/lex-fmt/lex/issues/608), [#610](https://github.com/lex-fmt/lex/issues/610), [#611](https://github.com/lex-fmt/lex/issues/611))
 
 Four more user-visible converter fixes, continuing the interop work-stream.
@@ -28,7 +31,6 @@ Three user-visible changes to the markdown / HTML converters, surfaced during th
 The legacy `frontmatter` annotation event synthesis in `crates/lex-babel/src/common/nested_to_flat.rs` is retired. `tree_to_events` no longer inserts a packed `frontmatter` annotation event from `document_annotations` — format-specific serializers that need a YAML preamble read the IR slot directly. The markdown serializer (`crates/lex-babel/src/formats/markdown/serializer.rs`) was updated to synthesize the YAML block from `document_annotations` at output time, matching the previous flatten-keys-by-`lex.metadata.*`-prefix shape. The Markdown import path still produces a `frontmatter` annotation in `children[0]` and continues to round-trip through the existing markdown-side handling — final unification with the metadata-label whitelist happens in Sub D (#617).
 
 This unblocks the rest of the interop architecture work-stream (umbrella #613): #615 / #616 / #617 build on the now-symmetric IR.
-
 ## [0.13.0] - 2026-05-14
 
 

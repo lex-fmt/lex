@@ -1,6 +1,6 @@
 [package]
 name = "lex-lsp-core"
-version = "0.13.0"
+version = "0.14.0"
 edition = "2021"
 authors = ["lex contributors"]
 description = "Sync language-server core for the lex format. Powers both the stdio LSP server (lexd-lsp) and the WASM bindings (lex-wasm)."
