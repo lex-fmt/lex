@@ -1,4 +1,4 @@
-//! Render-hook dispatch: walk the AST, ask registered handlers to
+//! Render-hook dispatch: walk the IR, ask registered handlers to
 //! render their labelled annotations / verbatim blocks, and surface
 //! the results to the format-specific serializer.
 //!
@@ -11,29 +11,42 @@
 //! Bounded extensibility: a label whose namespace is *not* registered
 //! is left untouched — the default rendering applies.
 //!
-//! # Status
+//! # Status (#616)
 //!
-//! HTML wiring lands in this PR through
-//! [`crate::formats::html::serialize_to_html_with_registry`]: it runs
-//! the AST walk, collects the plan, surfaces handler diagnostics in
-//! the [`HtmlExportOutcome`](crate::formats::html::HtmlExportOutcome),
-//! and returns the default-rendered HTML. The actual *splice* — i.e.,
-//! replacing the default rendering of the labelled node with the
-//! handler's output — requires hooking the IR-events pipeline (the
-//! HTML serializer collapses all annotations into a synthetic
-//! `frontmatter` block, so there is no per-annotation HTML comment to
-//! post-process). That integration is a follow-up; today's PR
-//! delivers the dispatch surface and the diagnostic plumbing so PR 9
-//! and downstream consumers can light up handler-driven rendering as
-//! the splice sites land.
+//! Render dispatch now walks the IR (`ir::nodes::Document`), not the
+//! lex-core AST. This brings the "centralize hard logic in the IR"
+//! principle from `crates/lex-babel/src/lib.rs:60-64` back to a single
+//! center: the same IR feeds both the event-stream serializer and the
+//! render-hook dispatch.
+//!
+//! ## Behavioural note: `NodeRef.kind` for attached annotations
+//!
+//! The wire spec §2.1 says `LabelCtx.node.kind` is the host AST kind
+//! the label is attached to. The IR flattens attached annotations into
+//! sibling DocNodes (see `ir::from_lex::extract_attached_annotations`),
+//! so the original attachment kind is not recoverable from the IR
+//! alone. Handlers receiving an attached annotation see the kind of
+//! its IR *container* (the session, list-item, definition, or outer
+//! annotation it sits inside) rather than the kind of the element it
+//! was attached to in the source.
+//!
+//! Doc-scope annotations — those that live in
+//! `Document::document_annotations` — continue to surface as
+//! `kind="document"`.
+//!
+//! Restoring source-attachment precision needs an IR-side change (a
+//! per-Annotation `attached_to: Option<HostNodeKind>` tag set by
+//! `from_lex`); that belongs to the IR symmetry work-stream
+//! (#614 / Sub A territory), not the render-dispatch migration.
 
-use lex_core::lex::ast::{Annotation, ContentItem, Document, Session, Verbatim};
-use lex_core::lex::wire::to_wire_node;
-use lex_extension::wire::{Format, HostNodeKind, WireNode};
+use lex_extension::wire::{Format, HostNodeKind};
 use lex_extension::{schema::Schema, AnnotationBody, LabelCtx, NodeRef, RenderOut};
 use lex_extension_host::Registry;
 
-/// One render result for a labelled node, captured during the AST
+use crate::ir::nodes::{Annotation, DocNode, Document, Verbatim};
+use crate::ir::to_wire::{ir_annotation_body, ir_params_to_json};
+
+/// One render result for a labelled node, captured during the IR
 /// walk so the format-specific serializer can splice it into the
 /// final output.
 pub struct RenderedNode {
@@ -58,16 +71,16 @@ pub struct RenderedNode {
 pub struct RenderPlan {
     pub nodes: Vec<RenderedNode>,
     /// How many entries at the head of [`nodes`](Self::nodes) came
-    /// from `document.annotations()` (the doc-scope slot) rather
-    /// than the body walk. Phase 3b of #614 made doc-scope
-    /// annotations IR-only: they no longer flow through the event
-    /// stream as a synthetic `frontmatter` annotation, so an
-    /// event-indexed splice consumer (the HTML serializer) must skip
-    /// these prefix entries to keep its index aligned with the
-    /// `StartAnnotation` events it actually receives. Splicing
-    /// doc-scope handler output back into the rendered HTML is a
-    /// follow-up (#616 will likely subsume it once render dispatch
-    /// migrates onto the IR walk).
+    /// from `document.document_annotations` (the doc-scope slot)
+    /// rather than the body walk. `tree_to_events` does **not** emit
+    /// events for that slot (Phase 3b of #614 made doc-scope IR-only),
+    /// so an event-indexed splice consumer (the HTML serializer) must
+    /// skip these prefix entries to keep its index aligned with the
+    /// `StartAnnotation` events it actually receives. Routing doc-
+    /// scope handler output back into the rendered HTML is still a
+    /// follow-up — the entries are surfaced in the plan and their
+    /// diagnostics flow through, but no splice site exists for them
+    /// yet.
     pub doc_scope_count: usize,
     /// Root-level diagnostics from the registry (e.g., a namespace
     /// disabled after a panic).
@@ -97,16 +110,18 @@ pub fn dispatch_render(document: &Document, registry: &Registry, format_name: &s
         format: &format,
         out: &mut nodes,
     };
-    // Document-level annotations (parsed before the body) come first
-    // so the plan reflects source order. Track how many entries this
-    // prefix produced so event-indexed splice consumers can skip them
-    // (Phase 3b of #614: doc-scope is IR-only, not in the event
-    // stream).
-    for ann in document.annotations() {
+    // Document-scope annotations (the `document_annotations` slot
+    // populated by Phase 3b) come first so the plan reflects source
+    // order. Track how many entries this prefix produced so event-
+    // indexed splice consumers can skip them — `tree_to_events`
+    // doesn't emit events for this slot.
+    for ann in &document.document_annotations {
         visit_annotation(ann, HostNodeKind::Document, &mut ctx);
     }
     let doc_scope_count = ctx.out.len();
-    walk_session(&document.root, HostNodeKind::Session, &mut ctx);
+    for child in &document.children {
+        walk_doc_node(child, HostNodeKind::Session, &mut ctx);
+    }
     let root_diagnostics = registry
         .take_root_diagnostics()
         .into_iter()
@@ -143,150 +158,71 @@ struct WalkCtx<'a> {
     out: &'a mut Vec<RenderedNode>,
 }
 
-fn walk_session(session: &Session, self_kind: HostNodeKind, ctx: &mut WalkCtx<'_>) {
-    for ann in session.annotations() {
-        visit_annotation(ann, self_kind, ctx);
-    }
-    for child in session.children.iter() {
-        visit_content(child, HostNodeKind::Session, ctx);
-    }
-}
-
-fn visit_content(item: &ContentItem, parent_kind: HostNodeKind, ctx: &mut WalkCtx<'_>) {
-    match item {
-        ContentItem::Paragraph(p) => {
-            for ann in p.annotations() {
-                visit_annotation(ann, HostNodeKind::Paragraph, ctx);
+fn walk_doc_node(node: &DocNode, parent_kind: HostNodeKind, ctx: &mut WalkCtx<'_>) {
+    match node {
+        DocNode::Heading(h) => {
+            for child in &h.children {
+                walk_doc_node(child, HostNodeKind::Session, ctx);
             }
         }
-        ContentItem::Session(s) => walk_session(s, HostNodeKind::Session, ctx),
-        ContentItem::Definition(def) => {
-            for ann in def.annotations() {
-                visit_annotation(ann, HostNodeKind::Definition, ctx);
-            }
-            for child in def.children.iter() {
-                visit_content(child, HostNodeKind::Definition, ctx);
-            }
-        }
-        ContentItem::List(list) => {
-            // List-level annotations attach to the list itself, NOT
-            // to its items.
-            for ann in list.annotations() {
-                visit_annotation(ann, HostNodeKind::List, ctx);
-            }
-            for entry in &list.items {
-                if let ContentItem::ListItem(li) = entry {
-                    for ann in li.annotations() {
-                        visit_annotation(ann, HostNodeKind::ListItem, ctx);
-                    }
-                    for child in li.children.iter() {
-                        visit_content(child, HostNodeKind::ListItem, ctx);
-                    }
+        DocNode::Paragraph(_) | DocNode::Inline(_) => {}
+        DocNode::List(l) => {
+            for item in &l.items {
+                for child in &item.children {
+                    walk_doc_node(child, HostNodeKind::ListItem, ctx);
                 }
             }
         }
-        ContentItem::Annotation(a) => {
+        DocNode::ListItem(li) => {
+            for child in &li.children {
+                walk_doc_node(child, HostNodeKind::ListItem, ctx);
+            }
+        }
+        DocNode::Definition(d) => {
+            for child in &d.description {
+                walk_doc_node(child, HostNodeKind::Definition, ctx);
+            }
+        }
+        DocNode::Annotation(a) => {
             visit_annotation(a, parent_kind, ctx);
         }
-        ContentItem::VerbatimBlock(v) => {
+        DocNode::Verbatim(v) => {
             visit_verbatim(v, ctx);
-            for ann in v.annotations() {
-                visit_annotation(ann, HostNodeKind::Verbatim, ctx);
-            }
         }
-        ContentItem::Table(t) => {
-            for ann in t.annotations() {
-                visit_annotation(ann, HostNodeKind::Table, ctx);
-            }
-            // Walk block-level content nested inside table cells (a
-            // cell can hold a list / definition / verbatim, which can
-            // in turn carry labelled annotations).
-            for child in t.cell_children_iter() {
-                visit_content(child, HostNodeKind::Table, ctx);
-            }
-            if let Some(footnotes) = t.footnotes.as_deref() {
-                for ann in footnotes.annotations() {
-                    visit_annotation(ann, HostNodeKind::List, ctx);
-                }
-                for entry in &footnotes.items {
-                    if let ContentItem::ListItem(li) = entry {
-                        for ann in li.annotations() {
-                            visit_annotation(ann, HostNodeKind::ListItem, ctx);
-                        }
-                        for child in li.children.iter() {
-                            visit_content(child, HostNodeKind::ListItem, ctx);
-                        }
-                    }
+        DocNode::Table(t) => {
+            // Header rows before body rows — must match
+            // `nested_to_flat::tree_to_events`'s emit order so the
+            // event-indexed splice walker stays aligned with the
+            // dispatch plan.
+            for cell in t.header.iter().chain(t.rows.iter()).flat_map(|r| &r.cells) {
+                for child in &cell.content {
+                    walk_doc_node(child, HostNodeKind::Table, ctx);
                 }
             }
+            for child in &t.footnotes {
+                walk_doc_node(child, HostNodeKind::List, ctx);
+            }
         }
-        _ => {}
+        DocNode::Image(_) | DocNode::Video(_) | DocNode::Audio(_) | DocNode::Document(_) => {}
     }
 }
 
 fn visit_annotation(annotation: &Annotation, attached_to: HostNodeKind, ctx: &mut WalkCtx<'_>) {
-    let label = annotation.data.label.value.clone();
+    let label = annotation.label.clone();
     if let Some(schema) = ctx.registry.schema_for(&label) {
         if schema_has_render(&schema, ctx.format.as_str()) {
-            let wire = to_wire_node(&ContentItem::Annotation(annotation.clone()));
-            if let WireNode::Annotation {
-                params,
-                body,
-                range,
-                origin,
-                ..
-            } = wire
-            {
-                // Body deserialization is only fallible if the wire
-                // codec produced a value `AnnotationBody`'s untagged
-                // representation can't accept — that's a codec bug
-                // worth surfacing rather than silently dropping the
-                // body.
-                let body = match serde_json::from_value::<AnnotationBody>(body) {
-                    Ok(b) => b,
-                    Err(e) => {
-                        // Codec bug: emit the diagnostic plan entry
-                        // (one entry per labelled node, per the
-                        // RenderPlan contract) and skip dispatch. The
-                        // earlier flow continued to dispatch with
-                        // `AnnotationBody::None`, producing a second
-                        // entry for the same node and breaking the
-                        // 1:1 invariant the splice site relies on.
-                        ctx.out.push(RenderedNode {
-                            label: label.clone(),
-                            output: None,
-                            diagnostic: Some(format!(
-                                "internal: failed to decode annotation body for `{label}`: {e}"
-                            )),
-                        });
-                        // Children still need walking — a malformed
-                        // body codec doesn't excuse skipping nested
-                        // labelled content.
-                        for child in annotation.children.iter() {
-                            visit_content(child, HostNodeKind::Annotation, ctx);
-                        }
-                        return;
-                    }
-                };
-                let label_ctx = LabelCtx {
-                    label: label.clone(),
-                    params,
-                    body,
-                    node: NodeRef {
-                        // Wire spec §2.1: NodeRef.kind is the host AST
-                        // kind the label is attached to (paragraph /
-                        // list / table / …) — handlers use it to
-                        // disambiguate context. Previously hardcoded
-                        // to "annotation" regardless of the actual
-                        // host.
-                        kind: attached_to.as_str().to_string(),
-                        range,
-                        origin,
-                    },
-                };
-                ctx.out
-                    .push(dispatch_one(&label, ctx.registry, &label_ctx, ctx.format));
-            }
+            let label_ctx = LabelCtx {
+                label: label.clone(),
+                params: ir_params_to_json(&annotation.parameters),
+                body: ir_annotation_body(&annotation.content),
+                node: NodeRef {
+                    kind: attached_to.as_str().to_string(),
+                    range: zero_range(),
+                    origin: None,
+                },
+            };
+            ctx.out
+                .push(dispatch_one(&label, ctx.registry, &label_ctx, ctx.format));
         }
     }
     // Long-form annotations carry nested content (further annotations,
@@ -294,45 +230,49 @@ fn visit_annotation(annotation: &Annotation, attached_to: HostNodeKind, ctx: &mu
     // children unconditionally — even when this annotation's own
     // schema doesn't match, a registered label inside its body still
     // needs its handler called.
-    for child in annotation.children.iter() {
-        visit_content(child, HostNodeKind::Annotation, ctx);
+    for child in &annotation.content {
+        walk_doc_node(child, HostNodeKind::Annotation, ctx);
     }
 }
 
 fn visit_verbatim(v: &Verbatim, ctx: &mut WalkCtx<'_>) {
-    let label = v.closing_data.label.value.clone();
+    // A labelled verbatim with `on_ir_build` gets hydrated into a
+    // typed `DocNode` (Table / Image / Video / Audio) and never
+    // reaches here. A labelled verbatim without `on_ir_build` —
+    // typical for third-party `verbatim_label: true` schemas that
+    // only declare `on_render` — falls back to `DocNode::Verbatim`
+    // with the closing label preserved in `language`. Resurrect
+    // render dispatch for that case via the `language` field.
+    //
+    // Known gap: IR `Verbatim` doesn't carry the closing-data
+    // parameters, so handlers see empty params here. The pre-#616
+    // AST walk had full param access. Restoring this needs an IR-
+    // side `params` field on `Verbatim`; that's IR-symmetry work
+    // (Sub A territory, #614) and out of scope for #616.
+    let Some(label) = v.language.as_deref() else {
+        return;
+    };
     if label.is_empty() {
         return;
     }
-    let Some(schema) = ctx.registry.schema_for(&label) else {
+    let Some(schema) = ctx.registry.schema_for(label) else {
         return;
     };
     if !schema.verbatim_label || !schema_has_render(&schema, ctx.format.as_str()) {
         return;
     }
-    let wire = to_wire_node(&ContentItem::VerbatimBlock(Box::new(v.clone())));
-    let WireNode::Verbatim {
-        params,
-        body_text,
-        range,
-        origin,
-        ..
-    } = wire
-    else {
-        return;
-    };
     let label_ctx = LabelCtx {
-        label: label.clone(),
-        params,
-        body: AnnotationBody::Text(body_text),
+        label: label.to_string(),
+        params: serde_json::Value::Object(serde_json::Map::new()),
+        body: AnnotationBody::Text(v.content.clone()),
         node: NodeRef {
             kind: HostNodeKind::Verbatim.as_str().to_string(),
-            range,
-            origin,
+            range: zero_range(),
+            origin: None,
         },
     };
     ctx.out
-        .push(dispatch_one(&label, ctx.registry, &label_ctx, ctx.format));
+        .push(dispatch_one(label, ctx.registry, &label_ctx, ctx.format));
 }
 
 fn dispatch_one(label: &str, registry: &Registry, ctx: &LabelCtx, format: &Format) -> RenderedNode {
@@ -370,6 +310,11 @@ fn schema_has_render(schema: &Schema, format_name: &str) -> bool {
         .any(|h| h.0.eq_ignore_ascii_case(format_name))
 }
 
+fn zero_range() -> lex_extension::wire::Range {
+    use lex_extension::wire::{Position, Range};
+    Range::new(Position::new(0, 0), Position::new(0, 0))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -377,11 +322,13 @@ mod tests {
     use lex_extension::schema::{
         BodyKind, BodyPresence, BodyShape, Capabilities, HookSet, RenderHook, Schema,
     };
+    use lex_extension::wire::WireNode;
     use lex_extension::{HandlerError, LexHandler};
     use std::collections::BTreeMap;
 
     fn parse(src: &str) -> Document {
-        DocumentLoader::from_string(src).parse().expect("parse")
+        let ast = DocumentLoader::from_string(src).parse().expect("parse");
+        crate::to_ir(&ast)
     }
 
     fn schema(label: &str, formats: &[&str]) -> Schema {
@@ -556,8 +503,7 @@ mod tests {
 
     /// End-to-end: registry-aware HTML serialization runs the dispatch
     /// pass, surfaces handler diagnostics in the outcome, and produces
-    /// the default-rendered HTML. Splicing the handler's HTML into the
-    /// output stream is a follow-up (see module-level docs).
+    /// the default-rendered HTML.
     #[test]
     fn end_to_end_html_pipeline_surfaces_diagnostics() {
         use crate::formats::html::{serialize_to_html_with_registry, HtmlOptions, HtmlTheme};
@@ -571,18 +517,19 @@ mod tests {
                 Err(HandlerError::internal("rendering failed"))
             }
         }
-        let doc = parse(":: acme.task ::\n    Body content.\n");
+        let ast = DocumentLoader::from_string(":: acme.task ::\n    Body content.\n")
+            .parse()
+            .expect("parse");
         let registry = Registry::new();
         registry
             .register_namespace("acme", vec![schema("acme.task", &["html"])], Box::new(Boom))
             .unwrap();
         let outcome = serialize_to_html_with_registry(
-            &doc,
+            &ast,
             HtmlOptions::new(HtmlTheme::default()),
             &registry,
         )
         .expect("serialise");
-        // Diagnostic from the failing handler reached the outcome.
         assert!(
             outcome
                 .diagnostics
@@ -591,18 +538,12 @@ mod tests {
             "expected handler diagnostic in outcome, got: {:?}",
             outcome.diagnostics
         );
-        // The default HTML is still produced (no panic, no error
-        // bubbling up).
         assert!(!outcome.html.is_empty());
     }
 
-    /// Regression for the NodeRef.kind misalignment: the wire spec
-    /// §2.1 says the LabelCtx's `node.kind` is the host AST kind the
-    /// label is attached to (paragraph / list / table / …). Before
-    /// the `HostNodeKind` unification it was hardcoded to
-    /// `"annotation"` regardless of the host node, so handlers
-    /// couldn't distinguish a label attached to a paragraph from one
-    /// attached to a list.
+    /// Wire spec §2.1: `LabelCtx.node.kind` carries the host kind. For
+    /// a doc-scope annotation (`Document::document_annotations`) we
+    /// surface `"document"`.
     #[test]
     fn handler_sees_host_node_kind_in_label_ctx() {
         use std::sync::Mutex;
@@ -628,28 +569,24 @@ mod tests {
                 Box::new(CaptureKind { seen: seen.clone() }),
             )
             .unwrap();
-        // Top-level annotation (parsed as document-level metadata).
-        // Before the HostNodeKind fix this would have been reported as
-        // "annotation"; it should now be "document".
         let doc = parse(":: acme.task ::\n");
         let _ = dispatch_render(&doc, &registry, "html");
         let kinds = seen.lock().unwrap().clone();
         assert_eq!(
             kinds.as_slice(),
             &["document"],
-            "top-level annotation must surface as host kind \"document\", not the hardcoded \"annotation\"",
+            "top-level annotation must surface as host kind \"document\"",
         );
     }
 
-    /// End-to-end without registered hooks: the registry is consulted
-    /// but dispatch is a no-op, the outcome carries no diagnostics,
-    /// and the HTML matches what the registry-less path would emit.
     #[test]
     fn end_to_end_html_pipeline_is_passthrough_when_no_hooks_match() {
         use crate::formats::html::{
             serialize_to_html, serialize_to_html_with_registry, HtmlOptions, HtmlTheme,
         };
-        let doc = parse(":: acme.task ::\n    Body.\n");
+        let ast = DocumentLoader::from_string(":: acme.task ::\n    Body.\n")
+            .parse()
+            .expect("parse");
         let registry = Registry::new();
         // Schema declares only markdown — html dispatch skipped.
         registry
@@ -660,25 +597,22 @@ mod tests {
             )
             .unwrap();
         let outcome = serialize_to_html_with_registry(
-            &doc,
+            &ast,
             HtmlOptions::new(HtmlTheme::default()),
             &registry,
         )
         .expect("serialise");
-        let baseline = serialize_to_html(&doc, HtmlTheme::default()).expect("baseline");
+        let baseline = serialize_to_html(&ast, HtmlTheme::default()).expect("baseline");
         assert_eq!(outcome.html, baseline);
         assert!(outcome.diagnostics.is_empty());
     }
 
-    // -- Splice tests (PR for #563). The splice mechanism replaces
-    // the default `<!-- lex:label -->` ... `<!-- /lex:label -->`
-    // comment pair (and any content between) with the handler's raw
-    // HTML when the handler returns `RenderOut::String`. WireAst and
-    // `Ok(None)` continue to fall through to default rendering.
+    // -- Splice tests. The splice mechanism replaces the default
+    // `<!-- lex:label -->` ... `<!-- /lex:label -->` comment pair (and
+    // any content between) with the handler's raw HTML when the
+    // handler returns `RenderOut::String`. WireAst and `Ok(None)`
+    // continue to fall through to default rendering.
 
-    /// Helper: build a registry + handler that returns a fixed
-    /// String for every render call. The returned HTML is what should
-    /// be spliced in place of the annotation's default rendering.
     fn registry_with_string_handler(label: &str, html_output: &'static str) -> Registry {
         struct Fixed(&'static str);
         impl LexHandler for Fixed {
@@ -703,32 +637,21 @@ mod tests {
         registry
     }
 
-    /// Test fixture: a session-scoped annotation (lives inside the
-    /// body, so it flows through `Event::StartAnnotation` and the
-    /// splice can operate on it).
-    ///
-    /// Doc-scope annotations are a separate category: post-Phase-3b
-    /// (#614) they live in `Document::document_annotations` and the
-    /// event walker doesn't see them. `dispatch_render` still walks
-    /// them first and emits plan entries, but the body splice walker
-    /// skips that prefix via [`RenderPlan::doc_scope_count`] —
-    /// otherwise doc-scope handler output would be spliced into the
-    /// first body annotation's position. The end-to-end
-    /// regression for that misalignment lives in
-    /// `doc_scope_annotation_does_not_misroute_body_splice`.
     const DOC_WITH_SCOPED_ANNOTATION: &str =
         "1. Heading\n\n    :: acme.task ::\n        Body that should be replaced.\n";
 
     #[test]
     fn splice_replaces_default_annotation_rendering_with_handler_html() {
         use crate::formats::html::{serialize_to_html_with_registry, HtmlOptions, HtmlTheme};
-        let doc = parse(DOC_WITH_SCOPED_ANNOTATION);
+        let ast = DocumentLoader::from_string(DOC_WITH_SCOPED_ANNOTATION)
+            .parse()
+            .expect("parse");
         let registry = registry_with_string_handler(
             "acme.task",
             "<div class=\"acme-task\">handler-rendered</div>",
         );
         let outcome = serialize_to_html_with_registry(
-            &doc,
+            &ast,
             HtmlOptions::new(HtmlTheme::default()),
             &registry,
         )
@@ -740,7 +663,6 @@ mod tests {
             "handler HTML should be spliced into the output. got:\n{}",
             outcome.html
         );
-        // Default comment markers gone for this annotation.
         assert!(
             !outcome.html.contains("<!-- lex:acme.task"),
             "default start comment should be replaced by splice. got:\n{}",
@@ -756,13 +678,12 @@ mod tests {
     #[test]
     fn splice_consumes_annotation_body_so_default_content_does_not_render() {
         use crate::formats::html::{serialize_to_html_with_registry, HtmlOptions, HtmlTheme};
-        // The body paragraph below ("Body that should be replaced.")
-        // must NOT appear in the output — the handler owns the
-        // annotation's full rendering, including its body.
-        let doc = parse(DOC_WITH_SCOPED_ANNOTATION);
+        let ast = DocumentLoader::from_string(DOC_WITH_SCOPED_ANNOTATION)
+            .parse()
+            .expect("parse");
         let registry = registry_with_string_handler("acme.task", "<div>HANDLER</div>");
         let outcome = serialize_to_html_with_registry(
-            &doc,
+            &ast,
             HtmlOptions::new(HtmlTheme::default()),
             &registry,
         )
@@ -788,7 +709,9 @@ mod tests {
                 Ok(None)
             }
         }
-        let doc = parse(DOC_WITH_SCOPED_ANNOTATION);
+        let ast = DocumentLoader::from_string(DOC_WITH_SCOPED_ANNOTATION)
+            .parse()
+            .expect("parse");
         let registry = Registry::new();
         registry
             .register_namespace(
@@ -798,12 +721,11 @@ mod tests {
             )
             .unwrap();
         let outcome = serialize_to_html_with_registry(
-            &doc,
+            &ast,
             HtmlOptions::new(HtmlTheme::default()),
             &registry,
         )
         .expect("serialise");
-        // No splice → default comment markers present.
         assert!(
             outcome.html.contains("<!-- lex:acme.task"),
             "Ok(None) should fall through to default rendering. got:\n{}",
@@ -832,7 +754,9 @@ mod tests {
                 }))
             }
         }
-        let doc = parse(DOC_WITH_SCOPED_ANNOTATION);
+        let ast = DocumentLoader::from_string(DOC_WITH_SCOPED_ANNOTATION)
+            .parse()
+            .expect("parse");
         let registry = Registry::new();
         registry
             .register_namespace(
@@ -842,14 +766,12 @@ mod tests {
             )
             .unwrap();
         let outcome = serialize_to_html_with_registry(
-            &doc,
+            &ast,
             HtmlOptions::new(HtmlTheme::default()),
             &registry,
         )
         .expect("serialise");
-        // Default markers present (WireAst doesn't splice for HTML).
         assert!(outcome.html.contains("<!-- lex:acme.task"));
-        // Diagnostic surfaces.
         assert!(
             outcome
                 .diagnostics
@@ -865,69 +787,34 @@ mod tests {
         use crate::formats::html::{
             serialize_to_html, serialize_to_html_with_registry, HtmlOptions, HtmlTheme,
         };
-        // No namespaces registered — splice has nothing to plan, the
-        // registry-less and registry-aware paths produce identical
-        // output.
-        let doc = parse("1. Heading\n\n    :: unknown.label ::\n        body.\n");
+        let ast =
+            DocumentLoader::from_string("1. Heading\n\n    :: unknown.label ::\n        body.\n")
+                .parse()
+                .expect("parse");
         let registry = Registry::new();
         let outcome = serialize_to_html_with_registry(
-            &doc,
+            &ast,
             HtmlOptions::new(HtmlTheme::default()),
             &registry,
         )
         .expect("serialise");
-        let baseline = serialize_to_html(&doc, HtmlTheme::default()).expect("baseline");
+        let baseline = serialize_to_html(&ast, HtmlTheme::default()).expect("baseline");
         assert_eq!(outcome.html, baseline);
-    }
-
-    /// Plan-vs-events alignment isn't trivially guaranteed when
-    /// multiple annotations appear in one document: the IR's
-    /// flatten pass can reposition trailing annotations relative
-    /// to their host element, breaking the simple counter-based
-    /// indexing the splice relies on. The two-annotation case is
-    /// real and worth fixing, but the fix needs deeper IR-side
-    /// work to preserve source order through the flatten pass —
-    /// out of scope for the initial splice landing. Tracked at
-    /// the same #563 follow-up that handles WireAst → HTML
-    /// conversion.
-    ///
-    /// For v1, the single-annotation case (the dominant use case)
-    /// works correctly, and the trailing-annotation case is the
-    /// only known divergence. Real extension usage (acme.commenting,
-    /// mit.plasma-specs, etc.) attaches per-element and renders
-    /// cleanly.
-    #[test]
-    fn multi_annotation_splice_is_a_known_limitation() {
-        // No assertion — this test exists so a future implementer
-        // grepping for "multi-annotation" lands here. Promote to a
-        // real assertion when the IR ordering is stabilised.
     }
 
     /// Regression for the doc-scope/body splice misalignment that
     /// Copilot flagged on PR #621.
     ///
-    /// Before Phase 3b: `tree_to_events` synthesized a `frontmatter`
-    /// `StartAnnotation` event for `document.annotations()`. The
-    /// event walker's `annotation_idx` saw it as index 0 and
-    /// (incidentally) stayed aligned with the dispatch plan's
-    /// doc-scope-first ordering for the single-annotation case.
-    ///
-    /// After Phase 3b: doc-scope is IR-only; no synthetic event is
-    /// emitted. If the splice walker fed the full plan through
-    /// unchanged, the first body annotation's `StartAnnotation` would
-    /// land on plan index 0 (still doc-scope) and the doc-scope
-    /// handler's HTML would replace the body annotation's rendering
-    /// — silent data corruption.
-    ///
-    /// The fix: `serialize_to_html_with_registry` slices
-    /// `plan.doc_scope_count` entries off the front before handing
-    /// the plan to the splice walker. This test locks that contract.
+    /// `dispatch_render` walks `document_annotations` first and emits
+    /// plan entries, but `tree_to_events` doesn't synthesise events
+    /// for that slot (Phase 3b of #614). The HTML serializer must
+    /// slice `plan.doc_scope_count` entries off the front before
+    /// handing the plan to the splice walker. This test locks that
+    /// contract.
     #[test]
     fn doc_scope_annotation_does_not_misroute_body_splice() {
         use crate::formats::html::{serialize_to_html_with_registry, HtmlOptions, HtmlTheme};
 
-        // Per-label handler that emits a label-specific marker so the
-        // test can tell which handler's output landed where.
         struct ByLabel;
         impl LexHandler for ByLabel {
             fn on_render(
@@ -946,19 +833,13 @@ mod tests {
             }
         }
 
-        // Doc-scope `acme.docscope` (top of file) + body `acme.body`
-        // inside a session. Both labels have html render hooks.
-        // No blank line between `:: acme.body ::` and its indented
-        // body — that would make the annotation marker-form and
-        // promote the body to a sibling paragraph.
-        let doc = parse(
-            ":: acme.docscope ::\n\
-             \n\
-             1. Heading\n\
-             \n    \
-             :: acme.body ::\n        \
-             Body that should be replaced.\n",
-        );
+        let src = ":: acme.docscope ::\n\
+                   \n\
+                   1. Heading\n\
+                   \n    \
+                   :: acme.body ::\n        \
+                   Body that should be replaced.\n";
+        let ast = DocumentLoader::from_string(src).parse().expect("parse");
         let registry = Registry::new();
         registry
             .register_namespace(
@@ -970,7 +851,8 @@ mod tests {
                 Box::new(ByLabel),
             )
             .unwrap();
-        let plan = dispatch_render(&doc, &registry, "html");
+        let ir_doc = crate::to_ir(&ast);
+        let plan = dispatch_render(&ir_doc, &registry, "html");
         assert_eq!(
             plan.doc_scope_count, 1,
             "dispatch_render should report one doc-scope plan entry"
@@ -982,16 +864,12 @@ mod tests {
         );
 
         let outcome = serialize_to_html_with_registry(
-            &doc,
+            &ast,
             HtmlOptions::new(HtmlTheme::default()),
             &registry,
         )
         .expect("serialise");
 
-        // The body annotation's splice must use the body handler's
-        // output — not the doc-scope handler's output (the bug pre-
-        // fix would route DOCSCOPE_HANDLER_OUTPUT into the body
-        // annotation's slot).
         assert!(
             outcome.html.contains("<BODY_HANDLER_OUTPUT/>"),
             "body annotation must splice the body handler's output. got:\n{}",
@@ -999,16 +877,205 @@ mod tests {
         );
         assert!(
             !outcome.html.contains("<DOCSCOPE_HANDLER_OUTPUT/>"),
-            "doc-scope handler output must not be spliced into the body \
-             (doc-scope routing is a follow-up under #616). got:\n{}",
+            "doc-scope handler output must not be spliced into the body. got:\n{}",
             outcome.html
         );
-        // Body annotation's default content must still be suppressed
-        // (the body handler owns the rendering).
         assert!(
             !outcome.html.contains("Body that should be replaced."),
             "body handler must own its body content. got:\n{}",
             outcome.html
+        );
+    }
+
+    /// Acceptance criterion for #616: a render handler must fire from
+    /// a markdown serializer path with the same signature it uses for
+    /// HTML. Sub D (#617) will wire splicing on the markdown side;
+    /// this test only proves format-agnosticism — the same
+    /// `dispatch_render` call, against the same IR, with a different
+    /// `format_name`, routes to the markdown-declared handler.
+    #[test]
+    fn dispatch_render_fires_from_markdown_path() {
+        let doc = parse(":: acme.task ::\n");
+        let registry = Registry::new();
+        registry
+            .register_namespace(
+                "acme",
+                vec![schema("acme.task", &["markdown"])],
+                Box::new(EchoRender),
+            )
+            .unwrap();
+        let plan = dispatch_render(&doc, &registry, "markdown");
+        assert_eq!(plan.nodes.len(), 1, "markdown dispatch should fire");
+        assert_eq!(plan.nodes[0].label, "acme.task");
+        assert_eq!(
+            plan.nodes[0].output.as_deref(),
+            Some(r#"<RENDERED label="acme.task"/>"#),
+            "markdown handler output should surface in the plan"
+        );
+    }
+
+    /// Annotation body is passed to handlers as
+    /// `AnnotationBody::Lex { children }` when the IR annotation has
+    /// content. Locks the IR→Wire bridge so handlers see the body
+    /// they expect.
+    #[test]
+    fn annotation_body_surfaces_lex_children_to_handler() {
+        use std::sync::Mutex;
+        struct CaptureBody {
+            seen: std::sync::Arc<Mutex<Option<AnnotationBody>>>,
+        }
+        impl LexHandler for CaptureBody {
+            fn on_render(
+                &self,
+                ctx: &LabelCtx,
+                _: Format,
+            ) -> Result<Option<RenderOut>, HandlerError> {
+                *self.seen.lock().unwrap() = Some(ctx.body.clone());
+                Ok(None)
+            }
+        }
+        let seen = std::sync::Arc::new(Mutex::new(None));
+        let registry = Registry::new();
+        registry
+            .register_namespace(
+                "acme",
+                vec![schema("acme.task", &["html"])],
+                Box::new(CaptureBody { seen: seen.clone() }),
+            )
+            .unwrap();
+        // Annotation with a body paragraph — the IR carries the body
+        // in `Annotation::content`, and the IR→Wire bridge surfaces
+        // it as `AnnotationBody::Lex { children: [Paragraph] }`.
+        let doc = parse(":: acme.task ::\n    inside the body.\n");
+        let _ = dispatch_render(&doc, &registry, "html");
+        let body = seen.lock().unwrap().clone().expect("handler ran");
+        match body {
+            AnnotationBody::Lex { children } => {
+                assert!(
+                    !children.is_empty(),
+                    "lex body must carry annotation children"
+                );
+            }
+            other => panic!("expected AnnotationBody::Lex, got {other:?}"),
+        }
+    }
+
+    /// Regression for Copilot's review on PR #623: a labelled verbatim
+    /// block without an `on_ir_build` handler still needs render
+    /// dispatch — `from_lex_verbatim` falls back to `DocNode::Verbatim`
+    /// with the closing label preserved in `language`, and
+    /// `visit_verbatim` resurrects dispatch via that field.
+    #[test]
+    fn verbatim_label_with_on_render_only_dispatches_via_language_field() {
+        let registry = Registry::new();
+        // `verbatim_label: true`, html render hook, no `on_ir_build` —
+        // the schema declares the label as a verbatim closer but
+        // doesn't hydrate it into a typed IR node, so it stays a
+        // generic `DocNode::Verbatim`.
+        let mut s = schema("acme.snippet", &["html"]);
+        s.verbatim_label = true;
+        registry
+            .register_namespace("acme", vec![s], Box::new(EchoRender))
+            .unwrap();
+        // Note the closing `::` line — that's the verbatim form's
+        // closer carrying the label.
+        let doc = parse("Code:\n    let x = 1;\n:: acme.snippet ::\n");
+        let plan = dispatch_render(&doc, &registry, "html");
+        assert_eq!(
+            plan.nodes.len(),
+            1,
+            "labelled verbatim with on_render hook should produce a plan entry"
+        );
+        assert_eq!(plan.nodes[0].label, "acme.snippet");
+        assert!(plan.nodes[0]
+            .output
+            .as_deref()
+            .is_some_and(|s| s.contains("acme.snippet")));
+    }
+
+    /// Regression for Copilot's review on PR #623: the dispatch walk
+    /// must visit table header rows before body rows so the plan
+    /// indexing matches `tree_to_events`'s emit order (header-first).
+    /// Otherwise an annotation inside a header cell would get its
+    /// handler output spliced into the wrong cell.
+    #[test]
+    fn table_header_cells_walked_before_body_cells() {
+        use std::sync::Mutex;
+        struct OrderedCapture {
+            seen: std::sync::Arc<Mutex<Vec<String>>>,
+        }
+        impl LexHandler for OrderedCapture {
+            fn on_render(
+                &self,
+                ctx: &LabelCtx,
+                _: Format,
+            ) -> Result<Option<RenderOut>, HandlerError> {
+                self.seen.lock().unwrap().push(ctx.label.clone());
+                Ok(None)
+            }
+        }
+        let seen = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let registry = Registry::new();
+        registry
+            .register_namespace(
+                "acme",
+                vec![
+                    schema("acme.in_header", &["html"]),
+                    schema("acme.in_body", &["html"]),
+                ],
+                Box::new(OrderedCapture { seen: seen.clone() }),
+            )
+            .unwrap();
+        // Synthesise an IR Table with a labelled annotation in a
+        // header cell and another in a body cell. Test the walker
+        // directly rather than parsing — keeps the regression
+        // hermetic to the dispatch order.
+        use crate::ir::nodes::{
+            Annotation as IrAnn, DocNode as IrNode, Document as IrDoc, LabelForm,
+            Paragraph as IrPara, Table as IrTable, TableCell as IrCell, TableCellAlignment,
+            TableRow as IrRow,
+        };
+        fn cell_with_annotation(label: &str) -> IrCell {
+            IrCell {
+                content: vec![
+                    IrNode::Annotation(IrAnn {
+                        label: label.into(),
+                        parameters: Vec::new(),
+                        content: Vec::new(),
+                        form: LabelForm::Canonical,
+                    }),
+                    IrNode::Paragraph(IrPara {
+                        content: vec![crate::ir::nodes::InlineContent::Text("cell".into())],
+                    }),
+                ],
+                header: false,
+                align: TableCellAlignment::None,
+                colspan: 1,
+                rowspan: 1,
+            }
+        }
+        let doc = IrDoc {
+            title: None,
+            subtitle: None,
+            children: vec![IrNode::Table(IrTable {
+                rows: vec![IrRow {
+                    cells: vec![cell_with_annotation("acme.in_body")],
+                }],
+                header: vec![IrRow {
+                    cells: vec![cell_with_annotation("acme.in_header")],
+                }],
+                caption: None,
+                footnotes: Vec::new(),
+                fullwidth: false,
+            })],
+            document_annotations: Vec::new(),
+        };
+        let _ = dispatch_render(&doc, &registry, "html");
+        let kinds = seen.lock().unwrap().clone();
+        assert_eq!(
+            kinds.as_slice(),
+            &["acme.in_header", "acme.in_body"],
+            "header cells must be walked before body cells"
         );
     }
 }
