@@ -84,22 +84,38 @@
 //!
 //!     This means that full format interop round tripping is not possible.
 //!
-//! Format Selection
+//! v1 Interop Scope
 //!
-//!     The choice for the formats is pretty sensible:
+//!     The full contributor-facing version of this lives in
+//!     `comms/docs/interop-scope.lex` (browse on GitHub:
+//!     <https://github.com/lex-fmt/comms/blob/main/docs/interop-scope.lex>).
+//!     The short version:
 //!
-//!     - HTML: self-arguing, as it's the most common format for publishing and viewing.
-//!     - Markdown: both in and to, as Markdown is the universal format for plain text editing.
-//!     - Tag (XML): serializing Lex to a structural XML representation is trivial and useful for storage.
-//!     - RFC XML: parse-only import from IETF RFC XML (v3) documents.
+//!     | Tier              | Format     | Export | Import | Notes                                                |
+//!     |-------------------|------------|--------|--------|------------------------------------------------------|
+//!     | Core              | Markdown   | ✓      | ✓      | Lingua franca. Round-trip is the bar.                |
+//!     | Core              | HTML       | ✓      | —      | Publishing target; PDF and editor previews consume.  |
+//!     | Core              | PDF        | ✓      | —      | Headless Chrome over the HTML output.                |
+//!     | Core              | PNG        | ✓      | —      | Headless Chrome screenshot of the HTML output.       |
+//!     | Stretch           | HTML       | —      | ✓      | After core lands.                                    |
+//!     | Experimental      | RFC XML    | —      | ✓      | Proof-of-concept; no bespoke investment.             |
+//!     | Planned           | Pandoc     | —      | —      | Bridge to DOCX/EPUB/RST/Org/etc. Not started.        |
+//!     | Planned           | LaTeX      | ✓      | —      | Export only, via Pandoc once Pandoc lands.           |
+//!     | Category error    | PDF import | —      | —      | **Will not be implemented.** See below.              |
 //!
-//!     These are table stakes, that is a format that can't export to HTML, convert to markdown or
-//!     lack a good semantic pure XML output is a non starter.
+//!     **PDF import is a category error, not a postponed task.** PDF is a
+//!     presentation format — paragraphs, headings, and lists are
+//!     reconstructed heuristically from layout (font size, indentation,
+//!     glyph positions), and no rule-based importer recovers that
+//!     reliably. Pandoc punts to `pdftotext` for the same reason. This
+//!     will not be implemented, ever, regardless of adoption. ML-based
+//!     extraction (Marker, Nougat, Mathpix, Grobid) is a different
+//!     product category and out of scope for lex-babel. Do not list,
+//!     advertise, or design around the possibility.
 //!
-//!     For everything else, there are good arguments for a variety of formats. The one that has the strongest fit
-//!     and use case is LaTeX, as Lex can be very useful for scientific writing. But LaTeX is
-//!     complicated, and having Pandoc in the pipeline allows us to serve reasonably well pretty much
-//!     any other format.
+//!     Diagnostic outputs (`tag`, `treeviz`, `linetreeviz`) sit outside
+//!     this tiering — they're AST visualizers used by `lexd inspect`,
+//!     not interop targets.
 //!
 //! Library Choices
 //!

@@ -1,3 +1,20 @@
+//! IETF RFC XML (v3) format implementation
+//!
+//! # Status: Experimental
+//!
+//! This is a parse-only proof-of-concept import for IETF RFC XML (v3)
+//! documents. It is kept in-tree because it's a useful demo of
+//! Lex-as-target, not because it is a release-quality format. The
+//! project invests **no bespoke time** here — only improvements that
+//! fall out of IR-symmetry work for free.
+//!
+//! Do not invest engineering effort in this format unless the v1
+//! interop bar (Markdown round-trip, HTML/PDF export) is already
+//! solid. See the full tiering at `comms/docs/interop-scope.lex`
+//! in-repo, or
+//! <https://github.com/lex-fmt/comms/blob/main/docs/interop-scope.lex>
+//! on the web.
+
 use crate::error::FormatError;
 use crate::format::{Format, SerializedDocument};
 use lex_core::lex::ast::Document;

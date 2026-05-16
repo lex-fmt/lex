@@ -30,6 +30,21 @@ impl SerializedDocument {
 /// Implementors provide bidirectional conversion between string representation and Document AST.
 /// Formats can support parsing, serialization, or both.
 ///
+/// # Round-trip discipline
+///
+/// Implementing **both** `parse` and `serialize` carries an implicit
+/// expectation: the format participates in lex-babel's round-trip
+/// test suite, and regressions in either direction are release
+/// blockers. If a format only makes sense in one direction (e.g.
+/// HTML export with no importer yet, or RFC XML import with no
+/// serializer), implement just that direction — don't add a
+/// half-baked counterpart and inherit the round-trip obligation.
+/// See the v1 interop tiering for which formats actually carry this
+/// expectation — `comms/docs/interop-scope.lex` in-repo, or
+/// <https://github.com/lex-fmt/comms/blob/main/docs/interop-scope.lex>
+/// for readers on docs.rs (the `comms` directory is a git submodule
+/// and won't be in published crate sources).
+///
 /// # Examples
 ///
 /// ```ignore
