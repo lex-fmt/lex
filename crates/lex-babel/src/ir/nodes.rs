@@ -30,16 +30,18 @@ pub struct Document {
     /// to the document, not nested inside any block).
     ///
     /// Phase 3a of #570 added this slot as a first-class home for them.
-    /// The slot is populated **one-way** from `from_lex_document`
-    /// (lex → IR direction); `to_lex_document`, `tree_to_events`, and
-    /// `events_to_tree` do **not** consume or emit it today. The
-    /// legacy frontmatter promotion in `from_lex_document` continues
-    /// to synthesize a `frontmatter` annotation into
-    /// [`children`](Self::children), and downstream serializers keep
-    /// reading from there — emitting both would double-write.
-    /// A follow-up phase (after #570 Phase 4's render hooks land)
-    /// retires the promotion and wires the new slot through every
-    /// consumer atomically.
+    /// Phase 3b (#614) flipped the source-of-truth atomically:
+    ///
+    /// - `from_lex_document` populates the slot from lex-core's
+    ///   `doc.annotations`.
+    /// - `to_lex_document` emits each entry back into
+    ///   `lex_doc.annotations` via `to_lex_annotation_raw`, so a
+    ///   `lex → IR → lex` roundtrip is structurally lossless.
+    /// - `tree_to_events` does **not** flatten the slot into the event
+    ///   stream as a synthetic `frontmatter` annotation — format-
+    ///   specific serializers that need a packed YAML preamble
+    ///   (currently just markdown) read this slot directly from the
+    ///   IR.
     pub document_annotations: Vec<Annotation>,
 }
 

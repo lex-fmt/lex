@@ -86,18 +86,15 @@ fn lex_verbatim_from_annotation_out(out: LexAnnotationOut) -> LexContentItem {
 
 /// Converts an IR document to a Lex document.
 ///
-/// **`document_annotations` note (#570):** the new IR slot is *not*
-/// emitted back into `lex_doc.annotations` on this path. The legacy
-/// frontmatter promotion in `from_lex_document` still synthesizes a
-/// `frontmatter` annotation into `children`, and downstream Lex
-/// serializers expect to see it there — emitting both would
-/// double-write. A follow-up to Phase 3b retires the promotion and
-/// flips the source-of-truth to `document_annotations` atomically;
-/// the [`to_lex_annotation_raw`] helper introduced in Phase 3a is
-/// wired into production then. Until that flip,
-/// `document_annotations` is a one-way slot: populated by
-/// `from_lex_document`, consumed only by embedders that read it
-/// directly.
+/// **`document_annotations` (#570 Phase 3b, #614):** the IR slot is
+/// the single source of truth for document-scope annotations on the
+/// IR → Lex path. Each entry is emitted through
+/// [`to_lex_annotation_raw`] into `lex_doc.annotations`, mirroring
+/// the lex-core `doc.annotations` slot that `from_lex_document`
+/// populates on the inbound side. The legacy `frontmatter` synthesis
+/// (previously in `nested_to_flat::emit_frontmatter_event`) is gone;
+/// downstream serializers that need a packed YAML preamble read
+/// `document_annotations` from the IR directly.
 pub fn to_lex_document(doc: &Document) -> LexDocument {
     let mut children = Vec::new();
 
@@ -123,21 +120,24 @@ pub fn to_lex_document(doc: &Document) -> LexDocument {
         }
     }
 
+    // Phase 3b: emit document-scope annotations back into
+    // `lex_doc.annotations` so a `lex → IR → lex` roundtrip is
+    // structurally lossless for document metadata.
+    lex_doc.annotations = doc
+        .document_annotations
+        .iter()
+        .map(to_lex_annotation_raw)
+        .collect();
+
     lex_doc
 }
 
 /// Build a `LexAnnotation` directly from an IR `Annotation`, mirroring
 /// what [`to_lex_annotation`] does but without wrapping the result in
-/// [`LexContentItem::Annotation`].
-///
-/// Shipped in Phase 3a (#570) ready for Phase 3b to wire it into
-/// [`to_lex_document`]: when that PR retires the legacy frontmatter
-/// promotion, `to_lex_document` will iterate `document_annotations`
-/// through this helper to populate `lex_doc.annotations`. Until then
-/// it is dead code in production, exercised only by the Phase-3a
-/// contract test that confirms the helper produces the expected
-/// shape.
-#[allow(dead_code)]
+/// [`LexContentItem::Annotation`]. Used by [`to_lex_document`] to
+/// populate `lex_doc.annotations` from `document_annotations` —
+/// Phase 3b (#614) made the new slot the single source of truth on
+/// the IR → Lex path.
 fn to_lex_annotation_raw(ann: &Annotation) -> LexAnnotation {
     let label = Label::new(ann.label.clone()).with_form(ann.form);
     let parameters: Vec<Parameter> = ann
@@ -778,18 +778,15 @@ mod tests {
     }
 
     #[test]
-    fn to_lex_document_drops_document_annotations_in_phase_3a() {
-        // Phase 3a of #570 is *additive*. `document_annotations` is
-        // populated on the lex → IR direction (via `from_lex_document`)
-        // but consumed only by embedders that read the slot directly;
-        // `to_lex_document` deliberately ignores it, because the
-        // legacy frontmatter promotion that runs *before* this stage
-        // already synthesizes a `frontmatter` annotation into
-        // `children`, and downstream Lex serializers expect exactly
-        // one copy. Phase 3b retires the legacy promotion and wires
-        // `to_lex_annotation_raw` into `to_lex_document` atomically.
-        // This test locks the Phase 3a behaviour so a premature flip
-        // can't sneak in.
+    fn to_lex_document_emits_document_annotations_phase_3b() {
+        // Phase 3b (#614) flip: `document_annotations` is the single
+        // source of truth on the IR → Lex path. Every entry is
+        // emitted into `lex_doc.annotations` via
+        // `to_lex_annotation_raw` so a lex → IR → lex roundtrip
+        // preserves document-scope metadata structurally. The legacy
+        // `emit_frontmatter_event` synthesis in `nested_to_flat` is
+        // retired in the same flip; downstream serializers that need
+        // YAML now read `document_annotations` directly.
         use crate::ir::nodes::Annotation;
 
         let ir_doc = Document {
@@ -805,15 +802,16 @@ mod tests {
         };
 
         let lex_doc = to_lex_document(&ir_doc);
-        assert!(
-            lex_doc.annotations.is_empty(),
-            "Phase 3a contract: to_lex_document leaves lex_doc.annotations empty"
+        assert_eq!(
+            lex_doc.annotations.len(),
+            1,
+            "Phase 3b contract: every document_annotations entry lands in lex_doc.annotations"
         );
-
-        // Sanity: the helper exists and produces a non-empty result —
-        // Phase 3b uses it.
-        let raw = to_lex_annotation_raw(&ir_doc.document_annotations[0]);
-        assert_eq!(raw.data.label.value, "lex.metadata.author");
+        let emitted = &lex_doc.annotations[0];
+        assert_eq!(emitted.data.label.value, "lex.metadata.author");
+        assert_eq!(emitted.data.parameters.len(), 1);
+        assert_eq!(emitted.data.parameters[0].key, "name");
+        assert_eq!(emitted.data.parameters[0].value, "Alice");
     }
 
     /// Issue #593 regression: the IR Annotation's `form` field must
@@ -854,5 +852,46 @@ mod tests {
         let raw = to_lex_annotation_raw(&ann);
         assert_eq!(raw.data.label.value, "lex.metadata.author");
         assert_eq!(raw.data.label.form, crate::ir::nodes::LabelForm::Stripped);
+    }
+
+    /// Phase 3b (#614) end-to-end roundtrip: a lex document carrying
+    /// document-scope annotations survives `to_ir` → `from_ir`
+    /// without losing them. Before Phase 3b, `to_lex_document`
+    /// dropped the slot and the roundtrip silently lost metadata.
+    #[test]
+    fn document_annotations_round_trip_lex_to_ir_to_lex() {
+        use crate::{from_ir, to_ir};
+        use lex_core::lex::ast::elements::{Annotation as LexAnnotation, Label};
+        use lex_core::lex::ast::Document as LexDocument;
+
+        let mut original_lex = LexDocument::new();
+        let label = Label::new("lex.metadata.author".to_string());
+        let parameters = vec![Parameter {
+            key: "name".to_string(),
+            value: "Alice".to_string(),
+            location: default_range(),
+        }];
+        original_lex
+            .annotations
+            .push(LexAnnotation::new(label, parameters, Vec::new()));
+
+        let ir_doc = to_ir(&original_lex);
+        assert_eq!(
+            ir_doc.document_annotations.len(),
+            1,
+            "from_lex_document populates document_annotations (Phase 3a)"
+        );
+
+        let back_to_lex = from_ir(&ir_doc);
+        assert_eq!(
+            back_to_lex.annotations.len(),
+            1,
+            "Phase 3b: to_lex_document emits document_annotations back to lex_doc.annotations"
+        );
+        let emitted = &back_to_lex.annotations[0];
+        assert_eq!(emitted.data.label.value, "lex.metadata.author");
+        assert_eq!(emitted.data.parameters.len(), 1);
+        assert_eq!(emitted.data.parameters[0].key, "name");
+        assert_eq!(emitted.data.parameters[0].value, "Alice");
     }
 }

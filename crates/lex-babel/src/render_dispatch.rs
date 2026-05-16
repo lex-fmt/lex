@@ -57,6 +57,18 @@ pub struct RenderedNode {
 /// (panic, namespace disabled).
 pub struct RenderPlan {
     pub nodes: Vec<RenderedNode>,
+    /// How many entries at the head of [`nodes`](Self::nodes) came
+    /// from `document.annotations()` (the doc-scope slot) rather
+    /// than the body walk. Phase 3b of #614 made doc-scope
+    /// annotations IR-only: they no longer flow through the event
+    /// stream as a synthetic `frontmatter` annotation, so an
+    /// event-indexed splice consumer (the HTML serializer) must skip
+    /// these prefix entries to keep its index aligned with the
+    /// `StartAnnotation` events it actually receives. Splicing
+    /// doc-scope handler output back into the rendered HTML is a
+    /// follow-up (#616 will likely subsume it once render dispatch
+    /// migrates onto the IR walk).
+    pub doc_scope_count: usize,
     /// Root-level diagnostics from the registry (e.g., a namespace
     /// disabled after a panic).
     pub root_diagnostics: Vec<String>,
@@ -75,6 +87,7 @@ pub fn dispatch_render(document: &Document, registry: &Registry, format_name: &s
     if registry.namespace_count() == 0 {
         return RenderPlan {
             nodes,
+            doc_scope_count: 0,
             root_diagnostics: Vec::new(),
         };
     }
@@ -85,10 +98,14 @@ pub fn dispatch_render(document: &Document, registry: &Registry, format_name: &s
         out: &mut nodes,
     };
     // Document-level annotations (parsed before the body) come first
-    // so the plan reflects source order.
+    // so the plan reflects source order. Track how many entries this
+    // prefix produced so event-indexed splice consumers can skip them
+    // (Phase 3b of #614: doc-scope is IR-only, not in the event
+    // stream).
     for ann in document.annotations() {
         visit_annotation(ann, HostNodeKind::Document, &mut ctx);
     }
+    let doc_scope_count = ctx.out.len();
     walk_session(&document.root, HostNodeKind::Session, &mut ctx);
     let root_diagnostics = registry
         .take_root_diagnostics()
@@ -97,6 +114,7 @@ pub fn dispatch_render(document: &Document, registry: &Registry, format_name: &s
         .collect();
     RenderPlan {
         nodes,
+        doc_scope_count,
         root_diagnostics,
     }
 }
@@ -685,15 +703,19 @@ mod tests {
         registry
     }
 
-    /// Test fixture: a session-scoped annotation. Top-level
-    /// annotations are extracted into the IR's synthetic
-    /// `frontmatter` block before events are emitted, so they
-    /// don't flow through `Event::StartAnnotation` at all and the
-    /// splice can't operate on them. Per-element annotations (the
-    /// realistic extension use case) go through the event stream.
-    /// Lifting this limitation requires reworking the IR's
-    /// document-annotation handling — out of scope here, tracked
-    /// implicitly under `serialize_to_html_with_registry`'s docs.
+    /// Test fixture: a session-scoped annotation (lives inside the
+    /// body, so it flows through `Event::StartAnnotation` and the
+    /// splice can operate on it).
+    ///
+    /// Doc-scope annotations are a separate category: post-Phase-3b
+    /// (#614) they live in `Document::document_annotations` and the
+    /// event walker doesn't see them. `dispatch_render` still walks
+    /// them first and emits plan entries, but the body splice walker
+    /// skips that prefix via [`RenderPlan::doc_scope_count`] —
+    /// otherwise doc-scope handler output would be spliced into the
+    /// first body annotation's position. The end-to-end
+    /// regression for that misalignment lives in
+    /// `doc_scope_annotation_does_not_misroute_body_splice`.
     const DOC_WITH_SCOPED_ANNOTATION: &str =
         "1. Heading\n\n    :: acme.task ::\n        Body that should be replaced.\n";
 
@@ -879,5 +901,114 @@ mod tests {
         // No assertion — this test exists so a future implementer
         // grepping for "multi-annotation" lands here. Promote to a
         // real assertion when the IR ordering is stabilised.
+    }
+
+    /// Regression for the doc-scope/body splice misalignment that
+    /// Copilot flagged on PR #621.
+    ///
+    /// Before Phase 3b: `tree_to_events` synthesized a `frontmatter`
+    /// `StartAnnotation` event for `document.annotations()`. The
+    /// event walker's `annotation_idx` saw it as index 0 and
+    /// (incidentally) stayed aligned with the dispatch plan's
+    /// doc-scope-first ordering for the single-annotation case.
+    ///
+    /// After Phase 3b: doc-scope is IR-only; no synthetic event is
+    /// emitted. If the splice walker fed the full plan through
+    /// unchanged, the first body annotation's `StartAnnotation` would
+    /// land on plan index 0 (still doc-scope) and the doc-scope
+    /// handler's HTML would replace the body annotation's rendering
+    /// — silent data corruption.
+    ///
+    /// The fix: `serialize_to_html_with_registry` slices
+    /// `plan.doc_scope_count` entries off the front before handing
+    /// the plan to the splice walker. This test locks that contract.
+    #[test]
+    fn doc_scope_annotation_does_not_misroute_body_splice() {
+        use crate::formats::html::{serialize_to_html_with_registry, HtmlOptions, HtmlTheme};
+
+        // Per-label handler that emits a label-specific marker so the
+        // test can tell which handler's output landed where.
+        struct ByLabel;
+        impl LexHandler for ByLabel {
+            fn on_render(
+                &self,
+                ctx: &LabelCtx,
+                _: Format,
+            ) -> Result<Option<RenderOut>, HandlerError> {
+                let marker = match ctx.label.as_str() {
+                    "acme.docscope" => "<DOCSCOPE_HANDLER_OUTPUT/>",
+                    "acme.body" => "<BODY_HANDLER_OUTPUT/>",
+                    _ => return Ok(None),
+                };
+                Ok(Some(RenderOut::String {
+                    string: marker.to_string(),
+                }))
+            }
+        }
+
+        // Doc-scope `acme.docscope` (top of file) + body `acme.body`
+        // inside a session. Both labels have html render hooks.
+        // No blank line between `:: acme.body ::` and its indented
+        // body — that would make the annotation marker-form and
+        // promote the body to a sibling paragraph.
+        let doc = parse(
+            ":: acme.docscope ::\n\
+             \n\
+             1. Heading\n\
+             \n    \
+             :: acme.body ::\n        \
+             Body that should be replaced.\n",
+        );
+        let registry = Registry::new();
+        registry
+            .register_namespace(
+                "acme",
+                vec![
+                    schema("acme.docscope", &["html"]),
+                    schema("acme.body", &["html"]),
+                ],
+                Box::new(ByLabel),
+            )
+            .unwrap();
+        let plan = dispatch_render(&doc, &registry, "html");
+        assert_eq!(
+            plan.doc_scope_count, 1,
+            "dispatch_render should report one doc-scope plan entry"
+        );
+        assert_eq!(
+            plan.nodes.len(),
+            2,
+            "plan should have one doc-scope + one body entry"
+        );
+
+        let outcome = serialize_to_html_with_registry(
+            &doc,
+            HtmlOptions::new(HtmlTheme::default()),
+            &registry,
+        )
+        .expect("serialise");
+
+        // The body annotation's splice must use the body handler's
+        // output — not the doc-scope handler's output (the bug pre-
+        // fix would route DOCSCOPE_HANDLER_OUTPUT into the body
+        // annotation's slot).
+        assert!(
+            outcome.html.contains("<BODY_HANDLER_OUTPUT/>"),
+            "body annotation must splice the body handler's output. got:\n{}",
+            outcome.html
+        );
+        assert!(
+            !outcome.html.contains("<DOCSCOPE_HANDLER_OUTPUT/>"),
+            "doc-scope handler output must not be spliced into the body \
+             (doc-scope routing is a follow-up under #616). got:\n{}",
+            outcome.html
+        );
+        // Body annotation's default content must still be suppressed
+        // (the body handler owns the rendering).
+        assert!(
+            !outcome.html.contains("Body that should be replaced."),
+            "body handler must own its body content. got:\n{}",
+            outcome.html
+        );
     }
 }

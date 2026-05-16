@@ -1314,12 +1314,16 @@ mod tests {
     }
 
     #[test]
-    fn document_annotations_synthesize_frontmatter_event() {
-        // Post-refac/label cleanup: `tree_to_events` synthesizes a
-        // single `frontmatter` annotation event from
-        // `document_annotations`. The synthesis is what downstream
-        // HTML/Markdown serializers consume; the IR no longer carries
-        // a redundant `frontmatter` annotation in children.
+    fn document_annotations_survive_tree_events_round_trip() {
+        // Phase 3b (#614): `document_annotations` is carried through
+        // the IR without being flattened into the event stream as a
+        // synthetic `frontmatter` annotation. `tree_to_events` →
+        // `events_to_tree` is a structural round-trip on `children`,
+        // but `document_annotations` is intentionally invisible to
+        // the event layer (format-specific serializers read it from
+        // the IR directly). The round-trip rebuilds an empty slot;
+        // we lock that contract here so a regression to the old
+        // synthesis is caught.
         use crate::ir::nodes::Annotation;
         use crate::ir::to_events::tree_to_events;
 
@@ -1341,20 +1345,22 @@ mod tests {
 
         let events = tree_to_events(&DocNode::Document(original.clone()));
 
-        // The frontmatter event must be present and carry the
-        // prefix-stripped `author` key with the body text as value.
-        let frontmatter = events.iter().find_map(|e| match e {
-            Event::StartAnnotation {
-                label, parameters, ..
-            } if label == "frontmatter" => Some(parameters.clone()),
-            _ => None,
+        // No synthetic `frontmatter` annotation event leaks into the
+        // stream — the Phase 3b flip retired that synthesis.
+        let has_frontmatter = events.iter().any(|e| {
+            matches!(
+                e,
+                Event::StartAnnotation { label, .. } if label == "frontmatter"
+            )
         });
-        let parameters = frontmatter.expect("frontmatter event must be synthesized");
-        let author = parameters
-            .iter()
-            .find(|(k, _)| k == "author")
-            .map(|(_, v)| v.as_str());
-        assert_eq!(author, Some("Alice"));
+        assert!(
+            !has_frontmatter,
+            "Phase 3b: tree_to_events must not synthesize a frontmatter event"
+        );
+
+        // Body events still round-trip through events_to_tree.
+        let rebuilt = events_to_tree(&events).expect("events_to_tree");
+        assert_eq!(rebuilt.children, original.children);
     }
 
     #[test]
