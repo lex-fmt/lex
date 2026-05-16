@@ -1141,7 +1141,7 @@ mod tests {
             .expect("dispatch_render ok")
             .expect("doc.author must produce a rendered output");
         match out {
-            RenderOut::String { string } => assert_eq!(string, "author: Alice\n"),
+            RenderOut::String { string } => assert_eq!(string, "author: \"Alice\"\n"),
             other => panic!("expected String, got {other:?}"),
         }
     }

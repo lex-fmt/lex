@@ -178,11 +178,20 @@ pub fn render_doc_annotation(
 }
 
 /// One YAML frontmatter line for the markdown serializer's preamble
-/// builder (`<key>: <value>\n`). Internal `\n` collapse to ` ` so the
-/// output stays a valid single YAML scalar.
+/// builder (`<key>: "<value>"\n`).
+///
+/// Internal `\n` collapse to ` ` so a multi-line annotation body
+/// stays a single YAML scalar (otherwise the trailing lines orphan
+/// from their key). The value is then double-quoted with `\` and `"`
+/// escaped — robust against arbitrary user input (titles containing
+/// colons, quotes, backslashes, leading-special characters that YAML
+/// otherwise treats as type tags).
 fn render_markdown_yaml_line(key: &str, value: &str) -> String {
-    let value = value.replace('\n', " ");
-    format!("{key}: {value}\n")
+    let value = value
+        .replace('\n', " ")
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    format!("{key}: \"{value}\"\n")
 }
 
 /// One HTML `<head>` element for the html serializer. `doc.title`
@@ -205,10 +214,12 @@ fn render_html_meta(key: &str, value: &str) -> String {
     )
 }
 
-/// Minimal HTML-attribute escape. Restricts to the four characters
-/// the consumers (markdown YAML preamble, HTML meta) need to emit
-/// safely; doesn't pull in `html_escape` since this module wants no
-/// new dep.
+/// Minimal HTML-attribute escape. Covers the five characters that
+/// matter for the consumers we ship today (HTML `<title>` body and
+/// `<meta>` attributes) plus single-quote defence-in-depth so the
+/// output is also safe to splice into a single-quoted attribute or
+/// other HTML position. Avoids pulling in `html_escape` since this
+/// module wants no new dep.
 fn html_escape_text(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -217,6 +228,7 @@ fn html_escape_text(s: &str) -> String {
             '>' => out.push_str("&gt;"),
             '&' => out.push_str("&amp;"),
             '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
             other => out.push(other),
         }
     }
@@ -310,7 +322,44 @@ mod tests {
             .expect("ok")
             .expect("Some");
         match out {
-            RenderOut::String { string } => assert_eq!(string, "title: My Doc\n"),
+            RenderOut::String { string } => assert_eq!(string, "title: \"My Doc\"\n"),
+            other => panic!("expected String, got {other:?}"),
+        }
+    }
+
+    /// YAML scalar safety: a value containing `"` or `\` or `:` (the
+    /// three characters that break unquoted YAML scalars) must come
+    /// out as a properly-escaped quoted string. Pinned so an
+    /// unquoting refactor doesn't silently corrupt frontmatter.
+    #[test]
+    fn render_markdown_quotes_and_escapes_special_characters() {
+        let c = ctx(
+            "doc.title",
+            AnnotationBody::Text("Has \"quotes\" and \\ backslash: yes".into()),
+        );
+        let out = render_doc_annotation(&c, &Format::Markdown)
+            .expect("ok")
+            .expect("Some");
+        match out {
+            RenderOut::String { string } => assert_eq!(
+                string,
+                "title: \"Has \\\"quotes\\\" and \\\\ backslash: yes\"\n"
+            ),
+            other => panic!("expected String, got {other:?}"),
+        }
+    }
+
+    /// Multi-line annotation body collapses internal `\n` to space so
+    /// the trailing lines don't orphan from their YAML key. Pinned per
+    /// the existing markdown-serializer contract for frontmatter.
+    #[test]
+    fn render_markdown_collapses_internal_newlines() {
+        let c = ctx("doc.author", AnnotationBody::Text("Alice\nBob".into()));
+        let out = render_doc_annotation(&c, &Format::Markdown)
+            .expect("ok")
+            .expect("Some");
+        match out {
+            RenderOut::String { string } => assert_eq!(string, "author: \"Alice Bob\"\n"),
             other => panic!("expected String, got {other:?}"),
         }
     }
