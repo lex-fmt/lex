@@ -26,8 +26,10 @@ cd "${REPO_ROOT}"
 # this repo). Without this step, `cargo test --workspace` panics with
 # "No such file or directory" when loading lexplore fixtures.
 if [ -f .gitmodules ]; then
-  git submodule update --init --recursive --quiet || \
+  git submodule sync --recursive --quiet || true
+  if ! git submodule update --init --recursive --quiet; then
     echo "warning: git submodule update failed — fixture-dependent tests may not run" >&2
+  fi
 fi
 
 # 2. Project dep cache — pick the right tool based on lockfile / manifest.

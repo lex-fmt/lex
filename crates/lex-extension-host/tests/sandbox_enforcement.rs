@@ -77,16 +77,28 @@ fn net_probe_succeeds_under_null_sandbox() {
 
 #[cfg(target_os = "linux")]
 fn landlock_available() -> bool {
-    // `Access` trait must be in scope for `AccessFs::from_all`.
-    use landlock::{Access, AccessFs, Ruleset, RulesetAttr, ABI};
-    // Probe by creating an unbound ruleset. Doesn't call
-    // `restrict_self` so the test process is unaffected. Failure here
-    // means the kernel doesn't support landlock.
-    let abi = ABI::V1;
-    Ruleset::default()
-        .handle_access(AccessFs::from_all(abi))
-        .and_then(|r| r.create())
-        .is_ok()
+    // Probe whether the kernel actually *enforces* landlock, not just
+    // whether a ruleset can be constructed. In some container envs
+    // (notably Claude Code on the web) `Ruleset::create()` returns Ok
+    // but the subsequent `restrict_self()` returns
+    // `RulesetStatus::NotEnforced`, and `LinuxSandbox`'s `pre_exec`
+    // treats that as fail-closed — `spawn()` then errors with `EINVAL`.
+    //
+    // We can't call `restrict_self()` directly in the test runner:
+    // it's irreversible and would lock the runner out of every later
+    // test. Instead, drive the real `LinuxSandbox` apply path against
+    // `/bin/true` — that exercises the same kernel codepath as the
+    // probe tests below, but on a trivial binary. If `spawn()`
+    // succeeds the kernel enforces landlock; if it fails the probe
+    // tests can't meaningfully run and should skip.
+    let mut cmd = std::process::Command::new("/bin/true");
+    if LinuxSandbox
+        .apply_to(&mut cmd, Capabilities::default())
+        .is_err()
+    {
+        return false;
+    }
+    cmd.status().is_ok()
 }
 
 #[cfg(target_os = "linux")]
