@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# should-release — Layer 0 primitive (lex-fmt/lex#640)
+#
+# Decides whether this repo needs a release right now.
+#
+# Contract:
+#   exit 0 + "yes: <reason>" on stdout when a release IS needed
+#   exit 1 + "no: <reason>"  on stdout when no release is needed
+#   exit 2 on error
+#
+# Two checks, OR'd together (release if ANY are true):
+#   1. Own commits: get-commits-since-release returns any commits
+#   2. comms submodule stale: pinned comms SHA != commit SHA of comms's
+#      latest GitHub release tag
+set -euo pipefail
+
+# Normalize any unhandled failure to exit 2 so callers can reliably distinguish
+# "no release" (1) from "error" (2). Explicit `exit 0`/`exit 1` paths below
+# bypass this trap; only unexpected failures land here.
+trap 'exit 2' ERR
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+cd "$REPO_ROOT"
+
+# --- Check 1: any commits in this repo since the latest release tag? ---
+if ! commits=$("$SCRIPT_DIR/get-commits-since-release" 2>&1); then
+  echo "error: get-commits-since-release failed: $commits" >&2
+  exit 2
+fi
+if [ -n "$commits" ]; then
+  count=$(printf '%s\n' "$commits" | grep -c .)
+  echo "yes: $count commit(s) in this repo since latest release"
+  exit 0
+fi
+
+# --- Check 2: is the pinned comms submodule older than comms's latest release? ---
+if [ -d comms ]; then
+  # Read the gitlink SHA currently pinned at HEAD (not the working-tree state).
+  current_sub=$(git ls-tree HEAD comms | awk '{print $3}')
+  if [ -n "$current_sub" ]; then
+    if ! latest_comms_tag=$(gh release view --repo lex-fmt/comms --json tagName --jq .tagName 2>&1); then
+      echo "error: gh release view lex-fmt/comms failed: $latest_comms_tag" >&2
+      exit 2
+    fi
+    if [ -n "$latest_comms_tag" ]; then
+      if ! latest_sha=$(gh api "repos/lex-fmt/comms/commits/$latest_comms_tag" --jq .sha 2>&1); then
+        echo "error: gh api repos/lex-fmt/comms/commits/$latest_comms_tag failed: $latest_sha" >&2
+        exit 2
+      fi
+      if [ -n "$latest_sha" ] && [ "$current_sub" != "$latest_sha" ]; then
+        echo "yes: comms submodule outdated (${current_sub:0:7} -> ${latest_sha:0:7} = $latest_comms_tag)"
+        exit 0
+      fi
+    fi
+  fi
+fi
+
+echo "no: own repo and comms submodule both up-to-date"
+exit 1
