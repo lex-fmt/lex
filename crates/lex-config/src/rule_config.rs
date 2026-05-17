@@ -12,10 +12,15 @@ use std::fmt;
 
 /// User-facing severity for a diagnostic rule.
 ///
-/// - [`Severity::Allow`] suppresses emission entirely.
-/// - [`Severity::Warn`] emits at the diagnostic's intrinsic LSP severity.
-/// - [`Severity::Deny`] emits at LSP `Error` severity regardless of the
-///   intrinsic value, and is the level CI tooling treats as fatal.
+/// Semantics (applied by the registry once that surface lands; this type
+/// currently only carries the configuration value):
+///
+/// - [`Severity::Allow`] is intended to suppress emission entirely.
+/// - [`Severity::Warn`] is intended to emit at the diagnostic's intrinsic
+///   LSP severity.
+/// - [`Severity::Deny`] is intended to emit at LSP `Error` severity
+///   regardless of the intrinsic value, and to be the level CI tooling
+///   treats as fatal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Severity {
@@ -51,7 +56,10 @@ pub type RuleOptions = BTreeMap<String, toml::Value>;
 /// rules with numeric thresholds (line length, nesting depth) can plug
 /// in without changing the schema. No rule in lex today carries
 /// options.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// `Eq` is not derived because [`RuleOptions`] embeds `toml::Value`,
+/// which contains `Float` and therefore is not `Eq`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum RuleConfig {
     /// Bare severity, no options.
@@ -64,8 +72,7 @@ impl RuleConfig {
     /// The configured severity, regardless of which form was used.
     pub fn severity(&self) -> Severity {
         match self {
-            RuleConfig::Bare(s) => *s,
-            RuleConfig::WithOptions(s, _) => *s,
+            RuleConfig::Bare(s) | RuleConfig::WithOptions(s, _) => *s,
         }
     }
 
@@ -147,26 +154,40 @@ mod tests {
 
     #[test]
     fn rejects_invalid_severity_string() {
-        let err = toml::from_str::<Wrap>(r#"rule = "error""#).unwrap_err();
-        assert!(
-            err.to_string().to_lowercase().contains("unknown")
-                || err.to_string().to_lowercase().contains("variant")
-                || err.to_string().to_lowercase().contains("expected"),
-            "unexpected error: {err}"
-        );
+        // Behaviour we own: an unrecognised severity must not deserialize.
+        // Exact wording is owned by serde/toml and not asserted.
+        assert!(toml::from_str::<Wrap>(r#"rule = "error""#).is_err());
     }
 
     #[test]
     fn rejects_invalid_array_severity() {
-        let err = toml::from_str::<Wrap>(r#"rule = ["error", {}]"#).unwrap_err();
-        assert!(err.to_string().to_lowercase().contains("did not match"),);
+        assert!(toml::from_str::<Wrap>(r#"rule = ["error", {}]"#).is_err());
     }
 
     #[test]
     fn round_trip_bare() {
         let r = parse(r#"rule = "warn""#);
         let s = toml::to_string(&Wrap { rule: r.clone() }).unwrap();
-        assert!(s.contains(r#""warn""#));
+        let back = toml::from_str::<Wrap>(&s).unwrap().rule;
+        assert_eq!(back, r);
+    }
+
+    #[test]
+    fn round_trip_with_options() {
+        // The array form is part of the on-disk contract — round-trip
+        // it through serialization to catch regressions in the
+        // tuple-variant emit shape.
+        let r = parse(r#"rule = ["warn", { max = 100, indent = "tabs" }]"#);
+        let s = toml::to_string(&Wrap { rule: r.clone() }).unwrap();
+        let back = toml::from_str::<Wrap>(&s).unwrap().rule;
+        assert_eq!(back, r);
+        assert_eq!(back.severity(), Severity::Warn);
+        let opts = back.options().expect("options preserved");
+        assert_eq!(opts.get("max"), Some(&toml::Value::Integer(100)));
+        assert_eq!(
+            opts.get("indent"),
+            Some(&toml::Value::String("tabs".into()))
+        );
     }
 
     #[test]
