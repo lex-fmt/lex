@@ -515,9 +515,84 @@ pub struct HtmlConfig {
 /// Diagnostics options.
 #[derive(Debug, Clone, Config, Serialize, Deserialize)]
 pub struct DiagnosticsConfig {
-    /// Enable spellcheck diagnostics.
-    #[config(default = true)]
-    pub spellcheck: bool,
+    /// Per-rule severity overrides. Each entry maps a diagnostic code
+    /// to a severity ("allow", "warn", or "deny"). The defaults shown
+    /// next to each rule are the intrinsic defaults — uncomment a line
+    /// to override one.
+    #[config(nested)]
+    pub rules: DiagnosticsRulesConfig,
+}
+
+/// Per-rule severity for diagnostics.
+///
+/// One field per built-in diagnostic code. Each field's doc comment is
+/// the description that surfaces in `lexd config gen` output, so
+/// authoring conventions for these doc comments matter: write them as
+/// user-facing prose, lead with what triggers the diagnostic, finish
+/// with the intrinsic default. Extension-emitted codes
+/// (`<namespace>.<code>`) and forward-looking prefix globs are not
+/// fields on this struct — they ride in the embedded map of `extra`
+/// once that surface lands.
+#[derive(Debug, Clone, Config, Serialize, Deserialize)]
+pub struct DiagnosticsRulesConfig {
+    /// A footnote reference like `[42]` has no corresponding
+    /// definition in the document. Intrinsic default: deny.
+    #[config(default = "deny")]
+    pub missing_footnote: RuleConfig,
+    /// A footnote definition appears in the document but no
+    /// reference points at it. Intrinsic default: warn.
+    #[config(default = "warn")]
+    pub unused_footnote: RuleConfig,
+    /// A table row has a different number of columns than the
+    /// table's header row. Intrinsic default: warn.
+    #[config(default = "warn")]
+    pub table_inconsistent_columns: RuleConfig,
+    /// A label uses the reserved `doc.*` prefix, which is no longer
+    /// valid under the current label policy. Intrinsic default: deny.
+    #[config(default = "deny")]
+    pub forbidden_label_prefix: RuleConfig,
+    /// A `lex.*` literal references a canonical that the toolchain
+    /// does not recognise — typically a typo or a label written for
+    /// a future core schema. Intrinsic default: deny.
+    #[config(default = "deny")]
+    pub unknown_lex_canonical: RuleConfig,
+    /// Spellcheck diagnostics. Set to "allow" to suppress
+    /// document-wide. Intrinsic default: warn.
+    #[config(default = "warn")]
+    pub spellcheck: RuleConfig,
+    /// Schema-validation diagnostics for extension labels.
+    #[config(nested)]
+    pub schema: SchemaRulesConfig,
+}
+
+/// Schema-validation diagnostics. Each field maps to one of the six
+/// schema pre-validation checks the analyser performs before
+/// dispatching to an extension handler. See
+/// [`extending-lex.lex`](../specs/proposals/extending-lex.lex) §13.2.
+#[derive(Debug, Clone, Config, Serialize, Deserialize)]
+pub struct SchemaRulesConfig {
+    /// A label is invoked whose namespace is registered, but no
+    /// schema entry exists for the label itself. Typically a typo
+    /// or an out-of-version label. Intrinsic default: deny.
+    #[config(default = "deny")]
+    pub unknown_label: RuleConfig,
+    /// A label invocation omits a parameter the schema marks as
+    /// required. Intrinsic default: deny.
+    #[config(default = "deny")]
+    pub missing_param: RuleConfig,
+    /// A label parameter's value does not match the type the schema
+    /// declares. Intrinsic default: deny.
+    #[config(default = "deny")]
+    pub param_type_mismatch: RuleConfig,
+    /// A label attaches to a container shape the schema disallows
+    /// (e.g. attaching a paragraph-only label to a session).
+    /// Intrinsic default: deny.
+    #[config(default = "deny")]
+    pub bad_attachment: RuleConfig,
+    /// A label body's shape (`none` / `text` / `lex`) does not match
+    /// the schema's declared body kind. Intrinsic default: deny.
+    #[config(default = "deny")]
+    pub body_shape_mismatch: RuleConfig,
 }
 
 /// Include-resolution options consumed by `lexd convert`, `lexd inspect`,
@@ -573,6 +648,94 @@ mod tests {
         assert_eq!(config.formatting.rules.session_blank_lines_before, 1);
         assert!(config.inspect.ast.show_line_numbers);
         assert_eq!(config.convert.pdf.size, PdfPageSize::LexEd);
+    }
+
+    fn load_from(toml_body: &str) -> LexConfig {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(CONFIG_FILE_NAME);
+        std::fs::write(&path, toml_body).unwrap();
+        clapfig::Clapfig::builder::<LexConfig>()
+            .app_name("lex")
+            .file_name(CONFIG_FILE_NAME)
+            .no_env()
+            .search_paths(vec![clapfig::SearchPath::Path(dir.path().to_path_buf())])
+            .load()
+            .expect("loads")
+    }
+
+    #[test]
+    fn diagnostics_rules_defaults_in_place() {
+        let cfg = load_defaults();
+        assert_eq!(
+            cfg.diagnostics.rules.missing_footnote.severity(),
+            Severity::Deny
+        );
+        assert_eq!(
+            cfg.diagnostics.rules.unused_footnote.severity(),
+            Severity::Warn
+        );
+        assert_eq!(
+            cfg.diagnostics.rules.table_inconsistent_columns.severity(),
+            Severity::Warn
+        );
+        assert_eq!(
+            cfg.diagnostics.rules.forbidden_label_prefix.severity(),
+            Severity::Deny
+        );
+        assert_eq!(
+            cfg.diagnostics.rules.unknown_lex_canonical.severity(),
+            Severity::Deny
+        );
+        assert_eq!(cfg.diagnostics.rules.spellcheck.severity(), Severity::Warn);
+        assert_eq!(
+            cfg.diagnostics.rules.schema.unknown_label.severity(),
+            Severity::Deny
+        );
+    }
+
+    #[test]
+    fn diagnostics_rules_user_overrides_apply() {
+        let cfg = load_from(
+            r#"
+[diagnostics.rules]
+missing_footnote = "allow"
+table_inconsistent_columns = "deny"
+
+[diagnostics.rules.schema]
+unknown_label = "warn"
+"#,
+        );
+        assert_eq!(
+            cfg.diagnostics.rules.missing_footnote.severity(),
+            Severity::Allow
+        );
+        assert_eq!(
+            cfg.diagnostics.rules.table_inconsistent_columns.severity(),
+            Severity::Deny
+        );
+        assert_eq!(
+            cfg.diagnostics.rules.schema.unknown_label.severity(),
+            Severity::Warn
+        );
+        // Untouched rules retain their intrinsic defaults.
+        assert_eq!(
+            cfg.diagnostics.rules.forbidden_label_prefix.severity(),
+            Severity::Deny
+        );
+    }
+
+    #[test]
+    fn diagnostics_rules_accept_array_form() {
+        let cfg = load_from(
+            r#"
+[diagnostics.rules]
+missing_footnote = ["warn", { example_option = 42 }]
+"#,
+        );
+        let rule = &cfg.diagnostics.rules.missing_footnote;
+        assert_eq!(rule.severity(), Severity::Warn);
+        let opts = rule.options().expect("array form keeps options");
+        assert_eq!(opts.get("example_option"), Some(&toml::Value::Integer(42)));
     }
 
     #[test]
