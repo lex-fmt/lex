@@ -52,6 +52,7 @@
 // this module rather than churn the public surface.
 #![allow(clippy::result_large_err)]
 
+use crate::lex::assembling::stages::{ApplyTableConfig, NormalizeLabels};
 use crate::lex::assembling::AttachAnnotations;
 use crate::lex::ast::elements::container::GeneralContainer;
 use crate::lex::ast::elements::content_item::ContentItem;
@@ -462,6 +463,26 @@ pub fn resolve_from_source(
         stamp_doc(&mut doc, origin);
     }
 
+    // Normalise labels in the entry source BEFORE the resolve walk so
+    // shortcut spellings (`:: include ::`, `:: image ::`, …) are
+    // rewritten to their canonical form. The resolve dispatcher keys
+    // on `registry.schema_for(label)` with the canonical spelling, so
+    // without this an `:: include src=... ::` annotation would be
+    // skipped because no schema is registered under the bare alias.
+    //
+    // Permissive mode: unknown labels are left as-is rather than
+    // erroring. The standard parse pipeline enforces strict-mode
+    // namespace policy (`STRING_TO_AST`); the resolve entry point is
+    // a downstream stage that just needs the shortcut table applied
+    // so dispatch finds the right handler.
+    let mut doc =
+        NormalizeLabels::permissive()
+            .run(doc)
+            .map_err(|e| IncludeError::ParseFailed {
+                path: source_path.clone().unwrap_or_default(),
+                message: format!("label normalisation failed: {e}"),
+            })?;
+
     let mut chain: Vec<ResolveKey> = Vec::new();
     let mut state = ResolverState {
         config,
@@ -476,8 +497,30 @@ pub fn resolve_from_source(
     let doc = AttachAnnotations::new()
         .run(doc)
         .map_err(|e| IncludeError::ParseFailed {
-            path: source_path.unwrap_or_default(),
+            path: source_path.clone().unwrap_or_default(),
             message: format!("annotation attachment failed: {e}"),
+        })?;
+
+    // Re-normalise after splicing. Each included file is parsed via
+    // `parse_no_attach` (no normalisation), so shortcut labels in the
+    // spliced content — e.g. `:: image src=... ::` inside an included
+    // chapter — need rewriting before downstream IR/format passes can
+    // dispatch them.
+    let doc = NormalizeLabels::permissive()
+        .run(doc)
+        .map_err(|e| IncludeError::ParseFailed {
+            path: source_path.clone().unwrap_or_default(),
+            message: format!("label normalisation failed: {e}"),
+        })?;
+
+    // Apply table configuration so `:: table header=N align=... ::`
+    // annotations attached to tables (here or in spliced content) take
+    // effect — matches the order the standard pipeline runs them.
+    let doc = ApplyTableConfig::new()
+        .run(doc)
+        .map_err(|e| IncludeError::ParseFailed {
+            path: source_path.unwrap_or_default(),
+            message: format!("table config application failed: {e}"),
         })?;
 
     Ok(doc)

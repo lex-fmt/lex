@@ -2341,3 +2341,117 @@ mod registry_dispatch {
         );
     }
 }
+
+// ============================================================================
+// Label-normalisation through the resolve pipeline (#633)
+// ============================================================================
+//
+// `resolve_from_source` runs `NormalizeLabels::permissive` so curated
+// shortcuts (`include`, `image`, `video`, `audio`, …) are canonicalised
+// to their `lex.*` form. Without this, downstream IR-build dispatch
+// for `lex.media.{image,video,audio}` never fires when authors use the
+// shortcut spelling and HTML/Markdown export drops the media payload
+// (#633).
+
+/// Walk all VerbatimBlocks in the tree and collect their closing
+/// labels. Used to assert that shortcut spellings reached the
+/// resolver's output as their canonical form.
+fn collect_verbatim_labels(items: &[ContentItem]) -> Vec<String> {
+    let mut out = Vec::new();
+    fn walk(items: &[ContentItem], out: &mut Vec<String>) {
+        for item in items {
+            match item {
+                ContentItem::VerbatimBlock(v) => {
+                    out.push(v.closing_data.label.value.clone());
+                }
+                ContentItem::Session(s) => walk(&s.children, out),
+                ContentItem::Annotation(a) => walk(&a.children, out),
+                ContentItem::Definition(d) => walk(&d.children, out),
+                ContentItem::List(l) => {
+                    for item in l.items.iter() {
+                        if let ContentItem::ListItem(li) = item {
+                            let kids: Vec<ContentItem> = li.children.iter().cloned().collect();
+                            walk(&kids, out);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    walk(items, &mut out);
+    out
+}
+
+#[test]
+fn resolve_canonicalises_image_shortcut_in_entry_source() {
+    let tree = fixture(
+        "Section:\n    Photo:\n    :: image src=\"foo.png\" ::\n",
+        &[],
+    )
+    .expect("resolve");
+    let labels = collect_verbatim_labels(tree.root_children());
+    assert!(
+        labels.contains(&"lex.media.image".to_string()),
+        "`:: image ::` shortcut must be normalised to `lex.media.image` so \
+         downstream IR-build dispatch can hydrate the media payload; got {labels:?}"
+    );
+}
+
+#[test]
+fn resolve_canonicalises_video_and_audio_shortcuts() {
+    let tree = fixture(
+        "Clips:\n    Video:\n    :: video src=\"v.mp4\" ::\n\n    Audio:\n    :: audio src=\"a.mp3\" ::\n",
+        &[],
+    )
+    .expect("resolve");
+    let labels = collect_verbatim_labels(tree.root_children());
+    assert!(
+        labels.contains(&"lex.media.video".to_string()),
+        "`:: video ::` shortcut must be normalised; got {labels:?}"
+    );
+    assert!(
+        labels.contains(&"lex.media.audio".to_string()),
+        "`:: audio ::` shortcut must be normalised; got {labels:?}"
+    );
+}
+
+#[test]
+fn resolve_canonicalises_image_shortcut_inside_included_file() {
+    let tree = fixture(
+        ":: include src=\"chapter.lex\" ::\n",
+        &[(
+            "/repo/chapter.lex",
+            "Section:\n    Photo:\n    :: image src=\"foo.png\" ::\n",
+        )],
+    )
+    .expect("resolve");
+    let labels = collect_verbatim_labels(tree.root_children());
+    assert!(
+        labels.contains(&"lex.media.image".to_string()),
+        "spliced content from an included file must also be normalised \
+         (the second NormalizeLabels pass runs after splicing); got {labels:?}"
+    );
+}
+
+#[test]
+fn resolve_fires_include_handler_for_bare_include_shortcut() {
+    // `:: include src=... ::` is the shortcut form of `:: lex.include ::`.
+    // The resolve dispatcher keys on `registry.schema_for(label)` with the
+    // canonical spelling, so without the pre-walk NormalizeLabels pass the
+    // shortcut form would be silently skipped (#633) — leaving the
+    // `include` annotation in the tree and the included content unspliced.
+    let tree = fixture(
+        ":: include src=\"frag.lex\" ::\n",
+        &[("/repo/frag.lex", "Hello from frag.\n")],
+    )
+    .expect("resolve");
+    assert!(
+        tree.root_paragraph_texts()
+            .iter()
+            .any(|t| t.contains("Hello from frag.")),
+        "the bare `:: include ::` shortcut must dispatch the `lex.include` \
+         handler so the target file's content is spliced in; root paragraphs: {:?}",
+        tree.root_paragraph_texts()
+    );
+}
