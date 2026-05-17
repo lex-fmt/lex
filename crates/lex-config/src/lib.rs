@@ -534,7 +534,13 @@ pub struct DiagnosticsConfig {
 /// (`<namespace>.<code>`) and forward-looking prefix globs are not
 /// fields on this struct — they ride in the embedded map of `extra`
 /// once that surface lands.
-#[derive(Debug, Clone, Config, Serialize, Deserialize)]
+///
+/// `Default` returns every field at [`Severity::Warn`] regardless of
+/// each rule's *intrinsic* default. Real production loads run through
+/// clapfig and honour the `#[config(default = "...")]` annotations.
+/// `Default` is here so tests and ad-hoc embedders can construct an
+/// instance without going through the clapfig pipeline.
+#[derive(Debug, Clone, Default, Config, Serialize, Deserialize)]
 pub struct DiagnosticsRulesConfig {
     /// A footnote reference like `[42]` has no corresponding
     /// definition in the document. Intrinsic default: deny.
@@ -566,11 +572,39 @@ pub struct DiagnosticsRulesConfig {
     pub schema: SchemaRulesConfig,
 }
 
+impl DiagnosticsRulesConfig {
+    /// Look up a rule by its on-the-wire code (e.g. `"missing-footnote"`
+    /// or `"schema.unknown-label"`).
+    ///
+    /// Returns `None` for codes the toolchain does not know about —
+    /// notably extension-emitted codes (`<namespace>.<code>`), which are
+    /// out of this struct's scope. Callers that want override semantics
+    /// for extension diagnostics will look those up in a future "extra"
+    /// map; until that surface lands, unknown codes fall through to the
+    /// emission site's intrinsic severity.
+    pub fn lookup_by_code(&self, code: &str) -> Option<&RuleConfig> {
+        match code {
+            "missing-footnote" => Some(&self.missing_footnote),
+            "unused-footnote" => Some(&self.unused_footnote),
+            "table-inconsistent-columns" => Some(&self.table_inconsistent_columns),
+            "forbidden-label-prefix" => Some(&self.forbidden_label_prefix),
+            "unknown-lex-canonical" => Some(&self.unknown_lex_canonical),
+            "spellcheck" => Some(&self.spellcheck),
+            "schema.unknown-label" => Some(&self.schema.unknown_label),
+            "schema.missing-param" => Some(&self.schema.missing_param),
+            "schema.param-type-mismatch" => Some(&self.schema.param_type_mismatch),
+            "schema.bad-attachment" => Some(&self.schema.bad_attachment),
+            "schema.body-shape-mismatch" => Some(&self.schema.body_shape_mismatch),
+            _ => None,
+        }
+    }
+}
+
 /// Schema-validation diagnostics. Each field maps to one of the
 /// schema pre-validation checks the analyser performs before
 /// dispatching to an extension handler. See the Extending Lex
 /// proposal (`comms/specs/proposals/extending-lex.lex`) §13.2.
-#[derive(Debug, Clone, Config, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Config, Serialize, Deserialize)]
 pub struct SchemaRulesConfig {
     /// A label is invoked whose namespace is registered, but no
     /// schema entry exists for the label itself. Typically a typo
