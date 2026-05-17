@@ -1,4 +1,5 @@
 use crate::inline::extract_references;
+use lex_config::{DiagnosticsRulesConfig, Severity};
 use lex_core::lex::ast::{
     Annotation, ContentItem, Document, Range, Session, Table, TableRow, TextContent,
 };
@@ -12,7 +13,7 @@ pub enum DiagnosticKind {
     UnusedFootnoteDefinition,
     TableInconsistentColumns,
     /// A label invocation failed schema pre-validation before the
-    /// handler was dispatched. The variant carries which of the six
+    /// handler was dispatched. The variant carries which of the
     /// pre-validation checks tripped.
     SchemaValidation(SchemaValidationKind),
     /// A diagnostic emitted by a registered extension handler. The
@@ -52,8 +53,8 @@ pub enum DiagnosticSeverity {
     Hint,
 }
 
-/// One of the six schema pre-validation checks the analyser owns
-/// before dispatching to a handler. Wire spec / proposal §13.2.
+/// One of the schema pre-validation checks the analyser owns before
+/// dispatching to a handler. Wire spec / proposal §13.2.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SchemaValidationKind {
     /// The namespace is registered but the schema set for that
@@ -68,6 +69,69 @@ pub enum SchemaValidationKind {
     ParamTypeMismatch,
     BadAttachment,
     BodyShapeMismatch,
+}
+
+impl SchemaValidationKind {
+    /// The on-the-wire code for this schema-validation kind. Matches
+    /// the `[diagnostics.rules.schema]` field name in `.lex.toml`.
+    pub fn code(&self) -> &'static str {
+        match self {
+            SchemaValidationKind::UnknownLabel => "schema.unknown-label",
+            SchemaValidationKind::MissingParam => "schema.missing-param",
+            SchemaValidationKind::ParamTypeMismatch => "schema.param-type-mismatch",
+            SchemaValidationKind::BadAttachment => "schema.bad-attachment",
+            SchemaValidationKind::BodyShapeMismatch => "schema.body-shape-mismatch",
+        }
+    }
+}
+
+impl DiagnosticKind {
+    /// The on-the-wire code for this diagnostic kind. The same value
+    /// travels in `lsp_types::Diagnostic.code` and is the key the
+    /// `[diagnostics.rules]` block in `.lex.toml` matches against
+    /// (see [`DiagnosticsRulesConfig::lookup_by_code`]).
+    ///
+    /// For the `Handler` variant — extension-emitted diagnostics —
+    /// this returns the handler's `code` if it supplied one, or the
+    /// stable fallback `"handler.diagnostic"` otherwise.
+    pub fn code(&self) -> &str {
+        match self {
+            DiagnosticKind::MissingFootnoteDefinition => "missing-footnote",
+            DiagnosticKind::UnusedFootnoteDefinition => "unused-footnote",
+            DiagnosticKind::TableInconsistentColumns => "table-inconsistent-columns",
+            DiagnosticKind::SchemaValidation(kind) => kind.code(),
+            DiagnosticKind::Handler { code, .. } => code.as_deref().unwrap_or("handler.diagnostic"),
+            DiagnosticKind::ForbiddenLabelPrefix => "forbidden-label-prefix",
+            DiagnosticKind::UnknownLexCanonical => "unknown-lex-canonical",
+        }
+    }
+}
+
+/// Apply a `[diagnostics.rules]` configuration to a stream of analyser
+/// diagnostics in place. Drops diagnostics whose resolved severity is
+/// `allow`, and remaps the remaining diagnostics' `severity` field:
+///
+/// - `warn` → the diagnostic's intrinsic severity stays unchanged.
+/// - `deny` → severity is upgraded to `Error`.
+///
+/// Diagnostics whose code is unknown to the rules config (extension-
+/// emitted codes from handlers, until the `extra` map ships) are
+/// passed through untouched at their intrinsic severity.
+pub fn apply_rules(diagnostics: &mut Vec<AnalysisDiagnostic>, rules: &DiagnosticsRulesConfig) {
+    diagnostics.retain_mut(|diag| {
+        let code = diag.kind.code();
+        let Some(rule) = rules.lookup_by_code(code) else {
+            return true;
+        };
+        match rule.severity() {
+            Severity::Allow => false,
+            Severity::Warn => true,
+            Severity::Deny => {
+                diag.severity = DiagnosticSeverity::Error;
+                true
+            }
+        }
+    });
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,6 +165,21 @@ pub fn analyze_with_registry(document: &Document, registry: &Registry) -> Vec<An
     check_tables(document, &mut diagnostics);
     check_labels(document, &mut diagnostics);
     crate::label_dispatch::dispatch_labels(document, registry, &mut diagnostics);
+    diagnostics
+}
+
+/// Run the analyser with both an extension registry and a
+/// `[diagnostics.rules]` configuration. The configuration is applied
+/// after all checks run, so rule overrides ([`Severity::Allow`] /
+/// [`Severity::Deny`]) take effect uniformly across the diagnostic
+/// stream.
+pub fn analyze_with_rules(
+    document: &Document,
+    registry: &Registry,
+    rules: &DiagnosticsRulesConfig,
+) -> Vec<AnalysisDiagnostic> {
+    let mut diagnostics = analyze_with_registry(document, registry);
+    apply_rules(&mut diagnostics, rules);
     diagnostics
 }
 
@@ -720,5 +799,152 @@ mod tests {
             "only the paragraph ref [1] should be unresolved, got: {diags:?}"
         );
         assert!(diags[0].message.contains("[1]"));
+    }
+
+    // ─────────────── apply_rules / DiagnosticKind::code ───────────────
+
+    fn dummy_diag(kind: DiagnosticKind, severity: DiagnosticSeverity) -> AnalysisDiagnostic {
+        AnalysisDiagnostic {
+            range: Range::default(),
+            severity,
+            kind,
+            message: "test".into(),
+        }
+    }
+
+    #[test]
+    fn diagnostic_kind_code_matches_lookup_for_every_builtin() {
+        // Drift test: every built-in DiagnosticKind variant must have a
+        // matching entry in DiagnosticsRulesConfig::lookup_by_code so
+        // configuration overrides reach every rule.
+        let rules = DiagnosticsRulesConfig::default();
+        for kind in [
+            DiagnosticKind::MissingFootnoteDefinition,
+            DiagnosticKind::UnusedFootnoteDefinition,
+            DiagnosticKind::TableInconsistentColumns,
+            DiagnosticKind::ForbiddenLabelPrefix,
+            DiagnosticKind::UnknownLexCanonical,
+            DiagnosticKind::SchemaValidation(SchemaValidationKind::UnknownLabel),
+            DiagnosticKind::SchemaValidation(SchemaValidationKind::MissingParam),
+            DiagnosticKind::SchemaValidation(SchemaValidationKind::ParamTypeMismatch),
+            DiagnosticKind::SchemaValidation(SchemaValidationKind::BadAttachment),
+            DiagnosticKind::SchemaValidation(SchemaValidationKind::BodyShapeMismatch),
+        ] {
+            let code = kind.code();
+            assert!(
+                rules.lookup_by_code(code).is_some(),
+                "DiagnosticsRulesConfig is missing a field for built-in code {code:?} \
+                 — add it to lookup_by_code (and likely as a struct field too)"
+            );
+        }
+    }
+
+    #[test]
+    fn handler_code_is_passthrough() {
+        let with_code = DiagnosticKind::Handler {
+            namespace: "acme".into(),
+            code: Some("acme.task-stuck".into()),
+        };
+        assert_eq!(with_code.code(), "acme.task-stuck");
+        let without_code = DiagnosticKind::Handler {
+            namespace: "acme".into(),
+            code: None,
+        };
+        assert_eq!(without_code.code(), "handler.diagnostic");
+    }
+
+    #[test]
+    fn apply_rules_allow_drops_diagnostic() {
+        let mut diags = vec![dummy_diag(
+            DiagnosticKind::MissingFootnoteDefinition,
+            DiagnosticSeverity::Error,
+        )];
+        let rules = DiagnosticsRulesConfig {
+            missing_footnote: lex_config::RuleConfig::Bare(Severity::Allow),
+            ..Default::default()
+        };
+        apply_rules(&mut diags, &rules);
+        assert!(diags.is_empty(), "allow should drop the diagnostic");
+    }
+
+    #[test]
+    fn apply_rules_deny_upgrades_to_error() {
+        let mut diags = vec![dummy_diag(
+            DiagnosticKind::TableInconsistentColumns,
+            DiagnosticSeverity::Warning,
+        )];
+        let rules = DiagnosticsRulesConfig {
+            table_inconsistent_columns: lex_config::RuleConfig::Bare(Severity::Deny),
+            ..Default::default()
+        };
+        apply_rules(&mut diags, &rules);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].severity, DiagnosticSeverity::Error);
+    }
+
+    #[test]
+    fn apply_rules_warn_keeps_intrinsic_severity() {
+        let mut diags = vec![dummy_diag(
+            DiagnosticKind::TableInconsistentColumns,
+            DiagnosticSeverity::Warning,
+        )];
+        let rules = DiagnosticsRulesConfig {
+            table_inconsistent_columns: lex_config::RuleConfig::Bare(Severity::Warn),
+            ..Default::default()
+        };
+        apply_rules(&mut diags, &rules);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(
+            diags[0].severity,
+            DiagnosticSeverity::Warning,
+            "warn should not change the intrinsic severity"
+        );
+    }
+
+    #[test]
+    fn apply_rules_unknown_code_is_passthrough() {
+        // An extension-emitted diagnostic with a code the registry
+        // does not know about must pass through unmodified.
+        let mut diags = vec![dummy_diag(
+            DiagnosticKind::Handler {
+                namespace: "acme".into(),
+                code: Some("acme.unknown".into()),
+            },
+            DiagnosticSeverity::Warning,
+        )];
+        let rules = DiagnosticsRulesConfig::default();
+        apply_rules(&mut diags, &rules);
+        assert_eq!(diags.len(), 1, "unknown codes should pass through");
+        assert_eq!(diags[0].severity, DiagnosticSeverity::Warning);
+    }
+
+    #[test]
+    fn apply_rules_preserves_order_of_kept_diagnostics() {
+        // Mixed stream: one to drop, one to keep, one to upgrade.
+        let mut diags = vec![
+            dummy_diag(
+                DiagnosticKind::MissingFootnoteDefinition,
+                DiagnosticSeverity::Error,
+            ),
+            dummy_diag(
+                DiagnosticKind::UnusedFootnoteDefinition,
+                DiagnosticSeverity::Warning,
+            ),
+            dummy_diag(
+                DiagnosticKind::TableInconsistentColumns,
+                DiagnosticSeverity::Warning,
+            ),
+        ];
+        let rules = DiagnosticsRulesConfig {
+            missing_footnote: lex_config::RuleConfig::Bare(Severity::Allow),
+            table_inconsistent_columns: lex_config::RuleConfig::Bare(Severity::Deny),
+            ..Default::default()
+        };
+        apply_rules(&mut diags, &rules);
+        assert_eq!(diags.len(), 2);
+        assert_eq!(diags[0].kind, DiagnosticKind::UnusedFootnoteDefinition);
+        assert_eq!(diags[0].severity, DiagnosticSeverity::Warning);
+        assert_eq!(diags[1].kind, DiagnosticKind::TableInconsistentColumns);
+        assert_eq!(diags[1].severity, DiagnosticSeverity::Error);
     }
 }

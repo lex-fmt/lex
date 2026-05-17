@@ -29,6 +29,23 @@ pub enum Severity {
     Deny,
 }
 
+impl Default for Severity {
+    /// Tests and ad-hoc construction of [`RuleConfig`] default to
+    /// [`Severity::Warn`]. The *real* per-rule intrinsic defaults are
+    /// declared as `#[config(default = "...")]` on each
+    /// [`crate::DiagnosticsRulesConfig`] field and applied by clapfig
+    /// during config load.
+    fn default() -> Self {
+        Severity::Warn
+    }
+}
+
+impl Default for RuleConfig {
+    fn default() -> Self {
+        RuleConfig::Bare(Severity::default())
+    }
+}
+
 impl fmt::Display for Severity {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {

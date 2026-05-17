@@ -17,6 +17,7 @@ test-support = []
 
 [dependencies]
 ignore = "0.4"
+lex-config = { workspace = true }
 lex-core = { workspace = true }
 lex-extension = { workspace = true }
 lex-extension-host = { workspace = true }

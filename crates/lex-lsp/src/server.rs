@@ -24,7 +24,7 @@ use crate::features::semantic_tokens::{
 use clapfig::{Boundary, Clapfig, SearchPath};
 use lex_analysis::completion::{completion_items, CompletionCandidate, CompletionWorkspace};
 use lex_analysis::diagnostics::{
-    analyze as analyze_diagnostics, AnalysisDiagnostic, DiagnosticKind,
+    analyze as analyze_diagnostics, apply_rules, AnalysisDiagnostic, DiagnosticKind,
 };
 use lex_babel::formats::lex::formatting_rules::FormattingRules;
 use lex_babel::templates::{
@@ -456,7 +456,9 @@ where
 
         let mut diagnostics: Vec<Diagnostic> = include_diags;
         if let Some(entry) = self.documents.get(&uri).await {
-            let analysis_diags = analyze_diagnostics(&entry.document);
+            let mut analysis_diags = analyze_diagnostics(&entry.document);
+            let rules = self.config.read().await.diagnostics.rules.clone();
+            apply_rules(&mut analysis_diags, &rules);
             diagnostics.extend(analysis_diags.into_iter().map(to_lsp_diagnostic));
         }
 
@@ -1961,7 +1963,7 @@ fn include_preview_markdown(src: &str, target: &Path, target_source: &str) -> St
 }
 
 fn to_lsp_diagnostic(diag: AnalysisDiagnostic) -> Diagnostic {
-    use lex_analysis::diagnostics::{DiagnosticSeverity as AS, SchemaValidationKind};
+    use lex_analysis::diagnostics::DiagnosticSeverity as AS;
     let severity = match diag.severity {
         AS::Error => tower_lsp::lsp_types::DiagnosticSeverity::ERROR,
         AS::Warning => tower_lsp::lsp_types::DiagnosticSeverity::WARNING,
@@ -1969,26 +1971,7 @@ fn to_lsp_diagnostic(diag: AnalysisDiagnostic) -> Diagnostic {
         AS::Hint => tower_lsp::lsp_types::DiagnosticSeverity::HINT,
     };
 
-    let code = match &diag.kind {
-        DiagnosticKind::MissingFootnoteDefinition => "missing-footnote".to_string(),
-        DiagnosticKind::UnusedFootnoteDefinition => "unused-footnote".to_string(),
-        DiagnosticKind::TableInconsistentColumns => "table-inconsistent-columns".to_string(),
-        DiagnosticKind::SchemaValidation(kind) => match kind {
-            SchemaValidationKind::UnknownLabel => "schema.unknown-label".into(),
-            SchemaValidationKind::MissingParam => "schema.missing-param".into(),
-            SchemaValidationKind::ParamTypeMismatch => "schema.param-type-mismatch".into(),
-            SchemaValidationKind::BadAttachment => "schema.bad-attachment".into(),
-            SchemaValidationKind::BodyShapeMismatch => "schema.body-shape-mismatch".into(),
-        },
-        // Handler-emitted diagnostics carry their own code; if none was
-        // supplied use a stable fallback so editors that filter by code
-        // still see something predictable.
-        DiagnosticKind::Handler { code, .. } => {
-            code.clone().unwrap_or_else(|| "handler.diagnostic".into())
-        }
-        DiagnosticKind::ForbiddenLabelPrefix => "forbidden-label-prefix".into(),
-        DiagnosticKind::UnknownLexCanonical => "unknown-lex-canonical".into(),
-    };
+    let code = diag.kind.code().to_string();
 
     let source = match &diag.kind {
         DiagnosticKind::Handler { namespace, .. } => format!("lex:{namespace}"),
