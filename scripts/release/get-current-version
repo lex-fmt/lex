@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# get-current-version — print the current version of this repo (bare, no `v`).
+#
+# Layer 0 release primitive (tracking issue: lex-fmt/lex#640).
+#
+# Version source for lex-fmt/lex: the `version = "X.Y.Z"` field in every
+# crate Cargo.toml. There is no [workspace.package] in this workspace —
+# each crate carries its own version line, kept in lock-step by
+# `cargo set-version --workspace` at release time. We read lex-core's
+# version as the canonical one (it sits at the top of the dep order and
+# every other publishable crate pins it via `workspace.dependencies`).
+#
+# Usage:  scripts/release/get-current-version
+# Output: bare version on stdout, e.g. `0.14.0`
+set -euo pipefail
+
+repo_root=$(git rev-parse --show-toplevel)
+manifest="$repo_root/crates/lex-core/Cargo.toml"
+
+if [[ ! -f "$manifest" ]]; then
+    echo "get-current-version: cannot find $manifest" >&2
+    exit 1
+fi
+
+# Match the first `version = "..."` line in the [package] table.
+# lex-core's manifest opens with [package] so the first hit is correct.
+version=$(grep -E '^version = "' "$manifest" | head -1 | sed -E 's/^version = "([^"]+)".*/\1/')
+
+if [[ -z "$version" ]]; then
+    echo "get-current-version: failed to parse version from $manifest" >&2
+    exit 1
+fi
+
+printf '%s\n' "$version"

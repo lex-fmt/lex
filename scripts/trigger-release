@@ -3,12 +3,16 @@ set -euo pipefail
 
 # Cut a release. Everything runs in CI — this just triggers it.
 #
-# Usage:  scripts/release <new-version>       e.g. scripts/release 0.9.0
-#    or:  scripts/release <bump-level>        e.g. scripts/release minor
-#                                                  (one of: major, minor, patch)
+# Usage:  scripts/trigger-release <new-version>   e.g. scripts/trigger-release 0.9.0
+#    or:  scripts/trigger-release <bump-level>    e.g. scripts/trigger-release minor
+#                                                      (one of: major, minor, patch)
 #
 # Pre-releases: pass a semver pre-release suffix to cut a release candidate
-# or beta, e.g. scripts/release 0.9.0-rc.1.
+# or beta, e.g. scripts/trigger-release 0.9.0-rc.1.
+#
+# Renamed from scripts/release in #640 to free up `scripts/release/` for the
+# Layer 0 release primitive scripts (get-current-version,
+# get-commits-since-release, update-release).
 #
 # What CI does (all on GitHub):
 #   1. Bumps the workspace version via `cargo set-version --workspace`
