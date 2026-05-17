@@ -435,10 +435,11 @@ pub struct HtmlConfig {
 /// Diagnostics options.
 #[derive(Debug, Clone, Config, Serialize, Deserialize)]
 pub struct DiagnosticsConfig {
-    /// Per-rule severity overrides. Each entry maps a diagnostic code
-    /// to a severity ("allow", "warn", or "deny"). The defaults shown
-    /// next to each rule are the intrinsic defaults — uncomment a line
-    /// to override one.
+    /// Per-rule severity overrides. Each entry takes either a bare
+    /// severity string (`"allow"`, `"warn"`, `"deny"`) or an array
+    /// form (`["warn", { option = value }]`) carrying rule-specific
+    /// options — see [`RuleConfig`]. The defaults shown next to each
+    /// rule are the intrinsic defaults; uncomment a line to override.
     #[config(nested)]
     pub rules: DiagnosticsRulesConfig,
 }
@@ -487,8 +488,8 @@ pub struct DiagnosticsRulesConfig {
 
 /// Schema-validation diagnostics. Each field maps to one of the
 /// schema pre-validation checks the analyser performs before
-/// dispatching to an extension handler. See
-/// [`extending-lex.lex`](../specs/proposals/extending-lex.lex) §13.2.
+/// dispatching to an extension handler. See the Extending Lex
+/// proposal (`comms/specs/proposals/extending-lex.lex`) §13.2.
 #[derive(Debug, Clone, Config, Serialize, Deserialize)]
 pub struct SchemaRulesConfig {
     /// A label is invoked whose namespace is registered, but no
