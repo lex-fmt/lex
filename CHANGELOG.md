@@ -4,7 +4,11 @@
 
 ### Added — `lex-config` diagnostic rule types ([#636](https://github.com/lex-fmt/lex/issues/636))
 
-Foundation types for the diagnostic-configuration tracking issue. `lex-config` now exports `Severity` (`Allow` / `Warn` / `Deny`), `RuleConfig` (an untagged enum accepting either `"warn"` or `["warn", { … }]` on disk), and the `RuleOptions` alias (`BTreeMap<String, toml::Value>`). No consumers yet — the runtime consumption surface (`DiagnosticsRulesConfig` struct, registry, emission-site wiring) lands in follow-up PRs on the same issue. Public crate API addition, hence the Unreleased note.
+Foundation types for the diagnostic-configuration tracking issue. `lex-config` now exports `Severity` (`Allow` / `Warn` / `Deny`), `RuleConfig` (an untagged enum accepting either `"warn"` or `["warn", { … }]` on disk), and the `RuleOptions` alias (`BTreeMap<String, toml::Value>`). No consumers yet — the runtime consumption surface (registry, emission-site wiring) lands in follow-up PRs on the same issue. Public crate API addition, hence the Unreleased note.
+
+### Changed — `[diagnostics.rules]` block in `.lex.toml` ([#636](https://github.com/lex-fmt/lex/issues/636))
+
+`DiagnosticsConfig` gains a `rules: DiagnosticsRulesConfig` nested struct with one field per built-in diagnostic code, each carrying its description as a doc comment and its intrinsic severity as the `#[config(default)]`. Schema-validation codes live in a `[diagnostics.rules.schema]` sub-table. `lexd config gen` now emits the full catalog automatically. **Breaking:** the previous `diagnostics.spellcheck = bool` knob is replaced by `[diagnostics.rules].spellcheck = "warn" | "allow" | "deny"` — any existing `.lex.toml` using the boolean form fails strict-key validation. Wiring of the runtime registry against this schema lands in the next PR on this issue.
 
 ## [0.14.0] - 2026-05-16
 
