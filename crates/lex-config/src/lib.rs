@@ -563,8 +563,12 @@ pub struct DiagnosticsRulesConfig {
     /// a future core schema. Intrinsic default: deny.
     #[config(default = "deny")]
     pub unknown_lex_canonical: RuleConfig,
-    /// Spellcheck diagnostics. Set to "allow" to suppress
-    /// document-wide. Intrinsic default: warn.
+    /// Spellcheck diagnostics. Intrinsic default: warn. **Currently
+    /// not consulted at emission time** — spellcheck emits through a
+    /// separate path in `lex-analysis::spellcheck`. The field is
+    /// present so the value lives in the user-facing config schema;
+    /// runtime wiring lands when spellcheck moves over to the
+    /// `AnalysisDiagnostic` / `DiagnosticKind` pipeline.
     #[config(default = "warn")]
     pub spellcheck: RuleConfig,
     /// Schema-validation diagnostics for extension labels.
@@ -589,7 +593,13 @@ impl DiagnosticsRulesConfig {
             "table-inconsistent-columns" => Some(&self.table_inconsistent_columns),
             "forbidden-label-prefix" => Some(&self.forbidden_label_prefix),
             "unknown-lex-canonical" => Some(&self.unknown_lex_canonical),
-            "spellcheck" => Some(&self.spellcheck),
+            // `spellcheck` is intentionally absent: spellcheck
+            // diagnostics emit through a separate path (see
+            // `lex-analysis/src/spellcheck.rs`) and do not flow
+            // through `DiagnosticKind` / `apply_rules` today.
+            // Returning `Some(&self.spellcheck)` here would falsely
+            // suggest the rule is wired. Joining the registry is
+            // tracked alongside the spellcheck refactor.
             "schema.unknown-label" => Some(&self.schema.unknown_label),
             "schema.missing-param" => Some(&self.schema.missing_param),
             "schema.param-type-mismatch" => Some(&self.schema.param_type_mismatch),
