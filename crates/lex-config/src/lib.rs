@@ -485,7 +485,7 @@ pub struct DiagnosticsRulesConfig {
     pub schema: SchemaRulesConfig,
 }
 
-/// Schema-validation diagnostics. Each field maps to one of the six
+/// Schema-validation diagnostics. Each field maps to one of the
 /// schema pre-validation checks the analyser performs before
 /// dispatching to an extension handler. See
 /// [`extending-lex.lex`](../specs/proposals/extending-lex.lex) §13.2.
