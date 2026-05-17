@@ -1213,6 +1213,7 @@ name = "lex-analysis"
 version = "0.14.1"
 dependencies = [
  "ignore",
+ "lex-config",
  "lex-core",
  "lex-extension",
  "lex-extension-host",
