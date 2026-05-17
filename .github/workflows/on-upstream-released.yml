@@ -70,6 +70,8 @@ jobs:
 
       - name: Decide whether to release
         id: decide
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         run: |
           set +e
           ./scripts/release/should-release
