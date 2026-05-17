@@ -93,4 +93,38 @@ fi
 # (See e.g. lex-fmt/lexed for an Xvfb start, lex-fmt/nvim for pinned-bin
 # fetches.)
 
+# cargo-nextest. scripts/check-tests and lefthook.yml prefer nextest and
+# fall back to `cargo test`; CI uses nextest unconditionally. The cloud
+# image doesn't ship it, and `get.nexte.st` (the upstream installer
+# redirect) is blocked by the cloud network policy — so fetch the
+# prebuilt binary from the GitHub release via `gh` (auth'd with
+# GH_TOKEN) and drop it into ~/.cargo/bin.
+if ! command -v cargo-nextest >/dev/null 2>&1 \
+    && command -v cargo >/dev/null 2>&1 \
+    && command -v gh >/dev/null 2>&1; then
+  cargo_bin="${CARGO_HOME:-${HOME}/.cargo}/bin"
+  if [ -d "${cargo_bin}" ]; then
+    arch="$(uname -m)"
+    case "${arch}" in
+      x86_64)  nextest_target="x86_64-unknown-linux-gnu"  ;;
+      aarch64) nextest_target="aarch64-unknown-linux-gnu" ;;
+      *)       nextest_target="" ;;
+    esac
+    if [ -n "${nextest_target}" ]; then
+      tmpdir="$(mktemp -d)"
+      if gh release download \
+            --repo nextest-rs/nextest \
+            --pattern "cargo-nextest-*-${nextest_target}.tar.gz" \
+            --dir "${tmpdir}" --clobber >/dev/null 2>&1 \
+         && tar -xzf "${tmpdir}"/cargo-nextest-*.tar.gz \
+              -C "${cargo_bin}" cargo-nextest; then
+        :
+      else
+        echo "warning: cargo-nextest install failed; scripts/check-tests will fall back to cargo test" >&2
+      fi
+      rm -rf "${tmpdir}"
+    fi
+  fi
+fi
+
 exit 0
