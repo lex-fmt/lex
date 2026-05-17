@@ -38,6 +38,25 @@ fi
 repo_root=$(git rev-parse --show-toplevel)
 cd "$repo_root"
 
+# --- 0. Upfront tool / state checks. --------------------------------------
+#
+# We rely on cargo-set-version (checked again below where it's used) and
+# python3 (used for the CHANGELOG rewrite further down). Fail fast on the
+# latter so we don't bump versions and then die mid-way.
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "update-release: python3 required for CHANGELOG rewrite — install python3" >&2
+    exit 1
+fi
+
+# The comms submodule must be initialized — step 3 below cds into it and
+# runs git there. On a fresh clone without `--recurse-submodules` the
+# directory exists but `comms/.git` does not, and `(cd comms && git ...)`
+# fails opaquely. Detect that explicitly.
+if [[ ! -e "$repo_root/comms/.git" ]]; then
+    echo "update-release: comms submodule not initialized. Run: git submodule update --init" >&2
+    exit 1
+fi
+
 echo "update-release: bumping workspace to $new_version"
 
 # --- 1. Bump crate versions + workspace.dependencies pins. ----------------

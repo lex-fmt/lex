@@ -16,11 +16,12 @@
 set -euo pipefail
 
 # Find the most recent `vX.Y.Z` tag by version sort (not commit date —
-# rebases / out-of-order tagging shouldn't fool us).
-latest_tag=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' \
+# rebases / out-of-order tagging shouldn't fool us). Use git's native
+# `--sort=-v:refname` (matches scripts/diff-since-release) so we don't
+# rely on an external `sort -V` whose behavior varies across BSD/GNU.
+latest_tag=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname \
     | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
-    | sort -V \
-    | tail -1 || true)
+    | head -1 || true)
 
 if [[ -z "$latest_tag" ]]; then
     echo "get-commits-since-release: no vX.Y.Z tags found in this repo" >&2
