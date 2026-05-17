@@ -91,14 +91,21 @@ fn landlock_available() -> bool {
     // probe tests below, but on a trivial binary. If `spawn()`
     // succeeds the kernel enforces landlock; if it fails the probe
     // tests can't meaningfully run and should skip.
-    let mut cmd = std::process::Command::new("/bin/true");
-    if LinuxSandbox
-        .apply_to(&mut cmd, Capabilities::default())
-        .is_err()
-    {
-        return false;
-    }
-    cmd.status().is_ok()
+    //
+    // Cache via OnceLock: every test in this module calls this, the
+    // answer is deterministic per process, and a /bin/true spawn per
+    // call is gratuitous.
+    static AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *AVAILABLE.get_or_init(|| {
+        let mut cmd = std::process::Command::new("/bin/true");
+        if LinuxSandbox
+            .apply_to(&mut cmd, Capabilities::default())
+            .is_err()
+        {
+            return false;
+        }
+        cmd.status().is_ok()
+    })
 }
 
 #[cfg(target_os = "linux")]
