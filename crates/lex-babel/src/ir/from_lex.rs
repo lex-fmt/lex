@@ -348,12 +348,17 @@ fn from_lex_verbatim(verbatim: &LexVerbatim, registry: &Registry) -> DocNode {
     // WireNode directly; we convert to IR by switching on the wire
     // variant — no re-dispatch on the label string.
     let label = verbatim.closing_data.label.value.clone();
+    // Pass semantic param values to handlers (outer quotes stripped,
+    // escapes resolved) — matches the policy lex-core uses for
+    // annotation dispatch (see `includes::annotation_to_wire`). The
+    // raw value with quotes is preserved on the IR `Verbatim`
+    // fallback below for round-trip serialisation.
     let params_object = serde_json::Value::Object(
         verbatim
             .closing_data
             .parameters
             .iter()
-            .map(|p| (p.key.clone(), serde_json::Value::String(p.value.clone())))
+            .map(|p| (p.key.clone(), serde_json::Value::String(p.unquoted_value())))
             .collect(),
     );
     let ctx = LabelCtx {
