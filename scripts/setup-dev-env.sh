@@ -103,6 +103,7 @@ if ! command -v cargo-nextest >/dev/null 2>&1 \
     && command -v cargo >/dev/null 2>&1 \
     && command -v gh >/dev/null 2>&1; then
   cargo_bin="${CARGO_HOME:-${HOME}/.cargo}/bin"
+  mkdir -p "${cargo_bin}" 2>/dev/null || true
   if [ -d "${cargo_bin}" ]; then
     arch="$(uname -m)"
     case "${arch}" in
