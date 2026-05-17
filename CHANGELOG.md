@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.14.1] - 2026-05-17
+
 ### Added — `lex-config` diagnostic rule types ([#636](https://github.com/lex-fmt/lex/issues/636))
 
 Foundation types for the diagnostic-configuration tracking issue. `lex-config` now exports `Severity` (`Allow` / `Warn` / `Deny`), `RuleConfig` (an untagged enum accepting either `"warn"` or `["warn", { … }]` on disk), and the `RuleOptions` alias (`BTreeMap<String, toml::Value>`). No consumers yet — the runtime consumption surface (`DiagnosticsRulesConfig` struct, registry, emission-site wiring) lands in follow-up PRs on the same issue. Public crate API addition, hence the Unreleased note.
