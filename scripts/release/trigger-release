@@ -41,12 +41,16 @@ NEW_VERSION="$1"
 # is intentionally narrower so the cross-repo driver gets a uniform
 # version-string shape across all six repos.
 if [[ ! "$NEW_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    echo "error: version must be X.Y.Z (got: $NEW_VERSION)" >&2
+    echo "trigger-release: version must be X.Y.Z (got: $NEW_VERSION)" >&2
     exit 2
 fi
 
 # Resolve the repo-local trigger script relative to this file so the
-# primitive works regardless of the caller's $PWD.
+# primitive works regardless of the caller's $PWD. cd into the repo
+# root before exec so the delegated `scripts/trigger-release` — which
+# calls `git rev-parse --show-toplevel` — finds a git repo even when
+# this primitive is invoked from outside the worktree.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+cd "$REPO_ROOT"
 exec "$REPO_ROOT/scripts/trigger-release" "$NEW_VERSION"
