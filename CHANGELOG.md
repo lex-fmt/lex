@@ -10,6 +10,10 @@ Foundation types for the diagnostic-configuration tracking issue. `lex-config` n
 
 `DiagnosticsConfig` gains a `rules: DiagnosticsRulesConfig` nested struct with one field per built-in diagnostic code, each carrying its description as a doc comment and its intrinsic severity as the `#[config(default)]`. Schema-validation codes live in a `[diagnostics.rules.schema]` sub-table. `lexd config gen` now emits the full catalog automatically. **Breaking:** the previous `diagnostics.spellcheck = bool` knob is replaced by `[diagnostics.rules].spellcheck = "warn" | "allow" | "deny"` — any existing `.lex.toml` using the boolean form fails strict-key validation. Wiring of the runtime registry against this schema lands in the next PR on this issue.
 
+### Added — diagnostic registry wiring through analysis + LSP ([#636](https://github.com/lex-fmt/lex/issues/636))
+
+Closes the loop on the diagnostic-configuration system. `DiagnosticKind` and `SchemaValidationKind` get `code()` methods returning the on-the-wire diagnostic code (formerly hard-coded inside `lex-lsp::to_lsp_diagnostic`). `DiagnosticsRulesConfig::lookup_by_code` resolves codes → rule entries. A new `apply_rules` function consumes the resolved overrides: `allow` drops the diagnostic, `warn` keeps its intrinsic LSP severity, `deny` upgrades to `Error`. The LSP server reads `[diagnostics.rules]` from `.lex.toml` and applies the registry to every analysis pass before publishing diagnostics, so editor squiggles and `lexd lint --strict` exit codes alike honour the configuration. Extension-emitted codes (`<namespace>.<code>`) pass through untouched until the `extra` map surface lands. Drift test in `lex-analysis` asserts every built-in `DiagnosticKind` variant has a matching field on the rules struct.
+
 ## [0.14.0] - 2026-05-16
 
 ### Changed — four babel/CLI interop fixes ([#607](https://github.com/lex-fmt/lex/issues/607), [#608](https://github.com/lex-fmt/lex/issues/608), [#610](https://github.com/lex-fmt/lex/issues/610), [#611](https://github.com/lex-fmt/lex/issues/611))
