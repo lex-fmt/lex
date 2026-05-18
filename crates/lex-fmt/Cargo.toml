@@ -23,7 +23,7 @@ native-export = ["lex-babel/native-export"]
 lex-core = { workspace = true }
 lex-config = { workspace = true }
 lex-extension = { workspace = true }
-lex-extension-host = { workspace = true, features = ["subprocess"] }
+lex-extension-host = { workspace = true, features = ["subprocess", "https-fetcher"] }
 lex-babel = { workspace = true }
 lex-analysis = { workspace = true }
 

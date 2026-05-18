@@ -23,7 +23,7 @@ lex-analysis = { workspace = true }
 lex-babel = { workspace = true, features = ["native-export"] }
 lex-config = { workspace = true }
 lex-extension = { workspace = true }
-lex-extension-host = { workspace = true, features = ["subprocess"] }
+lex-extension-host = { workspace = true, features = ["subprocess", "https-fetcher"] }
 lex-fmt = { workspace = true }
 clapfig = { workspace = true }
 clap = { workspace = true }

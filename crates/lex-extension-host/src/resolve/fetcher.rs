@@ -36,6 +36,9 @@
 
 use std::path::Path;
 
+#[cfg(feature = "https-fetcher")]
+use std::io::Read;
+
 use super::uri::ParsedUri;
 
 /// Per-transport network resolver. Implementations fetch the URI's
@@ -176,8 +179,27 @@ pub struct HttpsFetcher;
 /// Hard cap on archive size. 256 MiB is generous for any plausible
 /// schema bundle; a tarball larger than this is almost certainly the
 /// wrong artifact pointed at the wrong URI.
-const HTTPS_RESPONSE_CAP_BYTES: usize = 256 * 1024 * 1024;
+const HTTPS_RESPONSE_CAP_BYTES: u64 = 256 * 1024 * 1024;
 
+/// Hard cap on error-response bodies. Error bodies don't need to be
+/// large (they're consumed verbatim into a diagnostic string); a
+/// hostile or misbehaving server returning a 500 with a 1 GiB body
+/// shouldn't be allowed to OOM us via the error path either.
+#[cfg(feature = "https-fetcher")]
+const HTTPS_ERROR_BODY_CAP_BYTES: u64 = 64 * 1024;
+
+/// Per-request connect timeout. The resolver runs at boot; a stalled
+/// server shouldn't be able to hang it indefinitely.
+#[cfg(feature = "https-fetcher")]
+const HTTPS_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Overall read timeout. Covers both DNS-to-headers and headers-to-EOF
+/// — generous enough for slow tarball fetches over flaky links, tight
+/// enough that a wedged connection doesn't sit forever.
+#[cfg(feature = "https-fetcher")]
+const HTTPS_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+#[cfg(feature = "https-fetcher")]
 impl Fetcher for HttpsFetcher {
     fn fetch(&self, uri: &ParsedUri, dest: &Path) -> Result<(), FetchError> {
         // ParsedUri::body for `https:` includes the leading `//`
@@ -185,19 +207,41 @@ impl Fetcher for HttpsFetcher {
         // scheme, so reconstruct.
         let url = format!("https:{}", uri.body);
 
-        let response = ureq::get(&url)
-            .set("User-Agent", "lex-extension-host (lex#562)")
+        let agent = ureq::AgentBuilder::new()
+            .timeout_connect(HTTPS_CONNECT_TIMEOUT)
+            .timeout_read(HTTPS_READ_TIMEOUT)
+            .build();
+
+        let response = agent
+            .get(&url)
+            .set(
+                "User-Agent",
+                "lex-extension-host (https://github.com/lex-fmt/lex)",
+            )
             .call()
             .map_err(map_ureq_error)?;
 
         let content_type = response.header("Content-Type").map(|s| s.to_string());
         let format = super::extract::detect_format(content_type.as_deref(), &uri.body);
 
-        let mut body_reader = response.into_reader();
-        let bytes = super::extract::read_with_cap(&mut body_reader, HTTPS_RESPONSE_CAP_BYTES)
-            .map_err(map_extract_error)?;
+        // Stream the response body to a tempfile rather than buffering
+        // the whole archive in memory. Schema bundles are typically
+        // KB-MB but the cap is 256 MiB; the tempfile keeps resident
+        // memory bounded for the pathological case. `zip::ZipArchive`
+        // needs `Read + Seek`, which a File provides; `tar::Archive`
+        // doesn't need Seek but accepts it.
+        let mut response_reader = response.into_reader().take(HTTPS_RESPONSE_CAP_BYTES + 1);
+        let mut temp = tempfile::tempfile().map_err(FetchError::Io)?;
+        let written = std::io::copy(&mut response_reader, &mut temp).map_err(FetchError::Io)?;
+        if written > HTTPS_RESPONSE_CAP_BYTES {
+            return Err(FetchError::Extract {
+                message: format!("response exceeded {HTTPS_RESPONSE_CAP_BYTES}-byte cap"),
+            });
+        }
+        use std::io::Seek;
+        temp.rewind().map_err(FetchError::Io)?;
 
-        super::extract::extract_archive_into(&bytes, format, dest, uri.subdir.as_deref())
+        super::extract::extract_archive_into(temp, format, dest, uri.subdir.as_deref())
             .map_err(map_extract_error)?;
 
         Ok(())
@@ -208,20 +252,56 @@ impl Fetcher for HttpsFetcher {
     }
 }
 
+/// Stub HttpsFetcher impl for builds that disable the `https-fetcher`
+/// feature (notably wasm32-unknown-unknown, where `ring`'s `getrandom`
+/// dep doesn't compile). Returns [`FetchError::Unimplemented`] so the
+/// trait shape stays uniform across feature variants — callers don't
+/// need to special-case "is this build's HttpsFetcher real?"
+#[cfg(not(feature = "https-fetcher"))]
+impl Fetcher for HttpsFetcher {
+    fn fetch(&self, _uri: &ParsedUri, _dest: &Path) -> Result<(), FetchError> {
+        Err(FetchError::Unimplemented {
+            scheme: "https".into(),
+            message: "https: fetcher disabled at build time (the `https-fetcher` feature on lex-extension-host wasn't enabled — common for wasm targets where the underlying TLS chain doesn't compile)".into(),
+        })
+    }
+
+    fn schemes(&self) -> &'static [&'static str] {
+        &["https"]
+    }
+}
+
+#[cfg(feature = "https-fetcher")]
 fn map_ureq_error(e: ureq::Error) -> FetchError {
     match e {
-        ureq::Error::Status(code, response) => FetchError::UpstreamStatus {
-            status: format!("{code}"),
-            message: response
-                .into_string()
-                .unwrap_or_else(|_| "<failed to read body>".into()),
-        },
+        ureq::Error::Status(code, response) => {
+            // Cap the error-body read at 64 KiB. ureq's
+            // `Response::into_string` reads without bound; a
+            // misbehaving server returning a giant 4xx/5xx body could
+            // bypass HTTPS_RESPONSE_CAP_BYTES (which only applies to
+            // the success path) and exhaust memory on the error
+            // diagnostic. 64 KiB is far more than any sane error body
+            // would carry.
+            let mut reader = response.into_reader().take(HTTPS_ERROR_BODY_CAP_BYTES);
+            let mut buf = String::new();
+            use std::io::Read as _;
+            let _ = reader.read_to_string(&mut buf);
+            FetchError::UpstreamStatus {
+                status: format!("{code}"),
+                message: if buf.is_empty() {
+                    "<empty body>".into()
+                } else {
+                    buf
+                },
+            }
+        }
         ureq::Error::Transport(t) => FetchError::Network {
             message: t.to_string(),
         },
     }
 }
 
+#[cfg(feature = "https-fetcher")]
 fn map_extract_error(e: super::extract::ExtractError) -> FetchError {
     use super::extract::ExtractError;
     match e {

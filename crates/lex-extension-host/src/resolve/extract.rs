@@ -16,7 +16,7 @@
 //! in-memory archives without needing a TLS mock server.
 
 use std::fs;
-use std::io::{self, Read};
+use std::io::{self, Read, Seek};
 use std::path::{Component, Path, PathBuf};
 
 /// The two archive shapes this module can extract. The HTTPS fetcher
@@ -113,15 +113,23 @@ pub(super) fn detect_format(content_type: Option<&str>, url_path: &str) -> Archi
     }
 }
 
-/// Extract `bytes` (in `format` shape) into `dest`. If `subdir` is
-/// supplied, only files under that path within the archive are
-/// extracted, and they're written into `dest` directly (no leading
-/// `subdir/` prefix — the schema loader scans `dest` flat).
+/// Extract an archive from `reader` (in `format` shape) into `dest`.
+/// If `subdir` is supplied, only files under that path within the
+/// archive are extracted, and they're written into `dest` directly
+/// (no leading `subdir/` prefix — the schema loader scans `dest`
+/// flat).
+///
+/// `reader` is taken as `Read + Seek` so the caller can pass either a
+/// `Cursor<&[u8]>` (test path, in-memory archive fixture) or a
+/// `std::fs::File` over a temp file (production path: the HTTPS
+/// fetcher streams the response body to a tempfile to avoid buffering
+/// up to 256 MiB in memory). `tar` doesn't need Seek; `zip` does;
+/// the unified bound keeps the signature uniform.
 ///
 /// `dest` must exist and be a directory; the caller (the cache layer)
 /// is responsible for creating it.
-pub(super) fn extract_archive_into(
-    bytes: &[u8],
+pub(super) fn extract_archive_into<R: Read + Seek>(
+    mut reader: R,
     format: ArchiveFormat,
     dest: &Path,
     subdir: Option<&str>,
@@ -131,11 +139,19 @@ pub(super) fn extract_archive_into(
         .map_err(|e| ExtractError::Io(io::Error::new(e.kind(), format!("dest {dest:?}: {e}"))))?;
     let subdir_normalized = subdir.map(normalize_subdir);
 
+    // `matched_any` is `true` upfront when no subdir filter is set
+    // (every entry counts) and starts `false` when a subdir filter is
+    // set — only entries that survive both the subdir filter AND the
+    // entry-type filter (i.e. a real file we'd actually write) flip
+    // it. The earlier formulation flipped it on the subdir filter
+    // alone, which meant a tarball whose only subdir-matched entries
+    // were symlinks would silently produce an empty dest instead of
+    // surfacing SubdirNotFound.
     let mut matched_any = subdir_normalized.is_none();
 
     match format {
         ArchiveFormat::TarGz => {
-            let decoder = flate2::read::GzDecoder::new(bytes);
+            let decoder = flate2::read::GzDecoder::new(reader);
             let mut archive = tar::Archive::new(decoder);
             for entry in archive.entries().map_err(|e| ExtractError::Corrupt {
                 message: e.to_string(),
@@ -155,22 +171,27 @@ pub(super) fn extract_archive_into(
                 else {
                     continue; // outside subdir filter
                 };
-                matched_any = true;
 
-                let dest_path = safe_join(&dest, &member_rel)?;
-
-                if entry_type.is_dir() {
-                    fs::create_dir_all(&dest_path)?;
-                    continue;
-                }
                 // Refuse symlinks: schema dirs are pure data; allowing
                 // tarball symlinks expands the trust surface (a
                 // malicious tarball could create a symlink at
                 // `secret.yaml` pointing at `/etc/passwd` and the
-                // schema loader would dutifully read it).
+                // schema loader would dutifully read it). Flip
+                // `matched_any` AFTER this filter so SubdirNotFound
+                // still fires when the only subdir-matched entries
+                // are symlinks.
                 if entry_type.is_symlink() || entry_type.is_hard_link() {
                     continue;
                 }
+
+                let dest_path = safe_join(&dest, &member_rel)?;
+
+                if entry_type.is_dir() {
+                    matched_any = true;
+                    fs::create_dir_all(&dest_path)?;
+                    continue;
+                }
+                matched_any = true;
                 if let Some(parent) = dest_path.parent() {
                     fs::create_dir_all(parent)?;
                 }
@@ -179,8 +200,8 @@ pub(super) fn extract_archive_into(
             }
         }
         ArchiveFormat::Zip => {
-            let cursor = io::Cursor::new(bytes);
-            let mut archive = zip::ZipArchive::new(cursor).map_err(|e| ExtractError::Corrupt {
+            reader.rewind()?;
+            let mut archive = zip::ZipArchive::new(reader).map_err(|e| ExtractError::Corrupt {
                 message: e.to_string(),
             })?;
             for i in 0..archive.len() {
@@ -204,14 +225,30 @@ pub(super) fn extract_archive_into(
                 else {
                     continue;
                 };
-                matched_any = true;
+
+                // Zip can represent symlinks via the entry's unix
+                // mode bits (`S_IFLNK == 0o120000`). Skip these for
+                // the same reason we skip tarball symlinks: schema
+                // dirs are pure data, allowing zip-shipped symlinks
+                // expands the trust surface (`unix_mode` reads the
+                // file's mode from the archive's "external
+                // attributes" field, which zip optionally carries).
+                if let Some(mode) = entry.unix_mode() {
+                    const S_IFMT: u32 = 0o170000;
+                    const S_IFLNK: u32 = 0o120000;
+                    if mode & S_IFMT == S_IFLNK {
+                        continue;
+                    }
+                }
 
                 let dest_path = safe_join(&dest, &member_rel)?;
 
                 if entry.is_dir() {
+                    matched_any = true;
                     fs::create_dir_all(&dest_path)?;
                     continue;
                 }
+                matched_any = true;
                 if let Some(parent) = dest_path.parent() {
                     fs::create_dir_all(parent)?;
                 }
@@ -227,22 +264,6 @@ pub(super) fn extract_archive_into(
         });
     }
     Ok(())
-}
-
-/// Read all bytes from `r` with a size cap. Returns
-/// [`ExtractError::Corrupt`] if the response exceeds the cap (so a
-/// pathological server can't OOM us). 256 MiB is a generous ceiling
-/// for any plausible schema-bundle tarball.
-pub(super) fn read_with_cap<R: Read>(r: &mut R, cap: usize) -> Result<Vec<u8>, ExtractError> {
-    let mut buf = Vec::with_capacity(64 * 1024);
-    let mut taker = r.take(cap as u64 + 1);
-    taker.read_to_end(&mut buf).map_err(ExtractError::Io)?;
-    if buf.len() > cap {
-        return Err(ExtractError::Corrupt {
-            message: format!("response exceeded {cap}-byte cap"),
-        });
-    }
-    Ok(buf)
 }
 
 // ---- helpers ----
@@ -261,15 +282,12 @@ fn normalize_subdir(s: &str) -> String {
 /// is set and the member is outside it.
 ///
 /// Many forge tarballs (GitHub's especially) wrap the repo in a
-/// single top-level `<owner>-<repo>-<sha>/` directory; we strip the
-/// first path component unconditionally if it's the only directory
-/// at the archive root. To keep that handling simple and predictable,
-/// the actual stripping happens in [`extract_archive_into`] via the
-/// `subdir`-aware logic — callers who want the GitHub-style wrapper
-/// stripped set `subdir = "*"` (TODO: handle that special token) or
-/// stomach the wrapper in the cache. For now we treat archive paths
-/// as-is and rely on the cache layer's `subdir` knob to point at the
-/// real schema dir within the wrapper.
+/// single top-level `<owner>-<repo>-<sha>/` directory. Callers
+/// pointing at a schema dir within that wrapper set `subdir = "..."`
+/// to the desired path component; the match below finds the first
+/// occurrence of that token in the member's path and keeps everything
+/// after it, so the wrapper is implicitly stripped. Without a subdir
+/// the wrapper is preserved verbatim in `dest`.
 fn relativize_member(
     raw_path: &Path,
     subdir: Option<&str>,
@@ -304,13 +322,34 @@ fn relativize_member(
     }
 
     // Match members under `<archive-root>/.../<subdir>/...`.
-    // Archive paths often include a leading wrapper directory (GitHub
-    // tarballs do this), so we match the first occurrence of the
-    // subdir token, not a fixed-prefix match.
-    let parts: Vec<&str> = member_str.split('/').collect();
-    if let Some(idx) = parts.iter().position(|p| *p == subdir) {
-        // Re-join everything after the subdir token.
-        let rel: PathBuf = parts[idx + 1..].iter().collect();
+    // `subdir` may be either a single component (`labels`) or a
+    // nested path (`src/labels`). Use a component-windowed match so
+    // both cases work and we don't fold `/` into the matcher
+    // implicitly. Archive paths often include a leading wrapper
+    // directory (GitHub tarballs do this), so we match the first
+    // occurrence of the subdir token sequence, not a fixed-prefix
+    // match.
+    let path_components: Vec<Component<'_>> = raw_path
+        .components()
+        .filter(|c| matches!(c, Component::Normal(_)))
+        .collect();
+    let subdir_path = Path::new(subdir);
+    let subdir_components: Vec<Component<'_>> = subdir_path
+        .components()
+        .filter(|c| matches!(c, Component::Normal(_)))
+        .collect();
+
+    if subdir_components.is_empty() {
+        return Ok(Some(raw_path.to_path_buf()));
+    }
+
+    if let Some(idx) = path_components
+        .windows(subdir_components.len())
+        .position(|window| window == subdir_components.as_slice())
+    {
+        let rel: PathBuf = path_components[idx + subdir_components.len()..]
+            .iter()
+            .collect();
         if rel.as_os_str().is_empty() {
             // The entry IS the subdir itself (a directory marker);
             // skip it — its children will be extracted.
@@ -411,7 +450,13 @@ mod tests {
     fn extract_targz_writes_flat_files() {
         let bytes = build_tar_gz(&[("foo.yaml", b"foo: bar"), ("sub/baz.yaml", b"baz: qux")]);
         let dest = tempfile::tempdir().unwrap();
-        extract_archive_into(&bytes, ArchiveFormat::TarGz, dest.path(), None).unwrap();
+        extract_archive_into(
+            io::Cursor::new(&bytes),
+            ArchiveFormat::TarGz,
+            dest.path(),
+            None,
+        )
+        .unwrap();
         assert_eq!(
             std::fs::read_to_string(dest.path().join("foo.yaml")).unwrap(),
             "foo: bar"
@@ -431,7 +476,13 @@ mod tests {
             ("repo-abc/other/baz.yaml", b"baz"),
         ]);
         let dest = tempfile::tempdir().unwrap();
-        extract_archive_into(&bytes, ArchiveFormat::TarGz, dest.path(), Some("labels")).unwrap();
+        extract_archive_into(
+            io::Cursor::new(&bytes),
+            ArchiveFormat::TarGz,
+            dest.path(),
+            Some("labels"),
+        )
+        .unwrap();
         assert!(dest.path().join("foo.yaml").exists());
         assert!(dest.path().join("bar.yaml").exists());
         assert!(!dest.path().join("README.md").exists());
@@ -442,8 +493,13 @@ mod tests {
     fn extract_targz_subdir_not_found_errors_cleanly() {
         let bytes = build_tar_gz(&[("repo/foo.yaml", b"foo")]);
         let dest = tempfile::tempdir().unwrap();
-        let err = extract_archive_into(&bytes, ArchiveFormat::TarGz, dest.path(), Some("missing"))
-            .unwrap_err();
+        let err = extract_archive_into(
+            io::Cursor::new(&bytes),
+            ArchiveFormat::TarGz,
+            dest.path(),
+            Some("missing"),
+        )
+        .unwrap_err();
         match err {
             ExtractError::SubdirNotFound { subdir } => assert_eq!(subdir, "missing"),
             other => panic!("expected SubdirNotFound, got: {other}"),
@@ -517,7 +573,13 @@ mod tests {
         bytes.flush().unwrap();
 
         let dest = tempfile::tempdir().unwrap();
-        extract_archive_into(&bytes, ArchiveFormat::TarGz, dest.path(), None).unwrap();
+        extract_archive_into(
+            io::Cursor::new(&bytes),
+            ArchiveFormat::TarGz,
+            dest.path(),
+            None,
+        )
+        .unwrap();
         assert!(!dest.path().join("secret.yaml").exists());
         assert!(dest.path().join("real.yaml").exists());
     }
@@ -541,7 +603,13 @@ mod tests {
     fn extract_zip_writes_flat_files() {
         let bytes = build_zip(&[("foo.yaml", b"foo: bar")]);
         let dest = tempfile::tempdir().unwrap();
-        extract_archive_into(&bytes, ArchiveFormat::Zip, dest.path(), None).unwrap();
+        extract_archive_into(
+            io::Cursor::new(&bytes),
+            ArchiveFormat::Zip,
+            dest.path(),
+            None,
+        )
+        .unwrap();
         assert_eq!(
             std::fs::read_to_string(dest.path().join("foo.yaml")).unwrap(),
             "foo: bar"
@@ -556,28 +624,45 @@ mod tests {
             ("repo/labels/b.yaml", b"b"),
         ]);
         let dest = tempfile::tempdir().unwrap();
-        extract_archive_into(&bytes, ArchiveFormat::Zip, dest.path(), Some("labels")).unwrap();
+        extract_archive_into(
+            io::Cursor::new(&bytes),
+            ArchiveFormat::Zip,
+            dest.path(),
+            Some("labels"),
+        )
+        .unwrap();
         assert!(dest.path().join("a.yaml").exists());
         assert!(dest.path().join("b.yaml").exists());
         assert!(!dest.path().join("README").exists());
     }
 
-    // ---- read_with_cap ----
+    // ---- nested subdir matching ----
 
     #[test]
-    fn read_with_cap_accepts_under_limit() {
-        let mut data: &[u8] = b"hello world";
-        let out = read_with_cap(&mut data, 1024).unwrap();
-        assert_eq!(out, b"hello world");
-    }
-
-    #[test]
-    fn read_with_cap_rejects_over_limit() {
-        let mut data: &[u8] = b"abcdefghij";
-        let err = read_with_cap(&mut data, 5).unwrap_err();
-        match err {
-            ExtractError::Corrupt { message } => assert!(message.contains("5-byte cap")),
-            other => panic!("expected Corrupt, got: {other}"),
-        }
+    fn extract_targz_honors_nested_subdir_filter() {
+        // `subdir = "src/labels"` — nested path. The component-windowed
+        // match should find the two-component sequence inside paths
+        // like `repo/src/labels/foo.yaml` and strip everything up to
+        // and including it.
+        let bytes = build_tar_gz(&[
+            ("repo-abc/README", b"readme"),
+            ("repo-abc/src/labels/a.yaml", b"a"),
+            ("repo-abc/src/labels/nested/b.yaml", b"b"),
+            ("repo-abc/src/other/c.yaml", b"c"),
+            ("repo-abc/labels/d.yaml", b"d"), // bare `labels` shouldn't match
+        ]);
+        let dest = tempfile::tempdir().unwrap();
+        extract_archive_into(
+            io::Cursor::new(&bytes),
+            ArchiveFormat::TarGz,
+            dest.path(),
+            Some("src/labels"),
+        )
+        .unwrap();
+        assert!(dest.path().join("a.yaml").exists());
+        assert!(dest.path().join("nested/b.yaml").exists());
+        assert!(!dest.path().join("c.yaml").exists());
+        assert!(!dest.path().join("d.yaml").exists());
+        assert!(!dest.path().join("README").exists());
     }
 }
