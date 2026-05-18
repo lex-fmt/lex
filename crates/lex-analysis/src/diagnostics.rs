@@ -5,6 +5,7 @@ use lex_core::lex::ast::{
 };
 use lex_core::lex::inlines::ReferenceType;
 use lex_extension_host::Registry;
+use std::borrow::Cow;
 use std::collections::HashSet;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -99,18 +100,24 @@ impl DiagnosticKind {
     /// against (spec §9), and the per-namespace `.diagnostic` fallback
     /// gives users one knob per namespace for code-less handler
     /// diagnostics rather than a single global `"handler.diagnostic"`.
-    pub fn code(&self) -> String {
+    ///
+    /// Returns `Cow<'static, str>` so built-in variants borrow a
+    /// static string (no allocation) while the `Handler` variant owns
+    /// the `format!`-produced result. `apply_rules` runs on every
+    /// document change in the LSP, so avoiding per-built-in allocations
+    /// matters.
+    pub fn code(&self) -> Cow<'static, str> {
         match self {
-            DiagnosticKind::MissingFootnoteDefinition => "missing-footnote".to_string(),
-            DiagnosticKind::UnusedFootnoteDefinition => "unused-footnote".to_string(),
-            DiagnosticKind::TableInconsistentColumns => "table-inconsistent-columns".to_string(),
-            DiagnosticKind::SchemaValidation(kind) => kind.code().to_string(),
+            DiagnosticKind::MissingFootnoteDefinition => "missing-footnote".into(),
+            DiagnosticKind::UnusedFootnoteDefinition => "unused-footnote".into(),
+            DiagnosticKind::TableInconsistentColumns => "table-inconsistent-columns".into(),
+            DiagnosticKind::SchemaValidation(kind) => kind.code().into(),
             DiagnosticKind::Handler { namespace, code } => match code {
-                Some(c) => format!("{namespace}.{c}"),
-                None => format!("{namespace}.diagnostic"),
+                Some(c) => format!("{namespace}.{c}").into(),
+                None => format!("{namespace}.diagnostic").into(),
             },
-            DiagnosticKind::ForbiddenLabelPrefix => "forbidden-label-prefix".to_string(),
-            DiagnosticKind::UnknownLexCanonical => "unknown-lex-canonical".to_string(),
+            DiagnosticKind::ForbiddenLabelPrefix => "forbidden-label-prefix".into(),
+            DiagnosticKind::UnknownLexCanonical => "unknown-lex-canonical".into(),
         }
     }
 }
