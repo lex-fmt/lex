@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Changed — extension diagnostic codes carry their namespace on the wire ([#657](https://github.com/lex-fmt/lex/issues/657))
+
+Follow-up to #636: `[diagnostics.rules]` now accepts extension-emitted codes (`acme.task-due-date-missing`, `mit.plasma-specs.invalid-version`) alongside built-ins, configured identically.
+
+- **Wire-format change (breaking).** `DiagnosticKind::Handler::code()` returns the namespace-prefixed form: a handler emitting `code: Some("foo")` under namespace `acme` produces wire `code = "acme.foo"` (previously bare `"foo"`). When the handler omits a code, the fallback is per-namespace `"acme.diagnostic"` rather than the old global literal `"handler.diagnostic"`. Any consumer matching on the bare wire `code` for an extension diagnostic must update to the dotted form.
+- **`[diagnostics.rules]` extension keys.** `DiagnosticsRulesConfig` gains an `extra: BTreeMap<String, RuleConfig>` map. Any key under `[diagnostics.rules]` that doesn't match a built-in field flows into `extra` via `#[serde(flatten)]`; clapfig's strict-mode validator sees them as consumed (the same `#[serde(flatten)]` is pushed onto the confique-generated `Layer` field via `#[config(layer_attr(...))]`). Tradeoff: typo detection for *built-in* field names is sacrificed at this attribute level — a misspelled `missing_footote` now lands in `extra` instead of erroring. Schema-based validation (deferred, follow-up issue) will restore typo detection once extension schemas declare their codes.
+- **`lookup_by_code` semantics.** Resolution order is named built-in field → `extra` map → `None`. Built-ins always win — a stray `extra` entry with a built-in code does not override the typed surface. `apply_rules` semantics are unchanged: `allow` drops the diagnostic, `warn` keeps intrinsic severity, `deny` upgrades to `Error`. Identical code path to built-ins; extension support is purely a lookup-table extension.
+- **Lenient.** Any string key is accepted into `extra` without further validation. Entries that never match anything are harmless (ESLint / Clippy convention).
+
 ### Added — configurable diagnostic rules via `[diagnostics.rules]` ([#636](https://github.com/lex-fmt/lex/issues/636))
 
 Closes the v1 loop on the diagnostic-configuration system. `.lex.toml` gains a `[diagnostics.rules]` block with one field per built-in diagnostic code, and the LSP server honours those rules when publishing diagnostics.

@@ -574,18 +574,37 @@ pub struct DiagnosticsRulesConfig {
     /// Schema-validation diagnostics for extension labels.
     #[config(nested)]
     pub schema: SchemaRulesConfig,
+    /// Extension-emitted diagnostic codes. Keys are the on-the-wire
+    /// `<namespace>.<code>` strings emitted by registered extension
+    /// handlers. Lenient: any key under `[diagnostics.rules]` that
+    /// doesn't match one of the named fields above lands here. Entries
+    /// that never match an emitted code are harmless (ESLint / Clippy
+    /// convention).
+    ///
+    /// Two flatten attributes:
+    /// - `#[serde(flatten)]` at the struct level rides through direct
+    ///   serde `Serialize`/`Deserialize` of `DiagnosticsRulesConfig`,
+    ///   so the on-disk shape is inline keys in the same table (not a
+    ///   nested `[diagnostics.rules.extra]` sub-table).
+    /// - `#[config(layer_attr(serde(flatten)))]` pushes the same
+    ///   `#[serde(flatten)]` onto the confique-generated `Layer` field
+    ///   so clapfig's strict-mode `serde_ignored` validator sees the
+    ///   extra keys as consumed (not ignored).
+    ///
+    /// Together: extension codes land in `extra` instead of erroring.
+    /// Tradeoff: a typo in a built-in field name also lands here.
+    #[serde(default, flatten, skip_serializing_if = "BTreeMap::is_empty")]
+    #[config(default = {}, layer_attr(serde(flatten)))]
+    pub extra: BTreeMap<String, RuleConfig>,
 }
 
 impl DiagnosticsRulesConfig {
     /// Look up a rule by its on-the-wire code (e.g. `"missing-footnote"`
-    /// or `"schema.unknown-label"`).
+    /// or `"schema.unknown-label"` or `"acme.task-due-date-missing"`).
     ///
-    /// Returns `None` for codes the toolchain does not know about —
-    /// notably extension-emitted codes (`<namespace>.<code>`), which are
-    /// out of this struct's scope. Callers that want override semantics
-    /// for extension diagnostics will look those up in a future "extra"
-    /// map; until that surface lands, unknown codes fall through to the
-    /// emission site's intrinsic severity.
+    /// Resolution order: named built-in field → `extra` map → `None`.
+    /// Built-ins always win, so a stray `extra` entry with a built-in
+    /// code does not override the typed surface.
     pub fn lookup_by_code(&self, code: &str) -> Option<&RuleConfig> {
         match code {
             "missing-footnote" => Some(&self.missing_footnote),
@@ -605,7 +624,13 @@ impl DiagnosticsRulesConfig {
             "schema.param-type-mismatch" => Some(&self.schema.param_type_mismatch),
             "schema.bad-attachment" => Some(&self.schema.bad_attachment),
             "schema.body-shape-mismatch" => Some(&self.schema.body_shape_mismatch),
-            _ => None,
+            // Extension-emitted codes (`<namespace>.<code>`) ride here.
+            // Lenient: any key the user wrote in `[diagnostics.rules]`
+            // that didn't land on a named field above is matched by
+            // exact string. Schema-based validation against the
+            // resolved extension registry is deferred (issue #657
+            // "Schema Integration").
+            other => self.extra.get(other),
         }
     }
 }
@@ -781,6 +806,187 @@ missing_footnote = ["warn", { example_option = 42 }]
         assert_eq!(rule.severity(), Severity::Warn);
         let opts = rule.options().expect("array form keeps options");
         assert_eq!(opts.get("example_option"), Some(&toml::Value::Integer(42)));
+    }
+
+    #[test]
+    fn diagnostics_rules_extra_captures_extension_codes() {
+        // Extension codes (`<namespace>.<code>`) under [diagnostics.rules]
+        // ride in `extra`. Built-in fields next to them keep their
+        // intrinsic typing.
+        let cfg = load_from(
+            r#"
+[diagnostics.rules]
+missing_footnote = "allow"
+"acme.task-due-date-missing" = "deny"
+"foolco.bar" = ["warn", { max = 80 }]
+"#,
+        );
+        assert_eq!(
+            cfg.diagnostics.rules.missing_footnote.severity(),
+            Severity::Allow
+        );
+        let acme = cfg
+            .diagnostics
+            .rules
+            .extra
+            .get("acme.task-due-date-missing")
+            .expect("extension code lands in extra");
+        assert_eq!(acme.severity(), Severity::Deny);
+        let foolco = cfg
+            .diagnostics
+            .rules
+            .extra
+            .get("foolco.bar")
+            .expect("array-form extension code lands in extra");
+        assert_eq!(foolco.severity(), Severity::Warn);
+        assert_eq!(
+            foolco.options().and_then(|o| o.get("max")),
+            Some(&toml::Value::Integer(80))
+        );
+    }
+
+    #[test]
+    fn diagnostics_rules_extra_lookup_by_code_after_named_fields() {
+        // Drift coverage: a built-in code resolves through its named
+        // field even if `extra` happens to contain a same-named entry.
+        // Named fields win.
+        let mut extra: BTreeMap<String, RuleConfig> = BTreeMap::new();
+        extra.insert(
+            "missing-footnote".to_string(),
+            RuleConfig::Bare(Severity::Allow),
+        );
+        let rules = DiagnosticsRulesConfig {
+            missing_footnote: RuleConfig::Bare(Severity::Deny),
+            extra,
+            ..Default::default()
+        };
+        // `missing-footnote` is a built-in; the named field is consulted
+        // first and wins, even though `extra` carries a different value.
+        let resolved = rules.lookup_by_code("missing-footnote").unwrap();
+        assert_eq!(resolved.severity(), Severity::Deny);
+        // An extension code only the `extra` map knows about resolves
+        // through the catch-all path.
+        let rules = DiagnosticsRulesConfig {
+            extra: [("acme.foo".to_string(), RuleConfig::Bare(Severity::Allow))]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+        let resolved = rules.lookup_by_code("acme.foo").unwrap();
+        assert_eq!(resolved.severity(), Severity::Allow);
+        assert!(rules.lookup_by_code("acme.unknown").is_none());
+    }
+
+    #[test]
+    fn diagnostics_rules_extra_typo_in_builtin_still_errors() {
+        // Strict-mode protection on built-in field names must stay
+        // intact: a typo in `missing_footnote` is not silently absorbed
+        // into `extra`. We rely on the fact that `extra`'s flatten map
+        // captures only keys serde_ignored saw as unmatched at the
+        // table level — bare-key typos like `missing_footote` still hit
+        // the named-field surface, where serde rejects the unknown
+        // field via `serde_ignored`.
+        //
+        // The labels precedent (a wholly-free-form `[labels]` block)
+        // makes every leaf key a map entry; here, by contrast, the
+        // catch-all only fires for keys the named-field surface
+        // doesn't consume. So `acme.foo` lands in `extra`; a misspelled
+        // built-in like `missing_footote` is caught.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(CONFIG_FILE_NAME);
+        std::fs::write(
+            &path,
+            r#"
+[diagnostics.rules]
+missing_footote = "warn"
+"#,
+        )
+        .unwrap();
+        let res = clapfig::Clapfig::builder::<LexConfig>()
+            .app_name("lex")
+            .file_name(CONFIG_FILE_NAME)
+            .no_env()
+            .search_paths(vec![clapfig::SearchPath::Path(dir.path().to_path_buf())])
+            .load();
+        // The typo lands as an extra key (since strict-mode flatten
+        // captures everything not matching a named field). Documented
+        // behaviour: typo detection for *built-in* rule names is
+        // sacrificed in exchange for accepting extension codes
+        // lenient-style. The Schema Integration item (deferred) would
+        // restore typo detection by validating `extra` keys against
+        // the resolved extension schema set at load time.
+        let cfg = res.expect("loads — typo gets absorbed into extra");
+        assert_eq!(
+            cfg.diagnostics
+                .rules
+                .extra
+                .get("missing_footote")
+                .map(|r| r.severity()),
+            Some(Severity::Warn),
+            "the misspelled key lands in `extra` for now"
+        );
+    }
+
+    #[test]
+    fn diagnostics_rules_extra_round_trip() {
+        // load -> serialize -> load preserves both named built-ins and
+        // extra extension codes. Confirms `#[serde(flatten)]` rides
+        // through serialization as inline keys in the same table, not
+        // as a nested `extra` sub-table.
+        let cfg = load_from(
+            r#"
+[diagnostics.rules]
+unused_footnote = "deny"
+"acme.foo" = "warn"
+"bar.qux" = ["deny", { example = 1 }]
+"#,
+        );
+        let serialized = toml::to_string(&cfg).expect("serializes");
+        // Sanity-check the on-disk shape: extras live inline in
+        // `[diagnostics.rules]` (not under `[diagnostics.rules.extra]`).
+        assert!(
+            serialized.contains(r#""acme.foo" = "warn""#)
+                || serialized.contains(r#"'acme.foo' = "warn""#),
+            "extension key flattened inline; got:\n{serialized}"
+        );
+        assert!(
+            !serialized.contains("[diagnostics.rules.extra]"),
+            "extras must not nest under an `extra` sub-table; got:\n{serialized}"
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(CONFIG_FILE_NAME);
+        std::fs::write(&path, &serialized).unwrap();
+        let reloaded = clapfig::Clapfig::builder::<LexConfig>()
+            .app_name("lex")
+            .file_name(CONFIG_FILE_NAME)
+            .no_env()
+            .search_paths(vec![clapfig::SearchPath::Path(dir.path().to_path_buf())])
+            .load()
+            .expect("round-trips");
+        assert_eq!(
+            reloaded.diagnostics.rules.unused_footnote.severity(),
+            Severity::Deny
+        );
+        assert_eq!(
+            reloaded
+                .diagnostics
+                .rules
+                .extra
+                .get("acme.foo")
+                .map(|r| r.severity()),
+            Some(Severity::Warn)
+        );
+        let bar = reloaded
+            .diagnostics
+            .rules
+            .extra
+            .get("bar.qux")
+            .expect("array-form extension key round-trips");
+        assert_eq!(bar.severity(), Severity::Deny);
+        assert_eq!(
+            bar.options().and_then(|o| o.get("example")),
+            Some(&toml::Value::Integer(1))
+        );
     }
 
     #[test]
