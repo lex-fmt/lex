@@ -21,8 +21,17 @@ pub enum DiagnosticKind {
     /// `namespace` field is the namespace name (the part before the
     /// first `.`, e.g., `"acme"` for label `"acme.task"`) — `lex-lsp`
     /// surfaces it as the diagnostic `source: "lex:<namespace>"` so
-    /// editors can filter by extension. `code` mirrors the wire
-    /// `Diagnostic.code` field.
+    /// editors can filter by extension.
+    ///
+    /// `code` carries the **bare leaf** the handler supplied (the
+    /// `code` field on `lex_extension::Diagnostic`), *not* the wire
+    /// form. The analyser glues on the namespace prefix in
+    /// [`DiagnosticKind::code`] to produce the wire shape per spec §9
+    /// (`<namespace>.<leaf>`, e.g. `"acme.foo"`; or the per-namespace
+    /// fallback `"acme.diagnostic"` when the handler set `None`).
+    /// Passing an already-prefixed value here would produce a
+    /// double-prefixed wire code (`"acme.acme.foo"`) — handlers should
+    /// supply just the leaf.
     Handler {
         namespace: String,
         code: Option<String>,
@@ -129,9 +138,13 @@ impl DiagnosticKind {
 /// - `warn` → the diagnostic's intrinsic severity stays unchanged.
 /// - `deny` → severity is upgraded to `Error`.
 ///
-/// Diagnostics whose code is unknown to the rules config (extension-
-/// emitted codes from handlers, until the `extra` map ships) are
-/// passed through untouched at their intrinsic severity.
+/// Resolution is delegated to [`DiagnosticsRulesConfig::lookup_by_code`],
+/// which consults the named built-in fields first and then falls
+/// through to the `extra` map. So extension-emitted codes with a
+/// matching `[diagnostics.rules]` entry (e.g. `"acme.foo" = "deny"`)
+/// flow through the same `allow` / `warn` / `deny` logic as built-ins.
+/// Codes with no matching entry — anywhere — pass through untouched at
+/// their intrinsic severity.
 pub fn apply_rules(diagnostics: &mut Vec<AnalysisDiagnostic>, rules: &DiagnosticsRulesConfig) {
     diagnostics.retain_mut(|diag| {
         let code = diag.kind.code();
