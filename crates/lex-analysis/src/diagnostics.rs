@@ -92,17 +92,25 @@ impl DiagnosticKind {
     /// (see [`DiagnosticsRulesConfig::lookup_by_code`]).
     ///
     /// For the `Handler` variant — extension-emitted diagnostics —
-    /// this returns the handler's `code` if it supplied one, or the
-    /// stable fallback `"handler.diagnostic"` otherwise.
-    pub fn code(&self) -> &str {
+    /// this returns the namespace-prefixed code: `"acme.foo"` for
+    /// `Handler { namespace: "acme", code: Some("foo") }`, or
+    /// `"acme.diagnostic"` when the handler omitted a code. The
+    /// namespace prefix is what `[diagnostics.rules]` keys match
+    /// against (spec §9), and the per-namespace `.diagnostic` fallback
+    /// gives users one knob per namespace for code-less handler
+    /// diagnostics rather than a single global `"handler.diagnostic"`.
+    pub fn code(&self) -> String {
         match self {
-            DiagnosticKind::MissingFootnoteDefinition => "missing-footnote",
-            DiagnosticKind::UnusedFootnoteDefinition => "unused-footnote",
-            DiagnosticKind::TableInconsistentColumns => "table-inconsistent-columns",
-            DiagnosticKind::SchemaValidation(kind) => kind.code(),
-            DiagnosticKind::Handler { code, .. } => code.as_deref().unwrap_or("handler.diagnostic"),
-            DiagnosticKind::ForbiddenLabelPrefix => "forbidden-label-prefix",
-            DiagnosticKind::UnknownLexCanonical => "unknown-lex-canonical",
+            DiagnosticKind::MissingFootnoteDefinition => "missing-footnote".to_string(),
+            DiagnosticKind::UnusedFootnoteDefinition => "unused-footnote".to_string(),
+            DiagnosticKind::TableInconsistentColumns => "table-inconsistent-columns".to_string(),
+            DiagnosticKind::SchemaValidation(kind) => kind.code().to_string(),
+            DiagnosticKind::Handler { namespace, code } => match code {
+                Some(c) => format!("{namespace}.{c}"),
+                None => format!("{namespace}.diagnostic"),
+            },
+            DiagnosticKind::ForbiddenLabelPrefix => "forbidden-label-prefix".to_string(),
+            DiagnosticKind::UnknownLexCanonical => "unknown-lex-canonical".to_string(),
         }
     }
 }
@@ -120,7 +128,7 @@ impl DiagnosticKind {
 pub fn apply_rules(diagnostics: &mut Vec<AnalysisDiagnostic>, rules: &DiagnosticsRulesConfig) {
     diagnostics.retain_mut(|diag| {
         let code = diag.kind.code();
-        let Some(rule) = rules.lookup_by_code(code) else {
+        let Some(rule) = rules.lookup_by_code(&code) else {
             return true;
         };
         match rule.severity() {
@@ -832,7 +840,7 @@ mod tests {
         ] {
             let code = kind.code();
             assert!(
-                rules.lookup_by_code(code).is_some(),
+                rules.lookup_by_code(&code).is_some(),
                 "DiagnosticsRulesConfig is missing a field for built-in code {code:?} \
                  — add it to lookup_by_code (and likely as a struct field too)"
             );
@@ -840,17 +848,119 @@ mod tests {
     }
 
     #[test]
-    fn handler_code_is_passthrough() {
+    fn handler_code_carries_namespace_prefix() {
+        // Wire-shape contract (spec §9): the wire `code` is the
+        // namespace-prefixed form so a `.lex.toml` rule like
+        // `"acme.task-stuck" = "deny"` actually matches what the
+        // handler emitted. The handler supplies the bare leaf (`code`
+        // field on `Diagnostic`); the analyser glues on the namespace.
         let with_code = DiagnosticKind::Handler {
             namespace: "acme".into(),
-            code: Some("acme.task-stuck".into()),
+            code: Some("task-stuck".into()),
         };
         assert_eq!(with_code.code(), "acme.task-stuck");
+        // Code-less handler diagnostic gets a per-namespace fallback
+        // — users can target it as `"acme.diagnostic" = "warn"` rather
+        // than a single global literal.
         let without_code = DiagnosticKind::Handler {
             namespace: "acme".into(),
             code: None,
         };
-        assert_eq!(without_code.code(), "handler.diagnostic");
+        assert_eq!(without_code.code(), "acme.diagnostic");
+    }
+
+    #[test]
+    fn apply_rules_matches_extension_code_via_extra() {
+        // End-to-end: handler emits `acme.foo`, user configured
+        // `"acme.foo" = "allow"` in `[diagnostics.rules]` (landing in
+        // `extra`); diagnostic gets dropped.
+        let mut diags = vec![dummy_diag(
+            DiagnosticKind::Handler {
+                namespace: "acme".into(),
+                code: Some("foo".into()),
+            },
+            DiagnosticSeverity::Error,
+        )];
+        let rules = DiagnosticsRulesConfig {
+            extra: [(
+                "acme.foo".to_string(),
+                lex_config::RuleConfig::Bare(Severity::Allow),
+            )]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+        apply_rules(&mut diags, &rules);
+        assert!(diags.is_empty(), "allow drops the extension diagnostic");
+
+        // `warn` keeps the intrinsic severity (Error stays Error).
+        let mut diags = vec![dummy_diag(
+            DiagnosticKind::Handler {
+                namespace: "acme".into(),
+                code: Some("foo".into()),
+            },
+            DiagnosticSeverity::Error,
+        )];
+        let rules = DiagnosticsRulesConfig {
+            extra: [(
+                "acme.foo".to_string(),
+                lex_config::RuleConfig::Bare(Severity::Warn),
+            )]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+        apply_rules(&mut diags, &rules);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(
+            diags[0].severity,
+            DiagnosticSeverity::Error,
+            "warn preserves the handler's intrinsic severity"
+        );
+
+        // `deny` is a no-op when the intrinsic is already Error, but
+        // still keeps the diagnostic — symmetry with built-ins.
+        let mut diags = vec![dummy_diag(
+            DiagnosticKind::Handler {
+                namespace: "acme".into(),
+                code: Some("foo".into()),
+            },
+            DiagnosticSeverity::Error,
+        )];
+        let rules = DiagnosticsRulesConfig {
+            extra: [(
+                "acme.foo".to_string(),
+                lex_config::RuleConfig::Bare(Severity::Deny),
+            )]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+        apply_rules(&mut diags, &rules);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].severity, DiagnosticSeverity::Error);
+
+        // A configured rule whose code doesn't match the emitted one
+        // passes the diagnostic through untouched.
+        let mut diags = vec![dummy_diag(
+            DiagnosticKind::Handler {
+                namespace: "acme".into(),
+                code: Some("foo".into()),
+            },
+            DiagnosticSeverity::Warning,
+        )];
+        let rules = DiagnosticsRulesConfig {
+            extra: [(
+                "acme.other".to_string(),
+                lex_config::RuleConfig::Bare(Severity::Allow),
+            )]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+        apply_rules(&mut diags, &rules);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].severity, DiagnosticSeverity::Warning);
     }
 
     #[test]
@@ -904,11 +1014,13 @@ mod tests {
     #[test]
     fn apply_rules_unknown_code_is_passthrough() {
         // An extension-emitted diagnostic with a code the registry
-        // does not know about must pass through unmodified.
+        // does not know about must pass through unmodified. The
+        // handler's `code` is the bare leaf — the analyser glues on
+        // `acme.` to produce wire `acme.unknown`.
         let mut diags = vec![dummy_diag(
             DiagnosticKind::Handler {
                 namespace: "acme".into(),
-                code: Some("acme.unknown".into()),
+                code: Some("unknown".into()),
             },
             DiagnosticSeverity::Warning,
         )];

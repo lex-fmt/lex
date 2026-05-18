@@ -1971,7 +1971,7 @@ fn to_lsp_diagnostic(diag: AnalysisDiagnostic) -> Diagnostic {
         AS::Hint => tower_lsp::lsp_types::DiagnosticSeverity::HINT,
     };
 
-    let code = diag.kind.code().to_string();
+    let code = diag.kind.code();
 
     let source = match &diag.kind {
         DiagnosticKind::Handler { namespace, .. } => format!("lex:{namespace}"),
