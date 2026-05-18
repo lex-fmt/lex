@@ -6,9 +6,16 @@
 //! --ignored` (or `cargo nextest run --test https_fetcher_e2e
 //! --run-ignored=only`).
 //!
+//! Also gated on the `https-fetcher` feature: without it, the real
+//! fetcher is replaced by a stub that returns `Unimplemented`, and
+//! this test would only ever exercise the stub path — which is
+//! already covered by the unit tests in the resolve module.
+//!
 //! The target is GitHub's `octocat/Hello-World` tarball — an
 //! officially-stable test repo used in GitHub's own documentation.
 //! Small, public, no auth, predictable filenames after extraction.
+
+#![cfg(feature = "https-fetcher")]
 
 use std::path::Path;
 

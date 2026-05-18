@@ -54,6 +54,7 @@
 //! without changes.
 
 pub mod cache;
+#[cfg(feature = "https-fetcher")]
 mod extract;
 pub mod fetcher;
 mod path;
