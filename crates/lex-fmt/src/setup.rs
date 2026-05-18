@@ -40,9 +40,10 @@
 //!
 //! ## What's NOT here
 //!
-//! - Network resolvers (github:/gitlab:/https:/git+ssh:). Those
-//!   live in the resolver and return `Unimplemented`; this boot
-//!   surfaces the error and continues. Tracked at lex#546.
+//! - Network resolvers (https:/git: transports; github:/gitlab: URL
+//!   templates that expand into them). Those live in the resolver
+//!   and return `Unimplemented`; this boot surfaces the error and
+//!   continues. Tracked at lex#546 and lex#562.
 //! - Third-party `transport: native` handlers. Only the bundled
 //!   `lex.*` built-ins use the native transport in v1; user-provided
 //!   native handlers would need an in-process registration path

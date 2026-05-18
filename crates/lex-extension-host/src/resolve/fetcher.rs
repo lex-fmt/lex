@@ -1,25 +1,41 @@
-//! [`Fetcher`] trait — the contract per-scheme network resolvers
+//! [`Fetcher`] trait — the contract per-transport network resolvers
 //! implement.
 //!
 //! The host owns the cache (content-hashed lookup, TTL bookkeeping,
 //! `~/.cache/lex/labels/` layout); the fetcher only knows how to
 //! fetch one URI's contents to a directory. This split keeps the
-//! per-scheme implementation small — a github fetcher only needs to
-//! talk to github's tarball API, not understand lex's cache layout.
+//! per-transport implementation small — the git fetcher only needs to
+//! shell out to `git clone`, not understand lex's cache layout.
+//!
+//! ## Transports vs. URL templates
+//!
+//! The model (specified in `comms/specs/proposals/extending-lex-stores.lex`)
+//! decomposes the resolver into three real *transports* and N *URL
+//! templates*:
+//!
+//! - **Transports** are the [`Fetcher`] implementations in this module:
+//!   - `path:` — local filesystem read (in [`super::path`], special-cased
+//!     so it doesn't participate in registry dispatch).
+//!   - `https:` — HTTPS GET of a tarball/zip ([`HttpsFetcher`]).
+//!   - `git:` / `git+ssh:` — git clone ([`GitFetcher`]). Accepts any
+//!     URL form `git clone` accepts; the `git+ssh:` scheme is retained
+//!     for backwards compatibility and dispatched to the same fetcher.
+//! - **URL templates** are forge-shorthands that expand into a
+//!   transport URI before registry dispatch. They live in
+//!   [`super::template`] and have no `Fetcher` impl — they're pure
+//!   functions over URIs. `github:owner/repo` and `gitlab:owner/repo`
+//!   are the two templates shipped today.
 //!
 //! See [lex#562](https://github.com/lex-fmt/lex/issues/562) for the
-//! tracking issue covering the four real implementations
-//! (github/gitlab/https/git+ssh). This module ships the trait plus
-//! four stub fetchers that return [`FetchError::Unimplemented`] —
-//! same observable behaviour as the pre-machinery resolver, but
-//! plugged into the new dispatch so the implementer's PR only needs
-//! to swap out the stub for a real fetcher.
+//! tracking issue covering the two real transport implementations.
+//! Until those land, both fetchers ship as stubs that return
+//! [`FetchError::Unimplemented`] when the dispatch reaches them.
 
 use std::path::Path;
 
 use super::uri::ParsedUri;
 
-/// Per-scheme network resolver. Implementations fetch the URI's
+/// Per-transport network resolver. Implementations fetch the URI's
 /// contents into a caller-provided destination directory.
 ///
 /// ## Contract
@@ -43,9 +59,9 @@ pub trait Fetcher: Send + Sync {
 
     /// URI schemes this fetcher handles. Typically a single-element
     /// slice (one fetcher per scheme), but a fetcher can claim
-    /// multiple schemes if its implementation is shared (e.g., one
-    /// `HttpsFetcher` could handle both `https:` and `http:` if we
-    /// added the latter).
+    /// multiple schemes if its implementation is shared — e.g.,
+    /// [`GitFetcher`] claims both `git` and `git+ssh` because the
+    /// underlying `git clone` accepts both URL forms.
     ///
     /// Returned as `&'static [&'static str]` so the
     /// [`super::registry::FetcherRegistry`] can build its scheme map
@@ -59,7 +75,7 @@ pub trait Fetcher: Send + Sync {
     /// re-fetches.
     ///
     /// Default: `false` for any input. Fetchers should override
-    /// when they can confidently distinguish — e.g., a `GithubFetcher`
+    /// when they can confidently distinguish — e.g., [`GitFetcher`]
     /// would return `true` for `rev` matching `^[0-9a-f]{7,40}$`
     /// (SHA-ish) or `^v?\d+\.\d+`-ish (tag heuristic). Returning
     /// `false` from a default-impl-using fetcher is always safe
@@ -126,45 +142,13 @@ impl From<std::io::Error> for FetchError {
     }
 }
 
-/// Stub for the `github:` scheme. Returns
-/// [`FetchError::Unimplemented`]. Replace with a real
-/// implementation per lex#562.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct GithubFetcher;
-
-impl Fetcher for GithubFetcher {
-    fn fetch(&self, _uri: &ParsedUri, _dest: &Path) -> Result<(), FetchError> {
-        Err(FetchError::Unimplemented {
-            scheme: "github".into(),
-            message: "github: resolver not yet implemented (tracked at lex#562); use path: or --ext-schema for local schemas".into(),
-        })
-    }
-
-    fn schemes(&self) -> &'static [&'static str] {
-        &["github"]
-    }
-}
-
-/// Stub for the `gitlab:` scheme. Returns
-/// [`FetchError::Unimplemented`]. See [`GithubFetcher`].
-#[derive(Debug, Default, Clone, Copy)]
-pub struct GitlabFetcher;
-
-impl Fetcher for GitlabFetcher {
-    fn fetch(&self, _uri: &ParsedUri, _dest: &Path) -> Result<(), FetchError> {
-        Err(FetchError::Unimplemented {
-            scheme: "gitlab".into(),
-            message: "gitlab: resolver not yet implemented (tracked at lex#562); use path: or --ext-schema for local schemas".into(),
-        })
-    }
-
-    fn schemes(&self) -> &'static [&'static str] {
-        &["gitlab"]
-    }
-}
-
-/// Stub for the `https:` scheme. Returns
-/// [`FetchError::Unimplemented`]. See [`GithubFetcher`].
+/// Stub for the `https:` transport. Performs a single HTTPS GET of a
+/// tarball/zip and extracts it. Returns [`FetchError::Unimplemented`]
+/// until the real network code lands; tracked at lex#562.
+///
+/// This is also the underlying transport that `github:` and `gitlab:`
+/// URL templates expand into when their `via` knob picks https (the
+/// default).
 #[derive(Debug, Default, Clone, Copy)]
 pub struct HttpsFetcher;
 
@@ -181,20 +165,29 @@ impl Fetcher for HttpsFetcher {
     }
 }
 
-/// Stub for the `git+ssh:` scheme. Returns
-/// [`FetchError::Unimplemented`]. See [`GithubFetcher`].
+/// Stub for the `git:` / `git+ssh:` transport. Shells out to `git
+/// clone` (preferred over libgit2 for credential coverage; see
+/// `comms/specs/proposals/extending-lex-stores.lex` §6.3). Accepts any
+/// URL form `git clone` accepts — `https://...git`, `git@host:path`,
+/// `git+ssh://git@host/path` — across both registered schemes.
+///
+/// Returns [`FetchError::Unimplemented`] until the real shell-out code
+/// lands; tracked at lex#562. This is also the underlying transport
+/// that `github:` and `gitlab:` URL templates expand into when their
+/// `via` knob picks git (for private repositories needing the user's
+/// git credential setup).
 #[derive(Debug, Default, Clone, Copy)]
-pub struct GitSshFetcher;
+pub struct GitFetcher;
 
-impl Fetcher for GitSshFetcher {
+impl Fetcher for GitFetcher {
     fn fetch(&self, _uri: &ParsedUri, _dest: &Path) -> Result<(), FetchError> {
         Err(FetchError::Unimplemented {
-            scheme: "git+ssh".into(),
-            message: "git+ssh: resolver not yet implemented (tracked at lex#562); use path: or --ext-schema for local schemas".into(),
+            scheme: "git".into(),
+            message: "git: resolver not yet implemented (tracked at lex#562); use path: or --ext-schema for local schemas".into(),
         })
     }
 
     fn schemes(&self) -> &'static [&'static str] {
-        &["git+ssh"]
+        &["git", "git+ssh"]
     }
 }

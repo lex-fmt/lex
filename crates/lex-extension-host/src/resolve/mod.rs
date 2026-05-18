@@ -2,28 +2,34 @@
 //!
 //! A namespace declaration in `lex.toml` (or a `--ext-schema` flag)
 //! gives the host a URI; the resolver turns that URI into a
-//! filesystem directory the schema loader can scan. Five schemes
-//! are specified in the proposal (§4.2):
+//! filesystem directory the schema loader can scan. The model is
+//! specified in `comms/specs/proposals/extending-lex-stores.lex` and
+//! decomposes into:
 //!
-//! - `path:` — local filesystem path. No network, no cache. Resolved
-//!   relative to the workspace root unless absolute.
-//! - `github:` — `github:owner/repo[#rev][?subdir=…]`. Fetched +
-//!   cached at `~/.cache/lex/labels/<hash>/`.
-//! - `gitlab:` — same shape, gitlab.com.
-//! - `https:` — generic HTTPS tarball.
-//! - `git+ssh:` — explicit ssh remote.
+//! - **Three real transports** (one [`Fetcher`] each):
+//!   - `path:` — local filesystem path. No network, no cache.
+//!   - `https:` — HTTPS GET of a tarball/zip.
+//!   - `git:` / `git+ssh:` — git clone of a repository.
+//! - **N URL templates** that expand into one of the transports
+//!   above before dispatch:
+//!   - `github:owner/repo[#rev]` — github tarball (https) or clone (git).
+//!   - `gitlab:owner/repo[#rev]` — gitlab archive (https) or clone (git).
 //!
 //! ## Architecture
 //!
-//! The resolver has three layers:
+//! The resolver has four layers:
 //!
 //! - **URI parsing** ([`uri::ParsedUri`]) — splits the input string
 //!   into `scheme`, `body`, `rev`, `subdir` components. Pure
 //!   syntactic, no IO.
-//! - **Fetchers** ([`Fetcher`] trait + per-scheme impls) — each
-//!   scheme has an implementation that fetches the URI's contents
-//!   into a caller-provided directory. `path:` is built-in and
-//!   special-cased (no network, no cache); the four remote schemes
+//! - **URL-template expansion** ([`template::expand`]) — pure
+//!   functions that rewrite forge-shorthand URIs (`github:`,
+//!   `gitlab:`) into transport URIs (`https:`, `git:`). No-op for
+//!   URIs already in a transport scheme.
+//! - **Fetchers** ([`Fetcher`] trait + per-transport impls) — each
+//!   transport has an implementation that fetches the (expanded) URI's
+//!   contents into a caller-provided directory. `path:` is built-in
+//!   and special-cased (no network, no cache); the remote transports
 //!   are pluggable via the [`FetcherRegistry`].
 //! - **Cache** ([`ResolverCache`]) — content-keyed at
 //!   `~/.cache/lex/labels/<hash>/`. Caches fetched directories
@@ -31,13 +37,13 @@
 //!   TTL for mutable refs (branches, `None`). The fetcher tells the
 //!   cache which a given `rev` is.
 //!
-//! ## Status (post-machinery PR)
+//! ## Status
 //!
-//! The machinery (trait, registry, cache, dispatch) is in place.
-//! `path:` is the only fully-implemented scheme; the four remote
-//! schemes ship as stubs that return
+//! The machinery (trait, registry, templates, cache, dispatch) is in
+//! place. `path:` is the only fully-implemented transport; the two
+//! remote transports (`https:`, `git:`) ship as stubs that return
 //! [`FetchError::Unimplemented`] when the dispatch reaches them.
-//! Per-scheme network implementations are tracked at
+//! Per-transport network implementations are tracked at
 //! [lex#562](https://github.com/lex-fmt/lex/issues/562) — implementers
 //! plug their fetchers into [`default_fetcher_registry`] (or compose
 //! a custom registry) and the rest of the pipeline picks them up
@@ -47,6 +53,7 @@ pub mod cache;
 pub mod fetcher;
 mod path;
 pub mod registry;
+mod template;
 pub mod uri;
 
 use std::path::{Path, PathBuf};
@@ -119,7 +126,7 @@ impl std::fmt::Display for ResolveError {
         match self {
             ResolveError::UnknownScheme { uri } => write!(
                 f,
-                "namespace URI `{uri}` does not start with a known scheme (path:, github:, gitlab:, https:, git+ssh:)"
+                "namespace URI `{uri}` does not start with a known scheme (path:, https:, git:, git+ssh:, or the github:/gitlab: URL templates)"
             ),
             ResolveError::UriParseError { uri, source } => {
                 write!(f, "namespace URI `{uri}` is malformed: {source}")
@@ -169,10 +176,12 @@ impl std::error::Error for ResolveError {
 /// cache. Convenience wrapper around [`resolve_namespace_with`] for
 /// callers that don't need to override either.
 ///
-/// The default registry has stub fetchers for `github:`, `gitlab:`,
-/// `https:`, and `git+ssh:` that return [`FetchError::Unimplemented`]
-/// — same observable behaviour as the pre-machinery resolver.
-/// Per-scheme implementations are tracked at
+/// The default registry has stub fetchers for the `https:` and `git:`
+/// transports (the latter also claims `git+ssh:`); both return
+/// [`FetchError::Unimplemented`] — same observable behaviour as the
+/// pre-machinery resolver. `github:` and `gitlab:` are URL templates
+/// that expand into one of those transports before dispatch.
+/// Per-transport implementations are tracked at
 /// [lex#562](https://github.com/lex-fmt/lex/issues/562).
 ///
 /// The default cache lives at `$XDG_CACHE_HOME/lex/labels/` (falling
@@ -198,13 +207,17 @@ pub fn resolve_namespace(
 /// Dispatch:
 ///
 /// 1. Parse the URI ([`ParsedUri::parse`]). `path:` is special-cased
-///    here — it bypasses the registry + cache entirely and resolves
-///    against `workspace_root` like a local path.
-/// 2. Look up the fetcher for the URI's scheme in `registry`. Return
-///    [`ResolveError::UnknownScheme`] if no fetcher is registered.
-/// 3. Consult `cache` for the URI+rev. If hit (and still valid by
+///    here — it bypasses templates, registry, and cache, resolving
+///    directly against `workspace_root` like a local path.
+/// 2. Run URL-template expansion ([`template::expand`]) on the parsed
+///    URI. Forge shorthands (`github:`, `gitlab:`) become transport
+///    URIs; transport URIs pass through unchanged.
+/// 3. Look up the fetcher for the (expanded) URI's scheme in
+///    `registry`. Return [`ResolveError::UnknownScheme`] if no fetcher
+///    is registered.
+/// 4. Consult `cache` for the URI+rev. If hit (and still valid by
 ///    TTL / immutability), return the cached path.
-/// 4. Otherwise call `fetcher.fetch(uri, dest)` with a fresh cache
+/// 5. Otherwise call `fetcher.fetch(uri, dest)` with a fresh cache
 ///    directory. Record the fetch timestamp in the cache. Return the
 ///    path on success.
 pub fn resolve_namespace_with(
@@ -222,13 +235,18 @@ pub fn resolve_namespace_with(
         return path::resolve(&parsed, uri, workspace_root);
     }
 
+    let expanded = template::expand(parsed).map_err(|source| ResolveError::UriParseError {
+        uri: uri.to_string(),
+        source,
+    })?;
+
     let fetcher = registry
-        .get(&parsed.scheme)
+        .get(&expanded.scheme)
         .ok_or_else(|| ResolveError::UnknownScheme {
             uri: uri.to_string(),
         })?;
 
-    let schema_dir = cache.fetch_or_reuse(&parsed, fetcher.as_ref())?;
+    let schema_dir = cache.fetch_or_reuse(&expanded, fetcher.as_ref())?;
 
     Ok(ResolvedNamespace {
         schema_dir,
@@ -272,7 +290,13 @@ mod tests {
     }
 
     #[test]
-    fn github_scheme_through_default_registry_yields_unimplemented_fetch() {
+    fn github_template_expands_then_hits_unimplemented_https_fetch() {
+        // `github:` is a URL template that expands to an `https:` URI
+        // before dispatch. The fetch then fails at the (stubbed)
+        // https transport — note the reported scheme is the
+        // *transport* scheme, not the user-facing template scheme.
+        // The `Fetch.uri` field preserves the original user-facing
+        // URI for diagnostics.
         let workspace = tempfile::tempdir().unwrap();
         let registry = default_fetcher_registry();
         let (_tmp, cache) = fresh_cache();
@@ -285,32 +309,61 @@ mod tests {
         .unwrap_err();
         match err {
             ResolveError::Fetch {
+                uri,
                 source: FetchError::Unimplemented { scheme, .. },
-                ..
-            } => assert_eq!(scheme, "github"),
-            other => panic!("expected Fetch(Unimplemented {{ github }}), got: {other}"),
+            } => {
+                assert_eq!(scheme, "https", "expanded transport scheme");
+                assert_eq!(uri, "github:acme/lex-labels", "original URI preserved");
+            }
+            other => panic!("expected Fetch(Unimplemented {{ https }}), got: {other}"),
         }
     }
 
     #[test]
-    fn gitlab_https_git_ssh_all_unimplemented_through_default_registry() {
+    fn gitlab_template_expands_then_hits_unimplemented_https_fetch() {
         let workspace = tempfile::tempdir().unwrap();
         let registry = default_fetcher_registry();
         let (_tmp, cache) = fresh_cache();
-        for scheme in ["gitlab", "https", "git+ssh"] {
-            let uri = if scheme == "https" || scheme == "git+ssh" {
-                format!("{scheme}://example.com/foo")
-            } else {
-                format!("{scheme}:foo/bar")
-            };
-            let err =
-                resolve_namespace_with(&uri, workspace.path(), &registry, &cache).unwrap_err();
+        let err = resolve_namespace_with(
+            "gitlab:foolco/lex-labels",
+            workspace.path(),
+            &registry,
+            &cache,
+        )
+        .unwrap_err();
+        match err {
+            ResolveError::Fetch {
+                uri,
+                source: FetchError::Unimplemented { scheme, .. },
+            } => {
+                assert_eq!(scheme, "https");
+                assert_eq!(uri, "gitlab:foolco/lex-labels");
+            }
+            other => panic!("expected Fetch(Unimplemented {{ https }}), got: {other}"),
+        }
+    }
+
+    #[test]
+    fn transport_schemes_all_unimplemented_through_default_registry() {
+        let workspace = tempfile::tempdir().unwrap();
+        let registry = default_fetcher_registry();
+        let (_tmp, cache) = fresh_cache();
+        // `git:` and `git+ssh:` both route to the GitFetcher, which
+        // reports its primary scheme as `git`. `https:` routes to the
+        // HttpsFetcher.
+        let cases = [
+            ("https://example.com/foo.tar.gz", "https"),
+            ("git+ssh://git@example.com/foo.git", "git"),
+            ("git:https://example.com/foo.git", "git"),
+        ];
+        for (uri, expected_scheme) in cases {
+            let err = resolve_namespace_with(uri, workspace.path(), &registry, &cache).unwrap_err();
             match err {
                 ResolveError::Fetch {
                     source: FetchError::Unimplemented { scheme: s, .. },
                     ..
-                } => assert_eq!(s, scheme, "wrong scheme reported"),
-                other => panic!("expected Fetch(Unimplemented) for {scheme}, got: {other}"),
+                } => assert_eq!(s, expected_scheme, "wrong scheme reported for {uri}"),
+                other => panic!("expected Fetch(Unimplemented) for {uri}, got: {other}"),
             }
         }
     }
