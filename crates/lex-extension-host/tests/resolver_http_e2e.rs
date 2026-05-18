@@ -1,19 +1,10 @@
-//! End-to-end validation of the resolver machinery using a real
-//! HTTP fetcher against a local mock server.
-//!
-//! The four `Fetcher` impls shipped in `lex_extension_host` are
-//! stubs that return `Unimplemented` (real network code is tracked
-//! at [lex#562](https://github.com/lex-fmt/lex/issues/562)). This
-//! test exercises the full pipeline — URI parse → registry dispatch
-//! → cache miss → fetch → cache hit on second resolve — with a
-//! `TestHttpFetcher` that makes a real HTTP/1.1 GET to a TCP
-//! listener spun up inside the test.
-//!
-//! The point isn't to test HTTP; it's to prove that every joint in
-//! the machinery (trait + registry + cache + dispatch) works for a
-//! non-stub fetcher. When implementers wire up
-//! `GithubFetcher`/etc. per #562, the same shape of integration
-//! test will pass against their fetcher.
+//! End-to-end validation of the resolver machinery using a hand-
+//! rolled HTTP fetcher against a local mock server. The point isn't
+//! to test HTTP — the real [`lex_extension_host::HttpsFetcher`] has
+//! its own e2e test in `https_fetcher_e2e.rs`. This test proves the
+//! generic machinery (trait + registry + cache + dispatch + cache-key
+//! by `(uri, rev)`) works for a non-stub fetcher: URI parse → registry
+//! dispatch → cache miss → fetch → cache hit on second resolve.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};

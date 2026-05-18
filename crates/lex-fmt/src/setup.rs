@@ -717,19 +717,23 @@ mod tests {
     }
 
     #[test]
-    fn boot_with_remote_uri_emits_unimplemented_diagnostic() {
-        // Tests the diagnostic-surface contract for stub transports.
-        // We point at a `git+ssh:` URI rather than a github tap
-        // because https now ships a real fetcher (would attempt a
-        // network call against api.github.com); git/git+ssh is still
-        // the stub (tracked at lex#650), so it predictably returns
-        // FetchError::Unimplemented.
+    fn boot_with_unresolvable_uri_emits_diagnostic() {
+        // Tests the diagnostic-surface contract for namespace URIs
+        // that fail to resolve at boot. We point at an `ftp:` URI —
+        // no fetcher in the default registry claims that scheme, so
+        // the resolver returns `UnknownScheme` and boot_registry
+        // surfaces it as a per-namespace diagnostic rather than
+        // crashing the boot. (Previously this test pointed at a
+        // `git+ssh:` URI to exercise the FetchError::Unimplemented
+        // branch, but `git:` / `git+ssh:` now ship a real fetcher;
+        // `ftp:` is the closest stable proxy for "unresolvable
+        // remote URI in lex.toml".)
         let workspace = tempfile::tempdir().unwrap();
         let mut namespaces = BTreeMap::new();
         namespaces.insert(
             "acme".into(),
             NamespaceSpec::Table(NamespaceTable {
-                uri: Some("git+ssh://git@test.invalid/repo.git".into()),
+                uri: Some("ftp:server/path".into()),
                 ..Default::default()
             }),
         );
@@ -748,7 +752,7 @@ mod tests {
         assert_eq!(outcome.diagnostics.len(), 1);
         let diag = &outcome.diagnostics[0];
         assert_eq!(diag.namespace.as_deref(), Some("acme"));
-        assert!(diag.message.contains("not yet implemented"));
+        assert!(!diag.message.is_empty());
         assert!(!outcome.registered.iter().any(|r| r.name == "acme"));
     }
 
