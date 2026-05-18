@@ -13,12 +13,16 @@
 //! decomposes the resolver into three real *transports* and N *URL
 //! templates*:
 //!
-//! - **Transports** are the [`Fetcher`] implementations in this module:
-//!   - `path:` — local filesystem read (in [`super::path`], special-cased
-//!     so it doesn't participate in registry dispatch).
-//!   - `https:` — HTTPS GET of a tarball/zip ([`HttpsFetcher`]).
-//!   - `git:` / `git+ssh:` — git clone ([`GitFetcher`]). Accepts any
-//!     URL form `git clone` accepts; the `git+ssh:` scheme is retained
+//! - **Transports** carry the actual data movement. Three ship today:
+//!   - `path:` — built-in local filesystem read, implemented in
+//!     [`super::path`]. Special-cased upstream of registry dispatch
+//!     (no [`Fetcher`] impl, no cache); listed here for completeness
+//!     of the transport set.
+//!   - `https:` — HTTPS GET of a tarball/zip, implemented as the
+//!     [`HttpsFetcher`] [`Fetcher`] in this module.
+//!   - `git:` / `git+ssh:` — git clone, implemented as the
+//!     [`GitFetcher`] [`Fetcher`] in this module. Accepts any URL
+//!     form `git clone` accepts; the `git+ssh:` scheme is retained
 //!     for backwards compatibility and dispatched to the same fetcher.
 //! - **URL templates** are forge-shorthands that expand into a
 //!   transport URI before registry dispatch. They live in

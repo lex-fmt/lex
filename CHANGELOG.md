@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Changed — `lex-extension-host` resolver factored into transports + URL templates ([#648](https://github.com/lex-fmt/lex/pull/648))
+
+Restructures the namespace resolver to match the new `extending-lex-stores.lex` companion spec. The previous model registered four peer fetchers (`GithubFetcher`, `GitlabFetcher`, `HttpsFetcher`, `GitSshFetcher`); the new model registers two transport fetchers (`HttpsFetcher`, `GitFetcher`) covering three schemes (`https`, `git`, `git+ssh`) and adds a URL-template layer (`github:`, `gitlab:`) that expands forge shorthands into transport URIs before dispatch.
+
+Public-API changes (visible to direct `lex-extension-host` consumers):
+
+- **Removed:** `resolve::fetcher::GithubFetcher`, `resolve::fetcher::GitlabFetcher`.
+- **Renamed:** `resolve::fetcher::GitSshFetcher` → `resolve::fetcher::GitFetcher`. The renamed fetcher claims both `git:` and `git+ssh:` schemes.
+- **Added:** `resolve::ResolveError::UnknownScheme` gains a `scheme: String` field that names the actual missing transport (after template expansion, if any) for clearer diagnostics.
+
+No behaviour change for end users: every stub still returns `FetchError::Unimplemented`; per-transport network implementations are tracked at [#562](https://github.com/lex-fmt/lex/issues/562) (now rescoped from "implement four fetchers" to "implement two fetchers + two templates").
+
 ## [0.14.1] - 2026-05-17
 
 ### Added — `lex-config` diagnostic rule types ([#636](https://github.com/lex-fmt/lex/issues/636))

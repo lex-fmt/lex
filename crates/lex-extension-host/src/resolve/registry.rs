@@ -70,12 +70,13 @@ impl std::fmt::Debug for FetcherRegistry {
     }
 }
 
-/// Construct a registry with the standard two-transport stub fetcher
-/// set: [`HttpsFetcher`] (claims `https:`) and [`GitFetcher`] (claims
-/// both `git:` and `git+ssh:`). Each returns
-/// [`super::FetchError::Unimplemented`] from `fetch` — replace with
-/// a real implementation per lex#562 to make the transport actually
-/// work.
+/// Construct a registry with the standard transport-fetcher stub set:
+/// two [`Fetcher`] implementations covering three URI schemes —
+/// [`HttpsFetcher`] (claims `https:`) and [`GitFetcher`] (claims both
+/// `git:` and `git+ssh:`, since both URL forms feed the same
+/// `git clone`). Each fetcher returns [`super::FetchError::Unimplemented`]
+/// from `fetch` — replace with a real implementation per lex#562 to
+/// make the transport actually work.
 ///
 /// `path:` is NOT in the registry: it's special-cased at the
 /// [`super::resolve_namespace_with`] level (no cache, no fetcher,

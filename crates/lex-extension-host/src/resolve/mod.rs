@@ -6,10 +6,14 @@
 //! specified in `comms/specs/proposals/extending-lex-stores.lex` and
 //! decomposes into:
 //!
-//! - **Three real transports** (one [`Fetcher`] each):
-//!   - `path:` — local filesystem path. No network, no cache.
-//!   - `https:` — HTTPS GET of a tarball/zip.
-//!   - `git:` / `git+ssh:` — git clone of a repository.
+//! - **Three real transports**:
+//!   - `path:` — built-in local filesystem read. Special-cased
+//!     upstream of registry dispatch — no [`Fetcher`] impl, no cache.
+//!   - `https:` — HTTPS GET of a tarball/zip. Implemented by the
+//!     [`fetcher::HttpsFetcher`] in the registry.
+//!   - `git:` / `git+ssh:` — git clone of a repository. Implemented
+//!     by the [`fetcher::GitFetcher`] in the registry (claims both
+//!     schemes).
 //! - **N URL templates** that expand into one of the transports
 //!   above before dispatch:
 //!   - `github:owner/repo[#rev]` — github tarball (https) or clone (git).
@@ -81,8 +85,14 @@ pub struct ResolvedNamespace {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum ResolveError {
-    /// URI didn't match any registered scheme.
-    UnknownScheme { uri: String },
+    /// URI didn't match any registered scheme. `scheme` is the actual
+    /// missing scheme — for plain transport URIs that matches the
+    /// scheme of `uri`, but for forge-template URIs (`github:`,
+    /// `gitlab:`) it's the *expanded* transport scheme (typically
+    /// `https`). That's what the diagnostic needs to name so the user
+    /// understands which transport fetcher is missing from the
+    /// registry, not just that the original URI failed.
+    UnknownScheme { uri: String, scheme: String },
     /// URI failed to parse syntactically (bad fragment, missing
     /// scheme, …). Distinct from `UnknownScheme`: the URI is
     /// malformed at the lex layer, not just pointed at a scheme we
@@ -124,10 +134,27 @@ pub enum ResolveError {
 impl std::fmt::Display for ResolveError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ResolveError::UnknownScheme { uri } => write!(
-                f,
-                "namespace URI `{uri}` does not start with a known scheme (path:, https:, git:, git+ssh:, or the github:/gitlab: URL templates)"
-            ),
+            ResolveError::UnknownScheme { uri, scheme } => {
+                // When the URI's original scheme equals the missing
+                // scheme, no template expansion happened — give the
+                // plain "unknown scheme" phrasing. Otherwise the user
+                // wrote a forge template (`github:`/`gitlab:`) that
+                // expanded into a transport scheme they haven't
+                // registered; say that explicitly so the diagnostic
+                // points at what's actually missing.
+                let user_scheme = uri.split_once(':').map(|(s, _)| s).unwrap_or(uri);
+                if user_scheme == scheme {
+                    write!(
+                        f,
+                        "namespace URI `{uri}` uses transport scheme `{scheme}:` which has no registered fetcher (known: path:, https:, git:, git+ssh:, plus the github:/gitlab: URL templates)"
+                    )
+                } else {
+                    write!(
+                        f,
+                        "namespace URI `{uri}` (a `{user_scheme}:` URL template) expands to transport scheme `{scheme}:` which has no registered fetcher (known: path:, https:, git:, git+ssh:)"
+                    )
+                }
+            }
             ResolveError::UriParseError { uri, source } => {
                 write!(f, "namespace URI `{uri}` is malformed: {source}")
             }
@@ -244,6 +271,7 @@ pub fn resolve_namespace_with(
         .get(&expanded.scheme)
         .ok_or_else(|| ResolveError::UnknownScheme {
             uri: uri.to_string(),
+            scheme: expanded.scheme.clone(),
         })?;
 
     let schema_dir = cache.fetch_or_reuse(&expanded, fetcher.as_ref())?;
@@ -276,7 +304,61 @@ mod tests {
         let (_tmp, cache) = fresh_cache();
         let err = resolve_namespace_with("ftp:server/path", workspace.path(), &registry, &cache)
             .unwrap_err();
-        assert!(matches!(err, ResolveError::UnknownScheme { .. }));
+        match err {
+            ResolveError::UnknownScheme { uri, scheme } => {
+                assert_eq!(uri, "ftp:server/path");
+                assert_eq!(scheme, "ftp");
+                // Plain transport URI (no template expansion) — the
+                // diagnostic should NOT use the "expands to" phrasing
+                // that's reserved for the template-expansion branch.
+                // (The "known schemes" footer mentions URL templates
+                // either way, so we discriminate on "expands to"
+                // instead.)
+                let msg = format!(
+                    "{}",
+                    ResolveError::UnknownScheme {
+                        uri,
+                        scheme: scheme.clone()
+                    }
+                );
+                assert!(
+                    !msg.contains("expands to"),
+                    "plain transport URI shouldn't use template-expansion phrasing: {msg}"
+                );
+            }
+            other => panic!("expected UnknownScheme, got: {other}"),
+        }
+    }
+
+    #[test]
+    fn unknown_scheme_after_template_expansion_names_transport() {
+        // If a custom registry omits `https:`, a `github:` template
+        // expansion still produces an https URI, and the error needs
+        // to say "expands to transport scheme `https:`" rather than
+        // misleadingly claiming `github:` is unknown.
+        let workspace = tempfile::tempdir().unwrap();
+        let registry = FetcherRegistry::new(); // empty — no https registered
+        let (_tmp, cache) = fresh_cache();
+        let err = resolve_namespace_with("github:acme/repo", workspace.path(), &registry, &cache)
+            .unwrap_err();
+        match err {
+            ResolveError::UnknownScheme { uri, scheme } => {
+                assert_eq!(uri, "github:acme/repo");
+                assert_eq!(scheme, "https", "should report the expanded transport");
+                let msg = format!(
+                    "{}",
+                    ResolveError::UnknownScheme {
+                        uri: uri.clone(),
+                        scheme: scheme.clone()
+                    }
+                );
+                assert!(
+                    msg.contains("expands to") && msg.contains("`https:`"),
+                    "template-expansion diagnostic should name the expanded transport: {msg}"
+                );
+            }
+            other => panic!("expected UnknownScheme, got: {other}"),
+        }
     }
 
     #[test]
