@@ -214,18 +214,23 @@ impl ParsedUri {
 /// `subdir=<value>` and `via=<value>`; multi-key queries separate
 /// pairs with `&`. Any other key is a parse error.
 ///
-/// The `subdir` slot returns `Some(String)` whenever the URI carries
-/// a `?`, even for `uri?` with an empty query string (returns
-/// `Some(String::new())`). That symmetry with the fragment parser —
-/// where `uri#` yields `Some("")` not `None` — is load-bearing:
-/// callers (notably the `path:` resolver) inspect `has_query()` to
-/// decide whether the remote-only `?` knob was used; collapsing `?`
-/// to `None` would silently slip `path:dir?` past that check.
+/// To check whether a URI carried a `?` (even an empty one), callers
+/// should use [`ParsedUri::has_query`] — it is the authoritative
+/// "URI had a query string" check across both slots.
 ///
-/// The `via` slot is `None` when the URI doesn't carry a `via=` pair;
-/// it doesn't share the `subdir`-style "empty query → empty value"
-/// rule because `via` is forge-policy and isn't consulted by
-/// `has_query()`.
+/// The `subdir` slot is `Some(String)` when `subdir=<value>` is
+/// present in the query, OR when the query string is empty
+/// (`uri?` → `Some("")`). The empty-query sentinel lives here because
+/// the symmetry with the fragment parser — where `uri#` yields
+/// `Some("")` not `None` — is load-bearing: callers (notably the
+/// `path:` resolver) used to inspect `subdir.is_some()` directly to
+/// decide whether the remote-only `?` knob was used, and the sentinel
+/// keeps `has_query()` correctly identifying the empty-`?` case even
+/// when no recognised keys appear.
+///
+/// The `via` slot is `Some(String)` only when `via=<value>` is
+/// explicitly present in the query string. It does not carry the
+/// empty-query sentinel — that's `subdir`'s job alone.
 fn parse_query(q: &str) -> Result<(Option<String>, Option<String>), UriParseError> {
     if q.is_empty() {
         // `uri?` with empty query string — represent as
