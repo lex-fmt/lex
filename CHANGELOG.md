@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Added — configurable diagnostic rules via `[diagnostics.rules]` ([#636](https://github.com/lex-fmt/lex/issues/636))
+
+Closes the v1 loop on the diagnostic-configuration system. `.lex.toml` gains a `[diagnostics.rules]` block with one field per built-in diagnostic code, and the LSP server honours those rules when publishing diagnostics.
+
+- **Configuration surface.** `DiagnosticsConfig` gains a `rules: DiagnosticsRulesConfig` nested struct. Each field carries its description as a doc comment and its intrinsic severity as the `#[config(default)]`. Schema-validation codes nest under `[diagnostics.rules.schema]`. `lexd config gen` emits the full annotated catalog automatically.
+- **Severity verbs.** Each code accepts `"allow"` (suppress emission), `"warn"` (keep intrinsic LSP severity), or `"deny"` (upgrade to `Error`).
+- **Code centralisation.** `DiagnosticKind::code()` and `SchemaValidationKind::code()` return the on-the-wire diagnostic code (formerly hard-coded inside `lex-lsp::to_lsp_diagnostic`). `DiagnosticsRulesConfig::lookup_by_code` resolves codes → rule entries.
+- **Runtime wiring.** A new `apply_rules` function in `lex-analysis` filters and remaps diagnostics. The LSP server reads `[diagnostics.rules]` from `.lex.toml` and applies the registry to every analysis pass before publishing — editor squiggles honour the configuration immediately.
+- **Drift test.** A test in `lex-analysis` iterates every built-in `DiagnosticKind` variant and asserts `lookup_by_code(kind.code())` returns `Some`, so adding a new diagnostic without a matching config field fails CI.
+- **Breaking.** The previous `diagnostics.spellcheck = bool` knob is replaced by `[diagnostics.rules].spellcheck = "warn" | "allow" | "deny"`. Existing `.lex.toml` files using the boolean form fail strict-key validation and must migrate.
+- **Out of scope for v1.** Extension-emitted codes (`<namespace>.<code>`) pass through untouched until the `extra` map surface lands. Per-document and per-region annotation overrides (v2 / v3 of #636) ship in follow-up work. CLI `lexd lint` rendering is its own work-stream.
+
 ### Added — `lex-extension-host::GitFetcher` real shell-out implementation ([#650](https://github.com/lex-fmt/lex/issues/650))
 
 The git transport is no longer a stub. `GitFetcher::fetch` shells out to `git clone --depth=1` to populate the destination directory. Honors `uri.rev` as `--branch <ref>` (branch or tag) and `uri.subdir` to extract a subdirectory of the repo as the schema root. The `.git/` directory is stripped after clone — the cache only holds schema content.
@@ -52,15 +64,7 @@ No behaviour change for end users: every stub still returns `FetchError::Unimple
 
 ### Added — `lex-config` diagnostic rule types ([#636](https://github.com/lex-fmt/lex/issues/636))
 
-Foundation types for the diagnostic-configuration tracking issue. `lex-config` now exports `Severity` (`Allow` / `Warn` / `Deny`), `RuleConfig` (an untagged enum accepting either `"warn"` or `["warn", { … }]` on disk), and the `RuleOptions` alias (`BTreeMap<String, toml::Value>`). The runtime consumption surface (registry, emission-site wiring in `lex-analysis`, `[diagnostics.rules]` in `.lex.toml`) lands in follow-up PRs on the same issue — this PR ships only the value types. Public crate API addition, hence the Unreleased note.
-
-### Changed — `[diagnostics.rules]` block in `.lex.toml` ([#636](https://github.com/lex-fmt/lex/issues/636))
-
-`DiagnosticsConfig` gains a `rules: DiagnosticsRulesConfig` nested struct with one field per built-in diagnostic code, each carrying its description as a doc comment and its intrinsic severity as the `#[config(default)]`. Schema-validation codes live in a `[diagnostics.rules.schema]` sub-table. `lexd config gen` now emits the full catalog automatically. **Breaking:** the previous `diagnostics.spellcheck = bool` knob is replaced by `[diagnostics.rules].spellcheck = "warn" | "allow" | "deny"` — any existing `.lex.toml` using the boolean form fails strict-key validation. Wiring of the runtime registry against this schema lands in the next PR on this issue.
-
-### Added — diagnostic registry wiring through analysis + LSP ([#636](https://github.com/lex-fmt/lex/issues/636))
-
-Closes the LSP loop on the diagnostic-configuration system. `DiagnosticKind` and `SchemaValidationKind` get `code()` methods returning the on-the-wire diagnostic code (formerly hard-coded inside `lex-lsp::to_lsp_diagnostic`). `DiagnosticsRulesConfig::lookup_by_code` resolves codes → rule entries. A new `apply_rules` function consumes the resolved overrides: `allow` drops the diagnostic, `warn` keeps its intrinsic LSP severity, `deny` upgrades to `Error`. The LSP server reads `[diagnostics.rules]` from `.lex.toml` and applies the registry to every analysis pass before publishing diagnostics, so editor squiggles honour the configuration. Extension-emitted codes (`<namespace>.<code>`) pass through untouched until the `extra` map surface lands. Spellcheck still emits through its own path in `lex-analysis::spellcheck` and joins this registry in a follow-up. CLI lint rendering is its own work-stream — there is no `lexd lint` subcommand yet. Drift test in `lex-analysis` asserts every built-in `DiagnosticKind` variant has a matching field on the rules struct.
+Foundation types for the diagnostic-configuration tracking issue. `lex-config` now exports `Severity` (`Allow` / `Warn` / `Deny`), `RuleConfig` (an untagged enum accepting either `"warn"` or `["warn", { … }]` on disk), and the `RuleOptions` alias (`BTreeMap<String, toml::Value>`). No consumers yet — the runtime consumption surface (`DiagnosticsRulesConfig` struct, registry, emission-site wiring) lands in follow-up PRs on the same issue. Public crate API addition, hence the Unreleased note.
 
 ## [0.14.0] - 2026-05-16
 
