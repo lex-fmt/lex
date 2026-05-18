@@ -30,10 +30,9 @@
 //!   functions over URIs. `github:owner/repo` and `gitlab:owner/repo`
 //!   are the two templates shipped today.
 //!
-//! See [lex#562](https://github.com/lex-fmt/lex/issues/562) for the
-//! tracking issue covering the two real transport implementations.
-//! Until those land, both fetchers ship as stubs that return
-//! [`FetchError::Unimplemented`] when the dispatch reaches them.
+//! Implementation status: `https:` ships a real fetcher (ureq + tar +
+//! zip extraction, see [`HttpsFetcher`]). `git:` / `git+ssh:` ship as
+//! a stub returning [`FetchError::Unimplemented`]; tracked at lex#650.
 
 use std::path::Path;
 
@@ -146,26 +145,90 @@ impl From<std::io::Error> for FetchError {
     }
 }
 
-/// Stub for the `https:` transport. Performs a single HTTPS GET of a
-/// tarball/zip and extracts it. Returns [`FetchError::Unimplemented`]
-/// until the real network code lands; tracked at lex#562.
+/// HTTPS tarball/zip transport. Performs a single HTTPS GET against
+/// the URI body, expects a `tar.gz` or `zip` archive in response, and
+/// extracts it into the destination directory. Honors `uri.subdir`
+/// for archives that wrap their content in a top-level directory (the
+/// GitHub tarball API does this) or that ship schemas alongside
+/// unrelated content.
 ///
 /// This is also the underlying transport that `github:` and `gitlab:`
 /// URL templates expand into when their `via` knob picks https (the
-/// default).
+/// default — see [`super::template`]).
+///
+/// Auth is by way of an optional `Authorization` (or arbitrary)
+/// header pass-through with `${ENV_VAR}` interpolation. Plumbing the
+/// header through from `lex-config` is a follow-up (see issue #651);
+/// for now the fetcher reads no headers from configuration.
+///
+/// Implementation notes:
+///
+/// - Sync via `ureq` — keeps tokio off the resolver boot path.
+///   `rustls` + `webpki-roots` so HTTPS works without OS-OpenSSL.
+/// - 256 MiB response cap — a pathological server can't OOM us.
+/// - Path-traversal defence: archive members with absolute paths or
+///   `..` components are rejected; symlinks are skipped.
+///
+/// See `comms/specs/proposals/extending-lex-stores.lex` §3.2 and §6.2.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct HttpsFetcher;
 
+/// Hard cap on archive size. 256 MiB is generous for any plausible
+/// schema bundle; a tarball larger than this is almost certainly the
+/// wrong artifact pointed at the wrong URI.
+const HTTPS_RESPONSE_CAP_BYTES: usize = 256 * 1024 * 1024;
+
 impl Fetcher for HttpsFetcher {
-    fn fetch(&self, _uri: &ParsedUri, _dest: &Path) -> Result<(), FetchError> {
-        Err(FetchError::Unimplemented {
-            scheme: "https".into(),
-            message: "https: resolver not yet implemented (tracked at lex#562); use path: or --ext-schema for local schemas".into(),
-        })
+    fn fetch(&self, uri: &ParsedUri, dest: &Path) -> Result<(), FetchError> {
+        // ParsedUri::body for `https:` includes the leading `//`
+        // (`//api.github.com/...`); ureq wants the full URL with
+        // scheme, so reconstruct.
+        let url = format!("https:{}", uri.body);
+
+        let response = ureq::get(&url)
+            .set("User-Agent", "lex-extension-host (lex#562)")
+            .call()
+            .map_err(map_ureq_error)?;
+
+        let content_type = response.header("Content-Type").map(|s| s.to_string());
+        let format = super::extract::detect_format(content_type.as_deref(), &uri.body);
+
+        let mut body_reader = response.into_reader();
+        let bytes = super::extract::read_with_cap(&mut body_reader, HTTPS_RESPONSE_CAP_BYTES)
+            .map_err(map_extract_error)?;
+
+        super::extract::extract_archive_into(&bytes, format, dest, uri.subdir.as_deref())
+            .map_err(map_extract_error)?;
+
+        Ok(())
     }
 
     fn schemes(&self) -> &'static [&'static str] {
         &["https"]
+    }
+}
+
+fn map_ureq_error(e: ureq::Error) -> FetchError {
+    match e {
+        ureq::Error::Status(code, response) => FetchError::UpstreamStatus {
+            status: format!("{code}"),
+            message: response
+                .into_string()
+                .unwrap_or_else(|_| "<failed to read body>".into()),
+        },
+        ureq::Error::Transport(t) => FetchError::Network {
+            message: t.to_string(),
+        },
+    }
+}
+
+fn map_extract_error(e: super::extract::ExtractError) -> FetchError {
+    use super::extract::ExtractError;
+    match e {
+        ExtractError::Io(io_err) => FetchError::Io(io_err),
+        other => FetchError::Extract {
+            message: other.to_string(),
+        },
     }
 }
 

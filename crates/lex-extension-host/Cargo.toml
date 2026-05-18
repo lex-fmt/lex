@@ -24,6 +24,19 @@ serde_yaml = { workspace = true }
 sha2 = { workspace = true }
 tokio = { workspace = true, optional = true }
 
+# HTTPS fetcher (resolve::HttpsFetcher):
+# - `ureq` — sync HTTP client; keeps tokio off the resolver boot path.
+#   `tls` feature pulls in rustls + webpki-roots (Mozilla CA bundle),
+#   so HTTPS works out of the box on every supported platform without
+#   linking the system OpenSSL.
+# - `flate2` + `tar` — extract gzipped tarballs (the GitHub/GitLab
+#   tarball-API and any standard `.tar.gz` artifact server).
+# - `zip` — extract `.zip` archives (some internal artifact servers).
+ureq = { version = "2.11", default-features = false, features = ["tls"] }
+flate2 = "1.0"
+tar = "0.4"
+zip = { version = "2.2", default-features = false, features = ["deflate"] }
+
 # Linux sandbox impl: seccomp-bpf for syscall filtering (network deny)
 # + landlock for filesystem allowlist. Both crates are MIT/Apache,
 # maintained upstream (AWS / ANSSI), and work on every Linux arch we

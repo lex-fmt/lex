@@ -718,12 +718,18 @@ mod tests {
 
     #[test]
     fn boot_with_remote_uri_emits_unimplemented_diagnostic() {
+        // Tests the diagnostic-surface contract for stub transports.
+        // We point at a `git+ssh:` URI rather than a github tap
+        // because https now ships a real fetcher (would attempt a
+        // network call against api.github.com); git/git+ssh is still
+        // the stub (tracked at lex#650), so it predictably returns
+        // FetchError::Unimplemented.
         let workspace = tempfile::tempdir().unwrap();
         let mut namespaces = BTreeMap::new();
         namespaces.insert(
             "acme".into(),
             NamespaceSpec::Table(NamespaceTable {
-                tap: Some("acme".into()),
+                uri: Some("git+ssh://git@test.invalid/repo.git".into()),
                 ..Default::default()
             }),
         );

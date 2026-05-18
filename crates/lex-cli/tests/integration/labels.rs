@@ -77,10 +77,16 @@ fn labels_list_with_ext_schema_flag() {
 
 #[test]
 fn labels_list_with_remote_uri_emits_unimplemented_diagnostic() {
+    // Uses a `git+ssh://` URI rather than a github tap because https
+    // now ships a real fetcher (would attempt a real api.github.com
+    // GET in the CLI integration test). The git/git+ssh transport is
+    // still the stub (tracked at lex#650), so it predictably returns
+    // FetchError::Unimplemented and the diagnostic message contains
+    // "not yet implemented".
     let dir = make_workspace_with_acme_schemas(Some(
         r#"
-[labels]
-remote = { tap = "remote" }
+[labels.remote]
+uri = "git+ssh://git@test.invalid/repo.git"
 "#,
     ));
     Command::cargo_bin("lexd")

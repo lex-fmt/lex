@@ -54,6 +54,7 @@
 //! without changes.
 
 pub mod cache;
+mod extract;
 pub mod fetcher;
 mod path;
 pub mod registry;
@@ -372,69 +373,14 @@ mod tests {
     }
 
     #[test]
-    fn github_template_expands_then_hits_unimplemented_https_fetch() {
-        // `github:` is a URL template that expands to an `https:` URI
-        // before dispatch. The fetch then fails at the (stubbed)
-        // https transport — note the reported scheme is the
-        // *transport* scheme, not the user-facing template scheme.
-        // The `Fetch.uri` field preserves the original user-facing
-        // URI for diagnostics.
-        let workspace = tempfile::tempdir().unwrap();
-        let registry = default_fetcher_registry();
-        let (_tmp, cache) = fresh_cache();
-        let err = resolve_namespace_with(
-            "github:acme/lex-labels",
-            workspace.path(),
-            &registry,
-            &cache,
-        )
-        .unwrap_err();
-        match err {
-            ResolveError::Fetch {
-                uri,
-                source: FetchError::Unimplemented { scheme, .. },
-            } => {
-                assert_eq!(scheme, "https", "expanded transport scheme");
-                assert_eq!(uri, "github:acme/lex-labels", "original URI preserved");
-            }
-            other => panic!("expected Fetch(Unimplemented {{ https }}), got: {other}"),
-        }
-    }
-
-    #[test]
-    fn gitlab_template_expands_then_hits_unimplemented_https_fetch() {
-        let workspace = tempfile::tempdir().unwrap();
-        let registry = default_fetcher_registry();
-        let (_tmp, cache) = fresh_cache();
-        let err = resolve_namespace_with(
-            "gitlab:foolco/lex-labels",
-            workspace.path(),
-            &registry,
-            &cache,
-        )
-        .unwrap_err();
-        match err {
-            ResolveError::Fetch {
-                uri,
-                source: FetchError::Unimplemented { scheme, .. },
-            } => {
-                assert_eq!(scheme, "https");
-                assert_eq!(uri, "gitlab:foolco/lex-labels");
-            }
-            other => panic!("expected Fetch(Unimplemented {{ https }}), got: {other}"),
-        }
-    }
-
-    #[test]
-    fn transport_schemes_all_unimplemented_through_default_registry() {
-        let workspace = tempfile::tempdir().unwrap();
-        let registry = default_fetcher_registry();
-        let (_tmp, cache) = fresh_cache();
+    fn git_transport_schemes_unimplemented_through_default_registry() {
         // `git:` and `git+ssh:` both route to the GitFetcher, which
-        // reports its primary scheme as `git`. `https:` routes to the
-        // HttpsFetcher.
+        // reports its primary scheme as `git`. The https transport is
+        // implemented now (real network) so it's not included here.
+        let workspace = tempfile::tempdir().unwrap();
+        let registry = default_fetcher_registry();
+        let (_tmp, cache) = fresh_cache();
         let cases = [
-            ("https://example.com/foo.tar.gz", "https"),
             ("git+ssh://git@example.com/foo.git", "git"),
             ("git:https://example.com/foo.git", "git"),
         ];

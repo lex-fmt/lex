@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Added — `lex-extension-host::HttpsFetcher` real network implementation ([#649](https://github.com/lex-fmt/lex/issues/649))
+
+The HTTPS transport is no longer a stub. `HttpsFetcher::fetch` performs a single HTTPS GET (sync, via `ureq` with rustls + webpki-roots), detects the archive format from `Content-Type` with URL-extension fallback, and extracts `tar.gz` or `zip` archives into the destination directory. Honors `uri.subdir` for archives that wrap content in a top-level directory (the GitHub tarball API does this).
+
+Path-traversal defence at the extraction layer: archive members with `..` components or absolute paths are rejected; symlinks/hardlinks are skipped (schema directories are pure data, allowing tarball-shipped symlinks would expand the trust surface). Response size capped at 256 MiB to defend against pathological servers.
+
+New deps: `ureq` (sync HTTP client, tokio-free), `flate2` + `tar` (gzipped tarballs), `zip` (zip archives). All sit on the resolver path only, so consumers that don't use remote namespaces don't pay the cost at boot.
+
+The `header` knob for `Authorization` / custom header pass-through (spec §6.2) is plumbing-ready in the fetcher but not yet exposed via `lex-config`; that's the follow-up tracked in #651.
+
 ### Changed — `lex-extension-host` resolver factored into transports + URL templates ([#648](https://github.com/lex-fmt/lex/pull/648))
 
 Restructures the namespace resolver to match the new `extending-lex-stores.lex` companion spec. The previous model registered four peer fetchers (`GithubFetcher`, `GitlabFetcher`, `HttpsFetcher`, `GitSshFetcher`); the new model registers two transport fetchers (`HttpsFetcher`, `GitFetcher`) covering three schemes (`https`, `git`, `git+ssh`) and adds a URL-template layer (`github:`, `gitlab:`) that expands forge shorthands into transport URIs before dispatch.
