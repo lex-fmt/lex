@@ -882,20 +882,21 @@ missing_footnote = "allow"
     }
 
     #[test]
-    fn diagnostics_rules_extra_typo_in_builtin_still_errors() {
-        // Strict-mode protection on built-in field names must stay
-        // intact: a typo in `missing_footnote` is not silently absorbed
-        // into `extra`. We rely on the fact that `extra`'s flatten map
-        // captures only keys serde_ignored saw as unmatched at the
-        // table level — bare-key typos like `missing_footote` still hit
-        // the named-field surface, where serde rejects the unknown
-        // field via `serde_ignored`.
+    fn diagnostics_rules_typo_in_builtin_lands_in_extra() {
+        // Documents the intentional tradeoff: because the `extra` map
+        // uses `#[serde(flatten)]`, it captures *every* key under
+        // `[diagnostics.rules]` that doesn't match a named field —
+        // including a misspelled built-in like `missing_footote`. The
+        // load succeeds and the typo lives quietly in `extra`,
+        // matching nothing.
         //
-        // The labels precedent (a wholly-free-form `[labels]` block)
-        // makes every leaf key a map entry; here, by contrast, the
-        // catch-all only fires for keys the named-field surface
-        // doesn't consume. So `acme.foo` lands in `extra`; a misspelled
-        // built-in like `missing_footote` is caught.
+        // Typo detection for *built-in* rule names is sacrificed in
+        // exchange for accepting extension codes lenient-style. The
+        // Schema Integration item (deferred from #657) restores typo
+        // detection later by validating `extra` keys against the
+        // resolved extension registry — at that point an `extra` key
+        // matching neither a built-in nor a registered extension code
+        // can be flagged.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(CONFIG_FILE_NAME);
         std::fs::write(
@@ -906,20 +907,13 @@ missing_footote = "warn"
 "#,
         )
         .unwrap();
-        let res = clapfig::Clapfig::builder::<LexConfig>()
+        let cfg = clapfig::Clapfig::builder::<LexConfig>()
             .app_name("lex")
             .file_name(CONFIG_FILE_NAME)
             .no_env()
             .search_paths(vec![clapfig::SearchPath::Path(dir.path().to_path_buf())])
-            .load();
-        // The typo lands as an extra key (since strict-mode flatten
-        // captures everything not matching a named field). Documented
-        // behaviour: typo detection for *built-in* rule names is
-        // sacrificed in exchange for accepting extension codes
-        // lenient-style. The Schema Integration item (deferred) would
-        // restore typo detection by validating `extra` keys against
-        // the resolved extension schema set at load time.
-        let cfg = res.expect("loads — typo gets absorbed into extra");
+            .load()
+            .expect("loads — typo gets absorbed into extra");
         assert_eq!(
             cfg.diagnostics
                 .rules
@@ -927,7 +921,14 @@ missing_footote = "warn"
                 .get("missing_footote")
                 .map(|r| r.severity()),
             Some(Severity::Warn),
-            "the misspelled key lands in `extra` for now"
+            "the misspelled key lands in `extra`"
+        );
+        // And the *real* built-in field stays at its intrinsic default
+        // — the typo did not partially-shadow it.
+        assert_eq!(
+            cfg.diagnostics.rules.missing_footnote.severity(),
+            Severity::Deny,
+            "the correctly-spelled built-in keeps its intrinsic default"
         );
     }
 
