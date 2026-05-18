@@ -85,6 +85,14 @@ pub enum UriParseError {
     /// Query parameter without a value (`?subdir` instead of
     /// `?subdir=…`).
     QueryParamMissingValue,
+    /// `via=<value>` carried a value the forge template doesn't
+    /// recognise. Templates accept `via=https` (the default) and
+    /// `via=git` (route through the git transport); any other value is
+    /// reported here. This variant is raised by per-template logic in
+    /// [`super::template`], not the parser itself — the parser is
+    /// content-agnostic about the `via` value, since each template
+    /// decides which transports it can route through.
+    UnsupportedVia { value: String },
 }
 
 impl std::fmt::Display for UriParseError {
@@ -106,6 +114,10 @@ impl std::fmt::Display for UriParseError {
                 write!(f, "query parameter `{key}` appears more than once")
             }
             UriParseError::QueryParamMissingValue => write!(f, "query parameter has no `=` value"),
+            UriParseError::UnsupportedVia { value } => write!(
+                f,
+                "unsupported `via={value}` (recognised values: `https`, `git`)"
+            ),
         }
     }
 }
