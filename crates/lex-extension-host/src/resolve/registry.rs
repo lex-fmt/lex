@@ -5,16 +5,21 @@
 //! registry's keys are also `&'static str` — no allocation per
 //! lookup.
 //!
-//! Typical usage: construct via [`default_fetcher_registry`] for
-//! the standard four-scheme stub set, or build a custom registry
-//! with [`FetcherRegistry::new`] + [`FetcherRegistry::register`]
-//! when a host wants its own fetchers (in-process mocks for tests,
-//! custom internal schemes, etc.).
+//! Typical usage: construct via [`default_fetcher_registry`] for the
+//! standard two-transport stub set ([`HttpsFetcher`], [`GitFetcher`]),
+//! or build a custom registry with [`FetcherRegistry::new`] +
+//! [`FetcherRegistry::register`] when a host wants its own fetchers
+//! (in-process mocks for tests, custom internal schemes, etc.).
+//!
+//! Forge-shorthand schemes (`github:`, `gitlab:`) are *not* in the
+//! registry: they're URL templates that expand into a transport URI
+//! upstream of registry dispatch (see [`super::template`]). The
+//! registry only carries real transports.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use super::fetcher::{Fetcher, GitSshFetcher, GithubFetcher, GitlabFetcher, HttpsFetcher};
+use super::fetcher::{Fetcher, GitFetcher, HttpsFetcher};
 
 /// Maps URI schemes to [`Fetcher`] implementations. Clone is cheap
 /// (one `Arc` clone per registered fetcher).
@@ -65,22 +70,27 @@ impl std::fmt::Debug for FetcherRegistry {
     }
 }
 
-/// Construct a registry with the standard four-scheme stub fetcher
-/// set: [`GithubFetcher`], [`GitlabFetcher`], [`HttpsFetcher`],
-/// [`GitSshFetcher`]. Each returns
-/// [`super::FetchError::Unimplemented`] from `fetch` — replace with
-/// a real implementation per lex#562 to make the scheme actually
-/// work.
+/// Construct a registry with the standard transport-fetcher stub set:
+/// two [`Fetcher`] implementations covering three URI schemes —
+/// [`HttpsFetcher`] (claims `https:`) and [`GitFetcher`] (claims both
+/// `git:` and `git+ssh:`, since both URL forms feed the same
+/// `git clone`). Each fetcher returns [`super::FetchError::Unimplemented`]
+/// from `fetch` — replace with a real implementation per lex#562 to
+/// make the transport actually work.
 ///
 /// `path:` is NOT in the registry: it's special-cased at the
 /// [`super::resolve_namespace_with`] level (no cache, no fetcher,
 /// resolved directly against the workspace root).
+///
+/// `github:` and `gitlab:` are NOT in the registry either: they're
+/// URL templates that expand to transport URIs upstream of dispatch
+/// (see [`super::template`]). Adding more forge shorthands
+/// (bitbucket, gitea, codeberg, sourcehut) is template work, not
+/// fetcher work — the registry stays at two entries.
 pub fn default_fetcher_registry() -> FetcherRegistry {
     let mut r = FetcherRegistry::new();
-    r.register(Arc::new(GithubFetcher));
-    r.register(Arc::new(GitlabFetcher));
     r.register(Arc::new(HttpsFetcher));
-    r.register(Arc::new(GitSshFetcher));
+    r.register(Arc::new(GitFetcher));
     r
 }
 
@@ -89,13 +99,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_registry_has_four_schemes() {
+    fn default_registry_has_transport_schemes_only() {
         let r = default_fetcher_registry();
-        for s in ["github", "gitlab", "https", "git+ssh"] {
+        // Real transports.
+        for s in ["https", "git", "git+ssh"] {
             assert!(r.contains(s), "default registry missing `{s}:`");
         }
-        // `path:` is intentionally NOT in the registry.
+        // `path:` is intentionally NOT in the registry — special-cased
+        // upstream of dispatch.
         assert!(!r.contains("path"));
+        // `github:` and `gitlab:` are URL templates, not transports —
+        // they expand into one of the registered transports before
+        // dispatch reaches the registry.
+        assert!(!r.contains("github"));
+        assert!(!r.contains("gitlab"));
     }
 
     #[test]
