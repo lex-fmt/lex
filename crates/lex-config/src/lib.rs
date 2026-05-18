@@ -30,6 +30,7 @@ pub const CONFIG_FILE_NAME: &str = ".lex.toml";
 /// acme = { tap = "acme" }                                       # tap shorthand
 /// foolco = "gitlab:foolco/lex-labels#main"                      # bare URI
 /// custom = { uri = "github:org/repo", rev = "v1", subdir = "labels/" }
+/// bigorg = { tap = "bigorg", via = "git" }                       # private repo, git clone
 /// ```
 ///
 /// The reserved namespace name `lex` is rejected at load time —
@@ -83,14 +84,53 @@ pub struct NamespaceTable {
     /// files. Defaults to repo root.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subdir: Option<String>,
+    /// Transport selector for `github:` / `gitlab:` URL templates.
+    /// `"https"` (default) uses the forge's tarball/archive API over
+    /// public HTTPS; `"git"` uses a `git clone`, inheriting the user's
+    /// git credential setup for private repos (SSH agent, OS keychain,
+    /// gh CLI, etc.). Only valid when the spec resolves to a template
+    /// scheme (`tap`, or `uri` starting with `github:` / `gitlab:`);
+    /// declaring it on a non-template URI is a load-time error.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub via: Option<Via>,
+}
+
+/// Transport selector for URL-template namespace declarations
+/// (`github:`, `gitlab:`). The default, when unset, is `Https` — the
+/// public tarball/archive path — to match the original (pre-`via`)
+/// behaviour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Via {
+    /// Public HTTPS tarball/archive API. No auth.
+    Https,
+    /// `git clone` of the underlying repo. Inherits the user's
+    /// existing git credentials.
+    Git,
+}
+
+impl Via {
+    /// The query-string value the resolver's URI parser sees, e.g.
+    /// `"git"` or `"https"`. Lowercased to match
+    /// [`crate::NamespaceSpec::canonical_uri`] output.
+    pub fn as_query_value(self) -> &'static str {
+        match self {
+            Via::Https => "https",
+            Via::Git => "git",
+        }
+    }
 }
 
 impl NamespaceSpec {
     /// Resolve the spec into a single canonical URI string. Tap
     /// shorthand expands to `github:<tap>/lex-labels`; the table
-    /// form's `rev` and `subdir` are appended via fragment + query
-    /// (`uri#rev?subdir=...`) so the resolver can parse them
-    /// uniformly.
+    /// form's `rev`, `subdir`, and `via` are appended via fragment +
+    /// query (`uri#rev?subdir=...&via=git`) so the resolver can parse
+    /// them uniformly. `via = "https"` (the default) is intentionally
+    /// not encoded — omitting it keeps cache keys stable for the
+    /// existing tap-shorthand form (a `.lex.toml` change from
+    /// implicit-default to explicit-`https` should not invalidate
+    /// caches).
     pub fn canonical_uri(&self) -> Result<String, LabelsConfigError> {
         match self {
             NamespaceSpec::Uri(s) => Ok(s.clone()),
@@ -130,6 +170,14 @@ impl NamespaceSpec {
                     out.push_str("subdir=");
                     out.push_str(subdir);
                 }
+                // Only `Git` is encoded — `Https` is the default and
+                // omitting it keeps cache keys stable for existing
+                // configs that never declared `via`.
+                if t.via == Some(Via::Git) {
+                    out.push_str(if out.contains('?') { "&" } else { "?" });
+                    out.push_str("via=");
+                    out.push_str(Via::Git.as_query_value());
+                }
                 Ok(out)
             }
         }
@@ -137,16 +185,39 @@ impl NamespaceSpec {
 }
 
 impl NamespaceTable {
-    /// Validate mutual-exclusion + non-emptiness. Surfaces as a
-    /// load-time error so a bad `lex.toml` fails fast with a clear
-    /// message, not at first dispatch.
+    /// Validate mutual-exclusion + non-emptiness, plus that `via` is
+    /// only declared on URL-template-shaped specs (`tap`, or `uri`
+    /// using `github:` / `gitlab:`). `via` on a `path:` / `https:` /
+    /// `git+ssh:` / `git:` URI is meaningless — the transport is
+    /// already fully determined — so reject it at load time rather
+    /// than letting it silently no-op.
     pub fn validate(&self) -> Result<(), LabelsConfigError> {
         match (&self.tap, &self.uri) {
-            (Some(_), Some(_)) => Err(LabelsConfigError::TapAndUri),
-            (None, None) => Err(LabelsConfigError::EmptyTable),
-            _ => Ok(()),
+            (Some(_), Some(_)) => return Err(LabelsConfigError::TapAndUri),
+            (None, None) => return Err(LabelsConfigError::EmptyTable),
+            _ => {}
         }
+        if self.via.is_some() {
+            let on_template =
+                self.tap.is_some() || self.uri.as_deref().is_some_and(is_template_scheme_uri);
+            if !on_template {
+                return Err(LabelsConfigError::ViaOnNonTemplateScheme {
+                    uri: self.uri.clone().unwrap_or_default(),
+                });
+            }
+        }
+        Ok(())
     }
+}
+
+/// True when `uri` starts with a URL-template scheme (`github:` or
+/// `gitlab:`). Used by [`NamespaceTable::validate`] to gate the `via`
+/// knob.
+fn is_template_scheme_uri(uri: &str) -> bool {
+    let Some((scheme, _)) = uri.split_once(':') else {
+        return false;
+    };
+    matches!(scheme.to_ascii_lowercase().as_str(), "github" | "gitlab")
 }
 
 /// Errors emitted by [`load_labels_from_toml`] and
@@ -177,6 +248,11 @@ pub enum LabelsConfigError {
     /// field are set. Either is meaningful but together they're
     /// ambiguous — pick one.
     RevWithExplicitFragment { uri: String, rev: String },
+    /// `via` was declared on a spec whose URI scheme is not a URL
+    /// template (`github:` / `gitlab:`). The transport is already
+    /// fully determined by the scheme, so `via` would silently no-op
+    /// — reject it instead.
+    ViaOnNonTemplateScheme { uri: String },
 }
 
 impl std::fmt::Display for LabelsConfigError {
@@ -200,6 +276,10 @@ impl std::fmt::Display for LabelsConfigError {
             LabelsConfigError::RevWithExplicitFragment { uri, rev } => write!(
                 f,
                 "namespace spec sets both `rev = {rev:?}` and an explicit `#fragment` in uri `{uri}`; pick one"
+            ),
+            LabelsConfigError::ViaOnNonTemplateScheme { uri } => write!(
+                f,
+                "`via` is only valid on `tap` shorthand or `github:` / `gitlab:` URIs; got `{uri}`"
             ),
         }
     }
@@ -609,6 +689,124 @@ acme = { rev = "v1" }
         .unwrap();
         let err = load_labels_from_toml(&path).unwrap_err();
         assert!(matches!(err, LabelsConfigError::EmptyTable));
+    }
+
+    #[test]
+    fn labels_config_tap_with_via_git_encodes_query() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".lex.toml");
+        std::fs::write(
+            &path,
+            r#"
+[labels]
+bigorg = { tap = "bigorg", via = "git" }
+"#,
+        )
+        .unwrap();
+        let labels = load_labels_from_toml(&path).unwrap();
+        assert_eq!(
+            labels
+                .namespaces
+                .get("bigorg")
+                .unwrap()
+                .canonical_uri()
+                .unwrap(),
+            "github:bigorg/lex-labels?via=git"
+        );
+    }
+
+    #[test]
+    fn labels_config_default_via_https_is_not_encoded() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".lex.toml");
+        std::fs::write(
+            &path,
+            r#"
+[labels]
+explicit_https = { tap = "acme", via = "https" }
+implicit = { tap = "acme" }
+"#,
+        )
+        .unwrap();
+        let labels = load_labels_from_toml(&path).unwrap();
+        // Both produce the bare template URI — encoding the implicit
+        // default would needlessly diverge cache keys.
+        let explicit = labels
+            .namespaces
+            .get("explicit_https")
+            .unwrap()
+            .canonical_uri()
+            .unwrap();
+        let implicit = labels
+            .namespaces
+            .get("implicit")
+            .unwrap()
+            .canonical_uri()
+            .unwrap();
+        assert_eq!(explicit, "github:acme/lex-labels");
+        assert_eq!(implicit, "github:acme/lex-labels");
+    }
+
+    #[test]
+    fn labels_config_via_combines_with_subdir_and_rev() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".lex.toml");
+        std::fs::write(
+            &path,
+            r#"
+[labels]
+foolco = { uri = "gitlab:foolco/lex-labels", rev = "v2.1.0", subdir = "labels/", via = "git" }
+"#,
+        )
+        .unwrap();
+        let labels = load_labels_from_toml(&path).unwrap();
+        assert_eq!(
+            labels
+                .namespaces
+                .get("foolco")
+                .unwrap()
+                .canonical_uri()
+                .unwrap(),
+            "gitlab:foolco/lex-labels#v2.1.0?subdir=labels/&via=git"
+        );
+    }
+
+    #[test]
+    fn labels_config_via_on_https_uri_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".lex.toml");
+        std::fs::write(
+            &path,
+            r#"
+[labels]
+weird = { uri = "https://example.com/labels.tar.gz", via = "git" }
+"#,
+        )
+        .unwrap();
+        let err = load_labels_from_toml(&path).unwrap_err();
+        assert!(matches!(
+            err,
+            LabelsConfigError::ViaOnNonTemplateScheme { .. }
+        ));
+    }
+
+    #[test]
+    fn labels_config_via_on_path_uri_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".lex.toml");
+        std::fs::write(
+            &path,
+            r#"
+[labels]
+local = { uri = "path:./labels", via = "git" }
+"#,
+        )
+        .unwrap();
+        let err = load_labels_from_toml(&path).unwrap_err();
+        assert!(matches!(
+            err,
+            LabelsConfigError::ViaOnNonTemplateScheme { .. }
+        ));
     }
 
     #[test]

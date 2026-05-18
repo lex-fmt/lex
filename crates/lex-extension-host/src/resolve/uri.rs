@@ -19,10 +19,15 @@
 //! `(scheme, body, rev, subdir)` plus the few cross-cutting rules
 //! the host needs to enforce upstream of dispatch.
 //!
-//! Only the `subdir` key is recognised in the query string; other
+//! The recognised query keys are `subdir` and `via`. Multiple keys
+//! may appear separated by `&` (e.g. `?subdir=labels&via=git`). Other
 //! keys are a parse error. Multiple `?` is a parse error. Multiple
 //! `#` is a parse error. These keep silently-swallowed user mistakes
 //! out of the contract.
+//!
+//! The `via` value is opaque to the parser — templates in
+//! [`super::template`] interpret it (`"https"` vs `"git"`), keeping
+//! the parser layer free of forge-policy concerns.
 
 /// Parsed URI components.
 ///
@@ -47,6 +52,11 @@ pub struct ParsedUri {
     /// The `?subdir=…` query value, if any. Empty value parses to
     /// `Some("")`.
     pub subdir: Option<String>,
+    /// The `?via=…` query value, if any. Empty value parses to
+    /// `Some("")`. The parser does not validate the value — templates
+    /// in [`super::template`] interpret `"https"` vs `"git"`; other
+    /// transports treat a `via` carried into them as a no-op.
+    pub via: Option<String>,
 }
 
 /// Errors from [`ParsedUri::parse`].
@@ -64,10 +74,14 @@ pub enum UriParseError {
     /// `?` before `#` — fragment must come before query in our
     /// canonicalisation (matches lex-config's `canonical_uri` output).
     QueryBeforeFragment,
-    /// Query string contains a key other than `subdir`. We
+    /// Query string contains a key other than `subdir` / `via`. We
     /// intentionally don't accept arbitrary query strings — anything
     /// else is a typo or an unsupported feature.
     UnknownQueryKey { key: String },
+    /// A query key (`subdir` or `via`) appeared twice in the same
+    /// query string. We reject this so a config-file user doesn't
+    /// silently get the second value of an accidental duplicate.
+    DuplicateQueryKey { key: String },
     /// Query parameter without a value (`?subdir` instead of
     /// `?subdir=…`).
     QueryParamMissingValue,
@@ -86,8 +100,11 @@ impl std::fmt::Display for UriParseError {
             ),
             UriParseError::UnknownQueryKey { key } => write!(
                 f,
-                "unknown query parameter `{key}` (only `subdir` is recognised)"
+                "unknown query parameter `{key}` (recognised keys: `subdir`, `via`)"
             ),
+            UriParseError::DuplicateQueryKey { key } => {
+                write!(f, "query parameter `{key}` appears more than once")
+            }
             UriParseError::QueryParamMissingValue => write!(f, "query parameter has no `=` value"),
         }
     }
@@ -144,14 +161,14 @@ impl ParsedUri {
 
         // Query is everything after the first `?` (which must be
         // after the `#` if present). Multi-`?` is an error.
-        let subdir = if let Some(q) = question {
+        let (subdir, via) = if let Some(q) = question {
             let after_q = &rest[q + 1..];
             if after_q.contains('?') {
                 return Err(UriParseError::MultipleQueries);
             }
             parse_query(after_q)?
         } else {
-            None
+            (None, None)
         };
 
         Ok(Self {
@@ -160,6 +177,7 @@ impl ParsedUri {
             body,
             rev,
             subdir,
+            via,
         })
     }
 
@@ -172,44 +190,69 @@ impl ParsedUri {
     }
 
     /// True when this URI carried a `?` query. Same shape as
-    /// [`Self::has_fragment`].
+    /// [`Self::has_fragment`] — true regardless of which recognised
+    /// key (`subdir` or `via`) appeared, and for the empty-query
+    /// marker (`uri?` → `subdir = Some("")`).
     pub fn has_query(&self) -> bool {
-        self.subdir.is_some()
+        self.subdir.is_some() || self.via.is_some()
     }
 }
 
-/// Parse the query string after `?`. Only `subdir=<value>` is
-/// recognised; any other key is a parse error.
+/// Parse the query string after `?`. Recognised keys are
+/// `subdir=<value>` and `via=<value>`; multi-key queries separate
+/// pairs with `&`. Any other key is a parse error.
 ///
-/// Returns `Some(String)` whenever the URI carries a `?`, even for
-/// `uri?` with an empty query string (returns `Some(String::new())`).
-/// That symmetry with the fragment parser — where `uri#` yields
-/// `Some("")` not `None` — is load-bearing: callers (notably the
-/// `path:` resolver) inspect `has_query()` to decide whether the
-/// remote-only `?` knob was used; collapsing `?` to `None` would
-/// silently slip `path:dir?` past that check.
-fn parse_query(q: &str) -> Result<Option<String>, UriParseError> {
+/// The `subdir` slot returns `Some(String)` whenever the URI carries
+/// a `?`, even for `uri?` with an empty query string (returns
+/// `Some(String::new())`). That symmetry with the fragment parser —
+/// where `uri#` yields `Some("")` not `None` — is load-bearing:
+/// callers (notably the `path:` resolver) inspect `has_query()` to
+/// decide whether the remote-only `?` knob was used; collapsing `?`
+/// to `None` would silently slip `path:dir?` past that check.
+///
+/// The `via` slot is `None` when the URI doesn't carry a `via=` pair;
+/// it doesn't share the `subdir`-style "empty query → empty value"
+/// rule because `via` is forge-policy and isn't consulted by
+/// `has_query()`.
+fn parse_query(q: &str) -> Result<(Option<String>, Option<String>), UriParseError> {
     if q.is_empty() {
-        // `uri?` with empty query string — represent as Some("") so
-        // `has_query()` correctly reports "URI carried a `?`".
-        return Ok(Some(String::new()));
+        // `uri?` with empty query string — represent as
+        // `subdir = Some("")` so `has_query()` correctly reports
+        // "URI carried a `?`". `via` stays `None` (it isn't part of
+        // the syntactic-presence contract).
+        return Ok((Some(String::new()), None));
     }
-    // We accept a single `subdir=<value>` for now. Multi-param
-    // support (`?subdir=a&otherkey=b`) is unused; reject anything
-    // with `&`. If we ever need a second knob, this is the place to
-    // extend.
-    if q.contains('&') {
-        return Err(UriParseError::UnknownQueryKey { key: q.to_string() });
+    let mut subdir = None;
+    let mut via = None;
+    for pair in q.split('&') {
+        let Some((key, value)) = pair.split_once('=') else {
+            return Err(UriParseError::QueryParamMissingValue);
+        };
+        match key {
+            "subdir" => {
+                if subdir.is_some() {
+                    return Err(UriParseError::DuplicateQueryKey {
+                        key: key.to_string(),
+                    });
+                }
+                subdir = Some(value.to_string());
+            }
+            "via" => {
+                if via.is_some() {
+                    return Err(UriParseError::DuplicateQueryKey {
+                        key: key.to_string(),
+                    });
+                }
+                via = Some(value.to_string());
+            }
+            _ => {
+                return Err(UriParseError::UnknownQueryKey {
+                    key: key.to_string(),
+                });
+            }
+        }
     }
-    let Some((key, value)) = q.split_once('=') else {
-        return Err(UriParseError::QueryParamMissingValue);
-    };
-    if key != "subdir" {
-        return Err(UriParseError::UnknownQueryKey {
-            key: key.to_string(),
-        });
-    }
-    Ok(Some(value.to_string()))
+    Ok((subdir, via))
 }
 
 #[cfg(test)]
@@ -293,10 +336,40 @@ mod tests {
     }
 
     #[test]
-    fn rejects_multi_query_separator() {
-        // We don't support `&` as a multi-param separator yet.
+    fn accepts_subdir_and_via_together() {
+        let p = ParsedUri::parse("github:acme/repo#v1?subdir=labels&via=git").unwrap();
+        assert_eq!(p.rev.as_deref(), Some("v1"));
+        assert_eq!(p.subdir.as_deref(), Some("labels"));
+        assert_eq!(p.via.as_deref(), Some("git"));
+    }
+
+    #[test]
+    fn accepts_via_alone() {
+        let p = ParsedUri::parse("github:acme/repo?via=git").unwrap();
+        assert_eq!(p.via.as_deref(), Some("git"));
+        assert_eq!(p.subdir, None);
+        // `?via=git` is a recognised key, not the empty-query syntactic
+        // marker — so `has_query()` is `true` (URI carried a `?`) but
+        // subdir didn't get the empty-string sentinel.
+        assert!(p.has_query());
+    }
+
+    #[test]
+    fn rejects_multi_query_with_unknown_key() {
         let err = ParsedUri::parse("github:acme/repo#v1?subdir=a&otherkey=b").unwrap_err();
-        assert!(matches!(err, UriParseError::UnknownQueryKey { .. }));
+        assert!(matches!(err, UriParseError::UnknownQueryKey { key } if key == "otherkey"));
+    }
+
+    #[test]
+    fn rejects_duplicate_subdir_query_key() {
+        let err = ParsedUri::parse("github:acme/repo?subdir=a&subdir=b").unwrap_err();
+        assert!(matches!(err, UriParseError::DuplicateQueryKey { key } if key == "subdir"));
+    }
+
+    #[test]
+    fn rejects_duplicate_via_query_key() {
+        let err = ParsedUri::parse("github:acme/repo?via=git&via=https").unwrap_err();
+        assert!(matches!(err, UriParseError::DuplicateQueryKey { key } if key == "via"));
     }
 
     #[test]
