@@ -44,10 +44,11 @@ comms/
 
 ## Releasing
 
-Tag with `vX.Y.Z` and push. CI publishes crates in dependency order:
-lex-core → lex-config → lex-babel → lex-analysis → lexd-lsp → lexd
+This repo participates in the lex release cascade. Cutting a release here is triggered automatically when comms releases (via the `on-upstream-released` handler workflow). Once cut, it cascades further: lex's `notify-downstreams` step fires `repository_dispatch upstream-released` to vscode + nvim + lexed.
 
-CI also builds lexd and lexd-lsp binaries for 6 platforms.
+For a manual cut: `gh workflow run release.yml --repo lex-fmt/lex -f version=X.Y.Z` (lex uses workflow_dispatch, not tag-push — the canonical rust-cli@v1 workflow drives the bump+commit+tag itself).
+
+Design + ops + gotchas: [arthur-debert/release/docs/lex-release-cascade.md](https://github.com/arthur-debert/release/blob/main/docs/lex-release-cascade.md).
 
 ## Related repos
 
