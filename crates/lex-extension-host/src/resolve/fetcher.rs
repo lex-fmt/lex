@@ -400,12 +400,30 @@ impl Fetcher for GitFetcher {
         // ships.
         let clone_dir = dest.join(".lex-git-clone");
 
+        // Validate subdir upfront so we don't bother cloning if it
+        // would escape the clone root. Rejects `..` components,
+        // absolute paths, and platform prefixes — the symlink check
+        // happens post-clone (we need the on-disk tree to inspect).
+        if let Some(sub) = subdir.as_deref() {
+            validate_subdir(sub)?;
+        }
+
         let mut cmd = Command::new("git");
         cmd.arg("clone").arg("--depth=1");
         if let Some(rev) = uri.rev.as_deref().filter(|s| !s.is_empty()) {
+            // `--branch` accepts arbitrary user input (the rev). git
+            // does not interpret its `--branch` argument as a flag —
+            // it expects a ref name — but the rev still flows from a
+            // namespace config the user wrote, so terminate option
+            // parsing before any user-controlled positional with
+            // `--` below.
             cmd.arg("--branch").arg(rev);
         }
-        cmd.arg(&url).arg(&clone_dir);
+        // `--` terminates option parsing so a URL starting with `-`
+        // can't be mistaken for a flag (option-injection defence; the
+        // URL flows from user config). Same reasoning for the
+        // clone-dir positional, though that one is host-controlled.
+        cmd.arg("--").arg(&url).arg(&clone_dir);
         // Suppress interactive credential prompts; if the user's
         // credential helper can't satisfy the request non-interactively
         // we want a clean error rather than a hung boot path.
@@ -430,20 +448,29 @@ impl Fetcher for GitFetcher {
         }
 
         // Source of the content we keep is either `<clone>/<subdir>`
-        // or `<clone>` directly.
+        // or `<clone>` directly. `safe_subdir_join` walks the path
+        // component by component, refusing to follow any component
+        // that's a symlink on disk — a repo-shipped symlink at the
+        // subdir root would otherwise let us read/copy arbitrary
+        // filesystem paths into the cache.
         let source = match subdir.as_deref() {
-            Some(sub) => {
-                let p = clone_dir.join(sub);
-                if !p.is_dir() {
-                    let _ = std::fs::remove_dir_all(&clone_dir);
-                    return Err(FetchError::Other {
-                        message: format!(
-                            "subdir `{sub}` not found in cloned repo (clone succeeded but the path doesn't exist)"
-                        ),
-                    });
+            Some(sub) => match safe_subdir_join(&clone_dir, sub) {
+                Ok(p) => {
+                    if !p.is_dir() {
+                        let _ = std::fs::remove_dir_all(&clone_dir);
+                        return Err(FetchError::Other {
+                            message: format!(
+                                "subdir `{sub}` not found in cloned repo (clone succeeded but the path doesn't exist)"
+                            ),
+                        });
+                    }
+                    p
                 }
-                p
-            }
+                Err(e) => {
+                    let _ = std::fs::remove_dir_all(&clone_dir);
+                    return Err(e);
+                }
+            },
             None => clone_dir.clone(),
         };
 
@@ -485,6 +512,90 @@ fn reconstruct_git_url(scheme: &str, body: &str) -> String {
         // routes another scheme).
         _ => body.to_string(),
     }
+}
+
+/// Reject `subdir` values that escape the clone root *lexically*
+/// (before any disk lookup): `..` components, absolute paths, and
+/// platform prefixes (Windows drive letters, UNC roots). The
+/// post-clone path-component walk in [`safe_subdir_join`] catches the
+/// symlink-escape case; this is the first line of defence and runs
+/// pre-clone so a hostile subdir doesn't even cost us a network round
+/// trip.
+fn validate_subdir(subdir: &str) -> Result<(), FetchError> {
+    use std::path::Component;
+    let path = Path::new(subdir);
+    if path.is_absolute() {
+        return Err(FetchError::Other {
+            message: format!(
+                "subdir `{subdir}` is absolute; subdir must be a relative path within the cloned repo"
+            ),
+        });
+    }
+    for component in path.components() {
+        match component {
+            Component::ParentDir => {
+                return Err(FetchError::Other {
+                    message: format!(
+                        "subdir `{subdir}` contains `..`; refusing to escape the clone root"
+                    ),
+                });
+            }
+            Component::Prefix(_) | Component::RootDir => {
+                return Err(FetchError::Other {
+                    message: format!(
+                        "subdir `{subdir}` is rooted (absolute path or platform prefix); refusing"
+                    ),
+                });
+            }
+            Component::Normal(_) | Component::CurDir => {}
+        }
+    }
+    Ok(())
+}
+
+/// Join `clone_dir + subdir` while refusing to traverse a symlink at
+/// any intermediate component. The lexical [`validate_subdir`] is the
+/// belt; this is the suspenders for the on-disk side — a repo-shipped
+/// symlinked directory (`git checkout` happily restores symlinks from
+/// the tree object) at any point in the subdir path would otherwise
+/// let the post-clone copy read/write filesystem locations outside the
+/// clone root.
+///
+/// Walks each `Normal` component, accumulating the path, and rejects
+/// the first one whose `symlink_metadata` reports a symlink. Missing
+/// intermediate components terminate the walk early — the caller
+/// surfaces "subdir not found" against the joined path.
+fn safe_subdir_join(clone_dir: &Path, subdir: &str) -> Result<std::path::PathBuf, FetchError> {
+    use std::path::Component;
+    // validate_subdir is the lexical pre-flight; call it again here
+    // so this helper is safe to use standalone (defence in depth).
+    validate_subdir(subdir)?;
+
+    let mut accumulated = clone_dir.to_path_buf();
+    for component in Path::new(subdir).components() {
+        if let Component::Normal(name) = component {
+            accumulated.push(name);
+            match std::fs::symlink_metadata(&accumulated) {
+                Ok(meta) if meta.file_type().is_symlink() => {
+                    return Err(FetchError::Other {
+                        message: format!(
+                            "subdir component `{}` is a symlink in the cloned repo; refusing to follow",
+                            accumulated
+                                .strip_prefix(clone_dir)
+                                .unwrap_or(&accumulated)
+                                .display()
+                        ),
+                    });
+                }
+                Ok(_) | Err(_) => {
+                    // Non-symlink → keep walking. Missing entry →
+                    // stop; the caller handles "subdir not found"
+                    // against the final joined path.
+                }
+            }
+        }
+    }
+    Ok(accumulated)
 }
 
 /// Classify git's stderr into a typed [`FetchError`]. The heuristics
@@ -780,6 +891,101 @@ mod git_helper_tests {
             matches!(err, FetchError::UpstreamStatus { .. }),
             "got: {err:?}"
         );
+    }
+
+    // ---- validate_subdir ----
+
+    #[test]
+    fn validate_subdir_rejects_parent_dir() {
+        let err = validate_subdir("../escape").unwrap_err();
+        assert!(matches!(err, FetchError::Other { .. }), "got: {err:?}");
+    }
+
+    #[test]
+    fn validate_subdir_rejects_parent_dir_in_middle() {
+        let err = validate_subdir("safe/../escape").unwrap_err();
+        assert!(matches!(err, FetchError::Other { .. }), "got: {err:?}");
+    }
+
+    #[test]
+    fn validate_subdir_rejects_absolute_path() {
+        let err = validate_subdir("/etc/passwd").unwrap_err();
+        assert!(matches!(err, FetchError::Other { .. }), "got: {err:?}");
+    }
+
+    #[test]
+    fn validate_subdir_accepts_normal_relative_path() {
+        validate_subdir("labels").unwrap();
+        validate_subdir("src/labels").unwrap();
+        validate_subdir("./labels").unwrap();
+        validate_subdir("a/b/c").unwrap();
+    }
+
+    // ---- safe_subdir_join ----
+
+    #[test]
+    fn safe_subdir_join_rejects_traversal_lexically_before_disk_lookup() {
+        // No clone_dir on disk needed — the lexical check fires first.
+        let err = safe_subdir_join(Path::new("/nonexistent"), "../escape").unwrap_err();
+        assert!(matches!(err, FetchError::Other { .. }), "got: {err:?}");
+    }
+
+    #[test]
+    fn safe_subdir_join_refuses_symlink_at_subdir_root() {
+        let base = tempfile::tempdir().unwrap();
+        // Create a real "labels" target outside the base.
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::create_dir(outside.path().join("real")).unwrap();
+        // Inside the clone dir, ship a `labels` symlink pointing
+        // outside. A repo-shipped symlink that git checkout restored
+        // is the exact attack we're defending against.
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(outside.path(), base.path().join("labels")).unwrap();
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_dir(outside.path(), base.path().join("labels")).unwrap();
+
+        let err = safe_subdir_join(base.path(), "labels").unwrap_err();
+        match err {
+            FetchError::Other { message } => assert!(
+                message.contains("symlink"),
+                "error should mention symlink, got: {message}"
+            ),
+            other => panic!("expected Other(symlink), got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn safe_subdir_join_refuses_symlink_at_intermediate_component() {
+        let base = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::create_dir(outside.path().join("labels")).unwrap();
+        // `src` is a symlink, `src/labels` is the requested subdir.
+        // The intermediate component must be caught.
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(outside.path(), base.path().join("src")).unwrap();
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_dir(outside.path(), base.path().join("src")).unwrap();
+
+        let err = safe_subdir_join(base.path(), "src/labels").unwrap_err();
+        assert!(matches!(err, FetchError::Other { .. }), "got: {err:?}");
+    }
+
+    #[test]
+    fn safe_subdir_join_accepts_normal_path_with_real_directories() {
+        let base = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(base.path().join("src/labels")).unwrap();
+        let joined = safe_subdir_join(base.path(), "src/labels").unwrap();
+        assert_eq!(joined, base.path().join("src/labels"));
+    }
+
+    #[test]
+    fn safe_subdir_join_accepts_path_with_missing_tail() {
+        // When the subdir doesn't exist, the walk terminates early
+        // and the caller surfaces "subdir not found" against the
+        // joined path. No error from safe_subdir_join itself.
+        let base = tempfile::tempdir().unwrap();
+        let joined = safe_subdir_join(base.path(), "does/not/exist").unwrap();
+        assert_eq!(joined, base.path().join("does/not/exist"));
     }
 
     #[test]

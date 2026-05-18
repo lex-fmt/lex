@@ -259,6 +259,87 @@ fn subdir_extracts_only_that_directory() {
 }
 
 #[test]
+fn subdir_traversal_is_rejected_before_clone() {
+    // `subdir=../..` is a lexical escape attempt; the validator
+    // refuses it pre-clone (so the bogus URI doesn't even cost a
+    // network round-trip). The error surfaces as Other carrying the
+    // `..` rejection message.
+    let base = tempfile::tempdir().unwrap();
+    let bare = build_bare_repo(base.path(), &[("schema.yaml", b"label: x\n")]);
+
+    let dest = tempfile::tempdir().unwrap();
+    let fetcher = lex_extension_host::resolve::fetcher::GitFetcher;
+    let uri = ParsedUri::parse(&file_uri_for(&bare, None, Some("subdir=../../etc"))).unwrap();
+    let err = fetcher
+        .fetch(&uri, dest.path())
+        .expect_err("subdir with `..` should be rejected");
+    match err {
+        FetchError::Other { message } => assert!(
+            message.contains(".."),
+            "error should name the `..` traversal, got: {message}"
+        ),
+        other => panic!("expected Other(.. rejected), got: {other:?}"),
+    }
+    // The clone-staging dir should never have been created — the
+    // validator runs pre-clone.
+    assert!(
+        !dest.path().join(".lex-git-clone").exists(),
+        "validator should fire before the clone command runs"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn subdir_pointing_at_repo_symlink_is_rejected() {
+    // Repo ships a `labels` symlink pointing outside its own tree.
+    // Git checkout faithfully restores tree-object symlinks; without
+    // the post-clone symlink check, the resolver would happily copy
+    // arbitrary filesystem paths into the cache. The expectation:
+    // typed error, no symlinked content reaches dest.
+    use std::os::unix::fs::symlink;
+
+    let base = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::write(outside.path().join("secret.yaml"), b"secret-content\n").unwrap();
+
+    // Build the bare repo with the `labels` symlink pre-staged.
+    let bare = base.path().join("bare.git");
+    std::fs::create_dir(&bare).unwrap();
+    git(&bare, &["init", "--bare", "--initial-branch=main"]);
+    let work = base.path().join("work");
+    std::fs::create_dir(&work).unwrap();
+    git(&work, &["init", "--initial-branch=main"]);
+    // The trap: a symlink committed to the repo, named "labels",
+    // pointing at the outside tempdir. A naive
+    // clone_dir.join("labels") would resolve through the symlink.
+    symlink(outside.path(), work.join("labels")).unwrap();
+    git(&work, &["add", "."]);
+    git(&work, &["commit", "-m", "trap"]);
+    let bare_str = bare.to_str().unwrap();
+    git(&work, &["remote", "add", "origin", bare_str]);
+    git(&work, &["push", "origin", "main"]);
+
+    let dest = tempfile::tempdir().unwrap();
+    let fetcher = lex_extension_host::resolve::fetcher::GitFetcher;
+    let uri = ParsedUri::parse(&file_uri_for(&bare, None, Some("subdir=labels"))).unwrap();
+    let err = fetcher
+        .fetch(&uri, dest.path())
+        .expect_err("subdir pointing at a repo-shipped symlink should be rejected");
+    match err {
+        FetchError::Other { message } => assert!(
+            message.contains("symlink"),
+            "error should name the symlink refusal, got: {message}"
+        ),
+        other => panic!("expected Other(symlink), got: {other:?}"),
+    }
+    // The outside contents must not have leaked into dest.
+    assert!(
+        !dest.path().join("secret.yaml").exists(),
+        "outside-the-repo content must not leak into dest"
+    );
+}
+
+#[test]
 fn subdir_not_found_surfaces_typed_error() {
     let base = tempfile::tempdir().unwrap();
     let bare = build_bare_repo(base.path(), &[("schema.yaml", b"label: x\n")]);
