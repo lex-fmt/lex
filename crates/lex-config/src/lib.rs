@@ -574,25 +574,29 @@ pub struct DiagnosticsRulesConfig {
     /// Schema-validation diagnostics for extension labels.
     #[config(nested)]
     pub schema: SchemaRulesConfig,
-    /// Extension-emitted diagnostic codes. Keys are the on-the-wire
-    /// `<namespace>.<code>` strings emitted by registered extension
-    /// handlers. Lenient: any key under `[diagnostics.rules]` that
-    /// doesn't match one of the named fields above lands here. Entries
-    /// that never match an emitted code are harmless (ESLint / Clippy
-    /// convention).
+    /// Extension-emitted diagnostic codes. Write them directly under
+    /// `[diagnostics.rules]` as quoted dotted keys, alongside the
+    /// built-ins above — they accept the same severity verbs (`"allow"`,
+    /// `"warn"`, `"deny"`) and the same array form for options.
     ///
-    /// Two flatten attributes:
-    /// - `#[serde(flatten)]` at the struct level rides through direct
-    ///   serde `Serialize`/`Deserialize` of `DiagnosticsRulesConfig`,
-    ///   so the on-disk shape is inline keys in the same table (not a
-    ///   nested `[diagnostics.rules.extra]` sub-table).
-    /// - `#[config(layer_attr(serde(flatten)))]` pushes the same
-    ///   `#[serde(flatten)]` onto the confique-generated `Layer` field
-    ///   so clapfig's strict-mode `serde_ignored` validator sees the
-    ///   extra keys as consumed (not ignored).
+    /// ```toml
+    /// [diagnostics.rules]
+    /// missing_footnote = "deny"                  # built-in
+    /// "acme.task-due-date-missing" = "warn"      # extension code
+    /// "foolco.line-too-long" = ["warn", { max = 120 }]
+    /// ```
     ///
-    /// Together: extension codes land in `extra` instead of erroring.
-    /// Tradeoff: a typo in a built-in field name also lands here.
+    /// The on-the-wire shape per spec §9 is `<namespace>.<code>`
+    /// (e.g. `"acme.task-due-date-missing"` for namespace `acme`,
+    /// code `task-due-date-missing`); the analyser produces that wire
+    /// form, and these `[diagnostics.rules]` entries match it by exact
+    /// string. Entries that never match an emitted diagnostic are
+    /// harmless (ESLint / Clippy convention).
+    ///
+    /// Note: this field renders as `#extra = {  }` in `lexd config gen`
+    /// output. That's a confique template artifact — you do **not**
+    /// write `extra = {...}` in `.lex.toml`. Use inline quoted keys
+    /// directly under `[diagnostics.rules]` as shown above.
     #[serde(default, flatten, skip_serializing_if = "BTreeMap::is_empty")]
     #[config(default = {}, layer_attr(serde(flatten)))]
     pub extra: BTreeMap<String, RuleConfig>,
