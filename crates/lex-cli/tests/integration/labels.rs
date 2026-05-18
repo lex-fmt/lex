@@ -76,17 +76,17 @@ fn labels_list_with_ext_schema_flag() {
 }
 
 #[test]
-fn labels_list_with_remote_uri_emits_unimplemented_diagnostic() {
-    // Uses a `git+ssh://` URI rather than a github tap because https
-    // now ships a real fetcher (would attempt a real api.github.com
-    // GET in the CLI integration test). The git/git+ssh transport is
-    // still the stub (tracked at lex#650), so it predictably returns
-    // FetchError::Unimplemented and the diagnostic message contains
-    // "not yet implemented".
+fn labels_list_with_unresolvable_uri_emits_diagnostic() {
+    // Uses an `ftp:` URI — no fetcher in the default registry claims
+    // that scheme, so resolve fails with UnknownScheme and the CLI
+    // surfaces a per-namespace diagnostic. (Previously this test
+    // pointed at `git+ssh:` to exercise FetchError::Unimplemented,
+    // but `git:` / `git+ssh:` ship a real fetcher now; `ftp:` is
+    // the stable proxy for "unresolvable remote URI in lex.toml".)
     let dir = make_workspace_with_acme_schemas(Some(
         r#"
 [labels.remote]
-uri = "git+ssh://git@test.invalid/repo.git"
+uri = "ftp:server/path"
 "#,
     ));
     Command::cargo_bin("lexd")
@@ -95,7 +95,7 @@ uri = "git+ssh://git@test.invalid/repo.git"
         .args(["labels", "list"])
         .assert()
         .success() // listing succeeds; the diagnostic is in stdout
-        .stdout(predicates::str::contains("not yet implemented"));
+        .stdout(predicates::str::contains("ftp"));
 }
 
 #[test]

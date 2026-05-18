@@ -43,15 +43,13 @@
 //!
 //! ## Status
 //!
-//! The machinery (trait, registry, templates, cache, dispatch) is in
-//! place. `path:` is the only fully-implemented transport; the two
-//! remote transports (`https:`, `git:`) ship as stubs that return
-//! [`FetchError::Unimplemented`] when the dispatch reaches them.
-//! Per-transport network implementations are tracked at
-//! [lex#562](https://github.com/lex-fmt/lex/issues/562) — implementers
-//! plug their fetchers into [`default_fetcher_registry`] (or compose
-//! a custom registry) and the rest of the pipeline picks them up
-//! without changes.
+//! All three transports ship today. `path:` is built-in and special-
+//! cased upstream of registry dispatch; `https:` uses ureq + tar/zip
+//! extraction (see [`fetcher::HttpsFetcher`]); `git:` / `git+ssh:`
+//! shell out to `git clone --depth=1` (see [`fetcher::GitFetcher`]).
+//! Custom registries can compose alternative or in-process fetchers
+//! via [`FetcherRegistry::register`] — the rest of the pipeline picks
+//! them up without changes.
 
 pub mod cache;
 #[cfg(feature = "https-fetcher")]
@@ -205,13 +203,10 @@ impl std::error::Error for ResolveError {
 /// cache. Convenience wrapper around [`resolve_namespace_with`] for
 /// callers that don't need to override either.
 ///
-/// The default registry has stub fetchers for the `https:` and `git:`
-/// transports (the latter also claims `git+ssh:`); both return
-/// [`FetchError::Unimplemented`] — same observable behaviour as the
-/// pre-machinery resolver. `github:` and `gitlab:` are URL templates
-/// that expand into one of those transports before dispatch.
-/// Per-transport implementations are tracked at
-/// [lex#562](https://github.com/lex-fmt/lex/issues/562).
+/// The default registry ships real fetchers for the `https:` and
+/// `git:` transports (the latter also claims `git+ssh:`). `github:`
+/// and `gitlab:` are URL templates that expand into one of those
+/// transports before dispatch.
 ///
 /// The default cache lives at `$XDG_CACHE_HOME/lex/labels/` (falling
 /// back to `~/.cache/lex/labels/` per XDG conventions). Cache
@@ -371,30 +366,6 @@ mod tests {
         let err =
             resolve_namespace_with("not-a-uri", workspace.path(), &registry, &cache).unwrap_err();
         assert!(matches!(err, ResolveError::UriParseError { .. }));
-    }
-
-    #[test]
-    fn git_transport_schemes_unimplemented_through_default_registry() {
-        // `git:` and `git+ssh:` both route to the GitFetcher, which
-        // reports its primary scheme as `git`. The https transport is
-        // implemented now (real network) so it's not included here.
-        let workspace = tempfile::tempdir().unwrap();
-        let registry = default_fetcher_registry();
-        let (_tmp, cache) = fresh_cache();
-        let cases = [
-            ("git+ssh://git@example.com/foo.git", "git"),
-            ("git:https://example.com/foo.git", "git"),
-        ];
-        for (uri, expected_scheme) in cases {
-            let err = resolve_namespace_with(uri, workspace.path(), &registry, &cache).unwrap_err();
-            match err {
-                ResolveError::Fetch {
-                    source: FetchError::Unimplemented { scheme: s, .. },
-                    ..
-                } => assert_eq!(s, expected_scheme, "wrong scheme reported for {uri}"),
-                other => panic!("expected Fetch(Unimplemented) for {uri}, got: {other}"),
-            }
-        }
     }
 
     #[test]

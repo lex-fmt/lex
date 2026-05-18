@@ -2,6 +2,30 @@
 
 ## [Unreleased]
 
+### Added — `lex-extension-host::GitFetcher` real shell-out implementation ([#650](https://github.com/lex-fmt/lex/issues/650))
+
+The git transport is no longer a stub. `GitFetcher::fetch` shells out to `git clone --depth=1` to populate the destination directory. Honors `uri.rev` as `--branch <ref>` (branch or tag) and `uri.subdir` to extract a subdirectory of the repo as the schema root. The `.git/` directory is stripped after clone — the cache only holds schema content.
+
+Both registered schemes (`git:` and `git+ssh:`) route to this fetcher. URL forms accepted are whatever `git clone` accepts: `https://...git`, `git@host:owner/repo.git`, `file:///path/to/bare`, plus `git+ssh://...` (preserved verbatim — git treats it as a synonym for `ssh://`). Spec §3.3 / §6.3 cover the URL surface and the choice to shell out rather than embed libgit2.
+
+No new dependencies — `std::process::Command` is the entire surface. Auth is whatever `git clone` would honor at the command line (SSH agent, OS keychain credential helpers, `gh auth setup-git`, `gitconfig`-declared SSO providers); there is no Lex-side credential knob. `GIT_TERMINAL_PROMPT=0` is set on the spawned process so a missing credential helper surfaces as a clean error rather than blocking the boot path. `git` must be in `PATH`; if it's missing the fetcher returns `FetchError::Other` with an actionable message pointing at the `path:` / `--ext-schema` escape hatches.
+
+Git's stderr is classified into typed `FetchError` variants:
+
+- `FetchError::Network` — connectivity failures (DNS, connection refused/timeout, unreachable).
+- `FetchError::UpstreamStatus` — auth-shaped failures (permission denied, authentication failed, repository not found — the github/gitlab APIs use the last as a private-repo not-authorised signal too).
+- `FetchError::Other` — everything else, carrying git's raw stderr verbatim (unknown ref, corrupted upstream, "not a git repository", etc.).
+
+`is_immutable_rev` returns true for SHA-shaped refs (`^[0-9a-f]{7,40}$`) and tag-shaped refs (optional `v` prefix + `<digits>.<digits>` + optional suffix). The cache treats these as cacheable indefinitely; branch names and `None` are mutable and expire after the 24-hour TTL.
+
+What this enables in `lex.toml`:
+
+- `[labels.X] git = "git@internal.example.com:docs/lex-labels.git"` — private repos work end-to-end, inheriting the user's git credential setup.
+- The `via = "git"` knob on `github:` / `gitlab:` URL templates — private-repo path for the forge shorthands.
+- Self-hosted git over any transport git understands (HTTPS, SSH, git://, file://).
+
+Spec §11.2 mirror/fallback URLs are intentionally out of scope.
+
 ### Added — `lex-extension-host::HttpsFetcher` real network implementation ([#649](https://github.com/lex-fmt/lex/issues/649))
 
 The HTTPS transport is no longer a stub. `HttpsFetcher::fetch` performs a single HTTPS GET (sync, via `ureq` with rustls + webpki-roots), detects the archive format from `Content-Type` with URL-extension fallback, and extracts `tar.gz` or `zip` archives into the destination directory. Honors `uri.subdir` for archives that wrap content in a top-level directory (the GitHub tarball API does this).

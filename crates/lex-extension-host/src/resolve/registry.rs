@@ -6,8 +6,8 @@
 //! lookup.
 //!
 //! Typical usage: construct via [`default_fetcher_registry`] for the
-//! standard two-transport stub set ([`HttpsFetcher`], [`GitFetcher`]),
-//! or build a custom registry with [`FetcherRegistry::new`] +
+//! standard two-transport set ([`HttpsFetcher`], [`GitFetcher`]), or
+//! build a custom registry with [`FetcherRegistry::new`] +
 //! [`FetcherRegistry::register`] when a host wants its own fetchers
 //! (in-process mocks for tests, custom internal schemes, etc.).
 //!
@@ -70,13 +70,11 @@ impl std::fmt::Debug for FetcherRegistry {
     }
 }
 
-/// Construct a registry with the standard transport-fetcher stub set:
-/// two [`Fetcher`] implementations covering three URI schemes —
+/// Construct a registry with the standard transport-fetcher set: two
+/// [`Fetcher`] implementations covering three URI schemes —
 /// [`HttpsFetcher`] (claims `https:`) and [`GitFetcher`] (claims both
 /// `git:` and `git+ssh:`, since both URL forms feed the same
-/// `git clone`). Each fetcher returns [`super::FetchError::Unimplemented`]
-/// from `fetch` — replace with a real implementation per lex#562 to
-/// make the transport actually work.
+/// `git clone`). Both are real, networked fetchers in default builds.
 ///
 /// `path:` is NOT in the registry: it's special-cased at the
 /// [`super::resolve_namespace_with`] level (no cache, no fetcher,
