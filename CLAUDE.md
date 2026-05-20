@@ -39,7 +39,7 @@ comms/
 
 - All crates build together: `cargo build --workspace`
 - Tests: `cargo nextest run --workspace` or `cargo test --workspace`
-- Pre-commit hook: `scripts/rust-pre-commit` (runs fmt, clippy, build, test)
+- Pre-commit hook: `lefthook install` (lefthook composes `lefthook.yml` from arthur-debert/release Components — md/yaml/sh lint + cargo fmt/clippy check)
 - Exclude lex-wasm from most commands: `--exclude lex-wasm`
 
 ## Releasing
