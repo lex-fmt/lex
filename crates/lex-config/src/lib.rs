@@ -484,11 +484,7 @@ pub struct ConvertConfig {
 #[derive(Debug, Clone, Schema, Serialize, Deserialize)]
 pub struct PdfConfig {
     /// Page profile used when exporting to PDF ("lexed" or "mobile").
-    /// `PdfPageSize` derives `clapfig::Schema` (unit-only enum), but
-    /// field-level defaults are not yet permitted on nested-Schema
-    /// fields, so this stays a `#[clapfig(value)]` leaf with a string
-    /// default that serde resolves to the typed variant on load.
-    #[clapfig(value, default = "lexed")]
+    #[clapfig(default = "lexed")]
     pub size: PdfPageSize,
 }
 
