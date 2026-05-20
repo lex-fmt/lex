@@ -10,11 +10,10 @@ keywords = ["config", "lex"]
 categories = ["config"]
 
 [dependencies]
-confique = { workspace = true }
+clapfig = { workspace = true }
 serde = { workspace = true }
 toml = "0.8"
 lex-babel = { workspace = true }
 
 [dev-dependencies]
-clapfig = { workspace = true }
 tempfile = { workspace = true }

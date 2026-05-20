@@ -30,7 +30,10 @@ use lex_babel::formats::lex::formatting_rules::FormattingRules;
 use lex_babel::templates::{
     build_asset_snippet, build_verbatim_snippet, AssetSnippetRequest, VerbatimSnippetRequest,
 };
-use lex_config::{LabelsConfig, LexConfig, CONFIG_FILE_NAME};
+use lex_config::{
+    collect_extension_diagnostic_rules, extension_rules_unknown_key_callback, LabelsConfig,
+    LexConfig, LoadedLexConfig, CONFIG_FILE_NAME,
+};
 use lex_core::lex::ast::links::{DocumentLink as AstDocumentLink, LinkType};
 use lex_core::lex::ast::range::SourceLocation;
 use lex_core::lex::ast::{Document, Position as AstPosition, Range as AstRange};
@@ -280,7 +283,7 @@ pub struct LexLanguageServer<C = Client, P = DefaultFeatureProvider> {
     documents: DocumentStore,
     features: Arc<P>,
     workspace_roots: RwLock<Vec<PathBuf>>,
-    config: RwLock<LexConfig>,
+    config: RwLock<LoadedLexConfig>,
     /// Extension registry + boot diagnostics, lazily populated on first
     /// extension-aware request (hover/completion/code_action). Held for
     /// the lifetime of the workspace; rebuilt when workspace folders
@@ -360,7 +363,7 @@ where
             roots.first().cloned()?
         };
         let labels_config = LabelsConfig {
-            namespaces: self.config.read().await.labels.clone(),
+            namespaces: self.config.read().await.config.labels.clone(),
         };
 
         // boot_registry does synchronous filesystem IO (schema load,
@@ -457,8 +460,11 @@ where
         let mut diagnostics: Vec<Diagnostic> = include_diags;
         if let Some(entry) = self.documents.get(&uri).await {
             let mut analysis_diags = analyze_diagnostics(&entry.document);
-            let rules = self.config.read().await.diagnostics.rules.clone();
-            apply_rules(&mut analysis_diags, &rules);
+            let cfg = self.config.read().await;
+            apply_rules(&mut analysis_diags, |code| {
+                cfg.lookup_diagnostic_rule(code).cloned()
+            });
+            drop(cfg);
             diagnostics.extend(analysis_diags.into_iter().map(to_lsp_diagnostic));
         }
 
@@ -516,10 +522,10 @@ where
         let path = absolutize_path(&path);
 
         let cfg = self.config.read().await;
-        let inc_root = inc_root_for(&path, &cfg);
-        let max_depth = cfg.includes.max_depth;
-        let max_total_includes = cfg.includes.max_total_includes;
-        let max_file_size = cfg.includes.max_file_size;
+        let inc_root = inc_root_for(&path, &cfg.config);
+        let max_depth = cfg.config.includes.max_depth;
+        let max_total_includes = cfg.config.includes.max_total_includes;
+        let max_file_size = cfg.config.includes.max_file_size;
         drop(cfg);
 
         let resolve_config = ResolveConfig {
@@ -577,7 +583,7 @@ where
 
         let host_path = absolutize_path(&uri.to_file_path().ok()?);
         let cfg = self.config.read().await;
-        let inc_root = inc_root_for(&host_path, &cfg);
+        let inc_root = inc_root_for(&host_path, &cfg.config);
         drop(cfg);
 
         let target = lex_core::lex::includes::resolve_file_reference(
@@ -622,7 +628,7 @@ where
 
         let host_path = absolutize_path(&uri.to_file_path().ok()?);
         let cfg = self.config.read().await;
-        let inc_root = inc_root_for(&host_path, &cfg);
+        let inc_root = inc_root_for(&host_path, &cfg.config);
         drop(cfg);
 
         let target = lex_core::lex::includes::resolve_file_reference(
@@ -693,7 +699,7 @@ where
     /// Build formatting rules from stored config, with per-request LSP overrides on top.
     async fn resolve_formatting_rules(&self, options: &FormattingOptions) -> FormattingRules {
         let config = self.config.read().await;
-        let mut rules = FormattingRules::from(&config.formatting.rules);
+        let mut rules = FormattingRules::from(&config.config.formatting.rules);
 
         // Layer per-request LSP overrides (editors can send lex.* properties)
         apply_formatting_overrides(&mut rules, options);
@@ -702,8 +708,11 @@ where
     }
 }
 
-/// Load a [`LexConfig`] via clapfig, searching from an optional workspace root.
-fn load_config(workspace_root: Option<&Path>) -> LexConfig {
+/// Load a [`LoadedLexConfig`] via clapfig, searching from an optional
+/// workspace root. The wrapper carries both the typed [`LexConfig`] and
+/// the side-channel map of extension-emitted diagnostic rules captured
+/// from `[diagnostics.rules]` via the `on_unknown_key` callback.
+fn load_config(workspace_root: Option<&Path>) -> LoadedLexConfig {
     let mut search_paths = vec![SearchPath::Platform];
     if let Some(root) = workspace_root {
         search_paths.push(SearchPath::Path(root.to_path_buf()));
@@ -711,20 +720,35 @@ fn load_config(workspace_root: Option<&Path>) -> LexConfig {
         search_paths.push(SearchPath::Ancestors(Boundary::Marker(".git")));
         search_paths.push(SearchPath::Cwd);
     }
-    Clapfig::builder::<LexConfig>()
+    load_with(search_paths, false).unwrap_or_else(|_| {
+        // Fall back to compiled defaults if config loading fails.
+        load_with(vec![], true).expect("compiled defaults must load")
+    })
+}
+
+fn load_with(
+    search_paths: Vec<SearchPath>,
+    no_env: bool,
+) -> std::result::Result<LoadedLexConfig, clapfig::ClapfigError> {
+    let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let cb = extension_rules_unknown_key_callback(std::sync::Arc::clone(&captured));
+    let mut builder = Clapfig::schema_builder::<LexConfig>()
         .app_name("lex")
         .file_name(CONFIG_FILE_NAME)
         .search_paths(search_paths)
-        .load()
-        .unwrap_or_else(|_| {
-            // Fall back to compiled defaults if config loading fails
-            Clapfig::builder::<LexConfig>()
-                .app_name("lex")
-                .no_env()
-                .search_paths(vec![])
-                .load()
-                .expect("compiled defaults must load")
-        })
+        .on_unknown_key(cb);
+    if no_env {
+        builder = builder.no_env();
+    }
+    let config = builder.load()?;
+    let captured = std::sync::Arc::try_unwrap(captured)
+        .expect("captured Arc has no remaining holders after load")
+        .into_inner()
+        .expect("captured mutex not poisoned");
+    Ok(LoadedLexConfig {
+        config,
+        extension_diagnostic_rules: collect_extension_diagnostic_rules(captured),
+    })
 }
 
 fn best_matching_root(roots: &[PathBuf], document_path: &Path) -> Option<PathBuf> {
@@ -1708,7 +1732,7 @@ where
         let host_indent = range.start.character as usize;
 
         let cfg = self.config.read().await;
-        let inc_root = inc_root_for(&host_path, &cfg);
+        let inc_root = inc_root_for(&host_path, &cfg.config);
         drop(cfg);
 
         let edit = extract::build_extract_workspace_edit(

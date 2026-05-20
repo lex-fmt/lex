@@ -32,7 +32,7 @@ pub enum Severity {
 impl Default for Severity {
     /// Tests and ad-hoc construction of [`RuleConfig`] default to
     /// [`Severity::Warn`]. The *real* per-rule intrinsic defaults are
-    /// declared as `#[config(default = "...")]` on each
+    /// declared as `#[clapfig(value, default = "...")]` on each
     /// [`crate::DiagnosticsRulesConfig`] field and applied by clapfig
     /// during config load.
     fn default() -> Self {

@@ -1,10 +1,10 @@
 //! Shared configuration for the Lex toolchain.
 //!
 //! Defines [`LexConfig`] — the config struct consumed by all Lex applications.
-//! Defaults are compiled into the struct via `#[config(default)]`. Loading and
+//! Defaults are compiled into the struct via `#[clapfig(default)]`. Loading and
 //! layering is handled by [clapfig](https://docs.rs/clapfig) in the CLI.
 
-use confique::Config;
+use clapfig::Schema;
 use lex_babel::formats::lex::formatting_rules::FormattingRules;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -342,74 +342,71 @@ pub fn load_labels_from_toml(path: impl AsRef<Path>) -> Result<LabelsConfig, Lab
 }
 
 /// Top-level configuration consumed by Lex applications.
-#[derive(Debug, Clone, Config, Serialize, Deserialize)]
+#[derive(Debug, Clone, Schema, Serialize, Deserialize)]
 pub struct LexConfig {
     /// Formatting rules.
-    #[config(nested)]
     pub formatting: FormattingConfig,
     /// Inspect output options.
-    #[config(nested)]
     pub inspect: InspectConfig,
     /// Format-specific conversion options.
-    #[config(nested)]
     pub convert: ConvertConfig,
     /// Diagnostics options.
-    #[config(nested)]
     pub diagnostics: DiagnosticsConfig,
     /// Include-resolution options.
-    #[config(nested)]
     pub includes: IncludesConfig,
     /// Extension-namespace declarations. The map shape is
     /// free-form (each key is a namespace name; the value is a
-    /// `NamespaceSpec`), so the field is a leaf rather than a
-    /// nested confique struct — confique sees an opaque
-    /// `BTreeMap<String, NamespaceSpec>`. The `lexd labels`
+    /// sum-typed `NamespaceSpec`), so the field is declared as a
+    /// `LeafType::Value` escape hatch via `#[clapfig(value)]` —
+    /// clapfig accepts any TOML at this key and serde does the
+    /// shape-validation on the deserialize side. The `lexd labels`
     /// subcommand and the boot helper read individual entries via
     /// [`load_labels_from_toml`] for richer error messages
     /// (reserved-namespace check, table-form validation, …).
-    /// Declaring the field here is what makes clapfig's strict
-    /// unknown-keys check accept `[labels]` blocks in `.lex.toml`.
-    #[config(default = {})]
+    #[clapfig(value, optional)]
+    #[serde(default)]
     pub labels: BTreeMap<String, NamespaceSpec>,
 }
 
 /// Formatting-related configuration groups.
-#[derive(Debug, Clone, Config, Serialize, Deserialize)]
+#[derive(Debug, Clone, Schema, Serialize, Deserialize)]
 pub struct FormattingConfig {
     /// Formatting rules for lex output.
-    #[config(nested)]
     pub rules: FormattingRulesConfig,
     /// Automatically format documents on save (consumed by editors).
-    #[config(default = false)]
+    #[clapfig(default = false)]
     pub format_on_save: bool,
 }
 
 /// Mirrors the knobs exposed by the Lex formatter.
-#[derive(Debug, Clone, Config, Serialize, Deserialize)]
+#[derive(Debug, Clone, Schema, Serialize, Deserialize)]
 pub struct FormattingRulesConfig {
     /// Number of blank lines inserted before a session title.
-    #[config(default = 1)]
+    #[clapfig(default = 1)]
     pub session_blank_lines_before: usize,
     /// Number of blank lines inserted after a session title.
-    #[config(default = 1)]
+    #[clapfig(default = 1)]
     pub session_blank_lines_after: usize,
     /// Normalize list markers to predictable markers.
-    #[config(default = true)]
+    #[clapfig(default = true)]
     pub normalize_seq_markers: bool,
     /// Character for unordered list items when normalization is enabled.
-    #[config(default = "-")]
+    /// `char` isn't in clapfig's native leaf-type vocabulary, so this is
+    /// a `LeafType::Value` escape hatch — serde converts the single-char
+    /// TOML string on deserialize.
+    #[clapfig(value, default = "-")]
     pub unordered_seq_marker: char,
     /// Maximum consecutive blank lines kept in output.
-    #[config(default = 2)]
+    #[clapfig(default = 2)]
     pub max_blank_lines: usize,
     /// Whitespace string for each indentation level.
-    #[config(default = "    ")]
+    #[clapfig(default = "    ")]
     pub indent_string: String,
     /// Preserve trailing blank lines at the end of a document.
-    #[config(default = false)]
+    #[clapfig(default = false)]
     pub preserve_trailing_blanks: bool,
     /// Normalize verbatim fences back to canonical :: form.
-    #[config(default = true)]
+    #[clapfig(default = true)]
     pub normalize_verbatim_markers: bool,
 }
 
@@ -444,54 +441,53 @@ impl From<&FormattingRulesConfig> for FormattingRules {
 }
 
 /// Controls AST-related inspect output.
-#[derive(Debug, Clone, Config, Serialize, Deserialize)]
+#[derive(Debug, Clone, Schema, Serialize, Deserialize)]
 pub struct InspectConfig {
     /// AST visualization options.
-    #[config(nested)]
     pub ast: InspectAstConfig,
     /// Nodemap visualization options.
-    #[config(nested)]
     pub nodemap: NodemapConfig,
 }
 
-#[derive(Debug, Clone, Config, Serialize, Deserialize)]
+#[derive(Debug, Clone, Schema, Serialize, Deserialize)]
 pub struct InspectAstConfig {
     /// Include annotations, titles, markers, and other metadata in AST visualizations.
-    #[config(default = false)]
+    #[clapfig(default = false)]
     pub include_all_properties: bool,
     /// Show line numbers next to AST entries.
-    #[config(default = true)]
+    #[clapfig(default = true)]
     pub show_line_numbers: bool,
 }
 
-#[derive(Debug, Clone, Config, Serialize, Deserialize)]
+#[derive(Debug, Clone, Schema, Serialize, Deserialize)]
 pub struct NodemapConfig {
     /// Render ANSI-colored blocks instead of Base2048 glyphs.
-    #[config(default = false)]
+    #[clapfig(default = false)]
     pub color_blocks: bool,
     /// Render Base2048 glyphs but color them with ANSI codes.
-    #[config(default = false)]
+    #[clapfig(default = false)]
     pub color_characters: bool,
     /// Append high-level summary statistics under the node map output.
-    #[config(default = false)]
+    #[clapfig(default = false)]
     pub show_summary: bool,
 }
 
 /// Format-specific conversion knobs.
-#[derive(Debug, Clone, Config, Serialize, Deserialize)]
+#[derive(Debug, Clone, Schema, Serialize, Deserialize)]
 pub struct ConvertConfig {
     /// PDF export options.
-    #[config(nested)]
     pub pdf: PdfConfig,
     /// HTML export options.
-    #[config(nested)]
     pub html: HtmlConfig,
 }
 
-#[derive(Debug, Clone, Config, Serialize, Deserialize)]
+#[derive(Debug, Clone, Schema, Serialize, Deserialize)]
 pub struct PdfConfig {
     /// Page profile used when exporting to PDF ("lexed" or "mobile").
-    #[config(default = "lexed")]
+    /// `PdfPageSize` is a custom serde-deserializable enum (not a
+    /// `clapfig::Schema` type), so this is a `LeafType::Value` leaf —
+    /// serde handles the string-to-variant conversion on deserialize.
+    #[clapfig(value, default = "lexed")]
     pub size: PdfPageSize,
 }
 
@@ -503,24 +499,23 @@ pub enum PdfPageSize {
     Mobile,
 }
 
-#[derive(Debug, Clone, Config, Serialize, Deserialize)]
+#[derive(Debug, Clone, Schema, Serialize, Deserialize)]
 pub struct HtmlConfig {
     /// Theme for HTML export.
-    #[config(default = "default")]
+    #[clapfig(default = "default")]
     pub theme: String,
     /// Optional path to a custom CSS file to append after the baseline CSS.
     pub custom_css: Option<String>,
 }
 
 /// Diagnostics options.
-#[derive(Debug, Clone, Config, Serialize, Deserialize)]
+#[derive(Debug, Clone, Schema, Serialize, Deserialize)]
 pub struct DiagnosticsConfig {
     /// Per-rule severity overrides. Each entry takes either a bare
     /// severity string (`"allow"`, `"warn"`, `"deny"`) or an array
     /// form (`["warn", { option = value }]`) carrying rule-specific
     /// options — see [`RuleConfig`]. The defaults shown next to each
     /// rule are the intrinsic defaults; uncomment a line to override.
-    #[config(nested)]
     pub rules: DiagnosticsRulesConfig,
 }
 
@@ -530,38 +525,45 @@ pub struct DiagnosticsConfig {
 /// the description that surfaces in `lexd config gen` output, so
 /// authoring conventions for these doc comments matter: write them as
 /// user-facing prose, lead with what triggers the diagnostic, finish
-/// with the intrinsic default. Extension-emitted codes
-/// (`<namespace>.<code>`) and forward-looking prefix globs are not
-/// fields on this struct — they ride in the embedded map of `extra`
-/// once that surface lands.
+/// with the intrinsic default.
+///
+/// `RuleConfig` is a serde-untagged sum (`"warn"` *or*
+/// `["warn", { max = 80 }]`), so every field carries `#[clapfig(value)]`
+/// — the leaf is a `LeafType::Value` escape hatch in the schema, and
+/// serde does the shape validation on deserialize. clapfig's typo
+/// detection on the *field names themselves* still applies: a
+/// misspelled built-in like `missing_footote` is rejected as an unknown
+/// key. Extension-emitted codes (`<namespace>.<code>`) ride in via
+/// `on_unknown_key` and a side-channel populated by the loader — they
+/// are not fields on this struct.
 ///
 /// `Default` returns every field at [`Severity::Warn`] regardless of
 /// each rule's *intrinsic* default. Real production loads run through
-/// clapfig and honour the `#[config(default = "...")]` annotations.
+/// clapfig and honour the `#[clapfig(default = "...")]` annotations.
 /// `Default` is here so tests and ad-hoc embedders can construct an
 /// instance without going through the clapfig pipeline.
-#[derive(Debug, Clone, Default, Config, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Schema, Serialize, Deserialize)]
 pub struct DiagnosticsRulesConfig {
     /// A footnote reference like `[42]` has no corresponding
     /// definition in the document. Intrinsic default: deny.
-    #[config(default = "deny")]
+    #[clapfig(value, default = "deny")]
     pub missing_footnote: RuleConfig,
     /// A footnote definition appears in the document but no
     /// reference points at it. Intrinsic default: warn.
-    #[config(default = "warn")]
+    #[clapfig(value, default = "warn")]
     pub unused_footnote: RuleConfig,
     /// A table row has a different number of columns than the
     /// table's header row. Intrinsic default: warn.
-    #[config(default = "warn")]
+    #[clapfig(value, default = "warn")]
     pub table_inconsistent_columns: RuleConfig,
     /// A label uses the reserved `doc.*` prefix, which is no longer
     /// valid under the current label policy. Intrinsic default: deny.
-    #[config(default = "deny")]
+    #[clapfig(value, default = "deny")]
     pub forbidden_label_prefix: RuleConfig,
     /// A `lex.*` literal references a canonical that the toolchain
     /// does not recognise — typically a typo or a label written for
     /// a future core schema. Intrinsic default: deny.
-    #[config(default = "deny")]
+    #[clapfig(value, default = "deny")]
     pub unknown_lex_canonical: RuleConfig,
     /// Spellcheck diagnostics. Intrinsic default: warn. **Currently
     /// not consulted at emission time** — spellcheck emits through a
@@ -569,46 +571,22 @@ pub struct DiagnosticsRulesConfig {
     /// present so the value lives in the user-facing config schema;
     /// runtime wiring lands when spellcheck moves over to the
     /// `AnalysisDiagnostic` / `DiagnosticKind` pipeline.
-    #[config(default = "warn")]
+    #[clapfig(value, default = "warn")]
     pub spellcheck: RuleConfig,
     /// Schema-validation diagnostics for extension labels.
-    #[config(nested)]
     pub schema: SchemaRulesConfig,
-    /// Extension-emitted diagnostic codes. Write them directly under
-    /// `[diagnostics.rules]` as quoted dotted keys, alongside the
-    /// built-ins above — they accept the same severity verbs (`"allow"`,
-    /// `"warn"`, `"deny"`) and the same array form for options.
-    ///
-    /// ```toml
-    /// [diagnostics.rules]
-    /// missing_footnote = "deny"                  # built-in
-    /// "acme.task-due-date-missing" = "warn"      # extension code
-    /// "foolco.line-too-long" = ["warn", { max = 120 }]
-    /// ```
-    ///
-    /// The on-the-wire shape per spec §9 is `<namespace>.<code>`
-    /// (e.g. `"acme.task-due-date-missing"` for namespace `acme`,
-    /// code `task-due-date-missing`); the analyser produces that wire
-    /// form, and these `[diagnostics.rules]` entries match it by exact
-    /// string. Entries that never match an emitted diagnostic are
-    /// harmless (ESLint / Clippy convention).
-    ///
-    /// Note: this field renders as `#extra = {  }` in `lexd config gen`
-    /// output. That's a confique template artifact — you do **not**
-    /// write `extra = {...}` in `.lex.toml`. Use inline quoted keys
-    /// directly under `[diagnostics.rules]` as shown above.
-    #[serde(default, flatten, skip_serializing_if = "BTreeMap::is_empty")]
-    #[config(default = {}, layer_attr(serde(flatten)))]
-    pub extra: BTreeMap<String, RuleConfig>,
 }
 
 impl DiagnosticsRulesConfig {
     /// Look up a rule by its on-the-wire code (e.g. `"missing-footnote"`
-    /// or `"schema.unknown-label"` or `"acme.task-due-date-missing"`).
+    /// or `"schema.unknown-label"`).
     ///
-    /// Resolution order: named built-in field → `extra` map → `None`.
-    /// Built-ins always win, so a stray `extra` entry with a built-in
-    /// code does not override the typed surface.
+    /// Only consults named built-in fields. Extension-emitted codes
+    /// (`<namespace>.<code>`) live in a separate side-channel map
+    /// populated by the loader's `on_unknown_key` callback and stored
+    /// on [`LoadedLexConfig::extension_diagnostic_rules`]; use
+    /// [`LoadedLexConfig::lookup_diagnostic_rule`] to consult both
+    /// surfaces with a single call.
     pub fn lookup_by_code(&self, code: &str) -> Option<&RuleConfig> {
         match code {
             "missing-footnote" => Some(&self.missing_footnote),
@@ -628,13 +606,7 @@ impl DiagnosticsRulesConfig {
             "schema.param-type-mismatch" => Some(&self.schema.param_type_mismatch),
             "schema.bad-attachment" => Some(&self.schema.bad_attachment),
             "schema.body-shape-mismatch" => Some(&self.schema.body_shape_mismatch),
-            // Extension-emitted codes (`<namespace>.<code>`) ride here.
-            // Lenient: any key the user wrote in `[diagnostics.rules]`
-            // that didn't land on a named field above is matched by
-            // exact string. Schema-based validation against the
-            // resolved extension registry is deferred (issue #657
-            // "Schema Integration").
-            other => self.extra.get(other),
+            _ => None,
         }
     }
 }
@@ -643,35 +615,35 @@ impl DiagnosticsRulesConfig {
 /// schema pre-validation checks the analyser performs before
 /// dispatching to an extension handler. See the Extending Lex
 /// proposal (`comms/specs/proposals/extending-lex.lex`) §13.2.
-#[derive(Debug, Clone, Default, Config, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Schema, Serialize, Deserialize)]
 pub struct SchemaRulesConfig {
     /// A label is invoked whose namespace is registered, but no
     /// schema entry exists for the label itself. Typically a typo
     /// or an out-of-version label. Intrinsic default: deny.
-    #[config(default = "deny")]
+    #[clapfig(value, default = "deny")]
     pub unknown_label: RuleConfig,
     /// A label invocation omits a parameter the schema marks as
     /// required. Intrinsic default: deny.
-    #[config(default = "deny")]
+    #[clapfig(value, default = "deny")]
     pub missing_param: RuleConfig,
     /// A label parameter's value does not match the type the schema
     /// declares. Intrinsic default: deny.
-    #[config(default = "deny")]
+    #[clapfig(value, default = "deny")]
     pub param_type_mismatch: RuleConfig,
     /// A label attaches to a container shape the schema disallows
     /// (e.g. attaching a paragraph-only label to a session).
     /// Intrinsic default: deny.
-    #[config(default = "deny")]
+    #[clapfig(value, default = "deny")]
     pub bad_attachment: RuleConfig,
     /// A label body's shape (`none` / `text` / `lex`) does not match
     /// the schema's declared body kind. Intrinsic default: deny.
-    #[config(default = "deny")]
+    #[clapfig(value, default = "deny")]
     pub body_shape_mismatch: RuleConfig,
 }
 
 /// Include-resolution options consumed by `lexd convert`, `lexd inspect`,
 /// and the LSP. `lexd format` never expands includes regardless.
-#[derive(Debug, Clone, Config, Serialize, Deserialize)]
+#[derive(Debug, Clone, Schema, Serialize, Deserialize)]
 pub struct IncludesConfig {
     /// Resolution root for include path resolution.
     ///
@@ -687,31 +659,158 @@ pub struct IncludesConfig {
     pub root: Option<String>,
     /// Maximum include depth. Default 8. Hitting the limit is an error,
     /// not a silent truncation.
-    #[config(default = 8)]
+    #[clapfig(default = 8)]
     pub max_depth: usize,
     /// Maximum total include count across the document (DoS bound).
     /// Default 1000. Caps fan-out — `max_depth` alone bounds chain
     /// length but a doc with thousands of includes at depth 1 still
     /// blows past it.
-    #[config(default = 1000)]
+    #[clapfig(default = 1000)]
     pub max_total_includes: usize,
     /// Maximum size of any single included file in bytes (DoS bound).
     /// Default 10 MiB (10485760). Files larger than this are rejected
     /// before any bytes hit memory. Used by `FsLoader`; the in-memory
     /// `MemoryLoader` doesn't enforce a size limit.
-    #[config(default = 10485760)]
+    #[clapfig(default = 10485760)]
     pub max_file_size: u64,
+}
+
+/// Typed configuration plus the side-channel map of extension-emitted
+/// diagnostic rules. Returned by [`apply_extension_rules_callback`]-aware
+/// loaders.
+///
+/// The typed [`LexConfig`] holds built-in fields exactly. Extension
+/// diagnostic codes (`<namespace>.<code>` entries under
+/// `[diagnostics.rules]`) live in `extension_diagnostic_rules` so that
+/// dropping the previous `#[serde(flatten)]` catch-all restored typo
+/// detection on built-in field names while still accepting the open-
+/// ended extension key space.
+#[derive(Debug, Clone)]
+pub struct LoadedLexConfig {
+    pub config: LexConfig,
+    /// Side-channel map of extension-emitted diagnostic rules keyed by
+    /// their on-the-wire code (`<namespace>.<code>`). Populated from
+    /// `[diagnostics.rules]` entries accepted by the loader's
+    /// `on_unknown_key` callback.
+    pub extension_diagnostic_rules: BTreeMap<String, RuleConfig>,
+}
+
+impl LoadedLexConfig {
+    /// Look up a `[diagnostics.rules]` entry by its on-the-wire code,
+    /// consulting built-in fields first and the extension side-channel
+    /// second. Built-ins always win — a stray extension key that
+    /// happens to spell a built-in code does not override the typed
+    /// surface.
+    pub fn lookup_diagnostic_rule(&self, code: &str) -> Option<&RuleConfig> {
+        self.config
+            .diagnostics
+            .rules
+            .lookup_by_code(code)
+            .or_else(|| self.extension_diagnostic_rules.get(code))
+    }
+}
+
+/// Shared `(key, value)` collector handed to
+/// [`extension_rules_unknown_key_callback`]. The callback pushes
+/// accepted extension-rule entries here; the loader drains it into
+/// [`LoadedLexConfig::extension_diagnostic_rules`] via
+/// [`collect_extension_diagnostic_rules`].
+pub type CapturedExtensionRules =
+    std::sync::Arc<std::sync::Mutex<Vec<(String, Option<toml::Value>)>>>;
+
+/// Names of nested-struct fields under `[diagnostics.rules]`. The
+/// `on_unknown_key` predicate must reject unknown keys *inside* one of
+/// these subtrees (typos in `SchemaRulesConfig` fields, e.g.
+/// `[diagnostics.rules.schema] unkown_label = "warn"`). Keep this list
+/// in sync with the actual nested fields on
+/// [`DiagnosticsRulesConfig`] — the `known_nested_sections_in_sync`
+/// test asserts that.
+const DIAGNOSTICS_RULES_NESTED_SECTIONS: &[&str] = &["schema"];
+
+/// Build the `on_unknown_key` callback that distinguishes
+/// extension-emitted diagnostic codes (which we accept and capture)
+/// from typos (which we reject so clapfig surfaces them as
+/// `UnknownKeys` errors with line numbers).
+///
+/// The callback also captures accepted entries' parsed values into
+/// `captured` so the loader can build
+/// [`LoadedLexConfig::extension_diagnostic_rules`] without a
+/// side-channel re-parse — the macro-driven path routes
+/// `UnknownKeyContext::value` through the runtime pipeline, so the
+/// value is populated even for quoted-dotted keys like
+/// `"acme.task-due-date-missing" = "warn"`.
+///
+/// Returns a closure suitable for
+/// [`clapfig::SchemaConfigBuilder::on_unknown_key`].
+pub fn extension_rules_unknown_key_callback(
+    captured: CapturedExtensionRules,
+) -> impl Fn(&clapfig::UnknownKeyContext<'_>) -> clapfig::UnknownKeyDecision + Send + Sync + 'static
+{
+    move |ctx: &clapfig::UnknownKeyContext<'_>| {
+        let Some(rest) = ctx.path.strip_prefix("diagnostics.rules.") else {
+            return clapfig::UnknownKeyDecision::Reject;
+        };
+        let first_segment = rest.split('.').next().unwrap_or("");
+        if DIAGNOSTICS_RULES_NESTED_SECTIONS.contains(&first_segment) {
+            // Unknown key inside a typed nested section (e.g.
+            // `[diagnostics.rules.schema] unkown_label = "warn"`) is a
+            // typo — surface it.
+            return clapfig::UnknownKeyDecision::Reject;
+        }
+        if !rest.contains('.') {
+            // Single-segment remainder = bare typo of a built-in field
+            // at the `[diagnostics.rules]` level (e.g.
+            // `missing_footote = "warn"`).
+            return clapfig::UnknownKeyDecision::Reject;
+        }
+        // Multi-segment, first segment not a known nested section →
+        // treat as `<namespace>.<code>` extension key. Capture for
+        // later transfer into `LoadedLexConfig`.
+        captured
+            .lock()
+            .expect("captured mutex not poisoned")
+            .push((rest.to_string(), ctx.value.cloned()));
+        clapfig::UnknownKeyDecision::Accept
+    }
+}
+
+/// Drain a callback-collected `(key, value)` list into a typed
+/// `BTreeMap<String, RuleConfig>`, deserializing each value through
+/// serde so the `RuleConfig` `Bare` vs `WithOptions` sum dispatch
+/// happens at this boundary.
+///
+/// Entries whose value the callback could not resolve (`None`) or
+/// whose serde deserialization fails are silently dropped — the
+/// clapfig accept decision has already been made and the load
+/// succeeded; this finalization step is best-effort. The clapfig
+/// builder is the right surface to surface deserialize errors with
+/// file+line context, not this finalization step.
+pub fn collect_extension_diagnostic_rules(
+    captured: Vec<(String, Option<toml::Value>)>,
+) -> BTreeMap<String, RuleConfig> {
+    let mut out = BTreeMap::new();
+    for (key, value) in captured {
+        let Some(v) = value else { continue };
+        if let Ok(rule) = v.try_into() {
+            out.insert(key, rule);
+        }
+    }
+    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
 
     fn load_defaults() -> LexConfig {
-        clapfig::Clapfig::builder::<LexConfig>()
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let cb = extension_rules_unknown_key_callback(Arc::clone(&captured));
+        clapfig::Clapfig::schema_builder::<LexConfig>()
             .app_name("lex")
             .no_env()
             .search_paths(vec![])
+            .on_unknown_key(cb)
             .load()
             .expect("defaults to load")
     }
@@ -725,16 +824,31 @@ mod tests {
     }
 
     fn load_from(toml_body: &str) -> LexConfig {
+        load_wrapper_from(toml_body).config
+    }
+
+    fn load_wrapper_from(toml_body: &str) -> LoadedLexConfig {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(CONFIG_FILE_NAME);
         std::fs::write(&path, toml_body).unwrap();
-        clapfig::Clapfig::builder::<LexConfig>()
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let cb = extension_rules_unknown_key_callback(Arc::clone(&captured));
+        let config = clapfig::Clapfig::schema_builder::<LexConfig>()
             .app_name("lex")
             .file_name(CONFIG_FILE_NAME)
             .no_env()
             .search_paths(vec![clapfig::SearchPath::Path(dir.path().to_path_buf())])
+            .on_unknown_key(cb)
             .load()
-            .expect("loads")
+            .expect("loads");
+        let captured = Arc::try_unwrap(captured)
+            .expect("captured Arc has no remaining holders after load")
+            .into_inner()
+            .expect("captured mutex not poisoned");
+        LoadedLexConfig {
+            config,
+            extension_diagnostic_rules: collect_extension_diagnostic_rules(captured),
+        }
     }
 
     #[test]
@@ -813,11 +927,13 @@ missing_footnote = ["warn", { example_option = 42 }]
     }
 
     #[test]
-    fn diagnostics_rules_extra_captures_extension_codes() {
+    fn diagnostics_rules_extension_codes_land_in_side_channel() {
         // Extension codes (`<namespace>.<code>`) under [diagnostics.rules]
-        // ride in `extra`. Built-in fields next to them keep their
-        // intrinsic typing.
-        let cfg = load_from(
+        // are no longer struct fields — they ride in the
+        // `LoadedLexConfig::extension_diagnostic_rules` side-channel
+        // populated by the loader's `on_unknown_key` callback. Built-in
+        // fields next to them keep their intrinsic typing.
+        let loaded = load_wrapper_from(
             r#"
 [diagnostics.rules]
 missing_footnote = "allow"
@@ -826,22 +942,18 @@ missing_footnote = "allow"
 "#,
         );
         assert_eq!(
-            cfg.diagnostics.rules.missing_footnote.severity(),
+            loaded.config.diagnostics.rules.missing_footnote.severity(),
             Severity::Allow
         );
-        let acme = cfg
-            .diagnostics
-            .rules
-            .extra
+        let acme = loaded
+            .extension_diagnostic_rules
             .get("acme.task-due-date-missing")
-            .expect("extension code lands in extra");
+            .expect("extension code captured in side-channel");
         assert_eq!(acme.severity(), Severity::Deny);
-        let foolco = cfg
-            .diagnostics
-            .rules
-            .extra
+        let foolco = loaded
+            .extension_diagnostic_rules
             .get("foolco.bar")
-            .expect("array-form extension code lands in extra");
+            .expect("array-form extension code captured");
         assert_eq!(foolco.severity(), Severity::Warn);
         assert_eq!(
             foolco.options().and_then(|o| o.get("max")),
@@ -850,53 +962,60 @@ missing_footnote = "allow"
     }
 
     #[test]
-    fn diagnostics_rules_extra_lookup_by_code_after_named_fields() {
-        // Drift coverage: a built-in code resolves through its named
-        // field even if `extra` happens to contain a same-named entry.
-        // Named fields win.
-        let mut extra: BTreeMap<String, RuleConfig> = BTreeMap::new();
-        extra.insert(
-            "missing-footnote".to_string(),
-            RuleConfig::Bare(Severity::Allow),
+    fn loaded_lookup_diagnostic_rule_consults_both_surfaces() {
+        // Drift coverage: built-ins win over a same-named side-channel
+        // entry; an extension code only the side-channel knows about
+        // resolves through the second path.
+        let loaded = LoadedLexConfig {
+            config: LexConfig {
+                formatting: FormattingConfig {
+                    rules: FormattingRulesConfig::default_for_tests(),
+                    format_on_save: false,
+                },
+                inspect: InspectConfig::default_for_tests(),
+                convert: ConvertConfig::default_for_tests(),
+                diagnostics: DiagnosticsConfig {
+                    rules: DiagnosticsRulesConfig {
+                        missing_footnote: RuleConfig::Bare(Severity::Deny),
+                        ..Default::default()
+                    },
+                },
+                includes: IncludesConfig::default_for_tests(),
+                labels: BTreeMap::new(),
+            },
+            extension_diagnostic_rules: [
+                (
+                    "missing-footnote".to_string(),
+                    RuleConfig::Bare(Severity::Allow),
+                ),
+                ("acme.foo".to_string(), RuleConfig::Bare(Severity::Allow)),
+            ]
+            .into_iter()
+            .collect(),
+        };
+        // Built-in wins over the same-named side-channel entry.
+        assert_eq!(
+            loaded
+                .lookup_diagnostic_rule("missing-footnote")
+                .map(|r| r.severity()),
+            Some(Severity::Deny)
         );
-        let rules = DiagnosticsRulesConfig {
-            missing_footnote: RuleConfig::Bare(Severity::Deny),
-            extra,
-            ..Default::default()
-        };
-        // `missing-footnote` is a built-in; the named field is consulted
-        // first and wins, even though `extra` carries a different value.
-        let resolved = rules.lookup_by_code("missing-footnote").unwrap();
-        assert_eq!(resolved.severity(), Severity::Deny);
-        // An extension code only the `extra` map knows about resolves
-        // through the catch-all path.
-        let rules = DiagnosticsRulesConfig {
-            extra: [("acme.foo".to_string(), RuleConfig::Bare(Severity::Allow))]
-                .into_iter()
-                .collect(),
-            ..Default::default()
-        };
-        let resolved = rules.lookup_by_code("acme.foo").unwrap();
-        assert_eq!(resolved.severity(), Severity::Allow);
-        assert!(rules.lookup_by_code("acme.unknown").is_none());
+        // Side-channel entries resolve through the second path.
+        assert_eq!(
+            loaded
+                .lookup_diagnostic_rule("acme.foo")
+                .map(|r| r.severity()),
+            Some(Severity::Allow)
+        );
+        assert!(loaded.lookup_diagnostic_rule("acme.unknown").is_none());
     }
 
     #[test]
-    fn diagnostics_rules_typo_in_builtin_lands_in_extra() {
-        // Documents the intentional tradeoff: because the `extra` map
-        // uses `#[serde(flatten)]`, it captures *every* key under
-        // `[diagnostics.rules]` that doesn't match a named field —
-        // including a misspelled built-in like `missing_footote`. The
-        // load succeeds and the typo lives quietly in `extra`,
-        // matching nothing.
-        //
-        // Typo detection for *built-in* rule names is sacrificed in
-        // exchange for accepting extension codes lenient-style. The
-        // Schema Integration item (deferred from #657) restores typo
-        // detection later by validating `extra` keys against the
-        // resolved extension registry — at that point an `extra` key
-        // matching neither a built-in nor a registered extension code
-        // can be flagged.
+    fn diagnostics_rules_typo_in_builtin_errors() {
+        // Headline behaviour change vs PR #658: dropping the
+        // `#[serde(flatten)] extra` catch-all means typos in built-in
+        // field names are rejected by clapfig's strict-mode validator
+        // again — they no longer land silently in `extra`.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(CONFIG_FILE_NAME);
         std::fs::write(
@@ -907,91 +1026,136 @@ missing_footote = "warn"
 "#,
         )
         .unwrap();
-        let cfg = clapfig::Clapfig::builder::<LexConfig>()
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let cb = extension_rules_unknown_key_callback(Arc::clone(&captured));
+        let err = clapfig::Clapfig::schema_builder::<LexConfig>()
             .app_name("lex")
             .file_name(CONFIG_FILE_NAME)
             .no_env()
             .search_paths(vec![clapfig::SearchPath::Path(dir.path().to_path_buf())])
+            .on_unknown_key(cb)
             .load()
-            .expect("loads — typo gets absorbed into extra");
-        assert_eq!(
-            cfg.diagnostics
-                .rules
-                .extra
-                .get("missing_footote")
-                .map(|r| r.severity()),
-            Some(Severity::Warn),
-            "the misspelled key lands in `extra`"
-        );
-        // And the *real* built-in field stays at its intrinsic default
-        // — the typo did not partially-shadow it.
-        assert_eq!(
-            cfg.diagnostics.rules.missing_footnote.severity(),
-            Severity::Deny,
-            "the correctly-spelled built-in keeps its intrinsic default"
+            .expect_err("typo must surface as an unknown-key error");
+        let keys = err
+            .unknown_keys()
+            .expect("error variant carries UnknownKeys");
+        assert!(
+            keys.iter().any(|k| k.key.ends_with("missing_footote")),
+            "the misspelled key is reported: {keys:?}"
         );
     }
 
     #[test]
-    fn diagnostics_rules_extra_round_trip() {
-        // load -> serialize -> load preserves both named built-ins and
-        // extra extension codes. Confirms `#[serde(flatten)]` rides
-        // through serialization as inline keys in the same table, not
-        // as a nested `extra` sub-table.
-        let cfg = load_from(
-            r#"
-[diagnostics.rules]
-unused_footnote = "deny"
-"acme.foo" = "warn"
-"bar.qux" = ["deny", { example = 1 }]
-"#,
-        );
-        let serialized = toml::to_string(&cfg).expect("serializes");
-        // Sanity-check the on-disk shape: extras live inline in
-        // `[diagnostics.rules]` (not under `[diagnostics.rules.extra]`).
-        assert!(
-            serialized.contains(r#""acme.foo" = "warn""#)
-                || serialized.contains(r#"'acme.foo' = "warn""#),
-            "extension key flattened inline; got:\n{serialized}"
-        );
-        assert!(
-            !serialized.contains("[diagnostics.rules.extra]"),
-            "extras must not nest under an `extra` sub-table; got:\n{serialized}"
-        );
+    fn diagnostics_rules_typo_inside_nested_section_errors() {
+        // The `on_unknown_key` predicate must NOT accept a typo inside
+        // a nested-built-in section (`[diagnostics.rules.schema]`) just
+        // because the dotted path has more than two segments — the
+        // first segment must not be a known nested section. This is
+        // the failure mode Gemini called out in the original review on
+        // PR #664.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(CONFIG_FILE_NAME);
-        std::fs::write(&path, &serialized).unwrap();
-        let reloaded = clapfig::Clapfig::builder::<LexConfig>()
+        std::fs::write(
+            &path,
+            r#"
+[diagnostics.rules.schema]
+unkown_label = "warn"
+"#,
+        )
+        .unwrap();
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let cb = extension_rules_unknown_key_callback(Arc::clone(&captured));
+        let err = clapfig::Clapfig::schema_builder::<LexConfig>()
             .app_name("lex")
             .file_name(CONFIG_FILE_NAME)
             .no_env()
             .search_paths(vec![clapfig::SearchPath::Path(dir.path().to_path_buf())])
+            .on_unknown_key(cb)
             .load()
-            .expect("round-trips");
-        assert_eq!(
-            reloaded.diagnostics.rules.unused_footnote.severity(),
-            Severity::Deny
+            .expect_err("typo inside nested section must error");
+        let keys = err.unknown_keys().expect("UnknownKeys variant");
+        assert!(
+            keys.iter().any(|k| k.key.ends_with("unkown_label")),
+            "the misspelled nested key is reported: {keys:?}"
         );
-        assert_eq!(
-            reloaded
-                .diagnostics
-                .rules
-                .extra
-                .get("acme.foo")
-                .map(|r| r.severity()),
-            Some(Severity::Warn)
-        );
-        let bar = reloaded
-            .diagnostics
-            .rules
-            .extra
-            .get("bar.qux")
-            .expect("array-form extension key round-trips");
-        assert_eq!(bar.severity(), Severity::Deny);
-        assert_eq!(
-            bar.options().and_then(|o| o.get("example")),
-            Some(&toml::Value::Integer(1))
-        );
+    }
+
+    #[test]
+    fn known_nested_sections_in_sync_with_struct_fields() {
+        // The `on_unknown_key` predicate's list of "known nested
+        // section names" must match the actual nested-struct fields
+        // on `DiagnosticsRulesConfig`. If a new nested section is
+        // added to the struct but not added to the const, typos in
+        // that section's keys would be silently accepted as extension
+        // codes — exactly the bug we're protecting against.
+        //
+        // Hard-coded ground truth: as of now, the only nested-struct
+        // field on `DiagnosticsRulesConfig` is `schema`. Adding a new
+        // nested-struct field requires updating both this assertion
+        // and `DIAGNOSTICS_RULES_NESTED_SECTIONS`.
+        assert_eq!(DIAGNOSTICS_RULES_NESTED_SECTIONS, &["schema"]);
+    }
+
+    // Per-config-struct `default_for_tests` helpers — the new macro
+    // doesn't auto-`Default` like confique did, and we want one place
+    // each struct can be constructed for unit tests that don't go
+    // through the full clapfig pipeline. Production loads always run
+    // through clapfig and pick up the `#[clapfig(default = ...)]`
+    // annotations.
+    impl FormattingRulesConfig {
+        fn default_for_tests() -> Self {
+            FormattingRulesConfig {
+                session_blank_lines_before: 1,
+                session_blank_lines_after: 1,
+                normalize_seq_markers: true,
+                unordered_seq_marker: '-',
+                max_blank_lines: 2,
+                indent_string: "    ".to_string(),
+                preserve_trailing_blanks: false,
+                normalize_verbatim_markers: true,
+            }
+        }
+    }
+
+    impl InspectConfig {
+        fn default_for_tests() -> Self {
+            InspectConfig {
+                ast: InspectAstConfig {
+                    include_all_properties: false,
+                    show_line_numbers: true,
+                },
+                nodemap: NodemapConfig {
+                    color_blocks: false,
+                    color_characters: false,
+                    show_summary: false,
+                },
+            }
+        }
+    }
+
+    impl ConvertConfig {
+        fn default_for_tests() -> Self {
+            ConvertConfig {
+                pdf: PdfConfig {
+                    size: PdfPageSize::LexEd,
+                },
+                html: HtmlConfig {
+                    theme: "default".to_string(),
+                    custom_css: None,
+                },
+            }
+        }
+    }
+
+    impl IncludesConfig {
+        fn default_for_tests() -> Self {
+            IncludesConfig {
+                root: None,
+                max_depth: 8,
+                max_total_includes: 1000,
+                max_file_size: 10_485_760,
+            }
+        }
     }
 
     #[test]
