@@ -315,11 +315,12 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
 name = "clapfig"
-version = "0.20.1"
+version = "0.21.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a72ca080ffc51119948e88b6304f368ec4c62f7a1c9ae7815c19ad0c9fc46fc"
+checksum = "e6d6887dbff923bb26244ce00903d9200e6fa35f2e60c447941a0852a3c8cc2f"
 dependencies = [
  "clap",
+ "clapfig-derive",
  "confique",
  "directories",
  "serde",
@@ -328,6 +329,17 @@ dependencies = [
  "thiserror",
  "toml 0.8.23",
  "toml_edit",
+]
+
+[[package]]
+name = "clapfig-derive"
+version = "0.20.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dce3b78d2dcf849215e3f17b2e53b23c107cd5636dd99fa3e0071072ba95d275"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -700,7 +712,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1146,7 +1158,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1251,7 +1263,6 @@ name = "lex-config"
 version = "0.14.1"
 dependencies = [
  "clapfig",
- "confique",
  "lex-babel",
  "serde",
  "tempfile",
@@ -2069,7 +2080,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2357,7 +2368,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "28332bb44a9e7e7f1aa43ce4d97b6d1b27323a1fc160d4cfe0089245e1750845"
 dependencies = [
  "foldhash 0.2.0",
- "hashbrown 0.15.5",
+ "hashbrown 0.17.0",
 ]
 
 [[package]]
@@ -2474,7 +2485,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3184,7 +3195,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
