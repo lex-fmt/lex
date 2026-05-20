@@ -25,7 +25,7 @@
 use lexd::transforms;
 
 use clap::{Arg, ArgAction, ArgMatches, Command, ValueHint};
-use clapfig::{Boundary, Clapfig, ClapfigBuilder, ConfigCommand, SearchPath};
+use clapfig::{Boundary, Clapfig, ConfigCommand, SchemaConfigBuilder, SearchPath};
 use lex_analysis::semantic_tokens::collect_semantic_tokens;
 use lex_babel::{
     formats::lex::formatting_rules::FormattingRules, transforms::serialize_to_lex_with_rules,
@@ -947,9 +947,16 @@ fn handle_labels_command(top: &ArgMatches, sub: &ArgMatches) -> i32 {
     }
 }
 
-/// Build a clapfig builder with search paths and CLI overrides from parsed args.
-fn make_builder(matches: &ArgMatches) -> ClapfigBuilder<LexConfig> {
-    let mut builder = Clapfig::builder::<LexConfig>()
+/// Build a clapfig builder with search paths and CLI overrides from
+/// parsed args. The `on_unknown_key` callback accepts extension-emitted
+/// diagnostic codes under `[diagnostics.rules]` so they don't error
+/// strict-mode validation. The CLI doesn't consume the side-channel —
+/// only the LSP runs `apply_rules` — so the captured entries are
+/// discarded.
+fn make_builder(matches: &ArgMatches) -> SchemaConfigBuilder<LexConfig> {
+    let discard_captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let cb = lex_config::extension_rules_unknown_key_callback(discard_captured);
+    let mut builder = Clapfig::schema_builder::<LexConfig>()
         .app_name("lex")
         .file_name(CONFIG_FILE_NAME)
         .search_paths(vec![
@@ -958,7 +965,8 @@ fn make_builder(matches: &ArgMatches) -> ClapfigBuilder<LexConfig> {
             SearchPath::Cwd,
         ])
         .persist_scope("local", SearchPath::Cwd)
-        .persist_scope("user", SearchPath::Platform);
+        .persist_scope("user", SearchPath::Platform)
+        .on_unknown_key(cb);
 
     // Explicit config file path
     if let Some(path) = matches.get_one::<String>("config-path") {
@@ -1620,10 +1628,12 @@ mod tests {
     use super::*;
 
     fn test_config() -> LexConfig {
-        Clapfig::builder::<LexConfig>()
+        let discard = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        Clapfig::schema_builder::<LexConfig>()
             .app_name("lex")
             .no_env()
             .search_paths(vec![])
+            .on_unknown_key(lex_config::extension_rules_unknown_key_callback(discard))
             .load()
             .expect("defaults to load")
     }

@@ -1,5 +1,5 @@
 use crate::inline::extract_references;
-use lex_config::{DiagnosticsRulesConfig, Severity};
+use lex_config::{DiagnosticsRulesConfig, RuleConfig, Severity};
 use lex_core::lex::ast::{
     Annotation, ContentItem, Document, Range, Session, Table, TableRow, TextContent,
 };
@@ -138,17 +138,19 @@ impl DiagnosticKind {
 /// - `warn` → the diagnostic's intrinsic severity stays unchanged.
 /// - `deny` → severity is upgraded to `Error`.
 ///
-/// Resolution is delegated to [`DiagnosticsRulesConfig::lookup_by_code`],
-/// which consults the named built-in fields first and then falls
-/// through to the `extra` map. So extension-emitted codes with a
-/// matching `[diagnostics.rules]` entry (e.g. `"acme.foo" = "deny"`)
-/// flow through the same `allow` / `warn` / `deny` logic as built-ins.
-/// Codes with no matching entry — anywhere — pass through untouched at
-/// their intrinsic severity.
-pub fn apply_rules(diagnostics: &mut Vec<AnalysisDiagnostic>, rules: &DiagnosticsRulesConfig) {
+/// `lookup_rule` is the resolution function — typically
+/// [`LoadedLexConfig::lookup_diagnostic_rule`](lex_config::LoadedLexConfig::lookup_diagnostic_rule),
+/// which consults the named built-in fields first and the
+/// extension-rules side-channel second. Diagnostics whose code has no
+/// matching entry on either surface pass through untouched at their
+/// intrinsic severity.
+pub fn apply_rules<F>(diagnostics: &mut Vec<AnalysisDiagnostic>, lookup_rule: F)
+where
+    F: Fn(&str) -> Option<RuleConfig>,
+{
     diagnostics.retain_mut(|diag| {
         let code = diag.kind.code();
-        let Some(rule) = rules.lookup_by_code(&code) else {
+        let Some(rule) = lookup_rule(&code) else {
             return true;
         };
         match rule.severity() {
@@ -207,7 +209,7 @@ pub fn analyze_with_rules(
     rules: &DiagnosticsRulesConfig,
 ) -> Vec<AnalysisDiagnostic> {
     let mut diagnostics = analyze_with_registry(document, registry);
-    apply_rules(&mut diagnostics, rules);
+    apply_rules(&mut diagnostics, |code| rules.lookup_by_code(code).cloned());
     diagnostics
 }
 
@@ -890,10 +892,29 @@ mod tests {
     }
 
     #[test]
-    fn apply_rules_matches_extension_code_via_extra() {
+    fn apply_rules_matches_extension_code_via_side_channel() {
         // End-to-end: handler emits `acme.foo`, user configured
-        // `"acme.foo" = "allow"` in `[diagnostics.rules]` (landing in
-        // `extra`); diagnostic gets dropped.
+        // `"acme.foo" = "allow"` in `[diagnostics.rules]` (now
+        // captured into the LSP's `extension_diagnostic_rules`
+        // side-channel by the `on_unknown_key` callback rather than
+        // landing in a `#[serde(flatten)] extra` map); diagnostic
+        // gets dropped.
+        use std::collections::BTreeMap;
+        // The closure mirrors `LoadedLexConfig::lookup_diagnostic_rule`:
+        // built-in first, side-channel second.
+        let lookup = |code: &str, side: &BTreeMap<String, lex_config::RuleConfig>| {
+            DiagnosticsRulesConfig::default()
+                .lookup_by_code(code)
+                .cloned()
+                .or_else(|| side.get(code).cloned())
+        };
+
+        let side: BTreeMap<String, lex_config::RuleConfig> = [(
+            "acme.foo".to_string(),
+            lex_config::RuleConfig::Bare(Severity::Allow),
+        )]
+        .into_iter()
+        .collect();
         let mut diags = vec![dummy_diag(
             DiagnosticKind::Handler {
                 namespace: "acme".into(),
@@ -901,19 +922,16 @@ mod tests {
             },
             DiagnosticSeverity::Error,
         )];
-        let rules = DiagnosticsRulesConfig {
-            extra: [(
-                "acme.foo".to_string(),
-                lex_config::RuleConfig::Bare(Severity::Allow),
-            )]
-            .into_iter()
-            .collect(),
-            ..Default::default()
-        };
-        apply_rules(&mut diags, &rules);
+        apply_rules(&mut diags, |code| lookup(code, &side));
         assert!(diags.is_empty(), "allow drops the extension diagnostic");
 
         // `warn` keeps the intrinsic severity (Error stays Error).
+        let side: BTreeMap<String, lex_config::RuleConfig> = [(
+            "acme.foo".to_string(),
+            lex_config::RuleConfig::Bare(Severity::Warn),
+        )]
+        .into_iter()
+        .collect();
         let mut diags = vec![dummy_diag(
             DiagnosticKind::Handler {
                 namespace: "acme".into(),
@@ -921,16 +939,7 @@ mod tests {
             },
             DiagnosticSeverity::Error,
         )];
-        let rules = DiagnosticsRulesConfig {
-            extra: [(
-                "acme.foo".to_string(),
-                lex_config::RuleConfig::Bare(Severity::Warn),
-            )]
-            .into_iter()
-            .collect(),
-            ..Default::default()
-        };
-        apply_rules(&mut diags, &rules);
+        apply_rules(&mut diags, |code| lookup(code, &side));
         assert_eq!(diags.len(), 1);
         assert_eq!(
             diags[0].severity,
@@ -940,6 +949,12 @@ mod tests {
 
         // `deny` is a no-op when the intrinsic is already Error, but
         // still keeps the diagnostic — symmetry with built-ins.
+        let side: BTreeMap<String, lex_config::RuleConfig> = [(
+            "acme.foo".to_string(),
+            lex_config::RuleConfig::Bare(Severity::Deny),
+        )]
+        .into_iter()
+        .collect();
         let mut diags = vec![dummy_diag(
             DiagnosticKind::Handler {
                 namespace: "acme".into(),
@@ -947,21 +962,18 @@ mod tests {
             },
             DiagnosticSeverity::Error,
         )];
-        let rules = DiagnosticsRulesConfig {
-            extra: [(
-                "acme.foo".to_string(),
-                lex_config::RuleConfig::Bare(Severity::Deny),
-            )]
-            .into_iter()
-            .collect(),
-            ..Default::default()
-        };
-        apply_rules(&mut diags, &rules);
+        apply_rules(&mut diags, |code| lookup(code, &side));
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].severity, DiagnosticSeverity::Error);
 
         // A configured rule whose code doesn't match the emitted one
         // passes the diagnostic through untouched.
+        let side: BTreeMap<String, lex_config::RuleConfig> = [(
+            "acme.other".to_string(),
+            lex_config::RuleConfig::Bare(Severity::Allow),
+        )]
+        .into_iter()
+        .collect();
         let mut diags = vec![dummy_diag(
             DiagnosticKind::Handler {
                 namespace: "acme".into(),
@@ -969,16 +981,7 @@ mod tests {
             },
             DiagnosticSeverity::Warning,
         )];
-        let rules = DiagnosticsRulesConfig {
-            extra: [(
-                "acme.other".to_string(),
-                lex_config::RuleConfig::Bare(Severity::Allow),
-            )]
-            .into_iter()
-            .collect(),
-            ..Default::default()
-        };
-        apply_rules(&mut diags, &rules);
+        apply_rules(&mut diags, |code| lookup(code, &side));
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].severity, DiagnosticSeverity::Warning);
     }
@@ -993,7 +996,7 @@ mod tests {
             missing_footnote: lex_config::RuleConfig::Bare(Severity::Allow),
             ..Default::default()
         };
-        apply_rules(&mut diags, &rules);
+        apply_rules(&mut diags, |code| rules.lookup_by_code(code).cloned());
         assert!(diags.is_empty(), "allow should drop the diagnostic");
     }
 
@@ -1007,7 +1010,7 @@ mod tests {
             table_inconsistent_columns: lex_config::RuleConfig::Bare(Severity::Deny),
             ..Default::default()
         };
-        apply_rules(&mut diags, &rules);
+        apply_rules(&mut diags, |code| rules.lookup_by_code(code).cloned());
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].severity, DiagnosticSeverity::Error);
     }
@@ -1022,7 +1025,7 @@ mod tests {
             table_inconsistent_columns: lex_config::RuleConfig::Bare(Severity::Warn),
             ..Default::default()
         };
-        apply_rules(&mut diags, &rules);
+        apply_rules(&mut diags, |code| rules.lookup_by_code(code).cloned());
         assert_eq!(diags.len(), 1);
         assert_eq!(
             diags[0].severity,
@@ -1045,7 +1048,7 @@ mod tests {
             DiagnosticSeverity::Warning,
         )];
         let rules = DiagnosticsRulesConfig::default();
-        apply_rules(&mut diags, &rules);
+        apply_rules(&mut diags, |code| rules.lookup_by_code(code).cloned());
         assert_eq!(diags.len(), 1, "unknown codes should pass through");
         assert_eq!(diags[0].severity, DiagnosticSeverity::Warning);
     }
@@ -1072,7 +1075,7 @@ mod tests {
             table_inconsistent_columns: lex_config::RuleConfig::Bare(Severity::Deny),
             ..Default::default()
         };
-        apply_rules(&mut diags, &rules);
+        apply_rules(&mut diags, |code| rules.lookup_by_code(code).cloned());
         assert_eq!(diags.len(), 2);
         assert_eq!(diags[0].kind, DiagnosticKind::UnusedFootnoteDefinition);
         assert_eq!(diags[0].severity, DiagnosticSeverity::Warning);
