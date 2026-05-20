@@ -31,8 +31,8 @@ use lex_babel::templates::{
     build_asset_snippet, build_verbatim_snippet, AssetSnippetRequest, VerbatimSnippetRequest,
 };
 use lex_config::{
-    collect_extension_diagnostic_rules, extension_rules_unknown_key_callback, LabelsConfig,
-    LexConfig, LoadedLexConfig, CONFIG_FILE_NAME,
+    collect_extension_diagnostic_rules, LabelsConfig, LexConfig, LoadedLexConfig, CONFIG_FILE_NAME,
+    DIAGNOSTICS_RULES_PATH,
 };
 use lex_core::lex::ast::links::{DocumentLink as AstDocumentLink, LinkType};
 use lex_core::lex::ast::range::SourceLocation;
@@ -730,24 +730,21 @@ fn load_with(
     search_paths: Vec<SearchPath>,
     no_env: bool,
 ) -> std::result::Result<LoadedLexConfig, clapfig::ClapfigError> {
-    let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-    let cb = extension_rules_unknown_key_callback(std::sync::Arc::clone(&captured));
     let mut builder = Clapfig::schema_builder::<LexConfig>()
         .app_name("lex")
         .file_name(CONFIG_FILE_NAME)
         .search_paths(search_paths)
-        .on_unknown_key(cb);
+        .accept_dotted_extension_keys_in(
+            DIAGNOSTICS_RULES_PATH,
+            clapfig::UnknownKeyDecision::Collect,
+        );
     if no_env {
         builder = builder.no_env();
     }
-    let config = builder.load()?;
-    let captured = std::sync::Arc::try_unwrap(captured)
-        .expect("captured Arc has no remaining holders after load")
-        .into_inner()
-        .expect("captured mutex not poisoned");
+    let (config, unknowns) = builder.load_with_unknowns()?;
     Ok(LoadedLexConfig {
         config,
-        extension_diagnostic_rules: collect_extension_diagnostic_rules(captured),
+        extension_diagnostic_rules: collect_extension_diagnostic_rules(unknowns),
     })
 }
 
