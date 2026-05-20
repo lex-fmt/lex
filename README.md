@@ -46,7 +46,14 @@ cargo build --workspace
 cargo nextest run --workspace    # or cargo test --workspace
 ```
 
-Pre-commit hook: `scripts/rust-pre-commit` (fmt, clippy, build, test).
+Pre-commit hook: `lefthook install` (lefthook composes `lefthook.yml`
+from arthur-debert/release Component fragments — md/yaml/sh lint, plus
+the rust checks):
+
+```sh
+cargo fmt --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+```
 
 Tree-sitter grammar lives in `tree-sitter/` and is released as an artifact alongside binaries.
 
