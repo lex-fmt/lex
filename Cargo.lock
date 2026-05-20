@@ -315,9 +315,9 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
 name = "clapfig"
-version = "0.21.2"
+version = "0.21.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8503a118d7897f2a647299a3c28a9c971939c37c8d9b0fd84722061c7f26f42f"
+checksum = "8e368fe4b981b163314a6aa77001fcf023083e9c8779ce7970270d2680d44ff1"
 dependencies = [
  "clap",
  "clapfig-derive",
@@ -333,9 +333,9 @@ dependencies = [
 
 [[package]]
 name = "clapfig-derive"
-version = "0.21.2"
+version = "0.21.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1dbdfcbcc0c5f4deabf8a8ea5d5dff4c63aa3cdec938146332591b71a3fc92e4"
+checksum = "6e6681f5669b900b3a8d2bfd2c3ab3c35862353b9d3cad9423c550dd890eaeb0"
 dependencies = [
  "proc-macro2",
  "quote",

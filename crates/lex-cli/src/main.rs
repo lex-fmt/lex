@@ -948,14 +948,12 @@ fn handle_labels_command(top: &ArgMatches, sub: &ArgMatches) -> i32 {
 }
 
 /// Build a clapfig builder with search paths and CLI overrides from
-/// parsed args. The `on_unknown_key` callback accepts extension-emitted
-/// diagnostic codes under `[diagnostics.rules]` so they don't error
-/// strict-mode validation. The CLI doesn't consume the side-channel —
-/// only the LSP runs `apply_rules` — so the captured entries are
-/// discarded.
+/// parsed args. `accept_dotted_extension_keys_in` lets extension-
+/// emitted diagnostic codes under `[diagnostics.rules]` pass strict-
+/// mode validation without errors. The CLI doesn't consume the
+/// collected entries — only the LSP runs `apply_rules` — so they're
+/// ignored at load time.
 fn make_builder(matches: &ArgMatches) -> SchemaConfigBuilder<LexConfig> {
-    let discard_captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-    let cb = lex_config::extension_rules_unknown_key_callback(discard_captured);
     let mut builder = Clapfig::schema_builder::<LexConfig>()
         .app_name("lex")
         .file_name(CONFIG_FILE_NAME)
@@ -966,7 +964,10 @@ fn make_builder(matches: &ArgMatches) -> SchemaConfigBuilder<LexConfig> {
         ])
         .persist_scope("local", SearchPath::Cwd)
         .persist_scope("user", SearchPath::Platform)
-        .on_unknown_key(cb);
+        .accept_dotted_extension_keys_in(
+            lex_config::DIAGNOSTICS_RULES_PATH,
+            clapfig::UnknownKeyDecision::Collect,
+        );
 
     // Explicit config file path
     if let Some(path) = matches.get_one::<String>("config-path") {
@@ -1628,12 +1629,14 @@ mod tests {
     use super::*;
 
     fn test_config() -> LexConfig {
-        let discard = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         Clapfig::schema_builder::<LexConfig>()
             .app_name("lex")
             .no_env()
             .search_paths(vec![])
-            .on_unknown_key(lex_config::extension_rules_unknown_key_callback(discard))
+            .accept_dotted_extension_keys_in(
+                lex_config::DIAGNOSTICS_RULES_PATH,
+                clapfig::UnknownKeyDecision::Collect,
+            )
             .load()
             .expect("defaults to load")
     }

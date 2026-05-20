@@ -484,14 +484,15 @@ pub struct ConvertConfig {
 #[derive(Debug, Clone, Schema, Serialize, Deserialize)]
 pub struct PdfConfig {
     /// Page profile used when exporting to PDF ("lexed" or "mobile").
-    /// `PdfPageSize` is a custom serde-deserializable enum (not a
-    /// `clapfig::Schema` type), so this is a `LeafType::Value` leaf —
-    /// serde handles the string-to-variant conversion on deserialize.
+    /// `PdfPageSize` derives `clapfig::Schema` (unit-only enum), but
+    /// field-level defaults are not yet permitted on nested-Schema
+    /// fields, so this stays a `#[clapfig(value)]` leaf with a string
+    /// default that serde resolves to the typed variant on load.
     #[clapfig(value, default = "lexed")]
     pub size: PdfPageSize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Schema, Serialize, Deserialize)]
 pub enum PdfPageSize {
     #[serde(rename = "lexed")]
     LexEd,
@@ -710,89 +711,39 @@ impl LoadedLexConfig {
     }
 }
 
-/// Shared `(key, value)` collector handed to
-/// [`extension_rules_unknown_key_callback`]. The callback pushes
-/// accepted extension-rule entries here; the loader drains it into
-/// [`LoadedLexConfig::extension_diagnostic_rules`] via
-/// [`collect_extension_diagnostic_rules`].
-pub type CapturedExtensionRules =
-    std::sync::Arc<std::sync::Mutex<Vec<(String, Option<toml::Value>)>>>;
+/// Dotted-path prefix under which extension-emitted diagnostic codes
+/// live (`<namespace>.<code>` style keys, e.g.
+/// `"acme.task-due-date-missing" = "warn"`). Used with clapfig's
+/// [`accept_dotted_extension_keys_in`](clapfig::SchemaConfigBuilder::accept_dotted_extension_keys_in)
+/// helper: any unknown key in this subtree whose remainder contains a
+/// `.` is treated as an extension code and routed to the collected-
+/// unknowns list; bare typos at this level or typos inside
+/// `[diagnostics.rules.schema]` still fail strict-mode validation.
+pub const DIAGNOSTICS_RULES_PATH: &str = "diagnostics.rules";
 
-/// Names of nested-struct fields under `[diagnostics.rules]`. The
-/// `on_unknown_key` predicate must reject unknown keys *inside* one of
-/// these subtrees (typos in `SchemaRulesConfig` fields, e.g.
-/// `[diagnostics.rules.schema] unkown_label = "warn"`). Keep this list
-/// in sync with the actual nested fields on
-/// [`DiagnosticsRulesConfig`] — the `known_nested_sections_in_sync`
-/// test asserts that.
-const DIAGNOSTICS_RULES_NESTED_SECTIONS: &[&str] = &["schema"];
-
-/// Build the `on_unknown_key` callback that distinguishes
-/// extension-emitted diagnostic codes (which we accept and capture)
-/// from typos (which we reject so clapfig surfaces them as
-/// `UnknownKeys` errors with line numbers).
+/// Drain clapfig's [`CollectedUnknown`](clapfig::CollectedUnknown) list
+/// into a [`BTreeMap<String, RuleConfig>`] suitable for
+/// [`LoadedLexConfig::extension_diagnostic_rules`].
 ///
-/// The callback also captures accepted entries' parsed values into
-/// `captured` so the loader can build
-/// [`LoadedLexConfig::extension_diagnostic_rules`] without a
-/// side-channel re-parse — the macro-driven path routes
-/// `UnknownKeyContext::value` through the runtime pipeline, so the
-/// value is populated even for quoted-dotted keys like
-/// `"acme.task-due-date-missing" = "warn"`.
-///
-/// Returns a closure suitable for
-/// [`clapfig::SchemaConfigBuilder::on_unknown_key`].
-pub fn extension_rules_unknown_key_callback(
-    captured: CapturedExtensionRules,
-) -> impl Fn(&clapfig::UnknownKeyContext<'_>) -> clapfig::UnknownKeyDecision + Send + Sync + 'static
-{
-    move |ctx: &clapfig::UnknownKeyContext<'_>| {
-        let Some(rest) = ctx.path.strip_prefix("diagnostics.rules.") else {
-            return clapfig::UnknownKeyDecision::Reject;
-        };
-        let first_segment = rest.split('.').next().unwrap_or("");
-        if DIAGNOSTICS_RULES_NESTED_SECTIONS.contains(&first_segment) {
-            // Unknown key inside a typed nested section (e.g.
-            // `[diagnostics.rules.schema] unkown_label = "warn"`) is a
-            // typo — surface it.
-            return clapfig::UnknownKeyDecision::Reject;
-        }
-        if !rest.contains('.') {
-            // Single-segment remainder = bare typo of a built-in field
-            // at the `[diagnostics.rules]` level (e.g.
-            // `missing_footote = "warn"`).
-            return clapfig::UnknownKeyDecision::Reject;
-        }
-        // Multi-segment, first segment not a known nested section →
-        // treat as `<namespace>.<code>` extension key. Capture for
-        // later transfer into `LoadedLexConfig`.
-        captured
-            .lock()
-            .expect("captured mutex not poisoned")
-            .push((rest.to_string(), ctx.value.cloned()));
-        clapfig::UnknownKeyDecision::Accept
-    }
-}
-
-/// Drain a callback-collected `(key, value)` list into a typed
-/// `BTreeMap<String, RuleConfig>`, deserializing each value through
-/// serde so the `RuleConfig` `Bare` vs `WithOptions` sum dispatch
-/// happens at this boundary.
-///
-/// Entries whose value the callback could not resolve (`None`) or
-/// whose serde deserialization fails are silently dropped — the
-/// clapfig accept decision has already been made and the load
-/// succeeded; this finalization step is best-effort. The clapfig
-/// builder is the right surface to surface deserialize errors with
-/// file+line context, not this finalization step.
+/// Only paths under [`DIAGNOSTICS_RULES_PATH`] are kept; the dotted
+/// remainder becomes the map key (e.g.
+/// `diagnostics.rules.acme.task-due-date-missing` →
+/// `acme.task-due-date-missing`). Entries whose `value` is `None` or
+/// which fail to deserialize as a [`RuleConfig`] are silently dropped
+/// — the clapfig accept decision has already been made and the load
+/// succeeded; this finalization step is best-effort.
 pub fn collect_extension_diagnostic_rules(
-    captured: Vec<(String, Option<toml::Value>)>,
+    unknowns: Vec<clapfig::CollectedUnknown>,
 ) -> BTreeMap<String, RuleConfig> {
+    let prefix = format!("{DIAGNOSTICS_RULES_PATH}.");
     let mut out = BTreeMap::new();
-    for (key, value) in captured {
-        let Some(v) = value else { continue };
-        if let Ok(rule) = v.try_into() {
-            out.insert(key, rule);
+    for u in unknowns {
+        let Some(key) = u.path.strip_prefix(&prefix) else {
+            continue;
+        };
+        let Some(value) = u.value else { continue };
+        if let Ok(rule) = value.try_into() {
+            out.insert(key.to_string(), rule);
         }
     }
     out
@@ -801,18 +752,19 @@ pub fn collect_extension_diagnostic_rules(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Arc, Mutex};
 
     fn load_defaults() -> LexConfig {
-        let captured = Arc::new(Mutex::new(Vec::new()));
-        let cb = extension_rules_unknown_key_callback(Arc::clone(&captured));
-        clapfig::Clapfig::schema_builder::<LexConfig>()
+        let (config, _unknowns) = clapfig::Clapfig::schema_builder::<LexConfig>()
             .app_name("lex")
             .no_env()
             .search_paths(vec![])
-            .on_unknown_key(cb)
-            .load()
-            .expect("defaults to load")
+            .accept_dotted_extension_keys_in(
+                DIAGNOSTICS_RULES_PATH,
+                clapfig::UnknownKeyDecision::Collect,
+            )
+            .load_with_unknowns()
+            .expect("defaults to load");
+        config
     }
 
     #[test]
@@ -831,23 +783,20 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(CONFIG_FILE_NAME);
         std::fs::write(&path, toml_body).unwrap();
-        let captured = Arc::new(Mutex::new(Vec::new()));
-        let cb = extension_rules_unknown_key_callback(Arc::clone(&captured));
-        let config = clapfig::Clapfig::schema_builder::<LexConfig>()
+        let (config, unknowns) = clapfig::Clapfig::schema_builder::<LexConfig>()
             .app_name("lex")
             .file_name(CONFIG_FILE_NAME)
             .no_env()
             .search_paths(vec![clapfig::SearchPath::Path(dir.path().to_path_buf())])
-            .on_unknown_key(cb)
-            .load()
+            .accept_dotted_extension_keys_in(
+                DIAGNOSTICS_RULES_PATH,
+                clapfig::UnknownKeyDecision::Collect,
+            )
+            .load_with_unknowns()
             .expect("loads");
-        let captured = Arc::try_unwrap(captured)
-            .expect("captured Arc has no remaining holders after load")
-            .into_inner()
-            .expect("captured mutex not poisoned");
         LoadedLexConfig {
             config,
-            extension_diagnostic_rules: collect_extension_diagnostic_rules(captured),
+            extension_diagnostic_rules: collect_extension_diagnostic_rules(unknowns),
         }
     }
 
@@ -1010,35 +959,36 @@ missing_footnote = "allow"
         assert!(loaded.lookup_diagnostic_rule("acme.unknown").is_none());
     }
 
+    fn load_expecting_error(toml_body: &str) -> clapfig::ClapfigError {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(CONFIG_FILE_NAME);
+        std::fs::write(&path, toml_body).unwrap();
+        clapfig::Clapfig::schema_builder::<LexConfig>()
+            .app_name("lex")
+            .file_name(CONFIG_FILE_NAME)
+            .no_env()
+            .search_paths(vec![clapfig::SearchPath::Path(dir.path().to_path_buf())])
+            .accept_dotted_extension_keys_in(
+                DIAGNOSTICS_RULES_PATH,
+                clapfig::UnknownKeyDecision::Collect,
+            )
+            .load_with_unknowns()
+            .expect_err("typo must surface as an unknown-key error")
+    }
+
     #[test]
     fn diagnostics_rules_typo_in_builtin_errors() {
         // Headline behaviour change vs PR #658: dropping the
         // `#[serde(flatten)] extra` catch-all means typos in built-in
         // field names are rejected by clapfig's strict-mode validator
         // again — they no longer land silently in `extra`.
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join(CONFIG_FILE_NAME);
-        std::fs::write(
-            &path,
+        let err = load_expecting_error(
             r#"
 [diagnostics.rules]
 missing_footote = "warn"
 "#,
-        )
-        .unwrap();
-        let captured = Arc::new(Mutex::new(Vec::new()));
-        let cb = extension_rules_unknown_key_callback(Arc::clone(&captured));
-        let err = clapfig::Clapfig::schema_builder::<LexConfig>()
-            .app_name("lex")
-            .file_name(CONFIG_FILE_NAME)
-            .no_env()
-            .search_paths(vec![clapfig::SearchPath::Path(dir.path().to_path_buf())])
-            .on_unknown_key(cb)
-            .load()
-            .expect_err("typo must surface as an unknown-key error");
-        let keys = err
-            .unknown_keys()
-            .expect("error variant carries UnknownKeys");
+        );
+        let keys = err.unknown_keys().expect("UnknownKeys variant");
         assert!(
             keys.iter().any(|k| k.key.ends_with("missing_footote")),
             "the misspelled key is reported: {keys:?}"
@@ -1047,53 +997,25 @@ missing_footote = "warn"
 
     #[test]
     fn diagnostics_rules_typo_inside_nested_section_errors() {
-        // The `on_unknown_key` predicate must NOT accept a typo inside
-        // a nested-built-in section (`[diagnostics.rules.schema]`) just
-        // because the dotted path has more than two segments — the
-        // first segment must not be a known nested section. This is
-        // the failure mode Gemini called out in the original review on
-        // PR #664.
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join(CONFIG_FILE_NAME);
-        std::fs::write(
-            &path,
+        // `accept_dotted_extension_keys_in` must NOT accept a typo
+        // inside a nested-built-in section (`[diagnostics.rules.schema]`)
+        // just because the dotted path has more than two segments. The
+        // clapfig-side predicate honours the schema's nested-field
+        // shape — `schema` is a typed nested object, not an open-ended
+        // extension namespace — so an unknown key under it stays a
+        // strict-mode violation. This is the failure mode Gemini
+        // flagged on the original PR #664 plan.
+        let err = load_expecting_error(
             r#"
 [diagnostics.rules.schema]
 unkown_label = "warn"
 "#,
-        )
-        .unwrap();
-        let captured = Arc::new(Mutex::new(Vec::new()));
-        let cb = extension_rules_unknown_key_callback(Arc::clone(&captured));
-        let err = clapfig::Clapfig::schema_builder::<LexConfig>()
-            .app_name("lex")
-            .file_name(CONFIG_FILE_NAME)
-            .no_env()
-            .search_paths(vec![clapfig::SearchPath::Path(dir.path().to_path_buf())])
-            .on_unknown_key(cb)
-            .load()
-            .expect_err("typo inside nested section must error");
+        );
         let keys = err.unknown_keys().expect("UnknownKeys variant");
         assert!(
             keys.iter().any(|k| k.key.ends_with("unkown_label")),
             "the misspelled nested key is reported: {keys:?}"
         );
-    }
-
-    #[test]
-    fn known_nested_sections_in_sync_with_struct_fields() {
-        // The `on_unknown_key` predicate's list of "known nested
-        // section names" must match the actual nested-struct fields
-        // on `DiagnosticsRulesConfig`. If a new nested section is
-        // added to the struct but not added to the const, typos in
-        // that section's keys would be silently accepted as extension
-        // codes — exactly the bug we're protecting against.
-        //
-        // Hard-coded ground truth: as of now, the only nested-struct
-        // field on `DiagnosticsRulesConfig` is `schema`. Adding a new
-        // nested-struct field requires updating both this assertion
-        // and `DIAGNOSTICS_RULES_NESTED_SECTIONS`.
-        assert_eq!(DIAGNOSTICS_RULES_NESTED_SECTIONS, &["schema"]);
     }
 
     // Per-config-struct `default_for_tests` helpers — the new macro
