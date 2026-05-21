@@ -1,5 +1,23 @@
 name: Rust CI
 
+# Companion CI jobs for concerns the canonical reusable workflow at
+# arthur-debert/release/.github/workflows/rust-ci.yml deliberately
+# doesn't cover:
+#
+#   - `wasm`: wasm-pack bundler build for the lex-wasm crate. The
+#     reusable workflow's `extra-targets` knob installs the rustup
+#     target but doesn't run wasm-pack; lex needs the full
+#     wasm-pack-build + artifact-verify dance to keep the
+#     @lex-fmt/lex-wasm npm publish path warm.
+#
+#   - `docs`: `cargo doc` across the workspace (excluding lex-wasm,
+#     whose feature gates collide with rustdoc's default config).
+#     This is a required status check ("Documentation") per the
+#     main-branch-protection ruleset.
+#
+# The PR-time `test` job that used to live here has been replaced by
+# the thin caller at .github/workflows/ci.yml.
+
 on:
   push:
     branches: ['**']
@@ -10,37 +28,6 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  test:
-    name: Test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          submodules: true
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
-
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@nextest
-
-      - name: Check formatting
-        run: cargo fmt -- --check
-
-      - name: Clippy
-        run: cargo clippy --workspace --exclude lex-wasm --all-targets --all-features -- -D warnings
-
-      - name: Build
-        run: cargo build --workspace --exclude lex-wasm
-
-      - name: Test
-        run: cargo nextest run --workspace --exclude lex-wasm
-
   wasm:
     name: WASM build
     runs-on: ubuntu-latest
