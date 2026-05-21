@@ -4,8 +4,10 @@
 # The reusable workflow runs the 5 `scripts/release/` primitives in order:
 #   should-release → get-current-version → (compute new) → update-release
 #   → commit + branch + admin-merge PR → trigger-release
-# All 10 gotchas from `docs/lex-release-cascade.md` are folded in.
-# Concurrency control is set inside the reusable workflow.
+# All 10 gotchas from the canonical cascade doc are folded in:
+# https://github.com/arthur-debert/release/blob/main/docs/lex-release-cascade.md
+# Concurrency control + `submodules: recursive` checkout are set
+# inside the reusable workflow.
 #
 # Cross-repo release automation: when an upstream this repo depends on
 # fires `repository_dispatch` type `upstream-released`, this listener
