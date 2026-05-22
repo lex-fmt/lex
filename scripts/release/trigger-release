@@ -6,21 +6,16 @@
 # lex is the workflow_dispatch outlier in the chain. Unlike the other
 # five repos — which release on `on: push: tags: [v*]` — lex's
 # `.github/workflows/release.yml` only triggers via `workflow_dispatch`
-# with a `version` input. That's because the canonical rust-cli reusable
-# workflow it calls expects to drive the bump+commit+tag itself; the
-# `prepare-release` action has resume-on-existing-tag logic, so this
-# works fine when the cross-repo orchestrator has pre-bumped (detects
-# the tag, validates Cargo.toml matches, skips the bump, runs downstream
-# jobs).
+# with a `version` input.
 #
-# This script is the Layer-0 primitive the cross-repo orchestrator calls
-# to fire the release. It defers to the existing repo-local
-# `scripts/trigger-release` wrapper (a one-liner over
-# `gh workflow run release.yml -f version=...`) so the dispatch logic
-# stays DRY and lives in one place.
+# This primitive is the Layer-0 entry point the cross-repo orchestrator
+# calls to fire the release. Self-contained: just dispatches the
+# release.yml workflow with the given version. Doesn't depend on any
+# repo-local wrapper (the user-facing local CLI lives at bin/release).
 #
 # Usage:  scripts/release/trigger-release <new-version>
 # Example: scripts/release/trigger-release 0.15.0
+
 set -euo pipefail
 
 usage() {
@@ -35,22 +30,23 @@ fi
 
 NEW_VERSION="$1"
 
-# Bare X.Y.Z — strict, to match the orchestrator contract. The repo-local
-# `scripts/trigger-release` accepts richer inputs (bump levels like
-# `minor`, pre-release suffixes like `0.9.0-rc.1`); this Layer-0 primitive
-# is intentionally narrower so the cross-repo driver gets a uniform
-# version-string shape across all six repos.
+# Bare X.Y.Z — strict, to match the orchestrator contract.
 if [[ ! "$NEW_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     echo "trigger-release: version must be X.Y.Z (got: $NEW_VERSION)" >&2
     exit 2
 fi
 
-# Resolve the repo-local trigger script relative to this file so the
-# primitive works regardless of the caller's $PWD. cd into the repo
-# root before exec so the delegated `scripts/trigger-release` — which
-# calls `git rev-parse --show-toplevel` — finds a git repo even when
-# this primitive is invoked from outside the worktree.
+if ! command -v gh >/dev/null 2>&1; then
+    echo "trigger-release: gh CLI not found — install from https://cli.github.com/" >&2
+    exit 1
+fi
+
+# Resolve REPO_ROOT from this script's location and cd there so `gh
+# workflow run` finds the right git context regardless of caller PWD.
+# Mirrors the convention used by sibling Layer-0 primitives
+# (should-release, get-current-version, etc.).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$REPO_ROOT"
-exec "$REPO_ROOT/scripts/trigger-release" "$NEW_VERSION"
+
+exec gh workflow run release.yml -f version="$NEW_VERSION"
