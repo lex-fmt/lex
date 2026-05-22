@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Thin shim around the canonical release-cut CLI (arthur-debert/release/bin/release-cut).
+# release-cut handles arg parsing, semver bump, validation, and dispatches the
+# CI release workflow. Run `release-cut --help` for usage.
+#
+# What CI does (all on GitHub):
+#   1. Bumps workspace version via `cargo set-version --workspace` (handles
+#      all 7 crates + 4 workspace.dependencies pins + Cargo.lock)
+#   2. Rolls ## [Unreleased] → ## [VERSION] - DATE in CHANGELOG.md
+#   3. Commits "chore: Release vX.Y.Z" on main + creates+pushes tag
+#   4. Creates GitHub Release with notes from CHANGELOG
+#   5. Builds lexd + lexd-lsp binaries for 6 platforms (macOS arm64+x86_64
+#      signed+notarized, linux x86_64-gnu+aarch64-gnu+x86_64-musl, win x86_64)
+#   6. Builds .deb packages for lexd on linux-gnu targets
+#   7. Publishes 6 crates to crates.io in dep order
+#   8. Pushes Homebrew formula to arthur-debert/homebrew-tools
+
+if ! command -v release-cut >/dev/null 2>&1; then
+    echo "bin/release: release-cut not found on \$PATH" >&2
+    echo "  install: cd ~/h/release && git pull (release-cut lives in bin/)" >&2
+    exit 1
+fi
+
+exec release-cut "$@"
