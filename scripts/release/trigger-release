@@ -36,4 +36,17 @@ if [[ ! "$NEW_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     exit 2
 fi
 
+if ! command -v gh >/dev/null 2>&1; then
+    echo "trigger-release: gh CLI not found — install from https://cli.github.com/" >&2
+    exit 1
+fi
+
+# Resolve REPO_ROOT from this script's location and cd there so `gh
+# workflow run` finds the right git context regardless of caller PWD.
+# Mirrors the convention used by sibling Layer-0 primitives
+# (should-release, get-current-version, etc.).
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+cd "$REPO_ROOT"
+
 exec gh workflow run release.yml -f version="$NEW_VERSION"

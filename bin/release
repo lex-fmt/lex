@@ -19,7 +19,7 @@ set -euo pipefail
 
 if ! command -v release-cut >/dev/null 2>&1; then
     echo "bin/release: release-cut not found on \$PATH" >&2
-    echo "  install: cd ~/h/release && git pull (release-cut lives in bin/)" >&2
+    echo "  install: clone arthur-debert/release and add its bin/ dir to \$PATH" >&2
     exit 1
 fi
 
