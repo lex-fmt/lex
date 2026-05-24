@@ -1,7 +1,6 @@
-# Generated file — see CHANGELOG/README.txt and bin/changelog-render.
+# Changelog files are generated / historical content where markdownlint
+# defaults structurally disagree with Keep-a-Changelog convention
+# (MD024 duplicate headings, MD041 first-line heading, MD013 line length).
+# Per arthur-debert/release#237.
 CHANGELOG.md
-
-# Changelog fragments are partial markdown by design (no H1, may start
-# at H3) and CHANGELOG/legacy.md is a verbatim snapshot of the
-# pre-migration CHANGELOG.md.
 CHANGELOG/
