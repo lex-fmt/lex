@@ -1,0 +1,7 @@
+# Generated file — see CHANGELOG/README.txt and bin/changelog-render.
+CHANGELOG.md
+
+# Changelog fragments are partial markdown by design (no H1, may start
+# at H3) and CHANGELOG/legacy.md is a verbatim snapshot of the
+# pre-migration CHANGELOG.md.
+CHANGELOG/

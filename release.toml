@@ -13,3 +13,9 @@ consolidate-commits = true
 pre-release-commit-message = "chore: release {{version}}"
 tag-message = "Release {{version}}"
 tag-name = "v{{version}}"
+
+# CHANGELOG.md is generated from CHANGELOG/*.md fragments by bin/changelog.
+# Disable cargo-release's built-in markdown surgery — the pre-release-hook
+# below produces the final rendered file before cargo-release stages anything.
+pre-release-replacements = []
+pre-release-hook = ["bin/changelog", "new-version", "{{version}}"]
