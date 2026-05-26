@@ -4,8 +4,8 @@
 # the same suite on ubuntu-latest directly via .github/workflows/sandbox-tests.yml.
 #
 # Usage:
-#   scripts/dev/sandbox-test-linux.sh                # nextest sandbox:: in lex-extension-host
-#   scripts/dev/sandbox-test-linux.sh <cmd> [args]   # run an arbitrary command in the container
+#   app-bin/dev/sandbox-test-linux.sh                # nextest sandbox:: in lex-extension-host
+#   app-bin/dev/sandbox-test-linux.sh <cmd> [args]   # run an arbitrary command in the container
 #
 # Notes:
 # - The image is built on first run; subsequent runs reuse it. To force
@@ -28,14 +28,14 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 IMAGE="lex-sandbox-dev:latest"
-DOCKERFILE="$REPO_ROOT/scripts/dev/Dockerfile.sandbox"
+DOCKERFILE="$REPO_ROOT/app-bin/dev/Dockerfile.sandbox"
 PLATFORM_FLAG=()
 if [[ -n "${SANDBOX_PLATFORM:-}" ]]; then
     PLATFORM_FLAG=(--platform "$SANDBOX_PLATFORM")
 fi
 
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-    docker build "${PLATFORM_FLAG[@]}" -t "$IMAGE" -f "$DOCKERFILE" "$REPO_ROOT/scripts/dev"
+    docker build "${PLATFORM_FLAG[@]}" -t "$IMAGE" -f "$DOCKERFILE" "$REPO_ROOT/app-bin/dev"
 fi
 
 if [[ $# -eq 0 ]]; then

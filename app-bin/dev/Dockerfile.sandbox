@@ -1,6 +1,6 @@
 # Linux dev container for exercising the sandbox tests on a macOS host.
 #
-# Used by scripts/dev/sandbox-test-linux.sh. CI runs the same tests on
+# Used by app-bin/dev/sandbox-test-linux.sh. CI runs the same tests on
 # ubuntu-latest directly; this image only exists so a contributor on
 # macOS can run the Linux-only sandbox suite locally without spinning
 # up a VM.
