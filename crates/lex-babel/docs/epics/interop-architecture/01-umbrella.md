@@ -2,7 +2,7 @@
 
 **Title:** babel: interop architecture work-stream — symmetrize the IR, unify label dispatch, retire the markdown HACK
 
-**Filed:** https://github.com/lex-fmt/lex/issues/613
+**Filed:** <https://github.com/lex-fmt/lex/issues/613>
 
 ---
 
@@ -24,7 +24,7 @@ The lex-babel layer was built when the language spec was smaller and the extensi
 
 These are not four independent issues. The dependency order is forced:
 
-```
+```text
 (A) Symmetric IR
        ↓
        ├──→ enables (B) Unified dispatch surface (extensions can register against
