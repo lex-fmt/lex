@@ -24,6 +24,13 @@
 //!   - trailing whitespace                (every text field trimmed)
 //!   - annotation label *spelling*        (canonical `.value` kept)
 //!   - table cell padding                 (cell text trimmed)
+//!
+//! Note on footnote normalization: `format` here is `format_lex_source`, which
+//! runs `normalize_footnotes` before serializing. That step rewrites a trailing
+//! legacy "Notes"/"Footnotes" *session* into a canonical `:: notes ::` *list*.
+//! The legacy session form is deprecated and should not occur in practice, so
+//! `canon` intentionally does not model the equivalence and no test input uses
+//! it — the canonical `:: notes ::` list form is the only one exercised.
 
 use lex_babel::transforms::format_lex_source;
 use lex_core::lex::ast::elements::inlines::{InlineNode, ReferenceType};
@@ -35,9 +42,11 @@ use lex_core::lex::parsing::parse_document;
 // format() — the function under test
 // -----------------------------------------------------------------------------
 
-/// `format(D) = serialize(parse(D))` using the default formatting rules.
-fn format(source: &str) -> String {
-    format_lex_source(source).expect("formatting should not fail")
+/// `format(D)` = parse, `normalize_footnotes`, serialize (default rules) — the
+/// same path as `lexd format`. Returns the formatter error as `Err` rather than
+/// panicking, so proptest can shrink a formatting failure to a minimal input.
+fn format(source: &str) -> Result<String, String> {
+    format_lex_source(source).map_err(|e| format!("formatting failed: {e}"))
 }
 
 // -----------------------------------------------------------------------------
@@ -61,9 +70,11 @@ enum Canon {
     Paragraph {
         text: String,
         refs: Vec<String>,
+        annotations: Vec<Canon>,
     },
     List {
         style: Option<String>,
+        annotations: Vec<Canon>,
         items: Vec<Canon>,
     },
     ListItem {
@@ -197,6 +208,7 @@ fn canon_item(item: &ContentItem) -> Option<Canon> {
         ContentItem::TextLine(tl) => Canon::Paragraph {
             text: tl.content.as_string().trim_end().to_string(),
             refs: refs_in(&tl.content),
+            annotations: Vec::new(),
         },
         ContentItem::Paragraph(p) => {
             let mut text = String::new();
@@ -210,7 +222,11 @@ fn canon_item(item: &ContentItem) -> Option<Canon> {
                     refs.extend(refs_in(&tl.content));
                 }
             }
-            Canon::Paragraph { text, refs }
+            Canon::Paragraph {
+                text,
+                refs,
+                annotations: canon_annotations(&p.annotations),
+            }
         }
         ContentItem::Session(s) => Canon::Session {
             title: s.title.as_string().trim_end().to_string(),
@@ -220,15 +236,19 @@ fn canon_item(item: &ContentItem) -> Option<Canon> {
         },
         ContentItem::List(l) => Canon::List {
             style: l.marker.as_ref().map(|m| style_tag(m.style)),
+            annotations: canon_annotations(&l.annotations),
             items: canon_items(l.items.iter()),
         },
         ContentItem::ListItem(li) => {
+            // Project *all* text elements (not just the first) so multi-line
+            // item content is covered; collect refs from each.
             let text = li
                 .text
-                .first()
-                .map(|t| t.as_string().trim_end().to_string())
-                .unwrap_or_default();
-            let refs = li.text.first().map(refs_in).unwrap_or_default();
+                .iter()
+                .map(|t| t.as_string().trim_end())
+                .collect::<Vec<_>>()
+                .join("\n");
+            let refs = li.text.iter().flat_map(refs_in).collect();
             Canon::ListItem {
                 text,
                 refs,
@@ -303,8 +323,8 @@ fn canon(doc: &Document) -> Canon {
 
 /// Tier 1: `format(format(D)) == format(D)`. Pure text equality.
 fn check_idempotent(source: &str) -> Result<(), String> {
-    let once = format(source);
-    let twice = format(&once);
+    let once = format(source)?;
+    let twice = format(&once)?;
     if once == twice {
         Ok(())
     } else {
@@ -320,7 +340,7 @@ fn check_semantic_preserved(source: &str) -> Result<(), String> {
         Ok(d) => d,
         Err(e) => return Err(format!("source did not parse: {e}")),
     };
-    let formatted = format(source);
+    let formatted = format(source)?;
     let reparsed = match parse_document(&formatted) {
         Ok(d) => d,
         Err(e) => {
@@ -414,6 +434,10 @@ fn targeted_cases() -> Vec<(&'static str, &'static str)> {
 const TIER1_TARGETED_KNOWN_FAIL: &[(&str, &str)] = &[("table_colspan", "#683")];
 
 const TIER2_TARGETED_KNOWN_FAIL: &[(&str, &str)] = &[
+    // `:: notes ::` attaches to the footnote list; the formatter drops it (#682),
+    // demoting the list to a plain numbered list.
+    ("footnotes_doc_scoped", "#682"),
+    ("footnotes_section_scoped", "#682"),
     ("ref_tk_citation_annref", "#682"),
     ("table_with_footnotes", "#684"),
     ("table_colspan", "#683"),
