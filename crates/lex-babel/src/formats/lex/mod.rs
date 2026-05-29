@@ -9,9 +9,11 @@ use crate::format::Format;
 use lex_core::lex::ast::Document;
 use lex_core::lex::transforms::standard::STRING_TO_AST;
 
+pub mod blank_coalesce;
 pub mod formatting_rules;
 pub mod serializer;
 
+use blank_coalesce::coalesce_blank_line_groups;
 use formatting_rules::FormattingRules;
 use serializer::LexSerializer;
 ///
@@ -56,9 +58,14 @@ impl Format for LexFormat {
     }
 
     fn serialize(&self, doc: &Document) -> Result<String, FormatError> {
+        // Merge adjacent blank-line groups so blank-run emission is idempotent
+        // (lex#686). Operate on a clone to keep the `&Document` contract; a
+        // no-op for documents without adjacent blank groups.
+        let mut doc = doc.clone();
+        coalesce_blank_line_groups(&mut doc);
         let serializer = LexSerializer::new(self.rules.clone());
         serializer
-            .serialize(doc)
+            .serialize(&doc)
             .map_err(FormatError::SerializationError)
     }
 }
