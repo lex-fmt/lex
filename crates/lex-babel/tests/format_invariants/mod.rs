@@ -446,8 +446,6 @@ const TIER2_TARGETED_KNOWN_FAIL: &[(&str, &str)] = &[
 const TIER1_FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[("list.lex", "#685")];
 
 const TIER2_FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[
-    ("XXX-document-simple.lex", "#681"),
-    ("XXX-document-tricky.lex", "#681"),
     ("annotation-reference.lex", "#682"),
     ("annotation.lex", "#682"),
     ("data.lex", "#681"),
