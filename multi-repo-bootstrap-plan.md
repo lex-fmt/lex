@@ -40,7 +40,7 @@ clone-lex-repos [--all] [--with-setup] [--depth=N] [--refresh] <repo>...
 
 Hard-coded in the script (one source of truth):
 
-```
+```text
 lex comms mkdocs-lex vscode lexed nvim tree-sitter-lex zed-lex
 ```
 
@@ -50,7 +50,7 @@ When a new sibling repo joins the org, this list is updated and the script is re
 
 The script prints a tab-separated summary on stdout that agents can parse:
 
-```
+```text
 repo            path                            status
 comms           /tmp/lex-fmt/comms              cloned
 vscode          /tmp/lex-fmt/vscode             skipped-exists

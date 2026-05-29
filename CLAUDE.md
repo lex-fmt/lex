@@ -6,7 +6,7 @@ Lex is a plain text format for structured documents — more expressive than Mar
 
 This is the unified Rust workspace containing all Lex crates and specifications.
 
-```
+```text
 crates/
   lex-core/       Parser crate (crates.io)
   lex-analysis/   Stateless semantic analysis (crates.io)
@@ -61,6 +61,7 @@ Editor UIs download pre-built lexd-lsp binaries from this repo's releases,
 and tree-sitter artifacts from lex-fmt/tree-sitter-lex releases.
 
 For local development, set `LEX_LSP_PATH` to point editors at a local build:
+
 ```sh
 cargo build -p lexd-lsp
 LEX_LSP_PATH=./target/debug/lexd-lsp

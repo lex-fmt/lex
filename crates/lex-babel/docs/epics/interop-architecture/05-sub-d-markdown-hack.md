@@ -2,7 +2,7 @@
 
 **Title:** babel/markdown: retire the HACK at serializer.rs:484 — adopt format-passthrough splice helper
 
-**Filed:** https://github.com/lex-fmt/lex/issues/617
+**Filed:** <https://github.com/lex-fmt/lex/issues/617>
 
 ---
 
@@ -49,7 +49,7 @@ impl<'a> SpliceState<'a> {
 }
 ```
 
-2. **Each format adapter wires `SpliceState` into its event walk** (~5 LOC of wiring) and provides a 1-line `emit_raw_passthrough(content)` callback:
+1. **Each format adapter wires `SpliceState` into its event walk** (~5 LOC of wiring) and provides a 1-line `emit_raw_passthrough(content)` callback:
 
 | Format | `emit_raw_passthrough` implementation |
 |---|---|
@@ -58,13 +58,13 @@ impl<'a> SpliceState<'a> {
 | (Future) Pandoc | `push_child(parent, Block::RawBlock("markdown".into(), content.to_string()))` |
 | (Future) LaTeX | `output.push_str(content)` |
 
-3. **`tree_to_events` and `crates/lex-babel/src/ir/events.rs` are not modified.** The IR/events layer stays exactly as it is today. The splice concern lives entirely in the consumption layer (`common/splice.rs` + each format's walker).
+1. **`tree_to_events` and `crates/lex-babel/src/ir/events.rs` are not modified.** The IR/events layer stays exactly as it is today. The splice concern lives entirely in the consumption layer (`common/splice.rs` + each format's walker).
 
-4. **The HACK comment block (`serializer.rs:441-503`) is deleted.**
+2. **The HACK comment block (`serializer.rs:441-503`) is deleted.**
 
-5. **The hardcoded metadata-label whitelist** (`author, note, title, date, tags, category, template`) is removed. Document-level labels are registered as `doc.title`, `doc.author`, `doc.date`, `doc.tags`, `doc.category`, `doc.template` (per Sub B) with `on_render` hooks emitting YAML frontmatter; `note` is content-level and handled via the generic annotation path.
+3. **The hardcoded metadata-label whitelist** (`author, note, title, date, tags, category, template`) is removed. Document-level labels are registered as `doc.title`, `doc.author`, `doc.date`, `doc.tags`, `doc.category`, `doc.template` (per Sub B) with `on_render` hooks emitting YAML frontmatter; `note` is content-level and handled via the generic annotation path.
 
-6. **HTML's current splice-sentinel mechanism migrates to `SpliceState` in the same PR.** The post-DOM string-replacement code in `formats/html/serializer.rs` (around `replace_splice_sentinels`) retires. We end with one splice mechanism, not two.
+4. **HTML's current splice-sentinel mechanism migrates to `SpliceState` in the same PR.** The post-DOM string-replacement code in `formats/html/serializer.rs` (around `replace_splice_sentinels`) retires. We end with one splice mechanism, not two.
 
 ## Why this is better than the original "typed event" proposal
 

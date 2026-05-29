@@ -2,7 +2,7 @@
 
 **Title:** babel/extensions: unify the two label-dispatch surfaces (IR-build dispatch + render dispatch) into one registry shape
 
-**Filed:** https://github.com/lex-fmt/lex/issues/615
+**Filed:** <https://github.com/lex-fmt/lex/issues/615>
 
 ---
 
@@ -27,7 +27,7 @@ Both gate on the same `Registry` schema. Both are correct in isolation. Together
 
 **Single Registry surface** with two lifecycle hook kinds, both registered alongside one schema:
 
-```
+```text
 LabelSchema {
     name: "lex.tabular.table",
     on_ir_build: Some(table_from_verbatim),   // IR-construction hook

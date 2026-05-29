@@ -26,7 +26,7 @@ The grammar itself is **regular at each indent level**. Once indent/dedent bound
 
 ## Architecture
 
-```
+```text
                     grammar.js                    scanner.c
                     ──────────                    ─────────
                     Block rules:                  Indent stack management
@@ -50,7 +50,7 @@ The grammar itself is **regular at each indent level**. Once indent/dedent bound
 | INDENT token | Emitted when indent level increases |
 | DEDENT token(s) | Emitted when indent level decreases (possibly multiple) |
 | NEWLINE token | Emitted at line boundaries and EOF (gives grammar line-awareness) |
-| annotation_marker | `:: ` at line start or mid-line (detects double-colon prefix) |
+| annotation_marker | `::` at line start or mid-line (detects double-colon prefix) |
 | annotation_end_marker | `::` alone on a line (closing marker for annotation blocks) |
 | list_item_line | Full line starting with list marker (-, 1., a), (1), etc.) |
 | subject_content | Full line ending with `:` (for definitions and verbatim blocks) |
@@ -60,7 +60,7 @@ The grammar itself is **regular at each indent level**. Once indent/dedent bound
 
 ### grammar.js Node Hierarchy
 
-```
+```text
 document
 ├── metadata?                     (:: annotations before content)
 ├── document_title?               (title + blank, no indented content)
@@ -86,7 +86,7 @@ document
 
 Both start with a content line followed by indented content. The **only** difference is a blank line.
 
-```
+```text
 Definition:           ← subject line (ends with :)
     content           ← INDENT immediately follows
 
@@ -132,6 +132,7 @@ Consumers that need attachment semantics (editors, tooling) can implement a simp
 Inline formatting (`*bold*`, `_italic_`, `` `code` ``, `#math#`, `[ref]`) will be parsed **within the grammar**, not deferred to a post-processing pass. This gives tree-sitter full incremental parsing of inline edits.
 
 Inline nesting rules use `prec()`:
+
 - Bold can contain italic, code, math, references
 - Italic can contain bold, code, math, references
 - Code, math, references are leaf nodes (no nesting)

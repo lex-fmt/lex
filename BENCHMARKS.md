@@ -48,6 +48,7 @@ Time to read a file, parse it, and emit HTML.
 | `080-gentle-introduction` (Tier B) | 24.1 KB | 60.6 ms | 1.8 ms | 241 ms |
 
 **Observations**:
+
 - `cmark` shows the floor: ~0.3 ms of real work even on 24 KB. The C reference impl is single-pass, no extensions.
 - `lexd` sits in the middle tier — 7–34× slower than `cmark` end-to-end (gap widens with doc size as parse work dominates over equal startup cost), 4–19× faster than `pandoc` (gap narrows with doc size as `pandoc`'s processing catches up to its 25 ms startup).
 - `lexd format`, `lexd → md`, and `lexd → html` agree within 1–2% on every fixture. Parse cost dominates entirely; once parsed, the IR transform + serializer is < 10% on top. **The only number that matters end-to-end is parse time.**
