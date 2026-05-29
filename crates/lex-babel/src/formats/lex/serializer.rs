@@ -112,6 +112,12 @@ impl LexSerializer {
                 self.output.push('\n');
             }
             self.consecutive_newlines = 1;
+            // A blank line must separate the title from the body; otherwise the
+            // first body line is absorbed into the title on reparse (lex#687).
+            // Skip when there is no body (avoids a stray trailing blank).
+            if !doc.root.children.is_empty() {
+                self.ensure_blank_lines(1);
+            }
         }
         doc.root.accept(&mut self);
         Ok(self.output)
