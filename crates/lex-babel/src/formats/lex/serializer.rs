@@ -519,6 +519,18 @@ fn compute_column_widths(
     widths
 }
 
+/// Append one `| text |`-style cell padded to `width` to `out` (the leading
+/// `|` of the row, and the `|` after each cell, are emitted here).
+fn push_cell(out: &mut String, text: &str, width: usize) {
+    out.push(' ');
+    out.push_str(text);
+    for _ in text.chars().count()..width {
+        out.push(' ');
+    }
+    out.push(' ');
+    out.push('|');
+}
+
 fn format_pipe_row(row: &TableRow, widths: &[usize], col_count: usize) -> String {
     let mut out = String::from("|");
     let mut col = 0;
@@ -527,36 +539,25 @@ fn format_pipe_row(row: &TableRow, widths: &[usize], col_count: usize) -> String
             break;
         }
         let span = cell.colspan.max(1);
-        let span_width: usize = widths[col..(col + span).min(widths.len())]
-            .iter()
-            .sum::<usize>()
-            + (span.saturating_sub(1)) * 3; // `| ` + ` ` between cells
-        let text = cell.content.as_string().trim();
-        out.push(' ');
-        // Padding to the spanned width (1 cell uses widths[col]).
-        let pad_target = if span == 1 {
-            widths.get(col).copied().unwrap_or(0)
-        } else {
-            span_width
-        };
-        let visible_len = text.chars().count();
-        out.push_str(text);
-        for _ in visible_len..pad_target {
-            out.push(' ');
+        // Content lives in the top-left cell of the span, at its own column
+        // width; each absorbed column re-emits a `>>` marker so the column grid
+        // (and the colspan) survive a re-parse (lex#683). Without this the cell
+        // was merged into one wide column and the span was lost.
+        // `col < col_count` here and `widths.len() == col_count`, so direct
+        // indexing is in-bounds.
+        push_cell(&mut out, cell.content.as_string().trim(), widths[col]);
+        col += 1;
+        for _ in 1..span {
+            if col >= col_count {
+                break;
+            }
+            push_cell(&mut out, ">>", widths[col]);
+            col += 1;
         }
-        out.push(' ');
-        out.push('|');
-        col += span;
     }
     // Pad trailing empty cells.
     while col < col_count {
-        out.push(' ');
-        let w = widths.get(col).copied().unwrap_or(0);
-        for _ in 0..w {
-            out.push(' ');
-        }
-        out.push(' ');
-        out.push('|');
+        push_cell(&mut out, "", widths[col]);
         col += 1;
     }
     out
