@@ -434,25 +434,24 @@ fn assert_origins(tree: &Tree, expected: &[&str]) {
     );
 }
 
-/// Assert that the include annotation with `src=expected_src` is preserved
-/// somewhere in the resolved tree.
-///
-/// "Preserved" means: attached to a node's `.annotations`, sitting in
-/// `Document.annotations` (the natural landing spot for top-of-document
-/// includes per standard lex annotation attachment), or — rarely — still
-/// in a children list as a peer item.
-fn assert_include_annotation_attached(tree: &Tree, expected_src: &str) {
-    // Document-level first.
+/// Assert the `lex.include` directive for `expected_src` was *consumed* by
+/// expansion: the spliced content replaces it and no `lex.include` annotation
+/// with that src survives anywhere in the merged tree. (Origin provenance is
+/// tracked on `Range.origin_path`, not on a preserved annotation — keeping the
+/// annotation would leak `:: lex.include ::` into expanded output now that the
+/// serializer emits attached annotations, lex#682.)
+fn assert_include_directive_consumed(tree: &Tree, expected_src: &str) {
     for ann in &tree.doc.annotations {
-        if ann.is_include() && ann.include_src().as_deref() == Some(expected_src) {
-            return;
-        }
+        assert!(
+            !(ann.is_include() && ann.include_src().as_deref() == Some(expected_src)),
+            "lex.include src={expected_src:?} should be consumed by expansion, but remains a document annotation"
+        );
     }
     let mut found = false;
     walk_for_attached_include(tree.root_children(), expected_src, &mut found);
     assert!(
-        found,
-        "no preserved lex.include annotation found with src={expected_src:?}"
+        !found,
+        "lex.include src={expected_src:?} should be consumed by expansion, but a preserved annotation remains"
     );
 }
 
@@ -547,7 +546,7 @@ fn include_with_top_level_session_at_root_is_allowed() {
 
     assert_eq!(tree.root_session_titles(), vec!["1. Chapter One"]);
     assert_no_unresolved_includes(&tree);
-    assert_include_annotation_attached(&tree, "chapter.lex");
+    assert_include_directive_consumed(&tree, "chapter.lex");
 }
 
 #[test]
@@ -624,8 +623,8 @@ fn multiple_includes_in_same_parent_are_independent() {
         tree.root_session_titles(),
         vec!["1. Chapter A", "2. Chapter B"]
     );
-    assert_include_annotation_attached(&tree, "a.lex");
-    assert_include_annotation_attached(&tree, "b.lex");
+    assert_include_directive_consumed(&tree, "a.lex");
+    assert_include_directive_consumed(&tree, "b.lex");
     assert_no_unresolved_includes(&tree);
 }
 
