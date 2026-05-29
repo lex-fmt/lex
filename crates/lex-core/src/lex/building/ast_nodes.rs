@@ -317,13 +317,15 @@ pub(super) fn data_node(data: DataExtraction, source_location: &SourceLocation) 
 /// Create an Annotation AST node from a Data node and child content.
 pub(super) fn annotation_node(data: Data, content: Vec<ContentElement>) -> ContentItem {
     let child_items: Vec<ContentItem> = content.iter().cloned().map(ContentItem::from).collect();
-    // An annotation always begins at its `::` marker (the Data location). Anchor
-    // the location START there and only extend the END over child content — a
-    // child carrying a default/zero location (e.g. a marker's empty-paragraph
-    // artifact) must not be able to drag the annotation's start back to line 0,
-    // which would lose its real source position (#693). `blank_lines_between`
-    // keys attachment distance on the END line, so anchoring the start does not
-    // change attachment behavior.
+    // Anchor the annotation's location START at the `Data` (label/params) span
+    // and only extend the END over child content. A child carrying a default or
+    // zero location (e.g. a marker's empty-paragraph re-parse artifact) must not
+    // be able to drag the start back to line 0, which would lose the
+    // annotation's real source position (#693). `blank_lines_between` keys
+    // attachment distance on the END line, so anchoring the start does not
+    // change attachment behavior. (The label span sits just inside the opening
+    // `::`; close enough for ordering and distance — the markers themselves are
+    // not separately tracked in `DataExtraction`.)
     let location = annotation_location(&data.location, &child_items);
 
     let annotation = Annotation::from_data(data, content).at(location);

@@ -45,15 +45,17 @@ fn child_is_empty(item: &ContentItem) -> bool {
     }
 }
 
-/// Drop the empty-paragraph artifact from a marker annotation, recursing into
-/// genuine block children.
+/// Normalize an annotation's body. A marker (`:: label ::`) re-parses with a
+/// lone empty-paragraph artifact; clear it so the marker emits without a body.
+/// A genuine block body is left intact — including its blank-line separators
+/// between paragraphs — and recursed into so nested annotations inline.
 fn clean_annotation(ann: &mut Annotation) {
-    let kept: Vec<ContentItem> = std::mem::take(ann.children.as_mut_vec())
-        .into_iter()
-        .filter(|c| !child_is_empty(c))
-        .collect();
-    *ann.children.as_mut_vec() = kept;
-    process_stream(ann.children.as_mut_vec());
+    let has_real_body = ann.children.iter().any(|c| !child_is_empty(c));
+    if has_real_body {
+        process_stream(ann.children.as_mut_vec());
+    } else {
+        ann.children.as_mut_vec().clear();
+    }
 }
 
 pub fn inline_attached_annotations(doc: &mut Document) {
@@ -153,7 +155,9 @@ fn process_stream(items: &mut Vec<ContentItem>) {
             }
             ContentItem::Paragraph(p) => bubble.append(&mut p.annotations),
             ContentItem::VerbatimBlock(v) => bubble.append(&mut v.annotations),
-            ContentItem::Annotation(a) => process_stream(a.children.as_mut_vec()),
+            // Annotation children are processed by `clean_annotation` below
+            // (recursing once); do not recurse here too, or nested annotations
+            // would be processed 2^depth times.
             // Table annotations are emitted by Table::accept; leave in place.
             _ => {}
         }
@@ -163,11 +167,20 @@ fn process_stream(items: &mut Vec<ContentItem>) {
         items.push(ContentItem::Annotation(ann));
     }
     // Clean every annotation now in this stream (bubbled-in plus any that were
-    // already inline), then restore source order across the whole stream.
+    // already inline) — recurses into block bodies exactly once.
     for item in items.iter_mut() {
         if let ContentItem::Annotation(a) = item {
             clean_annotation(a);
         }
     }
-    items.sort_by_key(item_key);
+    // Restore source order so reinserted annotations land where they were
+    // authored — but only when every item shares one source origin. After
+    // include expansion a stream can mix coordinate spaces from different files,
+    // where a positional sort would scramble already-correct order (#682 review).
+    let mixed_origin = items
+        .iter()
+        .any(|i| i.range().origin_path != items[0].range().origin_path);
+    if !items.is_empty() && !mixed_origin {
+        items.sort_by_key(item_key);
+    }
 }

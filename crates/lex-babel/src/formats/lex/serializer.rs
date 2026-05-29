@@ -626,6 +626,12 @@ mod tests {
     use lex_core::lex::testing::lexplore::{ElementType, Lexplore};
     use lex_core::lex::testing::text_diff::assert_text_eq;
 
+    /// Drive the bare `LexSerializer` directly. NOTE: this bypasses
+    /// `LexFormat::serialize`'s pre/post passes (annotation inlining, blank
+    /// coalescing, trailing-blank trim), so its output can differ from
+    /// `lexd format`. Use `format_full` when the full pipeline matters (e.g.
+    /// annotation cases). Kept for the many element tests that assert the
+    /// serializer's raw structural output.
     fn format_source(source: &str) -> String {
         let format = super::super::LexFormat::default();
         let doc = format.parse(source).unwrap();

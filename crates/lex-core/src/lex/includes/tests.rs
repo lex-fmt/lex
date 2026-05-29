@@ -434,13 +434,6 @@ fn assert_origins(tree: &Tree, expected: &[&str]) {
     );
 }
 
-/// Assert that the include annotation with `src=expected_src` is preserved
-/// somewhere in the resolved tree.
-///
-/// "Preserved" means: attached to a node's `.annotations`, sitting in
-/// `Document.annotations` (the natural landing spot for top-of-document
-/// includes per standard lex annotation attachment), or — rarely — still
-/// in a children list as a peer item.
 /// Assert the `lex.include` directive for `expected_src` was *consumed* by
 /// expansion: the spliced content replaces it and no `lex.include` annotation
 /// with that src survives anywhere in the merged tree. (Origin provenance is
