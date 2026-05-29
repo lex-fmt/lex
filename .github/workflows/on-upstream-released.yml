@@ -30,7 +30,7 @@ permissions:
 
 jobs:
   cascade:
-    uses: arthur-debert/release/.github/workflows/cascade-handler.yml@v1
+    uses: arthur-debert/release/.github/workflows/cascade-handler.yml@v2
     with:
       git-author-name: lex-fmt release-bot
       git-author-email: release-bot@lex-fmt.local
