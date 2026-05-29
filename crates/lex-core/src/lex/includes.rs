@@ -640,15 +640,14 @@ fn process_resolves(
 
         match resolve_one_invocation(&annotation, state, kind)? {
             ResolveOutcome::Spliced(splice_items) => {
-                // Replace the annotation with `[annotation, ...splice_items]`.
-                // The annotation itself stays in the children list immediately
-                // before the splice, so the post-resolution AttachAnnotations
-                // pass moves it onto the first spliced node by the standard
-                // "attach to next sibling" rule.
-                let mut replacement = Vec::with_capacity(splice_items.len() + 1);
-                replacement.push(ContentItem::Annotation(annotation));
-                replacement.extend(splice_items);
-                children.splice(i..=i, replacement);
+                // Expansion replaces the directive with the included content. The
+                // `lex.include` annotation is consumed — drop it. (It used to be
+                // kept in the stream as provenance, relying on the serializer
+                // dropping attached annotations; now that the serializer emits
+                // them (lex#682), keeping it would leak `:: lex.include ::` into
+                // expanded output. Origin provenance is tracked on
+                // `Range.origin_path`, not this node.)
+                children.splice(i..=i, splice_items);
             }
             ResolveOutcome::Unexpanded => {
                 // Handler opted out of expanding this invocation. The

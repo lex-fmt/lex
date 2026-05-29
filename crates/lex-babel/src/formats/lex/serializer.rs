@@ -120,6 +120,18 @@ impl LexSerializer {
             }
         }
         doc.root.accept(&mut self);
+
+        // Normalize trailing blank lines to a single newline unless configured
+        // to preserve them. Block elements (annotations, verbatim) can leave a
+        // structural trailing blank when they are the last node; trimming here
+        // keeps the document tail idempotent.
+        if !self.rules.preserve_trailing_blanks {
+            let end = self.output.trim_end_matches('\n').len();
+            self.output.truncate(end);
+            if !self.output.is_empty() {
+                self.output.push('\n');
+            }
+        }
         Ok(self.output)
     }
 
@@ -327,10 +339,11 @@ impl Visitor for LexSerializer {
             }
         }
 
-        // Only add closing :: for short-form annotations (no children)
-        if annotation.children.is_empty() {
-            header.push_str(" ::");
-        }
+        // Always close the header with ` ::`. The open form (`:: label`) is not
+        // valid annotation syntax — the parser drops it — so a block annotation
+        // must be `:: label ::` followed by its indented body to round-trip
+        // (lex#682).
+        header.push_str(" ::");
 
         self.write_line(&header);
 
@@ -342,6 +355,12 @@ impl Visitor for LexSerializer {
     fn leave_annotation(&mut self, annotation: &Annotation) {
         if !annotation.children.is_empty() {
             self.indent_level -= 1;
+            // A block annotation's body is closed by a dedent; the parser
+            // consumes the following blank line as part of that close (it is not
+            // a `BlankLineGroup` in the AST, like the pre-verbatim blank in
+            // lex#505), so without re-emitting it a following sibling is parsed
+            // as part of the body. Emit it so the block round-trips (lex#682).
+            self.ensure_blank_lines(1);
         }
     }
 
@@ -616,6 +635,17 @@ mod tests {
         serializer.output
     }
 
+    /// Format through the full `LexFormat` pipeline (annotation inlining +
+    /// blank coalescing), i.e. what `lexd format` actually does — as opposed to
+    /// driving the bare `LexSerializer`. Needed for annotation cases, where the
+    /// pipeline strips the empty-paragraph marker artifact.
+    fn format_full(source: &str) -> String {
+        use crate::format::Format;
+        let format = super::super::LexFormat::default();
+        let doc = format.parse(source).unwrap();
+        format.serialize(&doc).unwrap()
+    }
+
     // ==== Form-preserving roundtrip tests (#584 PR 3) =====================
 
     #[test]
@@ -867,27 +897,26 @@ mod tests {
     #[test]
     fn test_annotation_01_marker_simple() {
         let source = Lexplore::load(ElementType::Annotation, 1).source();
-        let formatted = format_source(&source);
-        // Document-level annotations should be preserved
-        assert_eq!(formatted, ":: note\n");
+        let formatted = format_full(&source);
+        // Marker annotation: closed `:: label ::` form (the open form is invalid
+        // and dropped on re-parse — lex#682).
+        assert_eq!(formatted, ":: note ::\n");
     }
 
     #[test]
     fn test_annotation_02_with_params() {
         let source = Lexplore::load(ElementType::Annotation, 2).source();
-        let formatted = format_source(&source);
-        // Document-level annotations should be preserved
-        assert_eq!(formatted, ":: warning severity=high\n");
+        let formatted = format_full(&source);
+        assert_eq!(formatted, ":: warning severity=high ::\n");
     }
 
     #[test]
     fn test_annotation_05_block_paragraph() {
         let source = Lexplore::load(ElementType::Annotation, 5).source();
-        let formatted = format_source(&source);
-        // Document-level annotations should be preserved
+        let formatted = format_full(&source);
         assert_eq!(
             formatted,
-            ":: note\n    This is an important note that requires a detailed explanation.\n"
+            ":: note ::\n    This is an important note that requires a detailed explanation.\n"
         );
     }
 

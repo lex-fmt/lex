@@ -422,40 +422,31 @@ fn targeted_cases() -> Vec<(&'static str, &'static str)> {
 // listed case still fails (so the list cannot rot — when a bug is fixed the
 // test tells you to delete the entry) and logs the excluded set on each run.
 //
-// Bugs:
-//   #682 — attached annotations dropped on serialize
-//   #683 — table colspan (>>) dropped
+// Bugs (shipped fixes removed their entries here):
 //   #684 — table footnote list emitted outside the block
 //   #685 — list renumbering not idempotent (nested/extended)
-// The element-fixture failures span these plus edge cases still under triage;
-// they are tracked against the umbrella issue #681.
+//   #696 — residual annotation round-trip edges (doc-level block-annotation
+//          re-attachment; deeply-nested annotation-example body indentation)
+//   #681 — umbrella for remaining mixed/untriaged element-fixture sweep failures
 // -----------------------------------------------------------------------------
 
 const TIER1_TARGETED_KNOWN_FAIL: &[(&str, &str)] = &[];
 
 const TIER2_TARGETED_KNOWN_FAIL: &[(&str, &str)] = &[
-    // `:: notes ::` attaches to the footnote list; the formatter drops it (#682),
-    // demoting the list to a plain numbered list.
-    ("footnotes_doc_scoped", "#682"),
-    ("footnotes_section_scoped", "#682"),
-    ("ref_tk_citation_annref", "#682"),
+    ("ref_tk_citation_annref", "#696"),
     ("table_with_footnotes", "#684"),
 ];
 
-const TIER1_FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[("list.lex", "#685")];
+const TIER1_FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[("escaping.lex", "#696"), ("list.lex", "#685")];
 
 const TIER2_FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[
-    ("annotation-reference.lex", "#682"),
-    ("annotation.lex", "#682"),
+    ("annotation.lex", "#696"),
     ("data.lex", "#681"),
-    ("escaping.lex", "#681"),
-    ("footnotes.lex", "#682"),
+    ("escaping.lex", "#696"),
     ("label.lex", "#681"),
-    ("lex.include.lex", "#681"),
-    ("list.lex", "#681"),
+    ("list.lex", "#685"),
     ("parameter.lex", "#681"),
     ("table.lex", "#684"),
-    ("verbatim.lex", "#681"),
 ];
 
 #[cfg(test)]
