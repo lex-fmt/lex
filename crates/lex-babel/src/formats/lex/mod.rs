@@ -9,7 +9,7 @@ use crate::format::Format;
 use lex_core::lex::ast::Document;
 use lex_core::lex::transforms::standard::STRING_TO_AST;
 
-pub mod blank_coalesce;
+mod blank_coalesce;
 pub mod formatting_rules;
 pub mod serializer;
 

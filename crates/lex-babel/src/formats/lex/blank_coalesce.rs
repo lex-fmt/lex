@@ -29,10 +29,18 @@ fn coalesce(items: &mut Vec<ContentItem>) {
             ContentItem::List(l) => coalesce(l.items.as_mut_vec()),
             ContentItem::Annotation(a) => coalesce(a.children.as_mut_vec()),
             ContentItem::Table(t) => {
+                // Mirror Table::accept: cell children, attached annotations,
+                // and the footnote list are all traversed on serialization.
                 for row in t.header_rows.iter_mut().chain(t.body_rows.iter_mut()) {
                     for cell in &mut row.cells {
                         coalesce(cell.children.as_mut_vec());
                     }
+                }
+                for ann in &mut t.annotations {
+                    coalesce(ann.children.as_mut_vec());
+                }
+                if let Some(list) = &mut t.footnotes {
+                    coalesce(list.items.as_mut_vec());
                 }
             }
             _ => {}
