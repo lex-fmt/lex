@@ -543,23 +543,21 @@ fn format_pipe_row(row: &TableRow, widths: &[usize], col_count: usize) -> String
         // width; each absorbed column re-emits a `>>` marker so the column grid
         // (and the colspan) survive a re-parse (lex#683). Without this the cell
         // was merged into one wide column and the span was lost.
-        push_cell(
-            &mut out,
-            cell.content.as_string().trim(),
-            widths.get(col).copied().unwrap_or(0),
-        );
+        // `col < col_count` here and `widths.len() == col_count`, so direct
+        // indexing is in-bounds.
+        push_cell(&mut out, cell.content.as_string().trim(), widths[col]);
         col += 1;
         for _ in 1..span {
             if col >= col_count {
                 break;
             }
-            push_cell(&mut out, ">>", widths.get(col).copied().unwrap_or(0));
+            push_cell(&mut out, ">>", widths[col]);
             col += 1;
         }
     }
     // Pad trailing empty cells.
     while col < col_count {
-        push_cell(&mut out, "", widths.get(col).copied().unwrap_or(0));
+        push_cell(&mut out, "", widths[col]);
         col += 1;
     }
     out
