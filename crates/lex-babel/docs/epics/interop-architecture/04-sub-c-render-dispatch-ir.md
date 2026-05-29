@@ -2,7 +2,7 @@
 
 **Title:** babel: migrate render_dispatch from lex-core AST to the IR
 
-**Filed:** https://github.com/lex-fmt/lex/issues/616
+**Filed:** <https://github.com/lex-fmt/lex/issues/616>
 
 ---
 

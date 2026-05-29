@@ -1,12 +1,11 @@
 _lex() {
-    local i cur prev opts cmd
+    local i cur opts cmd transforms word
     COMPREPLY=()
     if [[ "${BASH_VERSINFO[0]}" -ge 4 ]]; then
         cur="$2"
     else
         cur="${COMP_WORDS[COMP_CWORD]}"
     fi
-    prev="$3"
     cmd=""
     opts=""
 
@@ -28,6 +27,7 @@ _lex() {
 
             # Handle flags
             if [[ ${cur} == -* ]] ; then
+                # shellcheck disable=SC2207  # intentional word-split of compgen output; mapfile is bash4+ only and this completion supports bash 3
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
@@ -42,12 +42,14 @@ _lex() {
 
             # First positional argument: file path
             if [[ ${arg_count} -eq 0 ]]; then
+                # shellcheck disable=SC2207  # intentional word-split of compgen output; mapfile is bash4+ only and this completion supports bash 3
                 COMPREPLY=( $(compgen -f -- "${cur}") )
                 return 0
             fi
 
             # Second positional argument: transform format
             if [[ ${arg_count} -eq 1 ]]; then
+                # shellcheck disable=SC2207  # intentional word-split of compgen output; mapfile is bash4+ only and this completion supports bash 3
                 COMPREPLY=( $(compgen -W "${transforms}" -- "${cur}") )
                 return 0
             fi

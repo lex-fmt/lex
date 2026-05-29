@@ -2,7 +2,7 @@
 
 **Title:** babel/ir: advance IR ↔ Lex symmetry — Phase 3b document annotations, reference sub-types, round-trip audit
 
-**Filed:** https://github.com/lex-fmt/lex/issues/614
+**Filed:** <https://github.com/lex-fmt/lex/issues/614>
 
 ---
 
