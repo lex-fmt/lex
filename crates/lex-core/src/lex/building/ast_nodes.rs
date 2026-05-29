@@ -317,11 +317,35 @@ pub(super) fn data_node(data: DataExtraction, source_location: &SourceLocation) 
 /// Create an Annotation AST node from a Data node and child content.
 pub(super) fn annotation_node(data: Data, content: Vec<ContentElement>) -> ContentItem {
     let child_items: Vec<ContentItem> = content.iter().cloned().map(ContentItem::from).collect();
-    let location = aggregate_locations(data.location.clone(), &child_items);
+    // An annotation always begins at its `::` marker (the Data location). Anchor
+    // the location START there and only extend the END over child content — a
+    // child carrying a default/zero location (e.g. a marker's empty-paragraph
+    // artifact) must not be able to drag the annotation's start back to line 0,
+    // which would lose its real source position (#693). `blank_lines_between`
+    // keys attachment distance on the END line, so anchoring the start does not
+    // change attachment behavior.
+    let location = annotation_location(&data.location, &child_items);
 
     let annotation = Annotation::from_data(data, content).at(location);
 
     ContentItem::Annotation(annotation)
+}
+
+/// Compute an annotation's location: start fixed at the `::` marker (`primary`),
+/// end extended to cover the marker and any child content.
+fn annotation_location(primary: &Range, children: &[ContentItem]) -> Range {
+    let mut end_pos = primary.end;
+    let mut end_byte = primary.span.end;
+    for item in children {
+        let r = item.range();
+        if r.end > end_pos {
+            end_pos = r.end;
+            end_byte = r.span.end;
+        } else if r.end == end_pos {
+            end_byte = end_byte.max(r.span.end);
+        }
+    }
+    Range::new(primary.span.start..end_byte, primary.start, end_pos)
 }
 
 // ============================================================================
