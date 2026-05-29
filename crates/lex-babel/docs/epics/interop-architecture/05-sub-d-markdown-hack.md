@@ -60,11 +60,11 @@ impl<'a> SpliceState<'a> {
 
 1. **`tree_to_events` and `crates/lex-babel/src/ir/events.rs` are not modified.** The IR/events layer stays exactly as it is today. The splice concern lives entirely in the consumption layer (`common/splice.rs` + each format's walker).
 
-2. **The HACK comment block (`serializer.rs:441-503`) is deleted.**
+1. **The HACK comment block (`serializer.rs:441-503`) is deleted.**
 
-3. **The hardcoded metadata-label whitelist** (`author, note, title, date, tags, category, template`) is removed. Document-level labels are registered as `doc.title`, `doc.author`, `doc.date`, `doc.tags`, `doc.category`, `doc.template` (per Sub B) with `on_render` hooks emitting YAML frontmatter; `note` is content-level and handled via the generic annotation path.
+1. **The hardcoded metadata-label whitelist** (`author, note, title, date, tags, category, template`) is removed. Document-level labels are registered as `doc.title`, `doc.author`, `doc.date`, `doc.tags`, `doc.category`, `doc.template` (per Sub B) with `on_render` hooks emitting YAML frontmatter; `note` is content-level and handled via the generic annotation path.
 
-4. **HTML's current splice-sentinel mechanism migrates to `SpliceState` in the same PR.** The post-DOM string-replacement code in `formats/html/serializer.rs` (around `replace_splice_sentinels`) retires. We end with one splice mechanism, not two.
+1. **HTML's current splice-sentinel mechanism migrates to `SpliceState` in the same PR.** The post-DOM string-replacement code in `formats/html/serializer.rs` (around `replace_splice_sentinels`) retires. We end with one splice mechanism, not two.
 
 ## Why this is better than the original "typed event" proposal
 

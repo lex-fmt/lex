@@ -1,5 +1,5 @@
 _lex() {
-    local i cur opts cmd
+    local i cur opts cmd transforms word
     COMPREPLY=()
     if [[ "${BASH_VERSINFO[0]}" -ge 4 ]]; then
         cur="$2"
