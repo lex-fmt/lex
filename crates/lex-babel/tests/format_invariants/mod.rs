@@ -431,7 +431,7 @@ fn targeted_cases() -> Vec<(&'static str, &'static str)> {
 // they are tracked against the umbrella issue #681.
 // -----------------------------------------------------------------------------
 
-const TIER1_TARGETED_KNOWN_FAIL: &[(&str, &str)] = &[("table_colspan", "#683")];
+const TIER1_TARGETED_KNOWN_FAIL: &[(&str, &str)] = &[];
 
 const TIER2_TARGETED_KNOWN_FAIL: &[(&str, &str)] = &[
     // `:: notes ::` attaches to the footnote list; the formatter drops it (#682),
@@ -440,7 +440,6 @@ const TIER2_TARGETED_KNOWN_FAIL: &[(&str, &str)] = &[
     ("footnotes_section_scoped", "#682"),
     ("ref_tk_citation_annref", "#682"),
     ("table_with_footnotes", "#684"),
-    ("table_colspan", "#683"),
 ];
 
 const TIER1_FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[("list.lex", "#685")];
