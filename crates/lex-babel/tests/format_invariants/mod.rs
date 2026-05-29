@@ -610,7 +610,6 @@ mod tests {
 //   - attached annotations            (#682)
 //   - tables                          (#683, #684)
 //   - nested/extended numbered lists  (#685)
-//   - 3+ blank lines *after* a list   (#686 — capped to 2 below)
 //   - a bare document title line       (#687 — generator leads with a 2-line
 //                                        paragraph, which is never title-absorbed)
 //   - random *leading* indent widths  (untriaged paragraph-merge edge, #681)
@@ -702,22 +701,19 @@ mod messy_proptest {
         })
     }
 
-    /// `is_list` lets the assembler cap the *following* blank run to <= 2,
-    /// dodging the open list/blank idempotence bug (#686) while still letting
-    /// non-list boundaries exercise the >2 -> 2 blank-clamp normalizer.
-    fn block() -> impl Strategy<Value = (bool, String)> {
+    fn block() -> impl Strategy<Value = String> {
         prop_oneof![
-            paragraph_block().prop_map(|s| (false, s)),
-            unordered_block().prop_map(|s| (true, s)),
-            numbered_block().prop_map(|s| (true, s)),
-            definition_block().prop_map(|s| (false, s)),
+            paragraph_block(),
+            unordered_block(),
+            numbered_block(),
+            definition_block(),
         ]
     }
 
     /// A whole document. To avoid the title bug (#687) it opens with a
     /// guaranteed two-line paragraph (never title-absorbed), then blocks
     /// separated by blank-line runs of random width (1..4 — the formatter
-    /// clamps to <= 2), capped to <= 2 after a list per #686.
+    /// clamps to <= 2, including the 3+-blanks-after-a-list case fixed in #686).
     fn messy_document() -> impl Strategy<Value = String> {
         (
             (words(), words()),
@@ -725,17 +721,10 @@ mod messy_proptest {
         )
             .prop_map(|((lead1, lead2), blocks)| {
                 let mut out = format!("{lead1}\n{lead2}\n");
-                let mut prev_is_list = false; // lead paragraph is not a list
-                for ((is_list, b), blanks) in blocks.iter() {
-                    let blanks = if prev_is_list {
-                        (*blanks).min(2)
-                    } else {
-                        *blanks
-                    };
-                    out.push_str(&"\n".repeat(blanks));
+                for (b, blanks) in blocks.iter() {
+                    out.push_str(&"\n".repeat(*blanks));
                     out.push_str(b);
                     out.push('\n');
-                    prev_is_list = *is_list;
                 }
                 out
             })
