@@ -22,3 +22,6 @@ mod round_trip_proptest;
 
 #[cfg(test)]
 mod ir_round_trip_proptest;
+
+#[cfg(test)]
+mod format_invariants;
