@@ -602,6 +602,24 @@ mod tests {
             check_semantic_preserved,
         );
     }
+
+    /// The `table_aligned_header` Tier-2 case only proves alignment is *symmetric*
+    /// across a round-trip — it would also pass if alignment were dropped on both
+    /// sides (the old #702 blind spot). This asserts the stronger property: the
+    /// markdown separator-row alignment hints are actually *retained* in the
+    /// formatted output, not flattened to a plain `---` separator.
+    #[test]
+    fn table_separator_alignment_is_retained() {
+        let src =
+            "Stats:\n    | Name | Score |\n    |:---|---:|\n    | Alice | 10 |\n:: table ::\n";
+        let formatted = format(src).expect("format");
+        assert!(
+            formatted.contains(":---") && formatted.contains("---:"),
+            "alignment markers must survive formatting (lex#702); got:\n{formatted}"
+        );
+        // And re-emitting is a fixed point.
+        assert_eq!(format(&formatted).expect("reformat"), formatted);
+    }
 }
 
 // -----------------------------------------------------------------------------

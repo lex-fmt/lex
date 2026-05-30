@@ -303,8 +303,10 @@ pub fn table_from_lines(
     // Actual config from :: table :: annotation is applied later in assembly.
     let data = extraction::extract_table_data(subject_token, content_tokens, source);
 
-    // 2. Create table with defaults
-    let alignments: Vec<crate::lex::ast::TableCellAlignment> = Vec::new();
+    // 2. Create table, seeding per-column alignment from the markdown separator
+    //    row (`:---`, `---:`, `:---:`). The `:: table align=… ::` parameter, if
+    //    present, overrides these in a later assembly stage (apply_table_config).
+    let alignments = data.alignments.clone();
     let mut table_item = ast_nodes::table_node(data, &alignments, source_location);
 
     // 3. Attach config annotation to the table if present
