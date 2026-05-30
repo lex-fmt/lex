@@ -44,7 +44,7 @@
 //!     a few consequential marks in lines (blank, data, subject, list) having them
 //!     denormalized is required to have parsing simpler.
 //!
-//!     The definitive set is the LineType enum (blank, data marker, data, subject,
+//!     The definitive set is the LineType enum (blank, data marker, subject,
 //!     list, subject-or-list-item, paragraph, dialog, indent, dedent), and containers are
 //!     a separate structural node, not a line token.
 //!

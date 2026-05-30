@@ -14,7 +14,7 @@
 //!     consequential marks in lines (blank, data, subject, list) having them denormalized is
 //!     required to have parsing simpler.
 //!
-//!     The LineType enum is the definitive set: blank, annotation start, data, subject, list,
+//!     The LineType enum is the definitive set: blank, data marker, subject, list,
 //!     subject-or-list-item, paragraph, dialog, indent, dedent. Containers are a separate
 //!     structural node, not a line token.
 //!
@@ -24,7 +24,6 @@
 //!
 //!         - BlankLine: empty or whitespace only
 //!         - DataMarkerLine: a data marker in closed form (:: label params? ::)
-//!         - DataLine: :: label params? (no closing :: marker)
 //!         - SubjectLine: Line ending with colon (could be subject/definition/session title)
 //!         - ListLine: Line starting with list marker (-, 1., a., I., etc.)
 //!         - SubjectOrListItemLine: Line starting with list marker and ending with colon
@@ -97,9 +96,6 @@ pub enum LineType {
     /// Used for both annotation headers and verbatim closing lines.
     DataMarkerLine,
 
-    /// Data line: :: label params? (no closing :: marker)
-    DataLine,
-
     /// Line ending with colon (could be subject/definition/session title)
     SubjectLine,
 
@@ -137,7 +133,6 @@ impl fmt::Display for LineType {
         let name = match self {
             LineType::BlankLine => "BLANK_LINE",
             LineType::DataMarkerLine => "DATA_MARKER_LINE",
-            LineType::DataLine => "DATA_LINE",
             LineType::SubjectLine => "SUBJECT_LINE",
             LineType::ListLine => "LIST_LINE",
             LineType::SubjectOrListItemLine => "SUBJECT_OR_LIST_ITEM_LINE",
@@ -164,7 +159,6 @@ impl LineType {
         let name = match self {
             LineType::BlankLine => "blank-line",
             LineType::DataMarkerLine => "data-marker-line",
-            LineType::DataLine => "data-line",
             LineType::SubjectLine => "subject-line",
             LineType::ListLine => "list-line",
             LineType::SubjectOrListItemLine => "subject-or-list-item-line",

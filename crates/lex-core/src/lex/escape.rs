@@ -959,7 +959,7 @@ mod tests {
     }
 
     #[test]
-    fn structural_markers_data_line_with_quoted_marker() {
+    fn structural_markers_single_opening_with_quoted_marker() {
         use crate::lex::token::Token;
         // :: test.note foo=":: value"  (no closing ::)
         let tokens = vec![
