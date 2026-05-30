@@ -490,6 +490,9 @@ enum Slot<'a> {
     Colspan,
     /// A column absorbed by a rowspan above it — re-emits `^^` (lex#694).
     Rowspan,
+    /// Padding for a column a short row never reaches but that sits *before* a
+    /// rowspan-covered column further right; keeps later `^^` markers in place.
+    Empty,
 }
 
 impl Slot<'_> {
@@ -499,6 +502,7 @@ impl Slot<'_> {
             Slot::Origin(cell) => cell.content.as_string().trim(),
             Slot::Colspan => ">>",
             Slot::Rowspan => "^^",
+            Slot::Empty => "",
         }
     }
 }
@@ -541,8 +545,14 @@ fn build_grid<'a>(rows: &[&'a TableRow]) -> Vec<Vec<Slot<'a>>> {
                     slots.push(Slot::Colspan);
                 }
                 col += span;
+            } else if carry.iter().skip(col).any(|&r| r > 0) {
+                // Cells are exhausted but a rowspan still covers a column further
+                // right; pad this hole so that column's `^^` is still emitted and
+                // its `carry` is consumed in *this* row rather than leaking down.
+                slots.push(Slot::Empty);
+                col += 1;
             } else {
-                // No more cells and this column isn't covered: row is done.
+                // No more cells and nothing covered ahead: row is done.
                 break;
             }
         }
@@ -691,6 +701,7 @@ fn format_separator_row(widths: &[usize], aligns: &[TableCellAlignment]) -> Stri
 mod tests {
     use super::*;
     use crate::format::Format;
+    use lex_core::lex::ast::text_content::TextContent;
     use lex_core::lex::testing::lexplore::{ElementType, Lexplore};
     use lex_core::lex::testing::text_diff::assert_text_eq;
 
@@ -1176,5 +1187,34 @@ mod tests {
 
         assert!(table_start < separator);
         assert!(separator < footer_start);
+    }
+
+    #[test]
+    fn build_grid_pads_hole_before_trailing_rowspan() {
+        // Regression for the lex#694 review: a short continuation row whose cells
+        // run out before a rowspan-covered column further right must still emit
+        // that column's `^^` (and not let the carry leak into the next row).
+        // row0: a, b, c(rowspan 2) — c spans down into row1's third column.
+        // row1: a single cell `d`; the middle column is a hole, the third is `^^`.
+        let tc = |s: &str| TextContent::from_string(s.to_string(), None);
+        let row0 = TableRow::new(vec![
+            TableCell::new(tc("a")),
+            TableCell::new(tc("b")),
+            TableCell::new(tc("c")).with_span(1, 2),
+        ]);
+        let row1 = TableRow::new(vec![TableCell::new(tc("d"))]);
+        let grid = build_grid(&[&row0, &row1]);
+        let render = |slots: &[Slot]| {
+            slots
+                .iter()
+                .map(|s| s.text().to_string())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(render(&grid[0]), ["a", "b", "c"]);
+        assert_eq!(
+            render(&grid[1]),
+            ["d", "", "^^"],
+            "hole padded empty, trailing rowspan marker kept"
+        );
     }
 }

@@ -406,6 +406,31 @@ fn targeted_cases() -> Vec<(&'static str, &'static str)> {
             "table_rowspan",
             "Grid:\n    | a | b |\n    | ^^ | c |\n:: table ::\n",
         ),
+        // A rowspan stacked across three rows: each continuation row re-emits `^^`
+        // in the spanning column, and the parser must keep crediting the *same*
+        // top cell (lex#694 review — the old index-based resolution mis-aimed the
+        // second `^^` once the first row had been shrunk).
+        (
+            "table_rowspan_multirow",
+            "Grid:\n    | a | b |\n    | ^^ | c |\n    | ^^ | d |\n:: table ::\n",
+        ),
+        // Two adjacent rowspans in one continuation row (`| ^^ | ^^ | f |`): both
+        // columns must keep their own span and `f` must stay in the third column.
+        (
+            "table_rowspan_adjacent",
+            "Grid:\n    | a | b | c |\n    | ^^ | ^^ | f |\n:: table ::\n",
+        ),
+        // A rowspan in a middle column, with cells on either side.
+        (
+            "table_rowspan_midcolumn",
+            "Grid:\n    | a | b | c |\n    | d | ^^ | f |\n:: table ::\n",
+        ),
+        // Colspan and rowspan in the same continuation row (`| dd | >> | ^^ |`):
+        // the grid projection must re-derive both `>>` and `^^`.
+        (
+            "table_colspan_rowspan",
+            "Grid:\n    | a | b | c |\n    | dd | >> | ^^ |\n    | e | f | g |\n:: table ::\n",
+        ),
         (
             "messy_blank_runs_and_markers",
             "Doc\n===\n\n\n\n\nFirst para.\n\n\n\n* one\n* two\n* three\n",

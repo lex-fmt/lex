@@ -644,20 +644,40 @@ fn resolve_merges(mut rows: Vec<TableRowData>) -> Vec<TableRowData> {
         }
     }
 
-    // Second pass: resolve rowspan (^^ markers)
+    // Second pass: resolve rowspan (^^ markers).
+    //
+    // A `^^` is absorbed by the cell occupying the same *grid column* in a row
+    // above — which is not the same as the same cell-list index, because colspans
+    // widen cells and removing `^^` markers shifts later rows' indices. So walk
+    // top-to-bottom keeping, per grid column, the (row, cell) that currently spans
+    // it; a `^^` bumps that owner's rowspan and the owner keeps spanning further
+    // down (correct for stacked / multi-row spans). Indexing by grid column makes
+    // adjacent (`| ^^ | ^^ | x |`) and multi-row (`^^` on consecutive rows) spans
+    // resolve correctly, where the old index-based pass dropped or mis-aimed them.
+    let mut owner: Vec<Option<(usize, usize)>> = Vec::new();
     for row_idx in 0..rows.len() {
-        let mut col_idx = 0;
-        while col_idx < rows[row_idx].cells.len() {
-            if rows[row_idx].cells[col_idx].text == "^^" && row_idx > 0 {
-                // Find the cell above in the same column position
-                if col_idx < rows[row_idx - 1].cells.len() {
-                    rows[row_idx - 1].cells[col_idx].rowspan += 1;
+        let mut col = 0;
+        let mut kept: Vec<TableCellData> = Vec::new();
+        for cell in std::mem::take(&mut rows[row_idx].cells) {
+            let span = cell.colspan.max(1);
+            if cell.text == "^^" && row_idx > 0 {
+                if let Some(Some((owner_row, owner_cell))) = owner.get(col).copied() {
+                    rows[owner_row].cells[owner_cell].rowspan += 1;
                 }
-                rows[row_idx].cells.remove(col_idx);
+                // The marker is dropped; its owner continues to span this column.
             } else {
-                col_idx += 1;
+                let here = (row_idx, kept.len());
+                if owner.len() < col + span {
+                    owner.resize(col + span, None);
+                }
+                for slot in &mut owner[col..col + span] {
+                    *slot = Some(here);
+                }
+                kept.push(cell);
             }
+            col += span;
         }
+        rows[row_idx].cells = kept;
     }
 
     rows
@@ -906,6 +926,91 @@ mod tests {
         assert_eq!(resolved[0].cells[0].rowspan, 2);
         assert_eq!(resolved[1].cells.len(), 1);
         assert_eq!(resolved[1].cells[0].text, "d");
+    }
+
+    /// Build a row of single-column cells from their texts (test helper).
+    fn row(texts: &[&str]) -> TableRowData {
+        TableRowData {
+            cells: texts
+                .iter()
+                .map(|t| TableCellData {
+                    text: (*t).to_string(),
+                    raw_text: None,
+                    byte_range: 0..t.len(),
+                    colspan: 1,
+                    rowspan: 1,
+                    is_header: false,
+                    block_content: None,
+                })
+                .collect(),
+            byte_range: 0..0,
+        }
+    }
+
+    #[test]
+    fn test_resolve_merges_rowspan_stacked_three_rows() {
+        // `^^` in the same column on two consecutive rows must both credit the
+        // single top cell (rowspan 3), not the intermediate (already-shrunk) row.
+        let resolved = resolve_merges(vec![row(&["a", "b"]), row(&["^^", "c"]), row(&["^^", "d"])]);
+        assert_eq!(resolved[0].cells[0].rowspan, 3, "top cell spans all 3 rows");
+        assert_eq!(resolved[0].cells[1].rowspan, 1);
+        assert_eq!(
+            resolved[1]
+                .cells
+                .iter()
+                .map(|c| &c.text)
+                .collect::<Vec<_>>(),
+            vec!["c"]
+        );
+        assert_eq!(
+            resolved[2]
+                .cells
+                .iter()
+                .map(|c| &c.text)
+                .collect::<Vec<_>>(),
+            vec!["d"]
+        );
+    }
+
+    #[test]
+    fn test_resolve_merges_rowspan_adjacent_columns() {
+        // `| ^^ | ^^ | f |`: each `^^` belongs to its own column's cell above; the
+        // surviving `f` keeps the third column (index-based resolution used to fold
+        // both `^^` onto the first column and slide `f` left).
+        let resolved = resolve_merges(vec![row(&["a", "b", "c"]), row(&["^^", "^^", "f"])]);
+        assert_eq!(resolved[0].cells[0].rowspan, 2, "column 0 spans down");
+        assert_eq!(resolved[0].cells[1].rowspan, 2, "column 1 spans down");
+        assert_eq!(resolved[0].cells[2].rowspan, 1);
+        assert_eq!(
+            resolved[1]
+                .cells
+                .iter()
+                .map(|c| &c.text)
+                .collect::<Vec<_>>(),
+            vec!["f"]
+        );
+    }
+
+    #[test]
+    fn test_resolve_merges_colspan_then_rowspan_same_row() {
+        // `| dd | >> | ^^ |`: colspan folds `>>` into `dd` (now 2 wide), and the
+        // `^^` in the third grid column credits the third cell above.
+        let resolved = resolve_merges(vec![
+            row(&["a", "b", "c"]),
+            row(&["dd", ">>", "^^"]),
+            row(&["e", "f", "g"]),
+        ]);
+        assert_eq!(resolved[1].cells[0].text, "dd");
+        assert_eq!(resolved[1].cells[0].colspan, 2, "dd absorbs the >> column");
+        assert_eq!(
+            resolved[0].cells[2].rowspan, 2,
+            "third column cell spans down"
+        );
+        assert_eq!(
+            resolved[1].cells.len(),
+            1,
+            "only dd survives in the middle row"
+        );
     }
 
     #[test]
