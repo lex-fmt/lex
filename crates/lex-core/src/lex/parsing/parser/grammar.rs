@@ -124,6 +124,17 @@ pub(super) const GRAMMAR_PATTERNS: &[(&str, &str)] = &[
         "list",
         r"^(?P<blank>(<blank-line>)+)(?P<items>((<list-line>|<subject-or-list-item-line>)(<container>)?){2,})(?P<trailing_blank><blank-line>)?",
     ),
+    // Single list item that owns a nested container. The `{2,}` list rules above
+    // need a sibling to recognise a list, so a lone top-level item with a
+    // sub-list (e.g. `1. First\n    1.a. ...`) would otherwise split into a
+    // paragraph plus an orphaned sub-list — which a re-format then re-parses as a
+    // real list, breaking idempotence (lex#685). Restricted to `<list-line>` (an
+    // unambiguous marker) with a *mandatory* container, so bare lone items stay
+    // paragraphs and `subject:`-style definitions are untouched.
+    (
+        "list_single_with_container",
+        r"^(?P<items>(<list-line>)(<container>))(?P<trailing_blank><blank-line>)?",
+    ),
     // Definition: subject (must end with colon) + immediate indented content
     (
         "definition",

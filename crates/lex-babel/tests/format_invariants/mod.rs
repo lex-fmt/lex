@@ -427,7 +427,6 @@ fn targeted_cases() -> Vec<(&'static str, &'static str)> {
 // test tells you to delete the entry) and logs the excluded set on each run.
 //
 // Bugs (shipped fixes removed their entries here):
-//   #685 — list renumbering not idempotent (nested/extended)
 //   #681 — umbrella for remaining mixed/untriaged element-fixture sweep failures
 //          (e.g. paragraph merge of siblings distinguished only by irregular indent)
 // -----------------------------------------------------------------------------
@@ -436,7 +435,7 @@ const TIER1_TARGETED_KNOWN_FAIL: &[(&str, &str)] = &[];
 
 const TIER2_TARGETED_KNOWN_FAIL: &[(&str, &str)] = &[];
 
-const TIER1_FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[("list.lex", "#685")];
+const TIER1_FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[];
 
 const TIER2_FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[
     // annotation.lex no longer fails on the #696 annotation edges; its residual
@@ -446,7 +445,6 @@ const TIER2_FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[
     ("annotation.lex", "#681"),
     ("data.lex", "#681"),
     ("label.lex", "#681"),
-    ("list.lex", "#685"),
     ("parameter.lex", "#681"),
 ];
 
