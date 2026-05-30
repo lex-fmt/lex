@@ -83,6 +83,13 @@ pub struct LexSerializer {
     indent_level: usize,
     consecutive_newlines: usize,
     list_stack: Vec<ListContext>,
+    /// Footnote lists already emitted inside their table block (lex#684). Their
+    /// second, accept-driven walk must produce no output; see `suppress_output`.
+    emitted_footnote_lists: Vec<*const List>,
+    /// While > 0, `write_line` / `ensure_blank_lines` are no-ops. Used to swallow
+    /// the redundant accept-driven walk of a table's footnote list without
+    /// unbalancing the list stack — the visit still runs, only output is muted.
+    suppress_output: usize,
 }
 
 impl LexSerializer {
@@ -93,6 +100,8 @@ impl LexSerializer {
             indent_level: 0,
             consecutive_newlines: 2, // Start as if we have blank lines
             list_stack: Vec::new(),
+            emitted_footnote_lists: Vec::new(),
+            suppress_output: 0,
         }
     }
 
@@ -140,6 +149,9 @@ impl LexSerializer {
     }
 
     fn write_line(&mut self, text: &str) {
+        if self.suppress_output > 0 {
+            return;
+        }
         self.output.push_str(&self.indent());
         self.output.push_str(text);
         self.output.push('\n');
@@ -184,6 +196,9 @@ impl LexSerializer {
     }
 
     fn ensure_blank_lines(&mut self, count: usize) {
+        if self.suppress_output > 0 {
+            return;
+        }
         let target_newlines = count + 1;
         while self.consecutive_newlines < target_newlines {
             self.output.push('\n');
@@ -248,6 +263,15 @@ impl Visitor for LexSerializer {
 
         let marker_form = list.marker.as_ref().map(|marker| marker.form);
 
+        // A table's footnote list is emitted once inside its block by
+        // `visit_table`; its second, accept-driven walk must be muted (lex#684).
+        // Enter suppression here (and stay in it for any nested lists) but still
+        // push the context so `leave_list` stays balanced.
+        if self.suppress_output > 0 || self.emitted_footnote_lists.contains(&(list as *const List))
+        {
+            self.suppress_output += 1;
+        }
+
         self.list_stack.push(ListContext {
             style,
             upper_case,
@@ -258,6 +282,9 @@ impl Visitor for LexSerializer {
 
     fn leave_list(&mut self, _list: &List) {
         self.list_stack.pop();
+        if self.suppress_output > 0 {
+            self.suppress_output -= 1;
+        }
     }
 
     fn visit_list_item(&mut self, list_item: &ListItem) {
@@ -427,6 +454,20 @@ impl Visitor for LexSerializer {
 
         self.indent_level += 1;
         emit_pipe_table(self, table);
+
+        // Emit the scoped footnote list *inside* the indented block, after the
+        // rows and before the dedent, so it stays part of the table and keeps
+        // its numbered markers (lex#684). `Table::accept` walks `footnotes`
+        // again after `visit_table` returns — at the outer indent and after the
+        // closer — so record the list here and mute that second walk
+        // (`visit_list` / `suppress_output`).
+        if let Some(footnotes) = &table.footnotes {
+            self.ensure_blank_lines(1);
+            footnotes.accept(self);
+            self.emitted_footnote_lists
+                .push(footnotes.as_ref() as *const List);
+        }
+
         self.indent_level -= 1;
 
         // The closing `:: lex.tabular.table ::` annotation is part of

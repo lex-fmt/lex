@@ -423,7 +423,6 @@ fn targeted_cases() -> Vec<(&'static str, &'static str)> {
 // test tells you to delete the entry) and logs the excluded set on each run.
 //
 // Bugs (shipped fixes removed their entries here):
-//   #684 — table footnote list emitted outside the block
 //   #685 — list renumbering not idempotent (nested/extended)
 //   #681 — umbrella for remaining mixed/untriaged element-fixture sweep failures
 //          (e.g. paragraph merge of siblings distinguished only by irregular indent)
@@ -431,7 +430,7 @@ fn targeted_cases() -> Vec<(&'static str, &'static str)> {
 
 const TIER1_TARGETED_KNOWN_FAIL: &[(&str, &str)] = &[];
 
-const TIER2_TARGETED_KNOWN_FAIL: &[(&str, &str)] = &[("table_with_footnotes", "#684")];
+const TIER2_TARGETED_KNOWN_FAIL: &[(&str, &str)] = &[];
 
 const TIER1_FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[("list.lex", "#685")];
 
@@ -445,7 +444,6 @@ const TIER2_FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[
     ("label.lex", "#681"),
     ("list.lex", "#685"),
     ("parameter.lex", "#681"),
-    ("table.lex", "#684"),
 ];
 
 #[cfg(test)]

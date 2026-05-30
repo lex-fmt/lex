@@ -528,7 +528,19 @@ fn build_footnote_list(footnotes: Vec<FootnoteLineData>, source_location: &Sourc
             ListItem::new(f.marker, f.text).at(location)
         })
         .collect();
-    List::new(items)
+    let mut list = List::new(items);
+    // Derive the list marker from the first item, as `list_node` does for a
+    // regular list. Without it the footnote list has no marker and a formatter
+    // re-emits the numbered definitions as a `-` bullet list, which no longer
+    // re-parses as table footnotes (lex#684).
+    list.marker = list.items.iter().find_map(|item| {
+        if let ContentItem::ListItem(li) = item {
+            SequenceMarker::parse(li.marker.as_string(), li.marker.location.clone())
+        } else {
+            None
+        }
+    });
+    list
 }
 
 // ============================================================================
