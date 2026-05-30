@@ -257,9 +257,18 @@ fn looks_like_unclosed_annotation(text: &str) -> bool {
     let Some(rest) = text.trim().strip_prefix("::") else {
         return false;
     };
-    // A second `::` means a closed marker — not the unclosed shape.
-    if rest.contains("::") {
-        return false;
+    // A second *structural* `::` means a closed marker — not the unclosed shape.
+    // Scan quote-aware so a `::` inside a quoted parameter value (e.g.
+    // `:: note foo=":: value"`) does not count as a close, matching how the
+    // lexer's structural-marker detection treats it.
+    let mut in_quotes = false;
+    let mut chars = rest.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => in_quotes = !in_quotes,
+            ':' if !in_quotes && chars.peek() == Some(&':') => return false,
+            _ => {}
+        }
     }
     // Require whitespace after the opening marker, then a label-shaped token
     // (label.lex: a letter, then letters/digits/`_`/`-`/`.`).
@@ -716,7 +725,13 @@ mod tests {
     fn looks_like_unclosed_annotation_heuristic() {
         assert!(looks_like_unclosed_annotation(":: note"));
         assert!(looks_like_unclosed_annotation("    :: note severity=high"));
+        // A `::` inside a quoted value is not a structural close, so this is still
+        // an unclosed annotation (lex#704 review).
+        assert!(looks_like_unclosed_annotation(":: note foo=\":: value\""));
         assert!(!looks_like_unclosed_annotation(":: note ::"));
+        assert!(!looks_like_unclosed_annotation(
+            ":: note foo=\":: value\" ::"
+        )); // real close
         assert!(!looks_like_unclosed_annotation("::note")); // no whitespace after marker
         assert!(!looks_like_unclosed_annotation("::")); // no label
         assert!(!looks_like_unclosed_annotation("just prose"));

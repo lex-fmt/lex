@@ -299,8 +299,10 @@ pub fn table_from_lines(
     source: &str,
     source_location: &SourceLocation,
 ) -> ContentItem {
-    // 1. Extract table data with default config (header=1, no alignment).
-    // Actual config from :: table :: annotation is applied later in assembly.
+    // 1. Extract table data. Column alignment is seeded from the markdown
+    //    separator row here; header split defaults to header=1. The `:: table
+    //    header=N align=… ::` annotation can override both later in assembly
+    //    (the align param takes precedence over the separator row).
     let data = extraction::extract_table_data(subject_token, content_tokens, source);
 
     // 2. Create table, seeding per-column alignment from the markdown separator

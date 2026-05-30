@@ -605,17 +605,20 @@ fn is_prose_line(token: &crate::lex::token::LineToken) -> bool {
 ///
 /// The check mirrors the paragraph boundaries the matcher uses:
 ///   - paragraph / dialog / blank lines are always prose;
-///   - a subject line is prose *unless* it heads a container (subject + container
-///     is a definition or table) — a lone trailing-colon line is just prose;
+///   - a plain subject line is prose *unless* it heads a container (subject +
+///     container is a definition or table) — a lone trailing-colon line is just
+///     prose;
 ///   - a nested container is prose only if its own contents are prose;
-///   - anything else (list markers, data markers) disqualifies the run.
+///   - anything starting with a list marker (`ListLine`, `SubjectOrListItemLine`)
+///     or a data marker disqualifies the run — a run of those is a list, which
+///     must keep its own structure, not be flattened into a paragraph.
 fn is_prose_only_run(children: &[LineContainer]) -> bool {
     let mut idx = 0;
     while idx < children.len() {
         match &children[idx] {
             LineContainer::Token(t) => match t.line_type {
                 LineType::ParagraphLine | LineType::DialogLine | LineType::BlankLine => {}
-                LineType::SubjectLine | LineType::SubjectOrListItemLine => {
+                LineType::SubjectLine => {
                     // Subject + container is a definition/table header, not prose.
                     if matches!(children.get(idx + 1), Some(LineContainer::Container { .. })) {
                         return false;
@@ -792,4 +795,51 @@ fn parse_with_declarative_grammar_internal(
     }
 
     Ok(items)
+}
+
+#[cfg(test)]
+mod prose_continuation_tests {
+    use super::*;
+    use crate::lex::token::LineToken;
+
+    fn line(line_type: LineType) -> LineContainer {
+        LineContainer::Token(LineToken {
+            source_tokens: vec![],
+            token_spans: vec![],
+            line_type,
+        })
+    }
+
+    fn container(children: Vec<LineContainer>) -> LineContainer {
+        LineContainer::Container { children }
+    }
+
+    #[test]
+    fn prose_run_accepts_paragraph_and_lone_subject() {
+        use LineType::*;
+        // A hanging-indent continuation: paragraph lines, a blank, and a lone
+        // trailing-colon subject line (not heading a container) are all prose.
+        assert!(is_prose_only_run(&[
+            line(ParagraphLine),
+            line(SubjectLine),
+            line(BlankLine),
+        ]));
+    }
+
+    #[test]
+    fn prose_run_rejects_list_markers() {
+        use LineType::*;
+        // A run of list-marker lines is a list, never prose — folding it into the
+        // preceding paragraph would flatten real structure (lex#704 review).
+        assert!(!is_prose_only_run(&[
+            line(SubjectOrListItemLine),
+            line(SubjectOrListItemLine),
+        ]));
+        assert!(!is_prose_only_run(&[line(ListLine)]));
+        // A subject line that *heads* a container is a definition/table, not prose.
+        assert!(!is_prose_only_run(&[
+            line(SubjectLine),
+            container(vec![line(ParagraphLine)]),
+        ]));
+    }
 }
