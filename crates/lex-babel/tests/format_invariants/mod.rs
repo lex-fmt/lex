@@ -452,7 +452,6 @@ fn targeted_cases() -> Vec<(&'static str, &'static str)> {
 // test tells you to delete the entry) and logs the excluded set on each run.
 //
 // Bugs (shipped fixes removed their entries here):
-//   #699 — formatter merges paragraphs separated only by indentation
 //   #700 — open-form annotation dropped, collapsing its container
 // (The lex#681 umbrella is closed: its deliverable — this suite — shipped and
 // every bug it originally found is fixed. The two residual Tier-2 fixture gaps
@@ -466,11 +465,10 @@ const TIER2_TARGETED_KNOWN_FAIL: &[(&str, &str)] = &[];
 const TIER1_FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[];
 
 const TIER2_FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[
-    // Sibling paragraphs distinguished only by (alignment) indentation merge into
-    // one when the formatter normalizes the indent — #699.
-    ("annotation.lex", "#699"),
-    ("label.lex", "#699"),
-    ("parameter.lex", "#699"),
+    // Multi-parameter annotations re-serialize without the comma separator, so the
+    // params collapse on re-parse — #703. (The paragraph-merge half of this fixture
+    // was #699, now fixed.)
+    ("parameter.lex", "#703"),
     // An open-form annotation (`:: label` with no closing `::`) is dropped, so the
     // definition it bodies collapses to a paragraph on reformat — #700.
     ("data.lex", "#700"),
@@ -629,8 +627,8 @@ mod tests {
 //   - nested/extended numbered lists  (#685)
 //   - a bare document title line       (#687 — generator leads with a 2-line
 //                                        paragraph, which is never title-absorbed)
-//   - random *leading* indent widths  (paragraph-merge-on-indent edge, #699)
-// Widen this generator as those are fixed.
+// Widen this generator as those are fixed. (The paragraph-merge-on-indent edge,
+// #699, is now fixed — hanging-indent continuations fold back into the paragraph.)
 // -----------------------------------------------------------------------------
 
 #[cfg(test)]
