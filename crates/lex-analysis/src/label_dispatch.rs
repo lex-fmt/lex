@@ -604,6 +604,7 @@ mod tests {
             capabilities: Capabilities::default(),
             hooks,
             handler: None,
+            diagnostics: Vec::new(),
         }
     }
 
@@ -713,6 +714,7 @@ mod tests {
                 ..HookSet::default()
             },
             handler: None,
+            diagnostics: Vec::new(),
         };
         // Handler that should NOT be called — schema pre-validation
         // catches the missing param before dispatch.

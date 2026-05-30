@@ -16,13 +16,14 @@
 //! render, and LSP-request paths. Internal state lives behind a
 //! [`RwLock`]; dispatch methods take `&self`.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::RwLock;
 
 use lex_extension::{
-    CodeAction, Completion, Diagnostic, DiagnosticSeverity, Format, FormatCtx, HandlerError, Hover,
-    LabelCtx, LexAnnotationOut, LexHandler, Range, RenderOut, Schema, WireNode,
+    CodeAction, Completion, Diagnostic, DiagnosticDecl, DiagnosticSeverity, Format, FormatCtx,
+    HandlerError, Hover, LabelCtx, LexAnnotationOut, LexHandler, Range, RenderOut, Schema,
+    WireNode,
 };
 
 /// The namespace registry.
@@ -182,6 +183,33 @@ impl Registry {
         let ns_name = inner.label_to_namespace.get(label)?;
         let ns = inner.namespaces.get(ns_name)?;
         ns.schemas.get(label).cloned()
+    }
+
+    /// Diagnostic codes declared across all of a namespace's schemas.
+    ///
+    /// Returns `None` when `namespace` isn't registered — letting callers
+    /// tell "namespace unknown, nothing to validate against" (a
+    /// forward-compatible pass-through) apart from "namespace known but
+    /// declares no such code" (a dead-letter `[diagnostics.rules]`
+    /// entry). Returns `Some(vec)` — possibly empty — for a registered
+    /// namespace.
+    ///
+    /// Codes are de-duplicated across the namespace's schemas and
+    /// returned sorted by code for stable diagnostics; the first
+    /// declaration of a given code wins on description / default
+    /// severity.
+    pub fn declared_diagnostic_codes(&self, namespace: &str) -> Option<Vec<DiagnosticDecl>> {
+        let inner = self.inner.read().expect("registry poisoned");
+        let ns = inner.namespaces.get(namespace)?;
+        let mut by_code: BTreeMap<String, DiagnosticDecl> = BTreeMap::new();
+        for schema in ns.schemas.values() {
+            for decl in &schema.diagnostics {
+                by_code
+                    .entry(decl.code.clone())
+                    .or_insert_with(|| decl.clone());
+            }
+        }
+        Some(by_code.into_values().collect())
     }
 
     /// Whether a namespace is registered and currently healthy (no panic
@@ -538,6 +566,7 @@ mod tests {
             capabilities: Capabilities::default(),
             hooks: HookSet::default(),
             handler: None,
+            diagnostics: Vec::new(),
         }
     }
 
@@ -1013,5 +1042,56 @@ mod tests {
             .expect_err("must error");
         assert_eq!(err.code.as_deref(), Some("handler.internal"));
         assert!(err.message.contains("ir_build boom"));
+    }
+
+    fn schema_with_diagnostics(label: &str, codes: &[&str]) -> Schema {
+        let mut s = schema(label);
+        s.diagnostics = codes
+            .iter()
+            .map(|c| DiagnosticDecl {
+                code: (*c).into(),
+                description: None,
+                default_severity: DiagnosticSeverity::Warning,
+            })
+            .collect();
+        s
+    }
+
+    #[test]
+    fn declared_diagnostic_codes_unknown_namespace_is_none() {
+        let r = Registry::new();
+        assert!(r.declared_diagnostic_codes("acme").is_none());
+    }
+
+    #[test]
+    fn declared_diagnostic_codes_registered_but_empty_is_some_empty() {
+        let r = Registry::new();
+        r.register_namespace("acme", vec![schema("acme.thing")], Box::new(NoOp))
+            .unwrap();
+        let codes = r.declared_diagnostic_codes("acme").expect("registered");
+        assert!(codes.is_empty());
+    }
+
+    #[test]
+    fn declared_diagnostic_codes_aggregates_dedupes_and_sorts() {
+        let r = Registry::new();
+        r.register_namespace(
+            "acme",
+            vec![
+                schema_with_diagnostics("acme.task", &["due-date-missing", "overdue"]),
+                // Second schema repeats `overdue` and adds `blocked` —
+                // the accessor de-dupes and returns sorted codes.
+                schema_with_diagnostics("acme.note", &["overdue", "blocked"]),
+            ],
+            Box::new(NoOp),
+        )
+        .unwrap();
+        let codes: Vec<String> = r
+            .declared_diagnostic_codes("acme")
+            .unwrap()
+            .into_iter()
+            .map(|d| d.code)
+            .collect();
+        assert_eq!(codes, vec!["blocked", "due-date-missing", "overdue"]);
     }
 }

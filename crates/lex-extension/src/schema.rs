@@ -9,6 +9,8 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::wire::DiagnosticSeverity;
+
 /// One label's schema. Mirrors the YAML format documented in the *Extending
 /// Lex* proposal §13.2.
 ///
@@ -49,6 +51,41 @@ pub struct Schema {
     /// editor UX from the schema alone) omit this.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handler: Option<HandlerSpec>,
+    /// Diagnostic codes this label's handler can emit. Declaring them
+    /// lets the host schema-validate `[diagnostics.rules]` entries
+    /// against the resolved registry — a `<namespace>.<code>` rule
+    /// whose `<code>` matches nothing declared here is a dead letter
+    /// the host can flag — and lets `config`/editor tooling surface the
+    /// available codes with their descriptions and default severity.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub diagnostics: Vec<DiagnosticDecl>,
+}
+
+/// One diagnostic code a namespace's handler can emit, declared in the
+/// label's schema.
+///
+/// The [`code`](Self::code) is the bare leaf (e.g.
+/// `task-due-date-missing`) — exactly what a handler stamps on the
+/// `code` field of an emitted `Diagnostic`. Combined with the owning
+/// namespace it forms the on-the-wire `<namespace>.<code>` key the user
+/// writes under `[diagnostics.rules]`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DiagnosticDecl {
+    /// Bare leaf code, matching `Diagnostic.code` set by the handler.
+    pub code: String,
+    /// Human-readable summary, surfaced in config templates and editor
+    /// hover.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Intrinsic severity, used when the user hasn't overridden the
+    /// code under `[diagnostics.rules]`. Defaults to `warning`.
+    #[serde(default = "default_decl_severity")]
+    pub default_severity: DiagnosticSeverity,
+}
+
+fn default_decl_severity() -> DiagnosticSeverity {
+    DiagnosticSeverity::Warning
 }
 
 /// One parameter declaration.
@@ -301,6 +338,18 @@ mod tests {
                 command: vec!["acme-comment-handler".into()],
                 timeout_ms: Some(2000),
             }),
+            diagnostics: vec![
+                DiagnosticDecl {
+                    code: "unresolved-thread".into(),
+                    description: Some("A comment thread has no resolution.".into()),
+                    default_severity: DiagnosticSeverity::Warning,
+                },
+                DiagnosticDecl {
+                    code: "missing-author".into(),
+                    description: None,
+                    default_severity: DiagnosticSeverity::Error,
+                },
+            ],
         }
     }
 
@@ -370,5 +419,57 @@ mod tests {
         let bs = BodyShape::default();
         assert_eq!(bs.kind, BodyKind::None);
         assert_eq!(bs.presence, BodyPresence::Optional);
+    }
+
+    #[test]
+    fn schema_without_diagnostics_field_loads_empty() {
+        // Schemas that don't declare diagnostics still load — the field
+        // defaults to an empty vec, not an error.
+        let s: Schema =
+            serde_json::from_str(r#"{"schema_version": 1, "label": "acme.task"}"#).unwrap();
+        assert!(s.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn diagnostic_decl_default_severity_is_warning() {
+        // `default_severity` is optional; omitting it yields `warning`,
+        // matching the doc contract.
+        let s: Schema = serde_json::from_str(
+            r#"{"schema_version": 1, "label": "acme.task",
+                "diagnostics": [{"code": "due-date-missing"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(s.diagnostics.len(), 1);
+        assert_eq!(s.diagnostics[0].code, "due-date-missing");
+        assert_eq!(s.diagnostics[0].description, None);
+        assert_eq!(
+            s.diagnostics[0].default_severity,
+            DiagnosticSeverity::Warning
+        );
+    }
+
+    #[test]
+    fn diagnostic_decl_explicit_severity_parses() {
+        let s: Schema = serde_json::from_str(
+            r#"{"schema_version": 1, "label": "acme.task",
+                "diagnostics": [{"code": "due-date-missing",
+                                 "description": "Task lacks a due date.",
+                                 "default_severity": "error"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(s.diagnostics[0].default_severity, DiagnosticSeverity::Error);
+        assert_eq!(
+            s.diagnostics[0].description.as_deref(),
+            Some("Task lacks a due date.")
+        );
+    }
+
+    #[test]
+    fn diagnostic_decl_rejects_unknown_field() {
+        assert!(serde_json::from_str::<Schema>(
+            r#"{"schema_version": 1, "label": "acme.task",
+                "diagnostics": [{"code": "due-date-missing", "severty": "warn"}]}"#,
+        )
+        .is_err());
     }
 }

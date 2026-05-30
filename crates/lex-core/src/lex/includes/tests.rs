@@ -1890,6 +1890,7 @@ mod registry_dispatch {
                 ..HookSet::default()
             },
             handler: None,
+            diagnostics: Vec::new(),
         }
     }
 
@@ -2193,6 +2194,7 @@ mod registry_dispatch {
                     ..HookSet::default()
                 },
                 handler: None,
+                diagnostics: Vec::new(),
             }
         }
 
@@ -2292,6 +2294,7 @@ mod registry_dispatch {
                 ..HookSet::default()
             },
             handler: None,
+            diagnostics: Vec::new(),
         };
 
         let registry = Registry::new();

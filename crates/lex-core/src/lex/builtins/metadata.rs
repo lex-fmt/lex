@@ -63,6 +63,7 @@ fn metadata_schema(label: &'static str, description: &'static str) -> Schema {
         capabilities: Capabilities::default(),
         hooks: HookSet::default(),
         handler: None,
+        diagnostics: Vec::new(),
     }
 }
 

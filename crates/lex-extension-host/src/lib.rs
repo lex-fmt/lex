@@ -62,7 +62,7 @@
 //!         /* ... rest of Schema ... */
 //! #       description: None, params: Default::default(), attaches_to: vec![],
 //! #       body: Default::default(), verbatim_label: false,
-//! #       capabilities: Default::default(), handler: None,
+//! #       capabilities: Default::default(), handler: None, diagnostics: Vec::new(),
 //!     }],
 //!     Box::new(AcmeHandler),
 //! ).expect("registration ok");

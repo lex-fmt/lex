@@ -898,6 +898,11 @@ label: ns.y
                 command: Vec::new(),
                 timeout_ms: None,
             }),
+            diagnostics: vec![lex_extension::schema::DiagnosticDecl {
+                code: "thing-incomplete".into(),
+                description: Some("The thing is incomplete.".into()),
+                default_severity: lex_extension::DiagnosticSeverity::Warning,
+            }],
         };
 
         let yaml = serde_yaml::to_string(&original).expect("serialises");

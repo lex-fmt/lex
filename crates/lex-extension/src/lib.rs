@@ -65,8 +65,8 @@ pub use wire::{
 };
 
 pub use schema::{
-    BodyKind, BodyPresence, BodyShape, Capabilities, EnumValue, HandlerSpec, HandlerTransport,
-    HookSet, ParamSpec, ParamType, RenderHook, Schema,
+    BodyKind, BodyPresence, BodyShape, Capabilities, DiagnosticDecl, EnumValue, HandlerSpec,
+    HandlerTransport, HookSet, ParamSpec, ParamType, RenderHook, Schema,
 };
 
 /// The wire-format protocol version exchanged in the `initialize` handshake.

@@ -437,6 +437,9 @@ pub fn lex_include_schema() -> Schema {
         // Native built-ins skip the handler-spec field — the registry
         // dispatches in-process via `Box<dyn LexHandler>`.
         handler: None,
+        // Built-ins surface diagnostics through lex-analysis, not the
+        // extension diagnostic-code path, so they declare none here.
+        diagnostics: Vec::new(),
     }
 }
 
