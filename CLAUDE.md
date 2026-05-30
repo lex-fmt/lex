@@ -1,3 +1,7 @@
+<!-- BEGIN release-managed orientation — managed by release-sync; do not edit -->
+@.release/ORIENTATION.md
+<!-- END release-managed orientation -->
+
 # Lex
 
 Lex is a plain text format for structured documents — more expressive than Markdown, human-readable in raw form. Structure comes from indentation (4-space tabs), not markup.
