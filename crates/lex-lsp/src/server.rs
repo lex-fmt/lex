@@ -443,16 +443,20 @@ where
         // status with no document range to attach to. Unregistered
         // namespaces pass silently (the user may install the extension
         // later), so this never fires for staged-ahead rules.
-        {
+        // Collect findings under the lock, then drop it before awaiting
+        // any `show_message` — holding the config read lock across the
+        // network await could starve a concurrent config write.
+        let rule_findings = {
             let cfg = self.config.read().await;
-            for finding in lex_fmt::validate_extension_diagnostic_rules(
+            lex_fmt::validate_extension_diagnostic_rules(
                 &cfg.extension_diagnostic_rules,
                 &outcome.registry,
-            ) {
-                self.client
-                    .show_message(MessageType::WARNING, finding.message)
-                    .await;
-            }
+            )
+        };
+        for finding in rule_findings {
+            self.client
+                .show_message(MessageType::WARNING, finding.message)
+                .await;
         }
 
         let state = Arc::new(LspExtensionState::from(outcome));

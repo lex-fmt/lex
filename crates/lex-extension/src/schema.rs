@@ -78,14 +78,51 @@ pub struct DiagnosticDecl {
     /// hover.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    /// Intrinsic severity, used when the user hasn't overridden the
-    /// code under `[diagnostics.rules]`. Defaults to `warning`.
-    #[serde(default = "default_decl_severity")]
+    /// Declared intrinsic severity. This is *declaration metadata* —
+    /// surfaced by config-generation and editor tooling so authors and
+    /// users see a code's intended level. It is **not** yet read by the
+    /// runtime diagnostic pipeline: a handler-emitted diagnostic's own
+    /// `Diagnostic.severity` still determines its intrinsic severity,
+    /// and `[diagnostics.rules]` overrides apply on top of that.
+    /// Defaults to `warning`.
+    ///
+    /// Parsed strictly (unlike the permissive wire
+    /// [`DiagnosticSeverity`] deserializer): an unknown value is a
+    /// schema error, consistent with the schema loader's
+    /// `deny_unknown_fields` contract, rather than silently degrading to
+    /// `info`.
+    #[serde(
+        default = "default_decl_severity",
+        deserialize_with = "deserialize_strict_severity"
+    )]
     pub default_severity: DiagnosticSeverity,
 }
 
 fn default_decl_severity() -> DiagnosticSeverity {
     DiagnosticSeverity::Warning
+}
+
+/// Strict `default_severity` parser: accepts exactly the four known
+/// severities and rejects anything else, so a typo (`warn`, `erorr`)
+/// fails the schema load instead of deserialising to `info` the way the
+/// wire [`DiagnosticSeverity`] deserializer intentionally does for
+/// forward-compatible handler payloads.
+fn deserialize_strict_severity<'de, D>(deserializer: D) -> Result<DiagnosticSeverity, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::{Error, Unexpected};
+    let s = String::deserialize(deserializer)?;
+    match s.as_str() {
+        "error" => Ok(DiagnosticSeverity::Error),
+        "warning" => Ok(DiagnosticSeverity::Warning),
+        "info" => Ok(DiagnosticSeverity::Info),
+        "hint" => Ok(DiagnosticSeverity::Hint),
+        _ => Err(D::Error::invalid_value(
+            Unexpected::Str(&s),
+            &"one of: error, warning, info, hint",
+        )),
+    }
 }
 
 /// One parameter declaration.
@@ -471,5 +508,22 @@ mod tests {
                 "diagnostics": [{"code": "due-date-missing", "severty": "warn"}]}"#,
         )
         .is_err());
+    }
+
+    #[test]
+    fn diagnostic_decl_rejects_unknown_severity_value() {
+        // Strict, unlike the permissive wire deserializer: a typo'd
+        // severity (`warn` instead of `warning`) is a schema error, not
+        // a silent downgrade to `info`.
+        for bad in [r#""warn""#, r#""erorr""#, r#""fatal""#] {
+            let src = format!(
+                r#"{{"schema_version": 1, "label": "acme.task",
+                    "diagnostics": [{{"code": "x", "default_severity": {bad}}}]}}"#
+            );
+            assert!(
+                serde_json::from_str::<Schema>(&src).is_err(),
+                "expected `{bad}` to be rejected"
+            );
+        }
     }
 }

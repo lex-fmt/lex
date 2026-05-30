@@ -201,8 +201,15 @@ impl Registry {
     pub fn declared_diagnostic_codes(&self, namespace: &str) -> Option<Vec<DiagnosticDecl>> {
         let inner = self.inner.read().expect("registry poisoned");
         let ns = inner.namespaces.get(namespace)?;
+        // `schemas` is a `HashMap`, so iterate in a stable order (by
+        // label) before de-duping — otherwise "first declaration wins"
+        // would depend on hash iteration order, making the
+        // description / default-severity of a code that two schemas
+        // declare differently non-deterministic.
+        let mut schemas: Vec<&Schema> = ns.schemas.values().collect();
+        schemas.sort_by(|a, b| a.label.cmp(&b.label));
         let mut by_code: BTreeMap<String, DiagnosticDecl> = BTreeMap::new();
-        for schema in ns.schemas.values() {
+        for schema in schemas {
             for decl in &schema.diagnostics {
                 by_code
                     .entry(decl.code.clone())

@@ -57,20 +57,25 @@ pub fn validate_extension_diagnostic_rules(
 ) -> Vec<DiagnosticRuleFinding> {
     let mut findings = Vec::new();
     for key in extension_rules.keys() {
-        // Split on the FIRST dot: `acme.task-due-date-missing` →
-        // namespace `acme`, code `task-due-date-missing`. Bare keys
-        // (no dot) can't reach this map — the config loader rejects
-        // unknown un-dotted keys under `[diagnostics.rules]` at load —
-        // so a missing dot is defensive and skipped.
-        let Some((namespace, code)) = key.split_once('.') else {
-            continue;
-        };
-        // `None` → namespace not registered → forward-compatible
-        // pass-through (the user may install the extension later).
-        let Some(declared) = registry.declared_diagnostic_codes(namespace) else {
+        // Resolve the namespace by longest registered prefix, not a
+        // first-dot split: namespaces can themselves contain dots
+        // (`mit.plasma-specs`), so `mit.plasma-specs.invalid-version`
+        // must attribute to namespace `mit.plasma-specs` / code
+        // `invalid-version`, not namespace `mit`. `None` → no registered
+        // namespace is a prefix → forward-compatible pass-through (the
+        // user may install the extension later).
+        let Some((namespace, code, declared)) = resolve_namespace(key, registry) else {
             continue;
         };
         if declared.iter().any(|d| d.code == code) {
+            continue;
+        }
+        // The per-namespace `<namespace>.diagnostic` fallback is the
+        // wire code for a handler diagnostic emitted with no explicit
+        // `code` (see `lex_analysis::diagnostics`). It's host-generated
+        // rather than schema-declared, but users legitimately target it
+        // under `[diagnostics.rules]`, so it's never a dead letter.
+        if code == HANDLER_FALLBACK_CODE {
             continue;
         }
         findings.push(DiagnosticRuleFinding {
@@ -79,6 +84,30 @@ pub fn validate_extension_diagnostic_rules(
         });
     }
     findings
+}
+
+/// Leaf code of the per-namespace handler-diagnostic fallback
+/// (`<namespace>.diagnostic`), kept in sync with
+/// `lex_analysis::diagnostics::DiagnosticKind::Handler::code`.
+const HANDLER_FALLBACK_CODE: &str = "diagnostic";
+
+/// Split `key` into `(namespace, code, declared_codes)` using the
+/// longest dotted prefix that names a registered namespace. Returns
+/// `None` when no prefix is registered.
+fn resolve_namespace<'a>(
+    key: &'a str,
+    registry: &Registry,
+) -> Option<(&'a str, &'a str, Vec<DiagnosticDecl>)> {
+    // `match_indices` yields dot positions left-to-right, so the last
+    // registered prefix we see is the longest one.
+    let mut best: Option<(usize, Vec<DiagnosticDecl>)> = None;
+    for (idx, _) in key.match_indices('.') {
+        if let Some(declared) = registry.declared_diagnostic_codes(&key[..idx]) {
+            best = Some((idx, declared));
+        }
+    }
+    let (idx, declared) = best?;
+    Some((&key[..idx], &key[idx + 1..], declared))
 }
 
 fn format_finding(namespace: &str, code: &str, declared: &[DiagnosticDecl]) -> String {
@@ -94,11 +123,18 @@ fn format_finding(namespace: &str, code: &str, declared: &[DiagnosticDecl]) -> S
             " (namespace `{namespace}` declares no diagnostic codes)"
         ));
     } else {
-        let list = declared
+        // Cap the list so a namespace with many codes doesn't produce an
+        // unreadable, multi-line editor notification.
+        const MAX_LISTED: usize = 10;
+        let mut list = declared
             .iter()
+            .take(MAX_LISTED)
             .map(|d| d.code.as_str())
             .collect::<Vec<_>>()
             .join(", ");
+        if declared.len() > MAX_LISTED {
+            list.push_str(&format!(", … (+{} more)", declared.len() - MAX_LISTED));
+        }
         msg.push_str(&format!(" (declared codes: {list})"));
     }
     msg
@@ -267,5 +303,63 @@ mod tests {
         assert_eq!(levenshtein("abc", "abd"), 1);
         assert_eq!(levenshtein("tsak", "task"), 2);
         assert_eq!(levenshtein("", "abc"), 3);
+    }
+
+    fn registry_with_dotted_namespace(codes: &[&str]) -> Registry {
+        let r = Registry::new();
+        r.register_namespace(
+            "mit.plasma-specs",
+            vec![schema_with_diagnostics("mit.plasma-specs.lint", codes)],
+            Box::new(NoOp),
+        )
+        .unwrap();
+        r
+    }
+
+    #[test]
+    fn dotted_namespace_resolves_by_longest_registered_prefix() {
+        // Namespace itself contains a dot. A first-dot split would
+        // misread the namespace as `mit`; longest-prefix resolution
+        // gets `mit.plasma-specs` / code `invalid-version`.
+        let reg = registry_with_dotted_namespace(&["invalid-version"]);
+        // Declared code under the dotted namespace → passes.
+        assert!(validate_extension_diagnostic_rules(
+            &rules(&["mit.plasma-specs.invalid-version"]),
+            &reg
+        )
+        .is_empty());
+        // Undeclared code under the dotted namespace → flagged, and the
+        // message attributes it to the full namespace.
+        let found = validate_extension_diagnostic_rules(&rules(&["mit.plasma-specs.bogus"]), &reg);
+        assert_eq!(found.len(), 1);
+        assert!(
+            found[0].message.contains("namespace `mit.plasma-specs`"),
+            "{}",
+            found[0].message
+        );
+    }
+
+    #[test]
+    fn handler_fallback_diagnostic_code_is_not_a_dead_letter() {
+        // `<namespace>.diagnostic` is the host-generated wire code for a
+        // handler diagnostic emitted with no explicit code. It's a
+        // legitimate `[diagnostics.rules]` target even though no schema
+        // declares it.
+        let reg = registry_with_acme(&["task-due-date-missing"]);
+        assert!(validate_extension_diagnostic_rules(&rules(&["acme.diagnostic"]), &reg).is_empty());
+    }
+
+    #[test]
+    fn long_declared_code_list_is_truncated_in_message() {
+        let many: Vec<String> = (0..25).map(|i| format!("code-{i:02}")).collect();
+        let refs: Vec<&str> = many.iter().map(String::as_str).collect();
+        let reg = registry_with_acme(&refs);
+        let found = validate_extension_diagnostic_rules(&rules(&["acme.nope"]), &reg);
+        assert_eq!(found.len(), 1);
+        assert!(
+            found[0].message.contains("(+15 more)"),
+            "{}",
+            found[0].message
+        );
     }
 }
