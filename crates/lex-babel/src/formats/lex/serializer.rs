@@ -357,13 +357,14 @@ impl Visitor for LexSerializer {
         let params = &annotation.data.parameters;
 
         let mut header = format!(":: {label}");
-        if !params.is_empty() {
-            for param in params {
-                header.push(' ');
-                header.push_str(&param.key);
-                header.push('=');
-                header.push_str(&param.value);
-            }
+        // Parameters are comma-separated: the parser treats the comma as the only
+        // parameter separator (whitespace is ignored), so emitting them space-only
+        // collapses `k1=v1, k2=v2` into a single `k1=v1 k2=v2` value on re-parse.
+        for (i, param) in params.iter().enumerate() {
+            header.push_str(if i == 0 { " " } else { ", " });
+            header.push_str(&param.key);
+            header.push('=');
+            header.push_str(&param.value);
         }
 
         // Always close the header with ` ::`. The open form (`:: label`) is not
@@ -993,6 +994,17 @@ mod tests {
         let source = Lexplore::load(ElementType::Annotation, 2).source();
         let formatted = format_full(&source);
         assert_eq!(formatted, ":: warning severity=high ::\n");
+    }
+
+    #[test]
+    fn test_annotation_multi_param_keeps_comma_separator() {
+        // The parser uses the comma as the only parameter separator, so a
+        // space-only join collapses `k1=v1, k2=v2` into a single value on
+        // re-parse (lex#703). The formatted output must keep the comma and be a
+        // fixed point.
+        let formatted = format_full(":: warning type=critical, id=123 ::\n");
+        assert_eq!(formatted, ":: warning type=critical, id=123 ::\n");
+        assert_eq!(format_full(&formatted), formatted, "must be idempotent");
     }
 
     #[test]

@@ -57,11 +57,14 @@ pub struct ParsedListMarker {
 /// Classification follows this specific order (important for correctness):
 /// 1. Blank lines
 /// 2. Data marker lines (:: label params? ::, closed form)
-/// 3. Data lines (:: label params? without closing ::)
-/// 4. List lines starting with list marker AND ending with colon -> SubjectOrListItemLine
-/// 5. List lines (starting with list marker)
-/// 6. Subject lines (ending with colon)
-/// 7. Default to paragraph
+/// 3. List lines starting with list marker AND ending with colon -> SubjectOrListItemLine
+/// 4. List lines (starting with list marker)
+/// 5. Subject lines (ending with colon)
+/// 6. Default to paragraph
+///
+/// Note: there is no "open form" data line. A `:: label` with no closing `::` is
+/// not a recognized element, so it falls through to a paragraph like any other
+/// unrecognized text — Lex keeps content rather than dropping it.
 pub fn classify_line_tokens(tokens: &[Token]) -> LineType {
     if tokens.is_empty() {
         return LineType::ParagraphLine;
@@ -75,11 +78,6 @@ pub fn classify_line_tokens(tokens: &[Token]) -> LineType {
     // DATA_MARKER_LINE: Data marker in closed form (:: label params? ::)
     if is_data_marker_line(tokens) {
         return LineType::DataMarkerLine;
-    }
-
-    // DATA_LINE: :: label params? without closing ::
-    if is_data_line(tokens) {
-        return LineType::DataLine;
     }
 
     // Check if line both starts with list marker AND ends with colon
@@ -155,58 +153,6 @@ fn is_data_marker_line(tokens: &[Token]) -> bool {
     // Require a label between the markers
     let header_tokens = &tokens[first_marker_idx + 1..second_marker_idx];
     analyze_annotation_header_tokens(header_tokens).has_label
-}
-
-/// Check if a line is a data line (:: label params? without closing ::)
-///
-/// Uses quote-aware marker detection so that `::` inside quoted parameter
-/// values does not disqualify a line from being a data line.
-fn is_data_line(tokens: &[Token]) -> bool {
-    if tokens.is_empty() {
-        return false;
-    }
-
-    // Find structural markers (outside quoted regions)
-    let structural = find_structural_lex_markers(tokens);
-    if structural.is_empty() {
-        return false;
-    }
-
-    // Data lines have exactly one structural marker (no closing ::)
-    if structural.len() >= 2 {
-        return false;
-    }
-
-    let first_marker_idx = structural[0];
-
-    // First marker must be at the start (after optional whitespace/indentation)
-    for token in &tokens[..first_marker_idx] {
-        if !matches!(token, Token::Indentation | Token::Whitespace(_)) {
-            return false;
-        }
-    }
-
-    // After first marker we expect whitespace
-    if first_marker_idx + 1 >= tokens.len()
-        || !matches!(tokens[first_marker_idx + 1], Token::Whitespace(_))
-    {
-        return false;
-    }
-
-    // Collect header tokens (until newline) and ensure we have a label
-    let mut header_tokens = Vec::new();
-    for token in tokens[first_marker_idx + 1..].iter() {
-        if matches!(token, Token::BlankLine(_)) {
-            continue;
-        }
-        header_tokens.push(token.clone());
-    }
-
-    if header_tokens.is_empty() {
-        return false;
-    }
-
-    analyze_annotation_header_tokens(&header_tokens).has_label
 }
 
 /// Parse a list marker at the start of a line (after optional indentation).
@@ -451,14 +397,17 @@ mod tests {
     }
 
     #[test]
-    fn test_classify_data_line() {
+    fn test_open_form_data_marker_is_paragraph() {
+        // `:: label` with no closing `::` is not a recognized element (there is
+        // no "open form"). It falls through to a paragraph so its content is
+        // preserved rather than dropped (lex#700).
         let tokens = vec![
             Token::LexMarker,
             Token::Whitespace(1),
             Token::Text("label".to_string()),
             Token::BlankLine(Some("\n".to_string())),
         ];
-        assert_eq!(classify_line_tokens(&tokens), LineType::DataLine);
+        assert_eq!(classify_line_tokens(&tokens), LineType::ParagraphLine);
     }
 
     #[test]
@@ -611,8 +560,12 @@ mod tests {
     }
 
     #[test]
-    fn test_lex_marker_inside_quoted_value_data_line() {
-        // :: test.note foo=":: value"  (no closing ::)
+    fn test_lex_marker_inside_quoted_value_not_a_closing_marker() {
+        // :: test.note foo=":: value"  (no real closing :: — the inner one is
+        // inside a quoted value). It is not a closed-form data marker, and with
+        // the open form gone it falls through to a paragraph (lex#700). The
+        // point of this regression is that the quoted `::` is NOT mistaken for a
+        // structural closing marker (which would make it a DataMarkerLine).
         let tokens = vec![
             Token::LexMarker,
             Token::Whitespace(1),
@@ -627,6 +580,6 @@ mod tests {
             Token::Quote,
             Token::BlankLine(Some("\n".to_string())),
         ];
-        assert_eq!(classify_line_tokens(&tokens), LineType::DataLine);
+        assert_eq!(classify_line_tokens(&tokens), LineType::ParagraphLine);
     }
 }

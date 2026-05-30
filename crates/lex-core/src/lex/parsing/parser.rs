@@ -586,7 +586,110 @@ pub fn parse_with_declarative_grammar(
     tokens: Vec<LineContainer>,
     source: &str,
 ) -> Result<Vec<ParseNode>, String> {
+    let tokens = fold_prose_continuations(tokens);
     parse_with_declarative_grammar_internal(tokens, source, true, true)
+}
+
+/// True when a line token is paragraph prose (a `ParagraphLine` or `DialogLine`).
+fn is_prose_line(token: &crate::lex::token::LineToken) -> bool {
+    matches!(
+        token.line_type,
+        LineType::ParagraphLine | LineType::DialogLine
+    )
+}
+
+/// True when a run of line containers is *prose only* — it carries no structural
+/// element (list, definition, table, annotation, verbatim) and so would parse to
+/// nothing but paragraphs. A deeper-indented run of this shape is a hanging-indent
+/// continuation of the preceding paragraph, not a nested block.
+///
+/// The check mirrors the paragraph boundaries the matcher uses:
+///   - paragraph / dialog / blank lines are always prose;
+///   - a plain subject line is prose *unless* it heads a container (subject +
+///     container is a definition or table) — a lone trailing-colon line is just
+///     prose;
+///   - a nested container is prose only if its own contents are prose;
+///   - anything starting with a list marker (`ListLine`, `SubjectOrListItemLine`)
+///     or a data marker disqualifies the run — a run of those is a list, which
+///     must keep its own structure, not be flattened into a paragraph.
+fn is_prose_only_run(children: &[LineContainer]) -> bool {
+    let mut idx = 0;
+    while idx < children.len() {
+        match &children[idx] {
+            LineContainer::Token(t) => match t.line_type {
+                LineType::ParagraphLine | LineType::DialogLine | LineType::BlankLine => {}
+                LineType::SubjectLine => {
+                    // Subject + container is a definition/table header, not prose.
+                    if matches!(children.get(idx + 1), Some(LineContainer::Container { .. })) {
+                        return false;
+                    }
+                }
+                _ => return false,
+            },
+            LineContainer::Container { children: inner } => {
+                if !is_prose_only_run(inner) {
+                    return false;
+                }
+            }
+        }
+        idx += 1;
+    }
+    true
+}
+
+/// Append every leaf line of a container to `out`, dissolving nesting.
+fn dissolve_prose_into(container: LineContainer, out: &mut Vec<LineContainer>) {
+    match container {
+        token @ LineContainer::Token(_) => out.push(token),
+        LineContainer::Container { children } => {
+            for child in children {
+                dissolve_prose_into(child, out);
+            }
+        }
+    }
+}
+
+/// Fold hanging-indent continuations back into their paragraph's level (lex#699).
+///
+/// The tokenizer turns *any* indent increase into a nested `LineContainer`, so a
+/// paragraph whose continuation lines are merely more-indented (alignment / hanging
+/// indent) gets split: the deeper lines land in a child container and are later
+/// promoted to a *sibling* paragraph. The serializer then re-emits every paragraph
+/// line at one normalized indent, and the two siblings re-parse as a single
+/// paragraph — a silent semantic change across a format round-trip.
+///
+/// The grammar defines a paragraph as consecutive lines that stop only at list /
+/// definition starts (grammar-core.lex `<paragraph>`), never at a bare indent
+/// increase. So when a prose token is immediately followed by a *pure-prose*
+/// container, we dissolve that container into the current level. Any blank lines
+/// the tokenizer tucked inside the deeper container resurface as real separators at
+/// this level — exactly what the formatter would emit — so paragraph breaks are
+/// preserved while spurious indent-only splits are not.
+///
+/// Containers that carry structure (lists, definitions, annotations, tables) are
+/// never dissolved, and a container not preceded by prose (an annotation/definition
+/// body, an orphaned block) is left untouched.
+fn fold_prose_continuations(children: Vec<LineContainer>) -> Vec<LineContainer> {
+    let mut result: Vec<LineContainer> = Vec::with_capacity(children.len());
+
+    for item in children {
+        let dissolve = matches!(result.last(), Some(LineContainer::Token(t)) if is_prose_line(t))
+            && matches!(&item, LineContainer::Container { children } if is_prose_only_run(children));
+
+        if dissolve {
+            dissolve_prose_into(item, &mut result);
+            continue;
+        }
+
+        match item {
+            LineContainer::Container { children } => result.push(LineContainer::Container {
+                children: fold_prose_continuations(children),
+            }),
+            token => result.push(token),
+        }
+    }
+
+    result
 }
 
 /// Internal parsing function with nesting level tracking
@@ -692,4 +795,51 @@ fn parse_with_declarative_grammar_internal(
     }
 
     Ok(items)
+}
+
+#[cfg(test)]
+mod prose_continuation_tests {
+    use super::*;
+    use crate::lex::token::LineToken;
+
+    fn line(line_type: LineType) -> LineContainer {
+        LineContainer::Token(LineToken {
+            source_tokens: vec![],
+            token_spans: vec![],
+            line_type,
+        })
+    }
+
+    fn container(children: Vec<LineContainer>) -> LineContainer {
+        LineContainer::Container { children }
+    }
+
+    #[test]
+    fn prose_run_accepts_paragraph_and_lone_subject() {
+        use LineType::*;
+        // A hanging-indent continuation: paragraph lines, a blank, and a lone
+        // trailing-colon subject line (not heading a container) are all prose.
+        assert!(is_prose_only_run(&[
+            line(ParagraphLine),
+            line(SubjectLine),
+            line(BlankLine),
+        ]));
+    }
+
+    #[test]
+    fn prose_run_rejects_list_markers() {
+        use LineType::*;
+        // A run of list-marker lines is a list, never prose — folding it into the
+        // preceding paragraph would flatten real structure (lex#704 review).
+        assert!(!is_prose_only_run(&[
+            line(SubjectOrListItemLine),
+            line(SubjectOrListItemLine),
+        ]));
+        assert!(!is_prose_only_run(&[line(ListLine)]));
+        // A subject line that *heads* a container is a definition/table, not prose.
+        assert!(!is_prose_only_run(&[
+            line(SubjectLine),
+            container(vec![line(ParagraphLine)]),
+        ]));
+    }
 }

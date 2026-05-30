@@ -451,12 +451,12 @@ fn targeted_cases() -> Vec<(&'static str, &'static str)> {
 // listed case still fails (so the list cannot rot — when a bug is fixed the
 // test tells you to delete the entry) and logs the excluded set on each run.
 //
-// Bugs (shipped fixes removed their entries here):
-//   #699 — formatter merges paragraphs separated only by indentation
-//   #700 — open-form annotation dropped, collapsing its container
 // (The lex#681 umbrella is closed: its deliverable — this suite — shipped and
-// every bug it originally found is fixed. The two residual Tier-2 fixture gaps
-// were triaged out into the focused issues above.)
+// every bug it originally found is fixed. The residual Tier-2 fixture failures
+// were triaged into focused issues — #699 (paragraph merge), #700 (open-form
+// drop), #703 (annotation comma) — all now fixed, so every list below is empty.
+// Re-populate only when a newly-filed formatter bug needs to keep the suite
+// green while it is open.)
 // -----------------------------------------------------------------------------
 
 const TIER1_TARGETED_KNOWN_FAIL: &[(&str, &str)] = &[];
@@ -465,16 +465,7 @@ const TIER2_TARGETED_KNOWN_FAIL: &[(&str, &str)] = &[];
 
 const TIER1_FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[];
 
-const TIER2_FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[
-    // Sibling paragraphs distinguished only by (alignment) indentation merge into
-    // one when the formatter normalizes the indent — #699.
-    ("annotation.lex", "#699"),
-    ("label.lex", "#699"),
-    ("parameter.lex", "#699"),
-    // An open-form annotation (`:: label` with no closing `::`) is dropped, so the
-    // definition it bodies collapses to a paragraph on reformat — #700.
-    ("data.lex", "#700"),
-];
+const TIER2_FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[];
 
 #[cfg(test)]
 mod tests {
@@ -611,6 +602,24 @@ mod tests {
             check_semantic_preserved,
         );
     }
+
+    /// The `table_aligned_header` Tier-2 case only proves alignment is *symmetric*
+    /// across a round-trip — it would also pass if alignment were dropped on both
+    /// sides (the old #702 blind spot). This asserts the stronger property: the
+    /// markdown separator-row alignment hints are actually *retained* in the
+    /// formatted output, not flattened to a plain `---` separator.
+    #[test]
+    fn table_separator_alignment_is_retained() {
+        let src =
+            "Stats:\n    | Name | Score |\n    |:---|---:|\n    | Alice | 10 |\n:: table ::\n";
+        let formatted = format(src).expect("format");
+        assert!(
+            formatted.contains(":---") && formatted.contains("---:"),
+            "alignment markers must survive formatting (lex#702); got:\n{formatted}"
+        );
+        // And re-emitting is a fixed point.
+        assert_eq!(format(&formatted).expect("reformat"), formatted);
+    }
 }
 
 // -----------------------------------------------------------------------------
@@ -629,8 +638,8 @@ mod tests {
 //   - nested/extended numbered lists  (#685)
 //   - a bare document title line       (#687 — generator leads with a 2-line
 //                                        paragraph, which is never title-absorbed)
-//   - random *leading* indent widths  (paragraph-merge-on-indent edge, #699)
-// Widen this generator as those are fixed.
+// Widen this generator as those are fixed. (The paragraph-merge-on-indent edge,
+// #699, is now fixed — hanging-indent continuations fold back into the paragraph.)
 // -----------------------------------------------------------------------------
 
 #[cfg(test)]

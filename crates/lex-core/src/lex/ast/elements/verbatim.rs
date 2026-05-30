@@ -33,7 +33,7 @@
 //!
 //! | Element  | Prec. Blank | Head        | Blank    | Content  | Tail            |
 //! |----------|-------------|-------------|----------|----------|-----------------|
-//! | Verbatim | Optional    | SubjectLine | Optional | Optional | dedent+DataLine |
+//! | Verbatim | Optional    | SubjectLine | Optional | Optional | dedent+DataMarkerLine |
 //!
 //! Parsing Verbatim Blocks
 //!

@@ -47,6 +47,12 @@ pub enum DiagnosticKind {
     /// typo (`lex.fooar`) or a label authored against a future
     /// version of the core schemas.
     UnknownLexCanonical,
+    /// A paragraph line that looks like an annotation header (`:: label`)
+    /// but has no closing `::`. There is no "open form" — such a line is
+    /// kept as paragraph text rather than dropped (lex#700) — so this
+    /// warns the author that what looks like metadata is being treated as
+    /// content. The fix is to close the marker: `:: label ::`.
+    UnclosedAnnotation,
 }
 
 /// Severity for analysis-emitted diagnostics. The analyser populates
@@ -127,6 +133,7 @@ impl DiagnosticKind {
             },
             DiagnosticKind::ForbiddenLabelPrefix => "forbidden-label-prefix".into(),
             DiagnosticKind::UnknownLexCanonical => "unknown-lex-canonical".into(),
+            DiagnosticKind::UnclosedAnnotation => "unclosed-annotation".into(),
         }
     }
 }
@@ -194,8 +201,79 @@ pub fn analyze_with_registry(document: &Document, registry: &Registry) -> Vec<An
     check_footnotes(document, &mut diagnostics);
     check_tables(document, &mut diagnostics);
     check_labels(document, &mut diagnostics);
+    check_unclosed_annotations(document, &mut diagnostics);
     crate::label_dispatch::dispatch_labels(document, registry, &mut diagnostics);
     diagnostics
+}
+
+/// Warn on paragraph lines that look like an annotation header but never close
+/// the `:: ::` marker (lex#700). There is no "open form": `:: label` with no
+/// closing `::` is not a recognized element, so the parser keeps it as paragraph
+/// text rather than dropping it. This surfaces that — the author likely meant an
+/// annotation and forgot the trailing `::`.
+fn check_unclosed_annotations(document: &Document, diagnostics: &mut Vec<AnalysisDiagnostic>) {
+    fn emit(
+        tl: &lex_core::lex::ast::elements::paragraph::TextLine,
+        out: &mut Vec<AnalysisDiagnostic>,
+    ) {
+        if looks_like_unclosed_annotation(tl.text()) {
+            out.push(AnalysisDiagnostic {
+                range: tl.location.clone(),
+                severity: DiagnosticSeverity::Warning,
+                kind: DiagnosticKind::UnclosedAnnotation,
+                message: "this line looks like an annotation but has no closing `::`, \
+                          so it is treated as text. Close the marker to make it an \
+                          annotation, e.g. `:: label ::`."
+                    .to_string(),
+            });
+        }
+    }
+
+    fn walk(item: &ContentItem, out: &mut Vec<AnalysisDiagnostic>) {
+        if let ContentItem::Paragraph(p) = item {
+            for line in &p.lines {
+                if let ContentItem::TextLine(tl) = line {
+                    emit(tl, out);
+                }
+            }
+        }
+        if let Some(children) = item.children() {
+            for child in children {
+                walk(child, out);
+            }
+        }
+    }
+
+    for child in &document.root.children {
+        walk(child, diagnostics);
+    }
+}
+
+/// True when a line is shaped like an annotation header (`:: label …`) but has no
+/// closing `::`. Detection is intentionally a lightweight text heuristic — by the
+/// time content reaches the analyser, a *closed* annotation is already its own
+/// node, so any `::`-leading paragraph line is the unclosed shape.
+fn looks_like_unclosed_annotation(text: &str) -> bool {
+    let Some(rest) = text.trim().strip_prefix("::") else {
+        return false;
+    };
+    // A second *structural* `::` means a closed marker — not the unclosed shape.
+    // Scan quote-aware so a `::` inside a quoted parameter value (e.g.
+    // `:: note foo=":: value"`) does not count as a close, matching how the
+    // lexer's structural-marker detection treats it.
+    let mut in_quotes = false;
+    let mut chars = rest.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => in_quotes = !in_quotes,
+            ':' if !in_quotes && chars.peek() == Some(&':') => return false,
+            _ => {}
+        }
+    }
+    // Require whitespace after the opening marker, then a label-shaped token
+    // (label.lex: a letter, then letters/digits/`_`/`-`/`.`).
+    let label = rest.trim_start();
+    rest.len() != label.len() && label.chars().next().is_some_and(|c| c.is_alphabetic())
 }
 
 /// Run the analyser with both an extension registry and a
@@ -616,6 +694,48 @@ mod tests {
     use super::*;
     use lex_core::lex::parsing::process_full_permissive;
     use lex_core::lex::testing::lexplore::Lexplore;
+
+    fn unclosed_annotation_diags(source: &str) -> Vec<AnalysisDiagnostic> {
+        let doc = process_full_permissive(source).expect("permissive parse");
+        analyze(&doc)
+            .into_iter()
+            .filter(|d| d.kind == DiagnosticKind::UnclosedAnnotation)
+            .collect()
+    }
+
+    #[test]
+    fn unclosed_annotation_warns_on_open_form() {
+        // `:: note severity=high` (no closing `::`) parses as a paragraph; the
+        // analyser flags it so the author knows it isn't an annotation (lex#700).
+        let diags = unclosed_annotation_diags("Open form:\n\t:: note severity=high\n");
+        assert_eq!(diags.len(), 1, "expected one unclosed-annotation warning");
+        assert_eq!(diags[0].severity, DiagnosticSeverity::Warning);
+        assert_eq!(diags[0].kind.code(), "unclosed-annotation");
+    }
+
+    #[test]
+    fn unclosed_annotation_silent_on_closed_form_and_prose() {
+        // A properly closed annotation is its own node, not a flagged paragraph.
+        assert!(unclosed_annotation_diags(":: note severity=high ::\n\nBody.\n").is_empty());
+        // Prose that merely mentions `::` is not flagged.
+        assert!(unclosed_annotation_diags("Use :: to start a marker.\n").is_empty());
+    }
+
+    #[test]
+    fn looks_like_unclosed_annotation_heuristic() {
+        assert!(looks_like_unclosed_annotation(":: note"));
+        assert!(looks_like_unclosed_annotation("    :: note severity=high"));
+        // A `::` inside a quoted value is not a structural close, so this is still
+        // an unclosed annotation (lex#704 review).
+        assert!(looks_like_unclosed_annotation(":: note foo=\":: value\""));
+        assert!(!looks_like_unclosed_annotation(":: note ::"));
+        assert!(!looks_like_unclosed_annotation(
+            ":: note foo=\":: value\" ::"
+        )); // real close
+        assert!(!looks_like_unclosed_annotation("::note")); // no whitespace after marker
+        assert!(!looks_like_unclosed_annotation("::")); // no label
+        assert!(!looks_like_unclosed_annotation("just prose"));
+    }
 
     fn footnote_diags(doc: &Document) -> Vec<AnalysisDiagnostic> {
         analyze(doc)

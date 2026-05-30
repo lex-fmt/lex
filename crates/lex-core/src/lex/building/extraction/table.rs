@@ -15,6 +15,7 @@
 
 use super::verbatim::extract_verbatim_block_data;
 use crate::lex::ast::elements::verbatim::VerbatimBlockMode;
+use crate::lex::ast::TableCellAlignment;
 use crate::lex::escape::split_respecting_escape_with_ranges;
 use crate::lex::token::LineToken;
 use std::borrow::Cow;
@@ -58,6 +59,11 @@ pub(in crate::lex::building) struct TableData {
     pub body_rows: Vec<TableRowData>,
     pub footnotes: Vec<FootnoteLineData>,
     pub mode: VerbatimBlockMode,
+    /// Per-column alignment read from the markdown separator row
+    /// (`:---`, `---:`, `:---:`). Empty when the table has no separator row.
+    /// The `:: table align=… ::` parameter, applied later in assembly,
+    /// overrides this.
+    pub alignments: Vec<TableCellAlignment>,
 }
 
 /// Extract table data from the verbatim-like outer structure.
@@ -84,6 +90,7 @@ pub(in crate::lex::building) fn extract_table_data(
 
     // Parse the wall-stripped content lines into rows and extract footnotes
     let classified = classify_lines(&group.content_lines);
+    let alignments = parse_separator_alignments(&group.content_lines);
     let is_multiline = detect_multiline(&classified);
     let raw_rows = if is_multiline {
         parse_multiline_rows(&classified)
@@ -117,6 +124,7 @@ pub(in crate::lex::building) fn extract_table_data(
         body_rows,
         footnotes,
         mode,
+        alignments,
     }
 }
 
@@ -567,6 +575,42 @@ fn is_separator_line(line: &str) -> bool {
         .all(|c| matches!(c, '|' | '-' | ':' | '+' | ' ' | '='))
 }
 
+/// Read per-column alignment from the table's markdown separator row.
+///
+/// The separator row encodes alignment with leading/trailing colons on each
+/// column segment: `:---` → left, `---:` → right, `:---:` → center, `---` →
+/// none. Returns the per-column alignments for the first separator row found,
+/// or an empty vec when the table has no separator row.
+///
+/// Without this, the colon hints are dropped on parse and the formatter
+/// re-emits a plain `---` separator — a silent loss across a round-trip
+/// (lex#702). The `:: table align=… ::` parameter still overrides these in a
+/// later assembly stage.
+fn parse_separator_alignments(
+    content_lines: &[(String, ByteRange<usize>)],
+) -> Vec<TableCellAlignment> {
+    for (text, _) in content_lines {
+        let trimmed = text.trim();
+        if !trimmed.starts_with('|') || !is_separator_line(trimmed) {
+            continue;
+        }
+        return trimmed
+            .trim_matches('|')
+            .split('|')
+            .map(|segment| {
+                let seg = segment.trim();
+                match (seg.starts_with(':'), seg.ends_with(':')) {
+                    (true, true) => TableCellAlignment::Center,
+                    (true, false) => TableCellAlignment::Left,
+                    (false, true) => TableCellAlignment::Right,
+                    (false, false) => TableCellAlignment::None,
+                }
+            })
+            .collect();
+    }
+    Vec::new()
+}
+
 /// Extract footnote lines from trailing non-pipe content.
 ///
 /// Footnotes are non-pipe lines that appear after the last pipe row.
@@ -714,6 +758,19 @@ mod tests {
         assert!(is_separator_line("| --- | --- |"));
         assert!(!is_separator_line("| hello | world |"));
         assert!(!is_separator_line("| --- | data |"));
+    }
+
+    #[test]
+    fn test_parse_separator_alignments() {
+        use TableCellAlignment::*;
+        fn aligns(sep: &str) -> Vec<TableCellAlignment> {
+            parse_separator_alignments(&[(sep.to_string(), 0..sep.len())])
+        }
+        assert_eq!(aligns("|:---|---:|"), vec![Left, Right]);
+        assert_eq!(aligns("|:---:|---|"), vec![Center, None]);
+        assert_eq!(aligns("| :--- | ---: | :---: |"), vec![Left, Right, Center]);
+        // No separator row → no alignments.
+        assert!(aligns("| a | b |").is_empty());
     }
 
     #[test]
