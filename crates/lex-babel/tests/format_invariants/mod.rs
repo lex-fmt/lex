@@ -403,6 +403,10 @@ fn targeted_cases() -> Vec<(&'static str, &'static str)> {
             "Grid:\n    | A | B | C |\n    | span | >> | c |\n:: table ::\n",
         ),
         (
+            "table_rowspan",
+            "Grid:\n    | a | b |\n    | ^^ | c |\n:: table ::\n",
+        ),
+        (
             "messy_blank_runs_and_markers",
             "Doc\n===\n\n\n\n\nFirst para.\n\n\n\n* one\n* two\n* three\n",
         ),
