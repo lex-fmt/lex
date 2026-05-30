@@ -629,7 +629,7 @@ mod tests {
 //   - nested/extended numbered lists  (#685)
 //   - a bare document title line       (#687 — generator leads with a 2-line
 //                                        paragraph, which is never title-absorbed)
-//   - random *leading* indent widths  (untriaged paragraph-merge edge, #681)
+//   - random *leading* indent widths  (paragraph-merge-on-indent edge, #699)
 // Widen this generator as those are fixed.
 // -----------------------------------------------------------------------------
 
