@@ -113,6 +113,17 @@ pub(super) fn extract_annotation_single_content(
 
     ensure_header_has_label(start_token, &header_tokens)?;
 
+    // Drop the run of whitespace between the closing `::` and the inline body:
+    // it is alignment padding, not content. Keeping it bakes the padding into
+    // the body paragraph's indentation when the annotation is serialized as a
+    // block, so the body shifts on every re-format — never reaching a fixed
+    // point (lex#696). Trailing whitespace is already trimmed at emit time.
+    let leading_ws = content_tokens
+        .iter()
+        .take_while(|(t, _)| matches!(t, Token::Indentation | Token::Whitespace(_)))
+        .count();
+    content_tokens.drain(..leading_ws);
+
     // If there's content after the header, create a paragraph for it
     let children = if !content_tokens.is_empty() {
         vec![ParseNode::new(NodeType::Paragraph, content_tokens, vec![])]

@@ -14,13 +14,16 @@
 //! stream is then sorted by source position, weaving annotations back among the
 //! existing children (and their `BlankLineGroup`s) in source order.
 //!
-//! Document/root annotations are emitted at the document head, each followed by
-//! a blank line, so they re-attach to the `Document` (the document-start rule),
-//! regardless of where they sat in the source.
+//! Document/root annotations are woven back into the root stream at their
+//! original source position, then re-sorted with everything else, so each lands
+//! where it was authored: a head annotation (the document-start rule) stays at
+//! the head; a trailing one (the container-end rule) stays at the tail. Emitting
+//! at the source position lets the same attachment rule re-fire on re-parse.
+//! Forcing every doc annotation to the head instead broke the container-end case
+//! and tripped a parser drop of head block-annotations (lex#696).
 //!
 //! `Table` annotations are left untouched — `Table::accept` already emits them.
 
-use lex_core::lex::ast::elements::BlankLineGroup;
 use lex_core::lex::ast::traits::AstNode;
 use lex_core::lex::ast::{Annotation, ContentItem, Document};
 
@@ -61,25 +64,17 @@ fn clean_annotation(ann: &mut Annotation) {
 pub fn inline_attached_annotations(doc: &mut Document) {
     let mut doc_anns = std::mem::take(&mut doc.annotations);
     doc_anns.append(&mut doc.root.annotations);
-    doc_anns.sort_by_key(|a| (a.location.start.line, a.location.start.column));
 
-    process_stream(doc.root.children.as_mut_vec());
-
-    if !doc_anns.is_empty() {
-        let children = doc.root.children.as_mut_vec();
-        let mut head: Vec<ContentItem> = Vec::with_capacity(doc_anns.len() * 2 + children.len());
-        for mut ann in doc_anns {
-            clean_annotation(&mut ann);
-            head.push(ContentItem::Annotation(ann));
-            head.push(ContentItem::BlankLineGroup(BlankLineGroup {
-                count: 1,
-                source_tokens: Vec::new(),
-                location: Default::default(),
-            }));
-        }
-        head.append(children);
-        *children = head;
+    // Drop the document-level annotations back into the root stream; the blank
+    // groups around their original slots are still present (the parser removed
+    // only the annotation item when it attached). `process_stream` then cleans
+    // each body and re-sorts the whole stream by source position, weaving them
+    // back where they were authored.
+    let children = doc.root.children.as_mut_vec();
+    for ann in doc_anns {
+        children.push(ContentItem::Annotation(ann));
     }
+    process_stream(children);
 }
 
 /// Split annotations attached to one element: those whose source line falls

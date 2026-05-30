@@ -425,24 +425,23 @@ fn targeted_cases() -> Vec<(&'static str, &'static str)> {
 // Bugs (shipped fixes removed their entries here):
 //   #684 — table footnote list emitted outside the block
 //   #685 — list renumbering not idempotent (nested/extended)
-//   #696 — residual annotation round-trip edges (doc-level block-annotation
-//          re-attachment; deeply-nested annotation-example body indentation)
 //   #681 — umbrella for remaining mixed/untriaged element-fixture sweep failures
+//          (e.g. paragraph merge of siblings distinguished only by irregular indent)
 // -----------------------------------------------------------------------------
 
 const TIER1_TARGETED_KNOWN_FAIL: &[(&str, &str)] = &[];
 
-const TIER2_TARGETED_KNOWN_FAIL: &[(&str, &str)] = &[
-    ("ref_tk_citation_annref", "#696"),
-    ("table_with_footnotes", "#684"),
-];
+const TIER2_TARGETED_KNOWN_FAIL: &[(&str, &str)] = &[("table_with_footnotes", "#684")];
 
-const TIER1_FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[("escaping.lex", "#696"), ("list.lex", "#685")];
+const TIER1_FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[("list.lex", "#685")];
 
 const TIER2_FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[
-    ("annotation.lex", "#696"),
+    // annotation.lex no longer fails on the #696 annotation edges; its residual
+    // Tier-2 gap is a paragraph merge — two sibling paragraphs distinguished only
+    // by an irregular extra indent level collapse into one when re-indented. That
+    // is the untriaged paragraph-merge edge tracked under the #681 umbrella.
+    ("annotation.lex", "#681"),
     ("data.lex", "#681"),
-    ("escaping.lex", "#696"),
     ("label.lex", "#681"),
     ("list.lex", "#685"),
     ("parameter.lex", "#681"),

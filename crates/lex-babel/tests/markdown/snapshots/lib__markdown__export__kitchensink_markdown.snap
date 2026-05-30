@@ -25,7 +25,7 @@ This session acts as the main container for testing nested structures. It starts
 
 <!-- lex:warning severity=high -->
 
- This is a single-line annotation inside the session.
+This is a single-line annotation inside the session.
 
 <!-- /lex:warning -->
 
