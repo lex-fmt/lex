@@ -465,10 +465,6 @@ const TIER2_TARGETED_KNOWN_FAIL: &[(&str, &str)] = &[];
 const TIER1_FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[];
 
 const TIER2_FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[
-    // Multi-parameter annotations re-serialize without the comma separator, so the
-    // params collapse on re-parse — #703. (The paragraph-merge half of this fixture
-    // was #699, now fixed.)
-    ("parameter.lex", "#703"),
     // An open-form annotation (`:: label` with no closing `::`) is dropped, so the
     // definition it bodies collapses to a paragraph on reformat — #700.
     ("data.lex", "#700"),
