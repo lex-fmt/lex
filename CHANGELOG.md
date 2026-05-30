@@ -4,6 +4,28 @@
 
 ## Unreleased
 
+### Added — extensions declare diagnostic codes; the host validates `[diagnostics.rules]` against them ([#659](https://github.com/lex-fmt/lex/issues/659))
+
+Extension-emitted `[diagnostics.rules]` entries (`<namespace>.<code>`) are now schema-validated against the resolved registry, so a misspelled or undeclared code no longer silently retunes nothing.
+
+- **Schema declares codes.** `lex_extension::schema::Schema` gains an optional `diagnostics` list — each entry carries `code`, an optional `description`, and a `default_severity` (defaulting to `warning`). The field is additive: schemas that omit it load with no declared codes, and built-in `lex.*` schemas declare none (they surface diagnostics through `lex-analysis`, not the extension code path).
+- **Registry accessor.** `Registry::declared_diagnostic_codes(namespace)` aggregates and de-dupes the codes a namespace's schemas declare, returning `None` for an unregistered namespace so callers can distinguish "unknown namespace" from "known namespace, undeclared code".
+- **Host validation.** `lex_fmt::validate_extension_diagnostic_rules` classifies each rule key: an unregistered namespace passes (rules may be staged ahead of installing the extension), a declared code passes, and an undeclared code under a registered namespace is reported as a dead letter with a closest-match "did you mean … ?" suggestion and the list of declared codes. The LSP runs this after registry boot and surfaces findings via `window/showMessage`.
+### Fixed — paragraph lines split only by indentation no longer merge on format ([#699](https://github.com/lex-fmt/lex/issues/699))
+
+A paragraph whose continuation lines were merely more-indented (alignment / hanging indent) was split into separate sibling paragraphs by the parser, then re-merged into one paragraph after formatting normalized the indent — a silent semantic change across a round-trip. Such hanging-indent continuations now fold back into the paragraph at parse time (real blank-line breaks are preserved).
+### Changed — removed the open-form data marker; unrecognized `:: label` lines are kept as text ([#700](https://github.com/lex-fmt/lex/issues/700))
+
+There was never a real "open form" of a data marker. A `:: label` with no closing `::` was classified as a distinct token that no grammar rule consumed, so the parser silently dropped such lines (and a definition whose sole body was one collapsed into a paragraph). Following Lex's rule that anything unrecognized becomes a paragraph — be forgiving, never lose content — these lines now classify as paragraph text.
+
+- **New diagnostic.** An `unclosed-annotation` Warning flags a paragraph line shaped like `:: label …` with no closing `::`, so authors know it looks like metadata but is treated as content. Configurable via `[diagnostics.rules]`.
+- `LineType::DataLine` and its classifier are removed. Closed-form `:: label ::` (annotations, verbatim closings) is unchanged.
+### Fixed — table column alignment is read from the markdown separator row ([#702](https://github.com/lex-fmt/lex/issues/702))
+
+The separator row's colon hints (`:---` left, `---:` right, `:---:` center) were detected only to be discarded; alignment was sourced solely from the `:: table align=… ::` parameter. Markdown-style aligned tables now keep their alignment across a format round-trip. The explicit `align=` parameter still overrides the separator row.
+### Fixed — annotation parameters keep their comma separator on format ([#703](https://github.com/lex-fmt/lex/issues/703))
+
+The Lex serializer joined annotation parameters with a space instead of a comma, so `:: warning type=critical, id=123 ::` re-serialized as `:: warning type=critical id=123 ::` and re-parsed to a single parameter. Parameters now re-emit comma-separated.
 ### Changed — extension diagnostic codes carry their namespace on the wire ([#657](https://github.com/lex-fmt/lex/issues/657))
 
 Follow-up to #636: `[diagnostics.rules]` now accepts extension-emitted codes (`acme.task-due-date-missing`, `mit.plasma-specs.invalid-version`) alongside built-ins, configured identically.
