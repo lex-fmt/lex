@@ -43,10 +43,12 @@
 //!
 //! [`TrustPromptHandler`]: lex_extension_host::TrustPromptHandler
 
+pub mod diag_rules;
 pub mod engine;
 pub mod prompts;
 pub mod setup;
 
+pub use diag_rules::{validate_extension_diagnostic_rules, DiagnosticRuleFinding};
 pub use engine::{BuildError, Engine, EngineBuilder, ParseError, RenderError, ResolveError};
 pub use prompts::{AutoDenyPrompt, AutoTrustPrompt};
 pub use setup::{

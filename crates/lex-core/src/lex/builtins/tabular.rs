@@ -160,6 +160,7 @@ pub fn lex_tabular_table_schema() -> Schema {
             ..HookSet::default()
         },
         handler: None,
+        diagnostics: Vec::new(),
     }
 }
 

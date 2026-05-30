@@ -79,6 +79,7 @@ fn doc_schema(label: &'static str, description: &'static str) -> Schema {
             ..HookSet::default()
         },
         handler: None,
+        diagnostics: Vec::new(),
     }
 }
 

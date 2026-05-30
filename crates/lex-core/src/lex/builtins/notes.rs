@@ -44,6 +44,7 @@ pub fn lex_notes_schema() -> Schema {
         capabilities: Capabilities::default(),
         hooks: HookSet::default(),
         handler: None,
+        diagnostics: Vec::new(),
     }
 }
 

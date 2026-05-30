@@ -432,6 +432,7 @@ mod tests {
                 ..HookSet::default()
             },
             handler: None,
+            diagnostics: Vec::new(),
         }
     }
 

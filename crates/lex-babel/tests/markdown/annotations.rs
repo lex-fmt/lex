@@ -111,6 +111,7 @@ fn schema(label: &str, formats: &[&str]) -> Schema {
             ..HookSet::default()
         },
         handler: None,
+        diagnostics: Vec::new(),
     }
 }
 

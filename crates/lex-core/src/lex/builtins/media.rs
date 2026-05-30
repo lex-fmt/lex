@@ -59,6 +59,7 @@ fn media_schema(
             ..HookSet::default()
         },
         handler: None,
+        diagnostics: Vec::new(),
     }
 }
 
