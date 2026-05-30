@@ -83,7 +83,11 @@ impl GrammarMatcher {
                             content_idx: 1,
                         },
                         "annotation_single" => PatternMatch::AnnotationSingle { start_idx: 0 },
-                        "list_no_blank" => {
+                        // A lone top-level list item with a nested container
+                        // (lex#685). Same shape as `list_no_blank` — no preceding
+                        // blank, items captured the same way — so it shares that
+                        // arm's extraction logic.
+                        "list_no_blank" | "list_single_with_container" => {
                             // List without preceding blank line
                             let items_str = caps.name("items")?.as_str();
                             let mut items = Vec::new();

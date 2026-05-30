@@ -5,7 +5,7 @@ use lex_core::lex::ast::{
         verbatim::VerbatimGroupItemRef, VerbatimLine,
     },
     traits::{AstNode, Visitor},
-    Annotation, Definition, Document, List, ListItem, Paragraph, Session, Table,
+    Annotation, Definition, Document, List, ListItem, Paragraph, Session, Table, TableCell,
     TableCellAlignment, TableRow, Verbatim,
 };
 
@@ -83,6 +83,13 @@ pub struct LexSerializer {
     indent_level: usize,
     consecutive_newlines: usize,
     list_stack: Vec<ListContext>,
+    /// Footnote lists already emitted inside their table block (lex#684). Their
+    /// second, accept-driven walk must produce no output; see `suppress_output`.
+    emitted_footnote_lists: Vec<*const List>,
+    /// While > 0, `write_line` / `ensure_blank_lines` are no-ops. Used to swallow
+    /// the redundant accept-driven walk of a table's footnote list without
+    /// unbalancing the list stack — the visit still runs, only output is muted.
+    suppress_output: usize,
 }
 
 impl LexSerializer {
@@ -93,6 +100,8 @@ impl LexSerializer {
             indent_level: 0,
             consecutive_newlines: 2, // Start as if we have blank lines
             list_stack: Vec::new(),
+            emitted_footnote_lists: Vec::new(),
+            suppress_output: 0,
         }
     }
 
@@ -140,6 +149,9 @@ impl LexSerializer {
     }
 
     fn write_line(&mut self, text: &str) {
+        if self.suppress_output > 0 {
+            return;
+        }
         self.output.push_str(&self.indent());
         self.output.push_str(text);
         self.output.push('\n');
@@ -184,6 +196,9 @@ impl LexSerializer {
     }
 
     fn ensure_blank_lines(&mut self, count: usize) {
+        if self.suppress_output > 0 {
+            return;
+        }
         let target_newlines = count + 1;
         while self.consecutive_newlines < target_newlines {
             self.output.push('\n');
@@ -248,6 +263,15 @@ impl Visitor for LexSerializer {
 
         let marker_form = list.marker.as_ref().map(|marker| marker.form);
 
+        // A table's footnote list is emitted once inside its block by
+        // `visit_table`; its second, accept-driven walk must be muted (lex#684).
+        // Enter suppression here (and stay in it for any nested lists) but still
+        // push the context so `leave_list` stays balanced.
+        if self.suppress_output > 0 || self.emitted_footnote_lists.contains(&(list as *const List))
+        {
+            self.suppress_output += 1;
+        }
+
         self.list_stack.push(ListContext {
             style,
             upper_case,
@@ -258,6 +282,9 @@ impl Visitor for LexSerializer {
 
     fn leave_list(&mut self, _list: &List) {
         self.list_stack.pop();
+        if self.suppress_output > 0 {
+            self.suppress_output -= 1;
+        }
     }
 
     fn visit_list_item(&mut self, list_item: &ListItem) {
@@ -427,6 +454,20 @@ impl Visitor for LexSerializer {
 
         self.indent_level += 1;
         emit_pipe_table(self, table);
+
+        // Emit the scoped footnote list *inside* the indented block, after the
+        // rows and before the dedent, so it stays part of the table and keeps
+        // its numbered markers (lex#684). `Table::accept` walks `footnotes`
+        // again after `visit_table` returns — at the outer indent and after the
+        // closer — so record the list here and mute that second walk
+        // (`visit_list` / `suppress_output`).
+        if let Some(footnotes) = &table.footnotes {
+            self.ensure_blank_lines(1);
+            footnotes.accept(self);
+            self.emitted_footnote_lists
+                .push(footnotes.as_ref() as *const List);
+        }
+
         self.indent_level -= 1;
 
         // The closing `:: lex.tabular.table ::` annotation is part of
@@ -439,6 +480,85 @@ impl Visitor for LexSerializer {
     fn leave_table(&mut self, _table: &Table) {
         // No-op; annotations carry the closer.
     }
+}
+
+/// What occupies a single grid column in a single row.
+enum Slot<'a> {
+    /// The top-left (originating) cell of a span; carries its content.
+    Origin(&'a TableCell),
+    /// A column absorbed by a colspan to its left — re-emits `>>` (lex#683).
+    Colspan,
+    /// A column absorbed by a rowspan above it — re-emits `^^` (lex#694).
+    Rowspan,
+    /// Padding for a column a short row never reaches but that sits *before* a
+    /// rowspan-covered column further right; keeps later `^^` markers in place.
+    Empty,
+}
+
+impl Slot<'_> {
+    /// The literal a slot renders as, for width and emission.
+    fn text(&self) -> &str {
+        match self {
+            Slot::Origin(cell) => cell.content.as_string().trim(),
+            Slot::Colspan => ">>",
+            Slot::Rowspan => "^^",
+            Slot::Empty => "",
+        }
+    }
+}
+
+/// Project the table's ragged rows onto a rectangular column grid, re-deriving
+/// the merge markers the parser consumed: `>>` for each column a colspan
+/// absorbed (within a row) and `^^` for each column a rowspan absorbed (from the
+/// row above). The parser removes absorbed cells and bumps the spanning cell's
+/// colspan/rowspan, so without this reconstruction the markers — and the spans —
+/// are lost on a re-format (lex#683, lex#694).
+fn build_grid<'a>(rows: &[&'a TableRow]) -> Vec<Vec<Slot<'a>>> {
+    // `carry[col]` = remaining continuation rows still covered by a rowspan that
+    // originated above. Grows on demand since the column count emerges here.
+    let mut carry: Vec<usize> = Vec::new();
+    let mut grid: Vec<Vec<Slot>> = Vec::with_capacity(rows.len());
+
+    for row in rows {
+        let mut slots: Vec<Slot> = Vec::new();
+        let mut cells = row.cells.iter();
+        let mut col = 0;
+        loop {
+            if carry.get(col).copied().unwrap_or(0) > 0 {
+                // This column is mid-rowspan from a cell above.
+                carry[col] -= 1;
+                slots.push(Slot::Rowspan);
+                col += 1;
+            } else if let Some(cell) = cells.next() {
+                let span = cell.colspan.max(1);
+                if cell.rowspan > 1 {
+                    // Reserve the continuation rows across the cell's full width.
+                    for c in col..col + span {
+                        if carry.len() <= c {
+                            carry.resize(c + 1, 0);
+                        }
+                        carry[c] += cell.rowspan - 1;
+                    }
+                }
+                slots.push(Slot::Origin(cell));
+                for _ in 1..span {
+                    slots.push(Slot::Colspan);
+                }
+                col += span;
+            } else if carry.iter().skip(col).any(|&r| r > 0) {
+                // Cells are exhausted but a rowspan still covers a column further
+                // right; pad this hole so that column's `^^` is still emitted and
+                // its `carry` is consumed in *this* row rather than leaking down.
+                slots.push(Slot::Empty);
+                col += 1;
+            } else {
+                // No more cells and nothing covered ahead: row is done.
+                break;
+            }
+        }
+        grid.push(slots);
+    }
+    grid
 }
 
 /// Emit a structural Table as a markdown-style pipe table, padded for
@@ -456,70 +576,50 @@ fn emit_pipe_table(serializer: &mut LexSerializer, table: &Table) {
         return;
     }
 
-    // Determine column count from the widest row.
-    let col_count = all_rows
-        .iter()
-        .map(|r| r.cells.iter().map(|c| c.colspan).sum::<usize>())
-        .max()
-        .unwrap_or(0);
+    let grid = build_grid(&all_rows);
+    let col_count = grid.iter().map(Vec::len).max().unwrap_or(0);
     if col_count == 0 {
         return;
     }
 
-    // Compute per-column alignment: first non-`None` cell wins.
-    let aligns = compute_column_aligns(&all_rows, col_count);
+    // Compute per-column alignment (first explicit cell wins) and widths.
+    let aligns = compute_column_aligns(&grid, col_count);
+    let widths = compute_column_widths(&grid, col_count, &aligns);
 
-    // Compute per-column widths from cell text content. The
-    // separator-row cells use `---` (or longer to match content
-    // width), so include their natural width in the calc too.
-    let widths = compute_column_widths(&all_rows, col_count, &aligns);
-
-    // Emit header rows.
-    for row in &table.header_rows {
-        serializer.write_line(&format_pipe_row(row, &widths, col_count));
-    }
-    // Emit separator row (between header and body).
-    if !table.header_rows.is_empty() {
-        serializer.write_line(&format_separator_row(&widths, &aligns));
-    }
-    // Emit body rows.
-    for row in &table.body_rows {
-        serializer.write_line(&format_pipe_row(row, &widths, col_count));
+    let header_count = table.header_rows.len();
+    for (idx, slots) in grid.iter().enumerate() {
+        serializer.write_line(&format_grid_row(slots, &widths, col_count));
+        // Separator row sits between the header rows and the body.
+        if header_count > 0 && idx + 1 == header_count {
+            serializer.write_line(&format_separator_row(&widths, &aligns));
+        }
     }
 }
 
-fn compute_column_aligns(rows: &[&TableRow], col_count: usize) -> Vec<TableCellAlignment> {
+fn compute_column_aligns(grid: &[Vec<Slot>], col_count: usize) -> Vec<TableCellAlignment> {
     let mut aligns = vec![TableCellAlignment::None; col_count];
-    for row in rows {
-        let mut col = 0;
-        for cell in &row.cells {
-            if col >= col_count {
-                break;
+    for slots in grid {
+        for (col, slot) in slots.iter().enumerate() {
+            if let Slot::Origin(cell) = slot {
+                if aligns[col] == TableCellAlignment::None && cell.align != TableCellAlignment::None
+                {
+                    aligns[col] = cell.align;
+                }
             }
-            if aligns[col] == TableCellAlignment::None && cell.align != TableCellAlignment::None {
-                aligns[col] = cell.align;
-            }
-            col += cell.colspan.max(1);
         }
     }
     aligns
 }
 
 fn compute_column_widths(
-    rows: &[&TableRow],
+    grid: &[Vec<Slot>],
     col_count: usize,
     aligns: &[TableCellAlignment],
 ) -> Vec<usize> {
     let mut widths = vec![0usize; col_count];
-    for row in rows {
-        let mut col = 0;
-        for cell in &row.cells {
-            if col >= col_count {
-                break;
-            }
-            let text_len = cell.content.as_string().trim().chars().count();
-            widths[col] = widths[col].max(text_len);
-            col += cell.colspan.max(1);
+    for slots in grid {
+        for (col, slot) in slots.iter().enumerate() {
+            widths[col] = widths[col].max(slot.text().chars().count());
         }
     }
     // Separator widths need a minimum of 3 (`---`) plus 1 for each
@@ -550,34 +650,12 @@ fn push_cell(out: &mut String, text: &str, width: usize) {
     out.push('|');
 }
 
-fn format_pipe_row(row: &TableRow, widths: &[usize], col_count: usize) -> String {
+fn format_grid_row(slots: &[Slot], widths: &[usize], col_count: usize) -> String {
     let mut out = String::from("|");
-    let mut col = 0;
-    for cell in &row.cells {
-        if col >= col_count {
-            break;
-        }
-        let span = cell.colspan.max(1);
-        // Content lives in the top-left cell of the span, at its own column
-        // width; each absorbed column re-emits a `>>` marker so the column grid
-        // (and the colspan) survive a re-parse (lex#683). Without this the cell
-        // was merged into one wide column and the span was lost.
-        // `col < col_count` here and `widths.len() == col_count`, so direct
-        // indexing is in-bounds.
-        push_cell(&mut out, cell.content.as_string().trim(), widths[col]);
-        col += 1;
-        for _ in 1..span {
-            if col >= col_count {
-                break;
-            }
-            push_cell(&mut out, ">>", widths[col]);
-            col += 1;
-        }
-    }
-    // Pad trailing empty cells.
-    while col < col_count {
-        push_cell(&mut out, "", widths[col]);
-        col += 1;
+    for (col, &width) in widths.iter().enumerate().take(col_count) {
+        // Columns past this (short) row's slots render as empty padding.
+        let text = slots.get(col).map(Slot::text).unwrap_or("");
+        push_cell(&mut out, text, width);
     }
     out
 }
@@ -623,6 +701,7 @@ fn format_separator_row(widths: &[usize], aligns: &[TableCellAlignment]) -> Stri
 mod tests {
     use super::*;
     use crate::format::Format;
+    use lex_core::lex::ast::text_content::TextContent;
     use lex_core::lex::testing::lexplore::{ElementType, Lexplore};
     use lex_core::lex::testing::text_diff::assert_text_eq;
 
@@ -1108,5 +1187,34 @@ mod tests {
 
         assert!(table_start < separator);
         assert!(separator < footer_start);
+    }
+
+    #[test]
+    fn build_grid_pads_hole_before_trailing_rowspan() {
+        // Regression for the lex#694 review: a short continuation row whose cells
+        // run out before a rowspan-covered column further right must still emit
+        // that column's `^^` (and not let the carry leak into the next row).
+        // row0: a, b, c(rowspan 2) — c spans down into row1's third column.
+        // row1: a single cell `d`; the middle column is a hole, the third is `^^`.
+        let tc = |s: &str| TextContent::from_string(s.to_string(), None);
+        let row0 = TableRow::new(vec![
+            TableCell::new(tc("a")),
+            TableCell::new(tc("b")),
+            TableCell::new(tc("c")).with_span(1, 2),
+        ]);
+        let row1 = TableRow::new(vec![TableCell::new(tc("d"))]);
+        let grid = build_grid(&[&row0, &row1]);
+        let render = |slots: &[Slot]| {
+            slots
+                .iter()
+                .map(|s| s.text().to_string())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(render(&grid[0]), ["a", "b", "c"]);
+        assert_eq!(
+            render(&grid[1]),
+            ["d", "", "^^"],
+            "hole padded empty, trailing rowspan marker kept"
+        );
     }
 }

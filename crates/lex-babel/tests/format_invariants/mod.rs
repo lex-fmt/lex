@@ -403,6 +403,35 @@ fn targeted_cases() -> Vec<(&'static str, &'static str)> {
             "Grid:\n    | A | B | C |\n    | span | >> | c |\n:: table ::\n",
         ),
         (
+            "table_rowspan",
+            "Grid:\n    | a | b |\n    | ^^ | c |\n:: table ::\n",
+        ),
+        // A rowspan stacked across three rows: each continuation row re-emits `^^`
+        // in the spanning column, and the parser must keep crediting the *same*
+        // top cell (lex#694 review — the old index-based resolution mis-aimed the
+        // second `^^` once the first row had been shrunk).
+        (
+            "table_rowspan_multirow",
+            "Grid:\n    | a | b |\n    | ^^ | c |\n    | ^^ | d |\n:: table ::\n",
+        ),
+        // Two adjacent rowspans in one continuation row (`| ^^ | ^^ | f |`): both
+        // columns must keep their own span and `f` must stay in the third column.
+        (
+            "table_rowspan_adjacent",
+            "Grid:\n    | a | b | c |\n    | ^^ | ^^ | f |\n:: table ::\n",
+        ),
+        // A rowspan in a middle column, with cells on either side.
+        (
+            "table_rowspan_midcolumn",
+            "Grid:\n    | a | b | c |\n    | d | ^^ | f |\n:: table ::\n",
+        ),
+        // Colspan and rowspan in the same continuation row (`| dd | >> | ^^ |`):
+        // the grid projection must re-derive both `>>` and `^^`.
+        (
+            "table_colspan_rowspan",
+            "Grid:\n    | a | b | c |\n    | dd | >> | ^^ |\n    | e | f | g |\n:: table ::\n",
+        ),
+        (
             "messy_blank_runs_and_markers",
             "Doc\n===\n\n\n\n\nFirst para.\n\n\n\n* one\n* two\n* three\n",
         ),
@@ -423,30 +452,25 @@ fn targeted_cases() -> Vec<(&'static str, &'static str)> {
 // test tells you to delete the entry) and logs the excluded set on each run.
 //
 // Bugs (shipped fixes removed their entries here):
-//   #684 — table footnote list emitted outside the block
-//   #685 — list renumbering not idempotent (nested/extended)
-//   #696 — residual annotation round-trip edges (doc-level block-annotation
-//          re-attachment; deeply-nested annotation-example body indentation)
 //   #681 — umbrella for remaining mixed/untriaged element-fixture sweep failures
+//          (e.g. paragraph merge of siblings distinguished only by irregular indent)
 // -----------------------------------------------------------------------------
 
 const TIER1_TARGETED_KNOWN_FAIL: &[(&str, &str)] = &[];
 
-const TIER2_TARGETED_KNOWN_FAIL: &[(&str, &str)] = &[
-    ("ref_tk_citation_annref", "#696"),
-    ("table_with_footnotes", "#684"),
-];
+const TIER2_TARGETED_KNOWN_FAIL: &[(&str, &str)] = &[];
 
-const TIER1_FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[("escaping.lex", "#696"), ("list.lex", "#685")];
+const TIER1_FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[];
 
 const TIER2_FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[
-    ("annotation.lex", "#696"),
+    // annotation.lex no longer fails on the #696 annotation edges; its residual
+    // Tier-2 gap is a paragraph merge — two sibling paragraphs distinguished only
+    // by an irregular extra indent level collapse into one when re-indented. That
+    // is the untriaged paragraph-merge edge tracked under the #681 umbrella.
+    ("annotation.lex", "#681"),
     ("data.lex", "#681"),
-    ("escaping.lex", "#696"),
     ("label.lex", "#681"),
-    ("list.lex", "#685"),
     ("parameter.lex", "#681"),
-    ("table.lex", "#684"),
 ];
 
 #[cfg(test)]
