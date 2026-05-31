@@ -783,8 +783,13 @@ fn add_inline_to_node(
             // classify against lex's reference grammar).
             use crate::ir::nodes::ReferenceType;
             let href = match kind {
-                ReferenceType::Citation(_) => {
-                    let key = ref_text.strip_prefix('@').unwrap_or(ref_text);
+                ReferenceType::Citation(data) => {
+                    // Anchor on the citation KEY only (`#ref-spec2025`); the raw
+                    // literal includes the locator (`@spec2025, pp. 45-46`) which
+                    // must not leak into the href. See the markdown serializer.
+                    let key = data.keys.first().cloned().unwrap_or_else(|| {
+                        ref_text.strip_prefix('@').unwrap_or(ref_text).to_string()
+                    });
                     format!("#ref-{key}")
                 }
                 ReferenceType::NotSure => {

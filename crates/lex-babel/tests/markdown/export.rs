@@ -353,6 +353,26 @@ fn test_citation_converted_to_ref_link() {
 }
 
 #[test]
+fn test_citation_anchor_excludes_locator() {
+    // Regression: the anchor must be the citation KEY only — never the locator.
+    // Slugifying the raw `@spec2025, pp. 45-46` literal baked "pp. 45-46" into
+    // the href (`#ref-spec2025,%20pp.%2045-46`), which never resolved (MD051).
+    let lex_src = "See [@spec2025, pp. 45-46] for details.\n";
+    let lex_doc = STRING_TO_AST.run(lex_src.to_string()).unwrap();
+    let md = MarkdownFormat.serialize(&lex_doc).unwrap();
+
+    // Display text keeps the full literal; the anchor is the bare key.
+    assert!(
+        md.contains("(#ref-spec2025)"),
+        "Anchor must be the citation key only, got: {md}"
+    );
+    assert!(
+        !md.contains("#ref-spec2025,") && !md.contains("pp.%20"),
+        "Locator must not leak into the anchor, got: {md}"
+    );
+}
+
+#[test]
 fn test_placeholder_reference_as_text() {
     let lex_src = "This needs citation [TK-REF-2025-01].\n";
     let lex_doc = STRING_TO_AST.run(lex_src.to_string()).unwrap();
