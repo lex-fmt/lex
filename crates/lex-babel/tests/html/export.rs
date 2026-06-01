@@ -855,3 +855,132 @@ fn test_kitchensink() {
     // Snapshot test for the complete output
     assert_snapshot!(snapshot_without_styles(&html));
 }
+
+// ============================================================================
+// REFERENCE ANCHORING (references-general.lex §2.3) — PR B
+// ============================================================================
+
+#[test]
+fn test_inline_word_anchor_preceding() {
+    // §2.3.1: an inline reference anchors the preceding word; the bracketed
+    // reference itself renders nothing, and the link wraps that word.
+    let lex_src = "Body intro.\n\nthe project website [https://lex.ing] today\n\n";
+    let html = lex_to_html(lex_src, HtmlTheme::Modern);
+    assert!(
+        html.contains(r#"the project <a href="https://lex.ing">website</a> today"#),
+        "preceding word anchor should wrap 'website', got: {html}"
+    );
+    assert!(
+        !html.contains("[https://lex.ing]"),
+        "the bracketed reference must not render as literal text"
+    );
+}
+
+#[test]
+fn test_inline_word_anchor_following() {
+    // §2.3.1: a reference first on the line anchors the following word.
+    let lex_src = "Body intro.\n\n[https://lex.ing] is the home page.\n\n";
+    let html = lex_to_html(lex_src, HtmlTheme::Modern);
+    assert!(
+        html.contains(r#"<a href="https://lex.ing">is</a> the home page."#),
+        "following word anchor should wrap 'is', got: {html}"
+    );
+}
+
+#[test]
+fn test_whole_element_anchor_session_title() {
+    // §2.3.2: a reference line below a session title anchors the whole title.
+    let lex_src = "Getting Started\n[./readme.txt]\n\n    Welcome to the docs.\n\n";
+    let html = lex_to_html(lex_src, HtmlTheme::Modern);
+    assert!(
+        html.contains(r#"<h2><a href="./readme.txt">Getting Started</a></h2>"#),
+        "session title should be wrapped in the link, got: {html}"
+    );
+}
+
+#[test]
+fn test_whole_element_anchor_list_item() {
+    // §2.3.2: a reference line anchors the single list item above it.
+    let lex_src = "Intro.\n\n- Food\n- Water\n[https://water.example]\n- Bread\n\n";
+    let html = lex_to_html(lex_src, HtmlTheme::Modern);
+    assert!(
+        html.contains(
+            r#"<li class="lex-list-item"><a href="https://water.example">Water</a></li>"#
+        ),
+        "list item 'Water' should be wrapped, got: {html}"
+    );
+    // Sibling items are untouched.
+    assert!(html.contains("Food") && html.contains("Bread"));
+}
+
+#[test]
+fn test_whole_element_anchor_definition_term() {
+    // §2.3.2: anchors the definition term (trailing colon excluded).
+    let lex_src = "API Endpoint:\n[./endpoint.txt]\n    A URL that provides access.\n\n";
+    let html = lex_to_html(lex_src, HtmlTheme::Modern);
+    assert!(
+        html.contains(r#"<dt><a href="./endpoint.txt">API Endpoint</a></dt>"#),
+        "definition term should be wrapped (no trailing colon), got: {html}"
+    );
+}
+
+#[test]
+fn test_whole_element_anchor_verbatim_subject() {
+    // §2.3.2: anchors the verbatim subject (rendered as a linked caption).
+    let lex_src = "Example Source:\n[./example.rs]\n    fn main() {}\n:: rust ::\n\n";
+    let html = lex_to_html(lex_src, HtmlTheme::Modern);
+    assert!(
+        html.contains(
+            r#"<div class="lex-verbatim-subject"><a href="./example.rs">Example Source</a></div>"#
+        ),
+        "verbatim subject caption should wrap a link, got: {html}"
+    );
+}
+
+#[test]
+fn test_self_link_reference_line() {
+    // §2.3.2: a reference line with a blank line above stands alone and links
+    // its own text.
+    let lex_src = "See the upstream project:\n\n[https://github.com/lex-fmt/lex]\n\n";
+    let html = lex_to_html(lex_src, HtmlTheme::Modern);
+    assert!(
+        html.contains(
+            r#"<a href="https://github.com/lex-fmt/lex">https://github.com/lex-fmt/lex</a>"#
+        ),
+        "self-link should render as a standalone link of its own text, got: {html}"
+    );
+}
+
+#[test]
+fn test_marker_reference_line_not_anchored() {
+    // §2.3.4: a marker-style annotation reference on its own line is NOT a
+    // whole-element anchor; it stays an inline reference and resolves as usual.
+    let lex_src = "Closing remarks.\n[::summary-note]\n\n:: summary-note ::\n    Resolved.\n\n";
+    let html = lex_to_html(lex_src, HtmlTheme::Modern);
+    // The remarks paragraph is not wrapped in a link to the annotation ref.
+    assert!(
+        !html.contains(r#"<a href="::summary-note">Closing remarks</a>"#),
+        "marker-style reference must not anchor the line above, got: {html}"
+    );
+}
+
+#[test]
+fn test_marker_references_unchanged() {
+    // §2.3.4: footnotes / citations / annotation refs render as markers and are
+    // not given word anchors even when adjacent to text.
+    let lex_src = "Body.\n\nSee [42] and [@smith2023] later.\n\n";
+    let html = lex_to_html(lex_src, HtmlTheme::Modern);
+    // Footnote keeps its own text as the anchor (not the preceding word).
+    assert!(
+        html.contains(r#"<a href="42">42</a>"#),
+        "footnote marker should be unchanged, got: {html}"
+    );
+    // Citation still anchors on #ref-key with its literal as text.
+    assert!(
+        html.contains(r##"<a href="#ref-smith2023">@smith2023</a>"##),
+        "citation marker should be unchanged, got: {html}"
+    );
+    // No word anchor stole "See" or "and".
+    assert!(!html.contains(r#"<a href="42">See</a>"#));
+    assert!(!html.contains(r##"<a href="#ref-smith2023">and</a>"##));
+}
