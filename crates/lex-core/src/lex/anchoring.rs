@@ -18,10 +18,10 @@
 //! # Why this is a pre-pass
 //!
 //! A reference line is *transparent* to structural parsing (§2.3.3): it is
-//! neither a content line nor a blank line. It is removed from the line stream
-//! **before** structure is resolved, so the lines around it keep their original
-//! adjacency. This matters because a blank line after a subject is exactly what
-//! separates a *definition* from a *session*:
+//! neither a content line nor a blank line. Its tokens are removed from the
+//! token stream **before** structure is resolved, so the lines around it keep
+//! their original adjacency. This matters because a blank line after a subject
+//! is exactly what separates a *definition* from a *session*:
 //!
 //! ```text
 //! API Endpoint:
@@ -34,30 +34,74 @@
 //! reference line anchors the term "API Endpoint". Blanking it would wrongly
 //! turn it into a session.
 //!
+//! To make removal a token-stream operation (rather than a source-string edit
+//! that would shift every downstream byte offset), the pre-pass reports the
+//! **byte range of each removed reference line** — the line plus its terminating
+//! newline. The caller lexes the *original* source and drops every token whose
+//! range falls inside a removed line before parsing. The newline is included so
+//! the content line above and the line below become directly adjacent.
+//!
 //! # Coordinates
 //!
-//! Resolution runs against the *original* source, before removal, so every
-//! [`Range`] produced here is in original-source coordinates. That is what the
-//! document the user edits still contains, which is what editors (LSP
-//! `documentLink`) and serializers need.
+//! Nothing here edits the source string, and the caller parses the original
+//! source with token ranges intact, so **every AST range stays in
+//! original-source coordinates** — including elements that appear *after* a
+//! reference line. Every [`Range`] this module produces is likewise in
+//! original-source coordinates. That is what the document the user edits still
+//! contains, which is what editors (LSP `documentLink`) and serializers need.
 
 use crate::lex::ast::anchoring::{AnchoredElement, ReferenceAnchor, ReferenceLine};
 use crate::lex::ast::diagnostics::{Diagnostic, DiagnosticSeverity};
 use crate::lex::ast::range::SourceLocation;
 use crate::lex::inlines::{
-    determine_reference_type, AnchorDirection, AnchorKind, ReferenceInline, WordAnchor,
+    determine_reference_type, parse_inlines, AnchorDirection, AnchorKind, InlineNode,
+    ReferenceInline, WordAnchor,
 };
+use std::ops::Range;
 
 /// Result of the reference-line pre-pass.
 pub struct AnchoringPrepass {
-    /// Source with every reference line removed (the line plus its trailing
-    /// newline), ready to feed the structural parser. Other lines keep their
-    /// original byte content.
-    pub cleaned_source: String,
+    /// Byte ranges (in original-source coordinates) of every removed reference
+    /// line — each covers the line *plus its terminating newline*. The caller
+    /// drops every token whose range falls inside one of these ranges from the
+    /// token stream before parsing, which keeps all surviving tokens (and thus
+    /// all AST node ranges) in original-source coordinates.
+    pub removed_line_ranges: Vec<Range<usize>>,
     /// Resolved reference lines, in source order.
     pub reference_lines: Vec<ReferenceLine>,
     /// Overlap / stacking warnings (§2.3.3).
     pub diagnostics: Vec<Diagnostic>,
+}
+
+impl AnchoringPrepass {
+    /// True when no reference line was found, so the caller can skip the
+    /// token-filtering work entirely.
+    pub fn is_empty(&self) -> bool {
+        self.removed_line_ranges.is_empty()
+    }
+
+    /// Drop every token whose range starts inside a removed reference line.
+    ///
+    /// A token belongs to a removed line when its start offset lies within that
+    /// line's `[start, end)` byte range (the range includes the terminating
+    /// newline, so the line's `BlankLine`/newline token is dropped too — that is
+    /// what makes the surrounding content lines directly adjacent rather than
+    /// separated by a blank line). Tokens keep their original ranges, so the
+    /// survivors stay in original-source coordinates.
+    pub fn filter_tokens<T>(&self, tokens: Vec<(T, Range<usize>)>) -> Vec<(T, Range<usize>)> {
+        if self.removed_line_ranges.is_empty() {
+            return tokens;
+        }
+        tokens
+            .into_iter()
+            .filter(|(_, range)| {
+                !self
+                    .removed_line_ranges
+                    .iter()
+                    .any(|removed| removed.contains(&range.start))
+            })
+            .collect()
+    }
 }
 
 /// A single physical source line with its byte bounds.
@@ -317,7 +361,7 @@ pub fn extract_reference_lines(source: &str) -> AnchoringPrepass {
                         )
                         .with_code("stacked-reference-line"),
                     );
-                } else if head_line_has_inline_reference(lines[above_idx].text) {
+                } else if head_line_has_inline_reference(&lines[above_idx]) {
                     diagnostics.push(
                         Diagnostic::new(
                             reference_range.clone(),
@@ -350,27 +394,23 @@ pub fn extract_reference_lines(source: &str) -> AnchoringPrepass {
         });
     }
 
-    // Build cleaned source: keep every non-removed line verbatim, drop removed
-    // ones entirely (line + trailing newline). A reference line that self-links
-    // is *also* removed from structure (it is transparent either way); its
-    // standalone rendering is reconstructed by consumers from the collected
-    // `reference_lines` entry. This keeps the structural parser unaware of
-    // reference lines, which is the whole point of §2.3.3.
-    let cleaned_source = if reference_lines.is_empty() {
-        source.to_string()
-    } else {
-        let mut out = String::with_capacity(source.len());
-        for (idx, line) in lines.iter().enumerate() {
-            if removed[idx] {
-                continue;
-            }
-            out.push_str(&source[line.start..line.end]);
-        }
-        out
-    };
+    // Report the byte range of every removed reference line — the line *plus*
+    // its terminating newline (`line.end` already points just past the `\n`).
+    // The caller drops the tokens inside these ranges from the token stream, so
+    // a reference line that self-links is *also* removed from structure (it is
+    // transparent either way); its standalone rendering is reconstructed by
+    // consumers from the collected `reference_lines` entry. This keeps the
+    // structural parser unaware of reference lines (§2.3.3) without editing the
+    // source string, so all surviving tokens keep original-source coordinates.
+    let removed_line_ranges: Vec<Range<usize>> = lines
+        .iter()
+        .enumerate()
+        .filter(|(idx, _)| removed[*idx])
+        .map(|(_, line)| line.start..line.end)
+        .collect();
 
     AnchoringPrepass {
-        cleaned_source,
+        removed_line_ranges,
         reference_lines,
         diagnostics,
     }
@@ -394,6 +434,16 @@ pub fn extract_reference_lines(source: &str) -> AnchoringPrepass {
 pub(crate) fn resolve_word_anchors(nodes: &mut [crate::lex::inlines::InlineNode]) {
     use crate::lex::inlines::InlineNode;
 
+    // Fast path: nothing to anchor if the line carries no reference. This avoids
+    // the flatten/allocate work on the overwhelmingly common reference-free line
+    // (this runs for every `TextContent`).
+    if !nodes
+        .iter()
+        .any(|n| matches!(n, InlineNode::Reference { .. }))
+    {
+        return;
+    }
+
     // Flatten each top-level node to its plain text so word boundaries can be
     // computed across formatting spans.
     let texts: Vec<String> = nodes.iter().map(flatten_inline_text).collect();
@@ -410,21 +460,45 @@ pub(crate) fn resolve_word_anchors(nodes: &mut [crate::lex::inlines::InlineNode]
         let first_on_line = before.trim().is_empty();
         let anchor = if first_on_line {
             // Following word (only when text actually follows).
-            after.split_whitespace().next().map(|w| WordAnchor {
-                word: w.to_string(),
-                direction: AnchorDirection::Following,
-            })
+            after
+                .split_whitespace()
+                .next()
+                .and_then(clean_anchor_word)
+                .map(|word| WordAnchor {
+                    word,
+                    direction: AnchorDirection::Following,
+                })
         } else {
             // Preceding word: the last whitespace-delimited token of `before`.
-            before.split_whitespace().next_back().map(|w| WordAnchor {
-                word: w.to_string(),
-                direction: AnchorDirection::Preceding,
-            })
+            before
+                .split_whitespace()
+                .next_back()
+                .and_then(clean_anchor_word)
+                .map(|word| WordAnchor {
+                    word,
+                    direction: AnchorDirection::Preceding,
+                })
         };
 
         if let InlineNode::Reference { data, .. } = &mut nodes[i] {
             data.word_anchor = anchor;
         }
+    }
+}
+
+/// Strip surrounding punctuation from a candidate anchor word, honoring
+/// [`WordAnchor::word`]'s contract that the stored word carries no surrounding
+/// punctuation (`website, [url]` anchors `"website"`, not `"website,"`).
+///
+/// Leading and trailing non-alphanumeric characters are removed; interior
+/// punctuation (e.g. `lex.ing`, `can't`) is preserved. Returns `None` when
+/// nothing alphanumeric remains, so a punctuation-only token produces no anchor.
+fn clean_anchor_word(word: &str) -> Option<String> {
+    let cleaned = word.trim_matches(|c: char| !c.is_alphanumeric());
+    if cleaned.is_empty() {
+        None
+    } else {
+        Some(cleaned.to_string())
     }
 }
 
@@ -444,19 +518,17 @@ fn flatten_inline_text(node: &crate::lex::inlines::InlineNode) -> String {
     }
 }
 
-/// Cheap check: does a head line contain an inline `[...]` reference (something
-/// other than being a bare reference line)? Used only for the overlap warning.
-fn head_line_has_inline_reference(text: &str) -> bool {
-    // A bracketed token somewhere in the line that is *not* the whole line.
-    if let Some(open) = text.find('[') {
-        if let Some(rel_close) = text[open + 1..].find(']') {
-            let inner = &text[open + 1..open + 1 + rel_close];
-            if !inner.is_empty() && !inner.contains('[') {
-                return true;
-            }
-        }
-    }
-    false
+/// Does a head line carry a genuine inline reference? Used only for the overlap
+/// warning (§2.3.3).
+///
+/// This parses the line's inline content and inspects the resulting
+/// [`InlineNode::Reference`] nodes rather than matching brackets textually, so
+/// it does not false-positive on stray `[` characters (e.g. a verbatim subject
+/// or prose that merely contains a bracket but no real reference).
+fn head_line_has_inline_reference(line: &PhysicalLine<'_>) -> bool {
+    parse_inlines(line.text.trim())
+        .iter()
+        .any(|node| matches!(node, InlineNode::Reference { .. }))
 }
 
 #[cfg(test)]
@@ -523,6 +595,48 @@ mod tests {
         let wa = word_anchor("Hello[./file.txt] World\n\n");
         assert_eq!(wa.word, "Hello");
         assert_eq!(wa.direction, AnchorDirection::Preceding);
+    }
+
+    #[test]
+    fn inline_preceding_word_anchor_trims_trailing_punctuation() {
+        // "website, [https://x]" — the preceding token is "website," but the
+        // stored word must carry no surrounding punctuation (per the
+        // `WordAnchor::word` contract): "website".
+        let wa = word_anchor("the project website, [https://x] is fast.\n\n");
+        assert_eq!(wa.word, "website");
+        assert_eq!(wa.direction, AnchorDirection::Preceding);
+    }
+
+    #[test]
+    fn inline_following_word_anchor_trims_punctuation() {
+        // First-on-line reference, following token has trailing punctuation.
+        let wa = word_anchor("[https://x] (home) page.\n\n");
+        assert_eq!(wa.word, "home");
+        assert_eq!(wa.direction, AnchorDirection::Following);
+    }
+
+    #[test]
+    fn inline_word_anchor_preserves_interior_punctuation() {
+        // Interior dots/apostrophes are part of the word, not surrounding it.
+        let wa = word_anchor("visit lex.ing [https://lex.ing] now.\n\n");
+        assert_eq!(wa.word, "lex.ing");
+        assert_eq!(wa.direction, AnchorDirection::Preceding);
+    }
+
+    #[test]
+    fn inline_punctuation_only_neighbor_yields_no_anchor() {
+        // The token preceding the reference is punctuation-only; after trimming
+        // nothing alphanumeric remains, so no word anchor is produced.
+        let doc = parse_document("word -- [https://x] end.\n\n").unwrap();
+        let r = doc
+            .iter_all_references()
+            .find(|r| matches!(r.reference_type, ReferenceType::Url { .. }))
+            .expect("the url reference");
+        assert!(
+            r.word_anchor.is_none(),
+            "punctuation-only neighbor must not produce an anchor: {:?}",
+            r.word_anchor
+        );
     }
 
     // -- Fixture §2: reference line on a session title ---------------------
@@ -686,6 +800,27 @@ mod tests {
         assert!(doc.reference_lines[0].anchor.is_whole_element());
     }
 
+    #[test]
+    fn head_line_with_stray_bracket_does_not_warn() {
+        // The head line contains a `[` but no genuine inline reference (it is a
+        // code span, not a reference). The string/bracket heuristic used to
+        // false-positive here; the AST-based check must not fire the overlap
+        // warning.
+        let src = "Intro.\nThe array index `a[0]` matters.\n[./b.txt]\n\n";
+        let doc = parse_document(src).unwrap();
+        let warns: Vec<_> = doc
+            .diagnostics()
+            .into_iter()
+            .filter(|d| d.code.as_deref() == Some("overlapping-reference-line"))
+            .collect();
+        assert!(
+            warns.is_empty(),
+            "a stray bracket is not an inline reference: {warns:?}"
+        );
+        // The whole-line anchor is still resolved.
+        assert!(doc.reference_lines[0].anchor.is_whole_element());
+    }
+
     // -- Type-level anchoring split (§2.3.4) -----------------------------
 
     #[test]
@@ -737,6 +872,60 @@ mod tests {
         let doc = parse_document(src).unwrap();
         let range = &doc.reference_lines[0].reference_range;
         assert_eq!(&src[range.span.clone()], "[./readme.txt]");
+    }
+
+    // -- Original-coordinate invariant (regression for the cleaned-source
+    //    coordinate bug) --------------------------------------------------
+
+    /// Removing a reference line by *editing the source string* used to shift
+    /// every byte offset after it, so parsed AST nodes that followed a reference
+    /// line carried "cleaned-source" coordinates instead of original-source
+    /// ones. The token-filtering pre-pass keeps tokens at their original ranges,
+    /// so every node after a reference line must still report its position in
+    /// the ORIGINAL source.
+    ///
+    /// This asserts a later element's parsed range start equals the byte offset
+    /// of its text in the original source. It fails against the old
+    /// cleaned-source approach (the offset is short by the removed line's
+    /// length) and passes with token filtering.
+    #[test]
+    fn later_element_keeps_original_source_coordinates() {
+        // A reference line near the top, then a clearly later paragraph. The
+        // removed `[./top.txt]\n` line is 12 bytes; under the old cleaned-source
+        // approach every node after it was shifted left by 12.
+        let original =
+            "Intro paragraph here.\n[./top.txt]\n\nLater Section paragraph text.\n\n".to_string();
+
+        let doc = parse_document(&original).unwrap();
+
+        // Find the parsed paragraph whose text starts with "Later Section".
+        let later = doc
+            .root
+            .children
+            .iter()
+            .find(|c| {
+                c.text()
+                    .map(|t| t.contains("Later Section"))
+                    .unwrap_or(false)
+            })
+            .expect("a 'Later Section' element after the reference line");
+
+        let expected_start = original
+            .find("Later Section")
+            .expect("the literal text in the original source");
+
+        assert_eq!(
+            later.range().span.start,
+            expected_start,
+            "node after a reference line must carry an ORIGINAL-source offset \
+             (got {}, expected {}); a mismatch means a cleaned-source coordinate \
+             leaked into the AST",
+            later.range().span.start,
+            expected_start,
+        );
+
+        // And the slice at that range is the actual original text.
+        assert!(original[later.range().span.clone()].starts_with("Later Section"));
     }
 
     // -- Cleaned-source / no-reference-line passthrough ------------------

@@ -135,24 +135,38 @@ pub fn run_string_to_ast(
         s
     };
 
-    // Reference-line pre-pass (§2.3): extract whole-element-anchoring reference
-    // lines and remove them from the line stream *before* structural parsing,
-    // so the surrounding lines keep their original adjacency (a reference line
-    // must not be mistaken for the blank line that separates a definition from
-    // a session). Resolution runs against the original source, so the collected
-    // ranges stay in original-source coordinates. See `crate::lex::anchoring`.
+    // Reference-line pre-pass (§2.3): identify whole-element-anchoring reference
+    // lines so their tokens can be removed from the stream *before* structural
+    // parsing — the surrounding lines then keep their original adjacency (a
+    // reference line must not be mistaken for the blank line that separates a
+    // definition from a session). See `crate::lex::anchoring`.
+    //
+    // Critically, we do *not* edit the source string. We tokenize the ORIGINAL
+    // source (so every token keeps its original byte range), drop the tokens
+    // belonging to each reference line — including each line's terminating
+    // newline, so the lines above and below become directly adjacent — and then
+    // run semantic indentation and parse against the original source. The result
+    // is that every AST node range stays in original-source coordinates, even
+    // for elements that appear *after* a reference line. (Editing the source
+    // string instead would shift every downstream offset into a "cleaned-source"
+    // coordinate system that no longer matches what the editor holds.)
     let prepass = crate::lex::anchoring::extract_reference_lines(&source);
 
-    // Run lexing on the cleaned source (reference lines removed).
-    let tokens = LEXING.run(prepass.cleaned_source.clone())?;
+    // Core tokenization on the original source (flat tokens, original ranges),
+    // then drop the reference-line tokens, then semantic indentation.
+    let core_tokens = CoreTokenization::new().run(source.clone())?;
+    let core_tokens = prepass.filter_tokens(core_tokens);
+    let tokens = SemanticIndentation::new().run(core_tokens)?;
 
-    // Parse to AST
+    // Parse to AST against the original source (keeps location tracking in
+    // original-source coordinates).
     let mut output =
-        crate::lex::parsing::engine::parse_from_flat_tokens(tokens, &prepass.cleaned_source)
-            .map_err(|e| crate::lex::transforms::TransformError::StageFailed {
+        crate::lex::parsing::engine::parse_from_flat_tokens(tokens, &source).map_err(|e| {
+            crate::lex::transforms::TransformError::StageFailed {
                 stage: "Parser".to_string(),
                 message: e.to_string(),
-            })?;
+            }
+        })?;
 
     // Parse inline elements in root session before assembly
     output.root = ParseInlines::new().run(output.root)?;
