@@ -972,9 +972,10 @@ mod tests {
     /// `from_lex_document` builds its own context). The leaked empty index is a
     /// `'static` borrow so the returned context can be passed by reference.
     fn test_ctx() -> ConvCtx<'static> {
+        static ANCHORS: std::sync::OnceLock<AnchorIndex> = std::sync::OnceLock::new();
         ConvCtx {
             registry: test_registry(),
-            anchors: Box::leak(Box::new(AnchorIndex::default())),
+            anchors: ANCHORS.get_or_init(AnchorIndex::default),
         }
     }
 

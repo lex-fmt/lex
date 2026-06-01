@@ -131,25 +131,14 @@ impl PhysicalLine<'_> {
 fn physical_lines(source: &str) -> Vec<PhysicalLine<'_>> {
     let mut lines = Vec::new();
     let mut start = 0;
-    let bytes = source.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'\n' {
-            lines.push(PhysicalLine {
-                start,
-                end: i + 1,
-                text: &source[start..i],
-            });
-            start = i + 1;
-        }
-        i += 1;
-    }
-    if start < source.len() {
+    for line in source.split_inclusive('\n') {
+        let end = start + line.len();
         lines.push(PhysicalLine {
             start,
-            end: source.len(),
-            text: &source[start..],
+            end,
+            text: line.strip_suffix('\n').unwrap_or(line),
         });
+        start = end;
     }
     lines
 }
@@ -196,11 +185,13 @@ fn head_line_anchor(line: &PhysicalLine<'_>) -> HeadLine {
 
     // Trailing `:` subject marker (definition term / session title written with
     // a colon, verbatim subject). Strip a single trailing colon (and the
-    // whitespace before it, if any).
-    if let Some(stripped) = body.strip_suffix(':') {
-        body = stripped.trim_end();
-        end = start + body.len();
-        if element == AnchoredElement::WholeLine {
+    // whitespace before it, if any). This is a *subject* rule only — a list
+    // item like `- Note:` keeps its literal text `Note:`, so we never strip the
+    // colon once the list-marker branch has classified the line as a ListItem.
+    if element != AnchoredElement::ListItem {
+        if let Some(stripped) = body.strip_suffix(':') {
+            body = stripped.trim_end();
+            end = start + body.len();
             element = AnchoredElement::Subject;
         }
     }
@@ -662,6 +653,17 @@ mod tests {
         // List structure is preserved (3 items, the reference line removed).
         let doc = parse_document(src).unwrap();
         assert_eq!(doc.root.children[0].node_type(), "List");
+    }
+
+    #[test]
+    fn reference_line_on_list_item_keeps_trailing_colon() {
+        // A list item ending in `:` is not a subject — the colon is part of the
+        // item text. Anchoring must keep it literal (`Note:`), never strip it
+        // the way a definition/verbatim subject would.
+        let src = "- Note:\n[./n.txt]\n- Other\n\n";
+        let (anchor, kind) = sole_whole_anchor(src);
+        assert_eq!(anchor, "Note:");
+        assert_eq!(kind, AnchoredElement::ListItem);
     }
 
     // -- Fixture §4: reference line on a definition term (transparency) ----
