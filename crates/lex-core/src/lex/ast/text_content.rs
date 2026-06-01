@@ -140,6 +140,17 @@ impl TextContent {
         self.inner = TextRepresentation::Inlines { raw, nodes };
     }
 
+    /// Ensure inlines are parsed, then resolve inline word anchors (§2.3.1) on
+    /// the stored reference nodes. A `TextContent` is a single logical line, so
+    /// the surrounding-word rules apply within this run. Idempotent given the
+    /// same content.
+    pub fn ensure_inline_parsed_with_anchors(&mut self) {
+        self.ensure_inline_parsed();
+        if let TextRepresentation::Inlines { nodes, .. } = &mut self.inner {
+            crate::lex::anchoring::resolve_word_anchors(nodes);
+        }
+    }
+
     // ============================================================================
     // LSP-FRIENDLY APIS (Issue #290)
     // ============================================================================

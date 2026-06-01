@@ -456,8 +456,15 @@ fn is_valid_start(
     spec: &InlineSpec,
     parser: &InlineParser,
 ) -> bool {
-    if spec.literal {
-        // Literal elements (code, math, reference) accept any non-whitespace content.
+    if matches!(spec.kind, InlineKind::Reference) {
+        // References may abut a preceding word: `Hello[./file.txt]` anchors the
+        // word "Hello" (references-general.lex §2.3.1, "no surrounding space is
+        // required"). So unlike code/math, a reference start is allowed even
+        // when the previous char is a word char. The opening still requires
+        // non-whitespace content immediately after `[`.
+        next.is_some_and(|c| !c.is_whitespace())
+    } else if spec.literal {
+        // Literal elements (code, math) accept any non-whitespace content.
         // This allows code/math to start with \, {, (, *, etc.
         !is_word(prev) && next.is_some_and(|c| !c.is_whitespace())
     } else {
