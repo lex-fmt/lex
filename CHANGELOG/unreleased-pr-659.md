@@ -1,7 +1,0 @@
-### Added — extensions declare diagnostic codes; the host validates `[diagnostics.rules]` against them ([#659](https://github.com/lex-fmt/lex/issues/659))
-
-Extension-emitted `[diagnostics.rules]` entries (`<namespace>.<code>`) are now schema-validated against the resolved registry, so a misspelled or undeclared code no longer silently retunes nothing.
-
-- **Schema declares codes.** `lex_extension::schema::Schema` gains an optional `diagnostics` list — each entry carries `code`, an optional `description`, and a `default_severity` (defaulting to `warning`). The field is additive: schemas that omit it load with no declared codes, and built-in `lex.*` schemas declare none (they surface diagnostics through `lex-analysis`, not the extension code path).
-- **Registry accessor.** `Registry::declared_diagnostic_codes(namespace)` aggregates and de-dupes the codes a namespace's schemas declare, returning `None` for an unregistered namespace so callers can distinguish "unknown namespace" from "known namespace, undeclared code".
-- **Host validation.** `lex_fmt::validate_extension_diagnostic_rules` classifies each rule key: an unregistered namespace passes (rules may be staged ahead of installing the extension), a declared code passes, and an undeclared code under a registered namespace is reported as a dead letter with a closest-match "did you mean … ?" suggestion and the list of declared codes. The LSP runs this after registry boot and surfaces findings via `window/showMessage`.
