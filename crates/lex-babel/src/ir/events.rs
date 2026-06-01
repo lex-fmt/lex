@@ -35,6 +35,10 @@ pub enum Event {
     StartVerbatim {
         language: Option<String>,
         subject: Option<String>,
+        /// Destination href when a reference line anchors the subject
+        /// (references-general.lex §2.3.2). When `Some`, serializers wrap
+        /// the subject caption in a link. See [`crate::ir::nodes::Verbatim`].
+        subject_href: Option<String>,
         /// Closing-data parameters preserved end-to-end through the
         /// event stream so `IR → events → IR` round-trips losslessly
         /// (mirrors `StartAnnotation.parameters`).

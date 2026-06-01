@@ -195,6 +195,7 @@ fn collect_events_from_node<'a>(
             events.push(Event::StartVerbatim {
                 language,
                 subject: None,
+                subject_href: None,
                 parameters: Vec::new(),
             });
             events.push(Event::Inline(InlineContent::Text(

@@ -491,11 +491,15 @@ fn build_comrak_ast<'a>(
             Event::StartVerbatim {
                 language,
                 subject,
+                subject_href,
                 parameters: _,
             } => {
                 current_heading = None;
 
-                // Render subject as bold text before the code block
+                // Render subject as bold text before the code block. A reference
+                // line can anchor the subject (references-general.lex §2.3.2):
+                // when `subject_href` is set, the bold caption wraps a link
+                // (`**[subject](href)**`).
                 if let Some(subj) = subject {
                     let para = arena.alloc(AstNode::new(RefCell::new(Ast::new(
                         NodeValue::Paragraph,
@@ -511,7 +515,19 @@ fn build_comrak_ast<'a>(
                         NodeValue::Text(subj.clone()),
                         (0, 0).into(),
                     ))));
-                    strong.append(text);
+                    if let Some(href) = subject_href {
+                        let link = arena.alloc(AstNode::new(RefCell::new(Ast::new(
+                            NodeValue::Link(comrak::nodes::NodeLink {
+                                url: href.clone(),
+                                title: String::new(),
+                            }),
+                            (0, 0).into(),
+                        ))));
+                        strong.append(link);
+                        link.append(text);
+                    } else {
+                        strong.append(text);
+                    }
                 }
 
                 // Check for special metadata comment format
