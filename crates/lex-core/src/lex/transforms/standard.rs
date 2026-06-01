@@ -135,24 +135,31 @@ pub fn run_string_to_ast(
         s
     };
 
-    // Run lexing
-    let tokens = LEXING.run(source.clone())?;
+    // Reference-line pre-pass (§2.3): extract whole-element-anchoring reference
+    // lines and remove them from the line stream *before* structural parsing,
+    // so the surrounding lines keep their original adjacency (a reference line
+    // must not be mistaken for the blank line that separates a definition from
+    // a session). Resolution runs against the original source, so the collected
+    // ranges stay in original-source coordinates. See `crate::lex::anchoring`.
+    let prepass = crate::lex::anchoring::extract_reference_lines(&source);
+
+    // Run lexing on the cleaned source (reference lines removed).
+    let tokens = LEXING.run(prepass.cleaned_source.clone())?;
 
     // Parse to AST
     let mut output =
-        crate::lex::parsing::engine::parse_from_flat_tokens(tokens, &source).map_err(|e| {
-            crate::lex::transforms::TransformError::StageFailed {
+        crate::lex::parsing::engine::parse_from_flat_tokens(tokens, &prepass.cleaned_source)
+            .map_err(|e| crate::lex::transforms::TransformError::StageFailed {
                 stage: "Parser".to_string(),
                 message: e.to_string(),
-            }
-        })?;
+            })?;
 
     // Parse inline elements in root session before assembly
     output.root = ParseInlines::new().run(output.root)?;
 
     // Parse inlines in document title if present
     if let Some(ref mut title) = output.title {
-        title.content.ensure_inline_parsed();
+        title.content.ensure_inline_parsed_with_anchors();
     }
 
     // Attach root session and title to a document
@@ -170,6 +177,11 @@ pub fn run_string_to_ast(
 
     // Apply table config from :: table :: annotations (header, align)
     doc = crate::lex::assembling::stages::ApplyTableConfig::new().run(doc)?;
+
+    // Attach the reference-line pre-pass results to the document so consumers
+    // (babel serializers, LSP documentLink) can read the resolved anchors.
+    doc.reference_lines = prepass.reference_lines;
+    doc.reference_line_diagnostics = prepass.diagnostics;
 
     Ok(doc)
 }
