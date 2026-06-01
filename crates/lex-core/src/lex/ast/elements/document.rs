@@ -128,6 +128,16 @@ pub struct Document {
     pub title: Option<DocumentTitle>,
     // all content is attached to the root node
     pub root: Session,
+    /// Reference lines (whole-element anchors) extracted before structural
+    /// parsing and resolved against the original source. See
+    /// [`crate::lex::ast::anchoring`] and [`crate::lex::anchoring`].
+    ///
+    /// Empty for documents that contained no reference lines and for any
+    /// document built programmatically rather than parsed.
+    pub reference_lines: Vec<super::super::anchoring::ReferenceLine>,
+    /// Warnings produced while resolving reference-line anchors (overlap /
+    /// stacking, per §2.3.3). Surfaced through [`Document::diagnostics`].
+    pub reference_line_diagnostics: Vec<super::super::diagnostics::Diagnostic>,
 }
 
 impl Document {
@@ -136,6 +146,8 @@ impl Document {
             annotations: Vec::new(),
             title: None,
             root: Session::with_title(String::new()),
+            reference_lines: Vec::new(),
+            reference_line_diagnostics: Vec::new(),
         }
     }
 
@@ -147,6 +159,8 @@ impl Document {
             annotations: Vec::new(),
             title: None,
             root,
+            reference_lines: Vec::new(),
+            reference_line_diagnostics: Vec::new(),
         }
     }
 
@@ -156,6 +170,8 @@ impl Document {
             annotations: Vec::new(),
             title: None,
             root,
+            reference_lines: Vec::new(),
+            reference_line_diagnostics: Vec::new(),
         }
     }
 
@@ -165,6 +181,8 @@ impl Document {
             annotations: Vec::new(),
             title,
             root,
+            reference_lines: Vec::new(),
+            reference_line_diagnostics: Vec::new(),
         }
     }
 
@@ -179,12 +197,22 @@ impl Document {
             annotations,
             title: None,
             root,
+            reference_lines: Vec::new(),
+            reference_line_diagnostics: Vec::new(),
         }
     }
 
     pub fn with_root_location(mut self, location: Range) -> Self {
         self.root.location = location;
         self
+    }
+
+    /// Reference lines (whole-element anchors) resolved for this document.
+    ///
+    /// Consumed by the babel serializers and the LSP `documentLink` provider so
+    /// they can wrap the anchored head line without re-deriving §2.3 adjacency.
+    pub fn reference_lines(&self) -> &[super::super::anchoring::ReferenceLine] {
+        &self.reference_lines
     }
 
     pub fn root_session(&self) -> &Session {

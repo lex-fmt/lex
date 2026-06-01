@@ -8,5 +8,6 @@ mod references;
 
 pub use base::{InlineContent, InlineNode};
 pub use references::{
-    CitationData, CitationLocator, PageFormat, PageRange, ReferenceInline, ReferenceType,
+    AnchorDirection, AnchorKind, CitationData, CitationLocator, PageFormat, PageRange,
+    ReferenceInline, ReferenceType, WordAnchor,
 };
