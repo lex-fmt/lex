@@ -27,12 +27,13 @@
 //! 2. **File links**: `[./file.txt]`, `[../path/to/file.md]` - File references
 //! 3. **Verbatim src**: `:: image src=./image.png ::` - External resource references
 
+use super::anchoring::{ReferenceAnchor, ReferenceLine};
 use super::elements::Verbatim;
 use super::inline_positions::{walk_text_content_positions, InlinePositionVisitor};
-use super::range::Range;
+use super::range::{Position, Range};
 use super::text_content::TextContent;
 use super::{Document, Session};
-use crate::lex::inlines::{ReferenceInline, ReferenceType};
+use crate::lex::inlines::{AnchorDirection, ReferenceInline, ReferenceType, WordAnchor};
 use std::fmt;
 
 /// Represents a document link with its location and type
@@ -191,8 +192,68 @@ impl Document {
             collect_text_content_links(&title.content, &mut links);
         }
         links.extend(self.root.find_all_links());
+
+        // Reference lines (whole-element anchors and self-links) live outside
+        // the structural tree — they are removed from the line stream before
+        // parsing (see `crate::lex::anchoring`) and collected on the document.
+        // Each becomes a `DocumentLink` whose range is the *anchored span*
+        // (the head line for a whole-element anchor, the reference's own text
+        // for a self-link), so editors underline/navigate the anchored text
+        // rather than the bracketed reference.
+        for ref_line in self.reference_lines() {
+            collect_reference_line_link(ref_line, &mut links);
+        }
+
         links
     }
+}
+
+/// Emit a [`DocumentLink`] for a reference line (§2.3.2). Only link-like Url/File
+/// reference types become document links — Session/General reference types have
+/// no navigable Url/File target today, mirroring the inline collector which only
+/// surfaces Url/File. Marker-style types never reach here (they are not reference
+/// lines).
+///
+/// - [`ReferenceAnchor::WholeElement`]: range = the anchored head line
+///   (`anchor_range`); target = the reference's Url/File.
+/// - [`ReferenceAnchor::SelfLink`]: range = the reference's own bracketed text
+///   (`reference_range`); target = the reference's Url/File.
+fn collect_reference_line_link(ref_line: &ReferenceLine, out: &mut Vec<DocumentLink>) {
+    let (target, link_type) = match &ref_line.reference.reference_type {
+        ReferenceType::Url { target } => (target.clone(), LinkType::Url),
+        ReferenceType::File { target } => (target.clone(), LinkType::File),
+        _ => return,
+    };
+
+    // `anchor_range` / `reference_range` were produced via
+    // `SourceLocation::byte_range_to_ast_range`, whose columns are *byte*
+    // offsets within the line. The inline word-anchor path (and LSP's default
+    // `positionEncoding`) uses *UTF-16* columns. Normalize the reference-line
+    // ranges to UTF-16: keep the byte span and start column (the start sits at
+    // a known boundary — the anchor head or the `[`) and recompute the end
+    // column from the anchored text's UTF-16 width. For non-ASCII anchor or
+    // reference text this is the only correct mapping; for ASCII it is a no-op.
+    let (base, anchored_utf16) = match &ref_line.anchor {
+        ReferenceAnchor::WholeElement {
+            anchor_range,
+            anchor_text,
+            ..
+        } => (anchor_range, utf16_width(anchor_text)),
+        // Self-link covers the reference's own `[bracketed]` text:
+        // `[` + raw + `]`.
+        ReferenceAnchor::SelfLink => (
+            &ref_line.reference_range,
+            utf16_width("[") + utf16_width(&ref_line.reference.raw) + utf16_width("]"),
+        ),
+    };
+
+    let range = Range::new(
+        base.span.clone(),
+        base.start,
+        Position::new(base.start.line, base.start.column + anchored_utf16),
+    );
+
+    out.push(DocumentLink::new(range, target, link_type));
 }
 
 /// Walks `text`'s inline tree and pushes a [`DocumentLink`] for each URL and
@@ -207,18 +268,123 @@ impl Document {
 /// [`crate::lex::ast::inline_positions::walk_text_content_positions`] visitor;
 /// this function only contributes the link-shaping logic in `LinkCollector`.
 fn collect_text_content_links(text: &TextContent, out: &mut Vec<DocumentLink>) {
-    let mut collector = LinkCollector { out };
+    let mut collector = LinkCollector::new(out);
     walk_text_content_positions(text, &mut collector);
+    // A `Following`-anchored reference defers its link until the next `Plain`
+    // node arrives. If the walk ends with one still pending (the reference was
+    // the last node, or only non-`Plain` nodes followed it), flush it now so
+    // the link is not lost — it falls back to the bracket range.
+    collector.flush();
 }
 
 /// Visitor that emits a [`DocumentLink`] per URL/File reference. All other
 /// inline node variants are intentionally ignored (footnote/citation/session/
 /// annotation/TK refs do not become document links).
+///
+/// ## Range widening for inline word anchors (§2.3.1)
+///
+/// An *inline* URL/File reference (one that shares its line with other text)
+/// anchors a single word — the word immediately *preceding* it (default) or,
+/// when it is the first token on the line, the word immediately *following* it.
+/// The anchor-resolution pass records that word (and direction) on
+/// `ReferenceInline::word_anchor`. To make the link underline/navigate the
+/// *word* rather than the `[bracketed]` text, the collector computes the word's
+/// source range from the adjacent `Plain` node:
+///
+/// - `Preceding`: the word lies at the end of the most-recently-visited `Plain`
+///   node (`last_plain`), which is emitted before the reference. Computed
+///   immediately.
+/// - `Following`: the word lies at the start of the *next* `Plain` node, which
+///   is visited after the reference. The reference is recorded as `pending` and
+///   resolved when that `Plain` arrives.
+///
+/// The word stored on `WordAnchor` is *cleaned* (surrounding punctuation
+/// trimmed) by the resolver; we locate that cleaned substring inside the plain
+/// text so the range covers exactly the word, not its surrounding punctuation.
+/// If the word cannot be located in the adjacent plain text (e.g. it was
+/// flattened across a formatting span, or the plain node was escaped in a way
+/// that shifts byte math), the link falls back to the `[bracketed]` range.
 struct LinkCollector<'a> {
     out: &'a mut Vec<DocumentLink>,
+    /// The most recently visited `Plain` node's range + text, used to resolve a
+    /// `Preceding` word anchor (the word at the end of the text before a
+    /// reference).
+    last_plain: Option<PlainSpan>,
+    /// A reference whose `Following` word anchor is waiting for the next `Plain`
+    /// node to be visited so its start word can be located.
+    pending_following: Option<PendingFollowing>,
+}
+
+/// A `Plain` inline node captured for word-anchor range computation: the node's
+/// source range and the (unescaped) text the range covers.
+struct PlainSpan {
+    range: Range,
+    text: String,
+}
+
+/// A reference awaiting the next `Plain` node to resolve a `Following` anchor.
+struct PendingFollowing {
+    word: String,
+    target: String,
+    link_type: LinkType,
+    /// The bracket-bounded fallback range, used if the word can't be located.
+    bracket_range: Range,
+}
+
+impl<'a> LinkCollector<'a> {
+    fn new(out: &'a mut Vec<DocumentLink>) -> Self {
+        Self {
+            out,
+            last_plain: None,
+            pending_following: None,
+        }
+    }
+
+    /// Bracket-bounded range of a reference: open marker start → close marker end.
+    fn bracket_range(open_marker: &Range, close_marker: &Range) -> Range {
+        Range::new(
+            open_marker.span.start..close_marker.span.end,
+            open_marker.start,
+            close_marker.end,
+        )
+    }
+
+    fn push(&mut self, range: Range, target: String, link_type: LinkType) {
+        self.out.push(DocumentLink::new(range, target, link_type));
+    }
+
+    /// Emit any reference still waiting on a following `Plain` node, falling back
+    /// to its bracket range (no following plain text was found to anchor in).
+    ///
+    /// Called at the end of the walk and whenever a *new* `Following` anchor
+    /// arrives while one is already pending — without this the earlier pending
+    /// link would be silently overwritten and lost.
+    fn flush(&mut self) {
+        if let Some(pending) = self.pending_following.take() {
+            self.push(pending.bracket_range, pending.target, pending.link_type);
+        }
+    }
 }
 
 impl<'a> InlinePositionVisitor for LinkCollector<'a> {
+    fn visit_plain(&mut self, range: &Range, text: &str) {
+        // Resolve any reference waiting on a following word first — this plain
+        // node is the text that follows it.
+        if let Some(pending) = self.pending_following.take() {
+            let plain = PlainSpan {
+                range: range.clone(),
+                text: text.to_string(),
+            };
+            let resolved = locate_word_range(&plain, &pending.word, WordEnd::Start)
+                .unwrap_or(pending.bracket_range);
+            self.push(resolved, pending.target, pending.link_type);
+        }
+        self.last_plain = Some(PlainSpan {
+            range: range.clone(),
+            text: text.to_string(),
+        });
+    }
+
     fn visit_reference(
         &mut self,
         open_marker: &Range,
@@ -231,15 +397,136 @@ impl<'a> InlinePositionVisitor for LinkCollector<'a> {
             ReferenceType::File { target } => (target.clone(), LinkType::File),
             _ => return,
         };
-        // The link covers `[content]` inclusive of brackets — span from the
-        // open marker's start to the close marker's end.
-        let full = Range::new(
-            open_marker.span.start..close_marker.span.end,
-            open_marker.start,
-            close_marker.end,
-        );
-        self.out.push(DocumentLink::new(full, target, link_type));
+        let bracket_range = Self::bracket_range(open_marker, close_marker);
+
+        match &data.word_anchor {
+            // Inline reference anchoring the preceding word: resolve against the
+            // last plain node we visited.
+            Some(WordAnchor {
+                word,
+                direction: AnchorDirection::Preceding,
+            }) => {
+                let range = self
+                    .last_plain
+                    .as_ref()
+                    .and_then(|plain| locate_word_range(plain, word, WordEnd::End))
+                    .unwrap_or(bracket_range);
+                self.push(range, target, link_type);
+            }
+            // Inline reference anchoring the following word: defer until the
+            // next plain node is visited.
+            Some(WordAnchor {
+                word,
+                direction: AnchorDirection::Following,
+            }) => {
+                // Flush any earlier pending `Following` link first — two
+                // `Following` references back-to-back (before the next `Plain`
+                // node) would otherwise clobber the first.
+                self.flush();
+                self.pending_following = Some(PendingFollowing {
+                    word: word.clone(),
+                    target,
+                    link_type,
+                    bracket_range,
+                });
+            }
+            // No word anchor (reference lines are handled separately; a lone
+            // marker reference has no word). Fall back to the bracket range.
+            None => {
+                self.push(bracket_range, target, link_type);
+            }
+        }
     }
+}
+
+/// Which end of the plain text the anchored word sits at.
+#[derive(Clone, Copy)]
+enum WordEnd {
+    /// The word is the *last* whitespace-delimited token (preceding anchor).
+    End,
+    /// The word is the *first* whitespace-delimited token (following anchor).
+    Start,
+}
+
+/// Compute the source [`Range`] of `word` within `plain`, looking at the
+/// appropriate end of the plain text.
+///
+/// `word` is the *cleaned* anchor word (surrounding punctuation already trimmed
+/// by the resolver). We find the matching whitespace-delimited token at the
+/// requested end, then locate the cleaned word inside it so trailing/leading
+/// punctuation (`website,` → `website`) is excluded from the range.
+///
+/// Returns `None` (caller falls back to the bracket range) when the word can't
+/// be located — e.g. the anchor was flattened across a formatting span, so the
+/// adjacent plain node doesn't literally contain it.
+fn locate_word_range(plain: &PlainSpan, word: &str, end: WordEnd) -> Option<Range> {
+    let text = &plain.text;
+    // `text` is the *unescaped* plain text, but `plain.range.span` covers the
+    // *raw* source. When the run contains escapes (`\X`), the raw span is longer
+    // than the unescaped text, so byte offsets computed against `text` no longer
+    // map onto the raw span. Bail out (caller falls back to the bracket range)
+    // rather than emit a misplaced underline.
+    if plain.range.span.len() != text.len() {
+        return None;
+    }
+    // The token at the requested end, with its byte offset within `text`.
+    let token = match end {
+        WordEnd::End => last_token(text),
+        WordEnd::Start => first_token(text),
+    }?;
+    // Locate the cleaned word inside the token (punctuation trimmed). The token
+    // contains the word as a contiguous substring (cleaning only strips leading
+    // and trailing chars), so a single `find` recovers its offset.
+    let word_in_token = token.text.find(word)?;
+    let word_start = token.offset + word_in_token;
+    let word_end = word_start + word.len();
+
+    // Map byte offsets within the plain text to source coordinates. The plain
+    // node is single-line (inline parsing is per-line), so the source byte span
+    // is the plain node's span offset by these byte positions, and columns
+    // advance from the plain node's start column. This holds when the plain
+    // text's bytes line up 1:1 with the source (the common, escape-free case);
+    // if an escape shifted the bytes, `find` would still give a plausible
+    // offset but the column math could drift — acceptable since the worst case
+    // is a slightly-off underline, and callers can fall back to brackets.
+    let base = &plain.range;
+    let span = (base.span.start + word_start)..(base.span.start + word_end);
+    let start_col = base.start.column + utf16_width(&text[..word_start]);
+    let end_col = base.start.column + utf16_width(&text[..word_end]);
+    Some(Range::new(
+        span,
+        Position::new(base.start.line, start_col),
+        Position::new(base.start.line, end_col),
+    ))
+}
+
+/// A whitespace-delimited token with its byte offset within the parent text.
+struct Token<'a> {
+    text: &'a str,
+    offset: usize,
+}
+
+/// The last whitespace-delimited token of `text`, with its byte offset.
+fn last_token(text: &str) -> Option<Token<'_>> {
+    let tok = text.split_whitespace().next_back()?;
+    // `split_whitespace` doesn't give offsets; the last token ends at the last
+    // non-whitespace byte, so find it from the trimmed end.
+    let trimmed_end = text.trim_end().len();
+    let offset = trimmed_end - tok.len();
+    Some(Token { text: tok, offset })
+}
+
+/// The first whitespace-delimited token of `text`, with its byte offset.
+fn first_token(text: &str) -> Option<Token<'_>> {
+    let tok = text.split_whitespace().next()?;
+    let offset = text.len() - text.trim_start().len();
+    Some(Token { text: tok, offset })
+}
+
+/// UTF-16 code-unit width of `s` — matches the column units used by the inline
+/// position walker (LSP default `positionEncoding`).
+fn utf16_width(s: &str) -> usize {
+    s.chars().map(char::len_utf16).sum()
 }
 
 #[cfg(test)]
@@ -363,23 +650,28 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Range-precision tests
+    // Range-precision tests (inline word anchors, §2.3.1)
     //
     // The LSP `textDocument/documentLink` response uses each link's `range`
     // to decide what is clickable and what gets the link decoration in the
     // editor. Editors (notably VSCode) render the entire range as an
-    // underlined link. So the range must cover *only* the `[bracketed]`
-    // reference, not the surrounding paragraph or title line.
+    // underlined link.
+    //
+    // An *inline* reference (one that shares its line with other text) anchors
+    // a single word — the word immediately *preceding* it by default. So the
+    // link range covers that anchored word, not the `[bracketed]` reference and
+    // not the surrounding paragraph. This is the PR-C widening: editors now
+    // underline/navigate the word, matching how the reference renders.
     // -----------------------------------------------------------------------
 
     use super::super::range::Position;
 
     #[test]
-    fn test_url_link_range_is_bracket_bounded_in_paragraph() {
-        // Byte map of source line:
-        //   "Check out [https://example.com] for more info."
-        //    0123456789^                   ^
-        //              10                  30 (inclusive ']' position)
+    fn test_url_link_range_covers_preceding_word_in_paragraph() {
+        // "Check out [https://example.com] for more info."
+        //  0123456789^
+        // The reference shares its line with text, so it anchors the preceding
+        // word "out" (bytes 6..9), not the brackets.
         let source = "Check out [https://example.com] for more info.\n\n";
         let doc = parse_document(source).unwrap();
         let links = doc.find_all_links();
@@ -391,20 +683,17 @@ mod tests {
         let captured = &source[link.range.span.clone()];
         assert_eq!(
             link.range.span,
-            10..31,
-            "DocumentLink range must cover only the [bracketed] reference, not the whole paragraph. \
-             Captured text: {captured:?}"
+            6..9,
+            "inline link range must cover the anchored word 'out'. Captured: {captured:?}"
         );
-        assert_eq!(link.range.start, Position::new(0, 10));
-        assert_eq!(link.range.end, Position::new(0, 31));
+        assert_eq!(captured, "out");
+        assert_eq!(link.range.start, Position::new(0, 6));
+        assert_eq!(link.range.end, Position::new(0, 9));
     }
 
     #[test]
-    fn test_file_link_range_is_bracket_bounded_in_paragraph() {
-        // Byte map of source line:
-        //   "See [./README.md] for details."
-        //    0123^         ^
-        //        4         16 (inclusive ']')
+    fn test_file_link_range_covers_preceding_word_in_paragraph() {
+        // "See [./README.md] for details." → anchors the preceding word "See".
         let source = "See [./README.md] for details.\n\n";
         let doc = parse_document(source).unwrap();
         let links = doc.find_all_links();
@@ -416,19 +705,61 @@ mod tests {
         let captured = &source[link.range.span.clone()];
         assert_eq!(
             link.range.span,
-            4..17,
-            "DocumentLink range must cover only the [bracketed] reference, not the whole paragraph. \
-             Captured text: {captured:?}"
+            0..3,
+            "inline link range must cover the anchored word 'See'. Captured: {captured:?}"
         );
-        assert_eq!(link.range.start, Position::new(0, 4));
-        assert_eq!(link.range.end, Position::new(0, 17));
+        assert_eq!(captured, "See");
+        assert_eq!(link.range.start, Position::new(0, 0));
+        assert_eq!(link.range.end, Position::new(0, 3));
     }
 
     #[test]
-    fn test_multiple_links_have_distinct_bracket_bounded_ranges() {
-        // Byte map:
-        //   "Visit [https://example.com] and check [./docs.md]."
-        //    0     6                    27          38       49
+    fn test_following_word_anchor_range() {
+        // First-on-line reference anchors the *following* word "is".
+        // "[https://lex.ing] is the home page."
+        let source = "[https://lex.ing] is the home page.\n\n";
+        let doc = parse_document(source).unwrap();
+        let links = doc.find_all_links();
+
+        assert_eq!(links.len(), 1);
+        let link = &links[0];
+        assert_eq!(link.target, "https://lex.ing");
+
+        let captured = &source[link.range.span.clone()];
+        assert_eq!(captured, "is", "following-anchor link must cover 'is'");
+        let is_start = source.find("is").unwrap();
+        assert_eq!(link.range.span, is_start..is_start + 2);
+    }
+
+    #[test]
+    fn test_word_anchor_excludes_trailing_punctuation() {
+        // The preceding token is "website," but the anchor word is "website"
+        // (punctuation trimmed), so the range must exclude the comma.
+        let source = "the project website, [https://x.example] is fast.\n\n";
+        let doc = parse_document(source).unwrap();
+        let links = doc.find_all_links();
+
+        assert_eq!(links.len(), 1);
+        let captured = &source[links[0].range.span.clone()];
+        assert_eq!(captured, "website", "range must exclude the trailing comma");
+    }
+
+    #[test]
+    fn test_abutting_word_anchor_range() {
+        // "Hello[./file.txt] World" → abutting preceding word "Hello".
+        let source = "Hello[./file.txt] World\n\n";
+        let doc = parse_document(source).unwrap();
+        let links = doc.find_all_links();
+
+        assert_eq!(links.len(), 1);
+        let captured = &source[links[0].range.span.clone()];
+        assert_eq!(captured, "Hello");
+    }
+
+    #[test]
+    fn test_multiple_links_anchor_distinct_words() {
+        // "Visit [https://example.com] and check [./docs.md]."
+        // URL anchors "Visit", file anchors "check".
         let source = "Visit [https://example.com] and check [./docs.md].\n\n";
         let doc = parse_document(source).unwrap();
         let links = doc.find_all_links();
@@ -444,25 +775,15 @@ mod tests {
             .find(|l| l.link_type == LinkType::File)
             .expect("file link");
 
-        assert_eq!(
-            url.range.span,
-            6..27,
-            "URL link captured: {:?}",
-            &source[url.range.span.clone()]
-        );
-        assert_eq!(
-            file.range.span,
-            38..49,
-            "File link captured: {:?}",
-            &source[file.range.span.clone()]
-        );
+        assert_eq!(&source[url.range.span.clone()], "Visit");
+        assert_eq!(&source[file.range.span.clone()], "check");
     }
 
     #[test]
-    fn test_long_paragraph_with_single_file_ref_does_not_include_surrounding_text_in_range() {
+    fn test_long_paragraph_with_single_file_ref_anchors_only_the_word() {
         // Reproduces the dodot architecture.lex case: a long paragraph that
-        // contains a single file reference. Before the fix, the link's range
-        // covered the whole paragraph so VSCode underlined every word.
+        // contains a single file reference. The link's range covers only the
+        // anchored word "see", never the whole paragraph.
         let source = "\
 This document describes how dodot is organized. It is the conceptual view. \
 For concrete types, crate layout, and trait signatures, see [./types.lex].\n\n";
@@ -473,14 +794,10 @@ For concrete types, crate layout, and trait signatures, see [./types.lex].\n\n";
         let link = &links[0];
         assert_eq!(link.target, "./types.lex");
 
-        let bracket_start = source.find("[./types.lex]").expect("bracket present");
-        let bracket_end = bracket_start + "[./types.lex]".len();
-
         let captured = &source[link.range.span.clone()];
         assert_eq!(
-            link.range.span,
-            bracket_start..bracket_end,
-            "Link range must be bracket-bounded. Got captured text: {captured:?}"
+            captured, "see",
+            "inline link range must cover only the anchored word, not the paragraph"
         );
     }
 
@@ -521,13 +838,11 @@ For concrete types, crate layout, and trait signatures, see [./types.lex].\n\n";
         assert_eq!(link.target, "./other.lex");
         assert_eq!(link.link_type, LinkType::File);
 
-        let bracket_start = source.find("[./other.lex]").expect("bracket present");
-        let bracket_end = bracket_start + "[./other.lex]".len();
+        // Inline reference in the title → anchors the preceding word "See".
         assert_eq!(
-            link.range.span,
-            bracket_start..bracket_end,
-            "Nested-session title link must be bracket-bounded. Got captured text: {:?}",
-            &source[link.range.span.clone()]
+            &source[link.range.span.clone()],
+            "See",
+            "nested-session title link anchors the preceding word"
         );
     }
 
@@ -542,11 +857,8 @@ For concrete types, crate layout, and trait signatures, see [./types.lex].\n\n";
         assert_eq!(link.target, "https://example.com");
         assert_eq!(link.link_type, LinkType::Url);
 
-        let bracket_start = source
-            .find("[https://example.com]")
-            .expect("bracket present");
-        let bracket_end = bracket_start + "[https://example.com]".len();
-        assert_eq!(link.range.span, bracket_start..bracket_end);
+        // Inline reference in the title → anchors the preceding word "Visit".
+        assert_eq!(&source[link.range.span.clone()], "Visit");
     }
 
     #[test]
@@ -573,5 +885,260 @@ Top [./top.lex] section
         assert!(targets.contains(&"./top.lex"));
         assert!(targets.contains(&"./inner.lex"));
         assert!(targets.contains(&"./body.lex"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Reference lines: whole-element anchors and self-links (§2.3.2)
+    //
+    // A reference line (`[ref]` alone on its line) is removed from the
+    // structural stream and collected on the document. PR C surfaces it as a
+    // `DocumentLink` whose range is the *anchored span*: the head line of the
+    // element above (whole-element anchor), or the reference's own text when
+    // there is no content line above (self-link). These prove the LSP emits a
+    // standard range + target — the editor needs no special handling.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_reference_line_whole_element_anchors_session_title() {
+        // The reference line anchors the entire session title "Getting Started".
+        let source = "Getting Started\n[./readme.txt]\n\n    Welcome to the docs.\n\n";
+        let doc = parse_document(source).unwrap();
+        let links = doc.find_all_links();
+
+        assert_eq!(links.len(), 1, "one whole-element link; got {links:?}");
+        let link = &links[0];
+        assert_eq!(link.target, "./readme.txt");
+        assert_eq!(link.link_type, LinkType::File);
+
+        // Range covers the head line, not the `[./readme.txt]` reference line.
+        assert_eq!(
+            &source[link.range.span.clone()],
+            "Getting Started",
+            "whole-element link must cover the anchored head line"
+        );
+        // Positions point at the title line (line 0), full width.
+        assert_eq!(link.range.start, Position::new(0, 0));
+        assert_eq!(link.range.end, Position::new(0, "Getting Started".len()));
+    }
+
+    #[test]
+    fn test_reference_line_whole_element_anchors_list_item() {
+        // Anchors the whole "Water" list item; the `- ` marker is excluded.
+        let source = "- Food\n- Water\n[https://water.example]\n- Bread\n\n";
+        let doc = parse_document(source).unwrap();
+        let links = doc.find_all_links();
+
+        assert_eq!(links.len(), 1);
+        let link = &links[0];
+        assert_eq!(link.target, "https://water.example");
+        assert_eq!(link.link_type, LinkType::Url);
+        assert_eq!(
+            &source[link.range.span.clone()],
+            "Water",
+            "list-item anchor excludes the `- ` marker"
+        );
+    }
+
+    #[test]
+    fn test_reference_line_whole_element_anchors_definition_subject() {
+        // Anchors the definition term "API Endpoint"; the trailing `:` excluded.
+        let source =
+            "API Endpoint:\n[./endpoint.txt]\n    A URL that provides access to a resource.\n\n";
+        let doc = parse_document(source).unwrap();
+        let links = doc.find_all_links();
+
+        assert_eq!(links.len(), 1);
+        let link = &links[0];
+        assert_eq!(link.target, "./endpoint.txt");
+        assert_eq!(
+            &source[link.range.span.clone()],
+            "API Endpoint",
+            "subject anchor excludes the trailing colon"
+        );
+    }
+
+    #[test]
+    fn test_reference_line_self_link_range_is_the_reference_text() {
+        // No content line directly above (blank line above) → self-link. The
+        // link covers the reference's own `[bracketed]` text.
+        let source = "See the upstream project:\n\n[https://github.com/lex-fmt/lex]\n\n";
+        let doc = parse_document(source).unwrap();
+        let links = doc.find_all_links();
+
+        assert_eq!(links.len(), 1, "one self-link; got {links:?}");
+        let link = &links[0];
+        assert_eq!(link.target, "https://github.com/lex-fmt/lex");
+        assert_eq!(
+            &source[link.range.span.clone()],
+            "[https://github.com/lex-fmt/lex]",
+            "self-link covers the reference's own bracketed text"
+        );
+    }
+
+    #[test]
+    fn test_reference_line_self_link_at_start_of_document() {
+        // First line of the document → no content above → self-link.
+        let source = "[https://lex.ing]\n\n";
+        let doc = parse_document(source).unwrap();
+        let links = doc.find_all_links();
+
+        assert_eq!(links.len(), 1);
+        assert_eq!(
+            &source[links[0].range.span.clone()],
+            "[https://lex.ing]",
+            "self-link covers the reference's own bracketed text"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Finding #1: pending `Following` link must never be silently dropped.
+    //
+    // A `Following`-anchored reference defers its link until the next `Plain`
+    // node. If that never arrives (the walk ends, or only non-`Plain` nodes
+    // follow) the collector must still flush the pending link, falling back to
+    // the bracket range. Likewise, two `Following` refs back-to-back must each
+    // emit (the first is flushed before the second becomes pending).
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_following_anchor_followed_by_only_non_plain_nodes_still_emits() {
+        // The reference is first on its line (→ `Following` anchor) and the only
+        // node after it is inline code, which the walker reports via
+        // `visit_code` — never `visit_plain`. So the pending link is never
+        // resolved during the walk. Without the end-of-walk `flush()` this link
+        // is silently dropped (0 links); with it, the link still emits, falling
+        // back to the bracket range.
+        let source = "[https://a.example]`code`\n\n";
+        let doc = parse_document(source).unwrap();
+        let links = doc.find_all_links();
+
+        assert_eq!(
+            links.len(),
+            1,
+            "following-anchor link followed only by non-plain nodes must still \
+             emit (bracket-range fallback); got {links:?}"
+        );
+        let link = &links[0];
+        assert_eq!(link.target, "https://a.example");
+        // Bracket-range fallback: covers the `[https://a.example]` text.
+        assert_eq!(&source[link.range.span.clone()], "[https://a.example]");
+    }
+
+    #[test]
+    fn test_two_following_anchors_in_a_row_both_emit() {
+        // Two first-on-line references with no plain text between them. The
+        // first becomes pending, then the second arrives: the first must be
+        // flushed (bracket fallback) before the second is stored, so both emit.
+        let source = "[https://a.example][https://b.example] tail\n\n";
+        let doc = parse_document(source).unwrap();
+        let links = doc.find_all_links();
+
+        assert_eq!(
+            links.len(),
+            2,
+            "both back-to-back following-anchor refs must emit; got {links:?}"
+        );
+        let targets: Vec<&str> = links.iter().map(|l| l.target.as_str()).collect();
+        assert!(targets.contains(&"https://a.example"));
+        assert!(targets.contains(&"https://b.example"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Finding #2: reference-line ranges must use UTF-16 columns, matching the
+    // inline word-anchor path and LSP's default `positionEncoding`.
+    //
+    // The reference-line ranges arrive as byte columns (built via
+    // `SourceLocation::byte_range_to_ast_range`). For non-ASCII anchor /
+    // reference text, a byte column overshoots the UTF-16 column an editor
+    // expects, misplacing the link decoration. The collector normalizes them.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_reference_line_whole_element_end_column_is_utf16() {
+        // Title contains a multi-byte char "é" (2 UTF-8 bytes, 1 UTF-16 unit).
+        // "Café Menu" is 9 chars / 9 UTF-16 units, but 10 UTF-8 bytes.
+        let source = "Café Menu\n[./menu.txt]\n\n    Today's specials.\n\n";
+        let doc = parse_document(source).unwrap();
+        let links = doc.find_all_links();
+
+        assert_eq!(links.len(), 1, "got {links:?}");
+        let link = &links[0];
+        assert_eq!(link.target, "./menu.txt");
+        assert_eq!(
+            &source[link.range.span.clone()],
+            "Café Menu",
+            "byte span still covers the whole anchored title"
+        );
+        // End column counts UTF-16 units (9), not UTF-8 bytes (10).
+        assert_eq!(link.range.start, Position::new(0, 0));
+        assert_eq!(
+            link.range.end,
+            Position::new(0, 9),
+            "end column must be the UTF-16 width of the anchor, not its byte length"
+        );
+    }
+
+    #[test]
+    fn test_reference_line_self_link_end_column_is_utf16() {
+        // Self-link whose URL contains a multi-byte char. "[https://café.example]"
+        // is 22 chars / 22 UTF-16 units but 23 UTF-8 bytes (é = 2 bytes).
+        let source = "[https://café.example]\n\n";
+        let doc = parse_document(source).unwrap();
+        let links = doc.find_all_links();
+
+        assert_eq!(links.len(), 1, "got {links:?}");
+        let link = &links[0];
+        assert_eq!(link.target, "https://café.example");
+        assert_eq!(
+            &source[link.range.span.clone()],
+            "[https://café.example]",
+            "byte span still covers the bracketed reference"
+        );
+        assert_eq!(link.range.start, Position::new(0, 0));
+        assert_eq!(
+            link.range.end,
+            Position::new(0, 22),
+            "self-link end column must be the UTF-16 width of `[` + raw + `]`"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Finding #3: `locate_word_range` must not mis-map when the anchored plain
+    // text run contains an escape. The unescaped `PlainSpan.text` is shorter
+    // than its raw `range.span`, so byte offsets into the text don't line up
+    // with the raw source. The guard returns `None` → bracket-range fallback.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_escaped_char_in_anchored_word_falls_back_to_bracket_range() {
+        // The preceding plain run "a\\*b " contains an escape (`\*` → `*`), so
+        // the unescaped text ("a*b ") is one byte shorter than the raw span.
+        // The collector must fall back to the bracket range rather than emit a
+        // misplaced underline.
+        let source = "a\\*b [https://x.example] tail\n\n";
+        let doc = parse_document(source).unwrap();
+        let links = doc.find_all_links();
+
+        assert_eq!(links.len(), 1, "got {links:?}");
+        let link = &links[0];
+        assert_eq!(link.target, "https://x.example");
+        assert_eq!(
+            &source[link.range.span.clone()],
+            "[https://x.example]",
+            "escaped anchored run must fall back to the bracket range"
+        );
+    }
+
+    #[test]
+    fn test_marker_reference_line_is_not_a_document_link() {
+        // A footnote on its own line is a marker-style reference: not a
+        // reference line and not a document link.
+        let source = "Some claim.\n[42]\n\n:: 42 :: A footnote.\n\n";
+        let doc = parse_document(source).unwrap();
+        let links = doc.find_all_links();
+        assert!(
+            links.is_empty(),
+            "marker-style references are not document links: {links:?}"
+        );
     }
 }
