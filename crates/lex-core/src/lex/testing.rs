@@ -248,25 +248,13 @@ pub fn workspace_path(relative_path: &str) -> std::path::PathBuf {
 pub fn parse_without_annotation_attachment(
     source: &str,
 ) -> Result<crate::lex::ast::Document, String> {
-    use crate::lex::assembling::AttachRoot;
-    use crate::lex::parsing::engine::parse_from_flat_tokens;
-    use crate::lex::transforms::stages::ParseInlines;
-    use crate::lex::transforms::standard::LEXING;
-    use crate::lex::transforms::Runnable;
-
-    let source = if !source.is_empty() && !source.ends_with('\n') {
-        format!("{source}\n")
-    } else {
-        source.to_string()
-    };
-    let tokens = LEXING.run(source.clone()).map_err(|e| e.to_string())?;
-    let mut output = parse_from_flat_tokens(tokens, &source).map_err(|e| e.to_string())?;
-    output.root = ParseInlines::new()
-        .run(output.root)
-        .map_err(|e| e.to_string())?;
-    if let Some(ref mut title) = output.title {
-        title.content.ensure_inline_parsed();
-    }
-    // Assemble into a Document but skip metadata attachment
-    AttachRoot::new().run(output).map_err(|e| e.to_string())
+    // Delegate to the single shared parser front-end so this test helper
+    // can never drift from the production source→AST pipeline (lex#722).
+    // The front-end runs the reference-line pre-pass, parses, parses
+    // inlines (with anchors), and assembles via `AttachRoot` — exactly
+    // what this helper used to do by hand, minus the annotation
+    // attachment stage, which is the point of the helper.
+    crate::lex::transforms::standard::parse_to_attached_root(source.to_string())
+        .map(|(doc, _prepass)| doc)
+        .map_err(|e| e.to_string())
 }

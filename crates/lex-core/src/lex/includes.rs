@@ -454,10 +454,30 @@ pub fn resolve_from_source(
 ) -> Result<Document, IncludeError> {
     let entry_origin = source_path.as_ref().map(|p| Arc::new(p.clone()));
 
-    let mut doc = parse_no_attach(source).map_err(|message| IncludeError::ParseFailed {
+    // Run the SHARED parser front-end (the same one `run_string_to_ast`
+    // uses): source → assembled Document (annotations still standalone)
+    // plus the reference-line pre-pass results. This is the de-duplication
+    // fix for lex#722 — before this, the resolver had its own hand-rolled
+    // copy of the front-end (`parse_without_annotation_attachment`) that
+    // never ran the reference-line pre-pass, so whole-element anchors were
+    // silently dropped on the default `lexd <file> --to <fmt>` path. Now
+    // there is exactly one front-end and it can't drift.
+    let (mut doc, prepass) = crate::lex::transforms::standard::parse_to_attached_root(
+        source.to_string(),
+    )
+    .map_err(|e| IncludeError::ParseFailed {
         path: source_path.clone().unwrap_or_default(),
-        message,
+        message: e.to_string(),
     })?;
+
+    // Carry the entry file's reference lines (whole-element anchors) onto
+    // the document so the babel serializers / LSP documentLink can render
+    // them. These ranges are in the entry source's original coordinates,
+    // which is correct for the entry file. Reference lines that live
+    // *inside* included files are handled separately after splicing (see
+    // below); they are NOT in `prepass`, which only saw the entry source.
+    doc.reference_lines = prepass.reference_lines;
+    doc.reference_line_diagnostics = prepass.diagnostics;
 
     if let Some(origin) = entry_origin.as_ref() {
         stamp_doc(&mut doc, origin);
@@ -1341,8 +1361,25 @@ fn stamp_item(item: &mut ContentItem, origin: &Arc<PathBuf>) {
 
 /// Parse `source` into a Document but skip the annotation-attachment stage,
 /// so include annotations are findable in container children lists.
+///
+/// Runs the shared parser front-end ([`parse_to_attached_root`]) — the same
+/// one `run_string_to_ast` and `resolve_from_source` use — so the
+/// reference-line pre-pass and any future front-end stage can never drift
+/// from the standard path (lex#722). This is used by the built-in
+/// `lex.include` handler to parse *included* files.
+///
+/// The returned document does **not** carry `reference_lines`: included
+/// files reach the parent tree through the wire-AST codec, which has no
+/// `reference_lines` field, so whole-element anchors authored *inside* an
+/// included file are not propagated to the merged document (see the
+/// follow-up note in `resolve_from_source`). The pre-pass still runs here
+/// (it must, to keep a reference line from being mistaken for a structural
+/// blank line in the included file's own parse), but its result is dropped
+/// rather than emitted as a wrong-coordinate range in the merged document.
 pub(crate) fn parse_no_attach(source: &str) -> Result<Document, String> {
-    crate::lex::testing::parse_without_annotation_attachment(source)
+    crate::lex::transforms::standard::parse_to_attached_root(source.to_string())
+        .map(|(doc, _prepass)| doc)
+        .map_err(|e| e.to_string())
 }
 
 // ============================================================================

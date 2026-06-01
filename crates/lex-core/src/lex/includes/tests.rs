@@ -2437,6 +2437,61 @@ fn resolve_canonicalises_image_shortcut_inside_included_file() {
 }
 
 #[test]
+fn resolve_from_source_runs_reference_line_prepass() {
+    // Regression for lex#722: the include resolver used a hand-rolled copy
+    // of the parser front-end that never ran the reference-line pre-pass,
+    // so whole-element anchors were silently dropped on the default
+    // `lexd <file> --to <fmt>` path (which routes through the resolver even
+    // when the file has no includes). Now both paths share one front-end,
+    // so a reference line in the *entry* source must:
+    //   (a) populate `doc.reference_lines`, and
+    //   (b) keep the surrounding lines adjacent so they form a single list
+    //       (rather than the reference line splitting them into paragraphs).
+    let tree = fixture("- Apple\n[#2]\n- Banana\n", &[]).expect("resolve");
+
+    // (a) The pre-pass result is carried onto the resolved document.
+    assert_eq!(
+        tree.doc.reference_lines.len(),
+        1,
+        "entry-file reference line must populate doc.reference_lines; got {:?}",
+        tree.doc.reference_lines
+    );
+    assert!(
+        tree.doc.reference_lines[0].anchor.is_whole_element(),
+        "the `[#2]` reference line on its own line is a whole-element anchor"
+    );
+
+    // (b) The two list items stay in one list — the reference line did not
+    // get mistaken for a blank separator that splits them into paragraphs.
+    let lists: Vec<_> = tree
+        .root_children()
+        .iter()
+        .filter(|i| matches!(i, ContentItem::List(_)))
+        .collect();
+    assert_eq!(
+        lists.len(),
+        1,
+        "the two `- ` lines must form a single list, not collapse into a \
+         paragraph; root children: {:?}",
+        tree.root_children()
+    );
+    let ContentItem::List(list) = lists[0] else {
+        unreachable!("filtered to lists")
+    };
+    assert_eq!(
+        list.items.len(),
+        2,
+        "the list must contain both `Apple` and `Banana` items; got {:?}",
+        list.items
+    );
+    assert!(
+        tree.root_paragraph_texts().is_empty(),
+        "no content should fall out of the list into a paragraph; got {:?}",
+        tree.root_paragraph_texts()
+    );
+}
+
+#[test]
 fn resolve_fires_include_handler_for_bare_include_shortcut() {
     // `:: include src=... ::` is the shortcut form of `:: lex.include ::`.
     // The resolve dispatcher keys on `registry.schema_for(label)` with the

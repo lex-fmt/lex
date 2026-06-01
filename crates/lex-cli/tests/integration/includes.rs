@@ -102,6 +102,72 @@ fn convert_lex_relative_include_resolves_from_entry_directory() {
 }
 
 // ============================================================================
+// Reference-line anchoring on the default convert path (lex#722)
+// ============================================================================
+
+/// Regression for lex#722: whole-element reference-line anchors must render
+/// on the *default* `lexd <file> --to html` path, which routes through the
+/// include resolver even for files with no includes. Before the front-end
+/// de-duplication, the resolver skipped the reference-line pre-pass, so the
+/// `[#2]` line collapsed the list into a self-linking paragraph. Now the
+/// default path and `--no-includes` produce the same whole-element anchor.
+#[test]
+fn convert_renders_whole_element_anchor_on_default_path() {
+    let dir = fixture_dir(&[("c1.lex", "- Apple\n[#2]\n- Banana\n")]);
+    let main = path_in(&dir, "c1.lex");
+
+    // Default path (includes ON): the whole "Apple" list item is wrapped in
+    // the anchor — NOT a self-link inside a paragraph.
+    lexd()
+        .arg(&main)
+        .arg("--to")
+        .arg("html")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("<a href=\"#2\">Apple</a>"))
+        .stdout(predicate::str::contains(
+            "<li class=\"lex-list-item\">Banana",
+        ))
+        // The broken behaviour wrapped everything in one paragraph with the
+        // reference self-linking; assert that shape is gone.
+        .stdout(predicate::str::contains(">#2</a>").not());
+}
+
+/// The default convert path and `--no-includes` must produce byte-identical
+/// output for a reference-line document with no includes — they share one
+/// parser front-end now, so there is nothing left to diverge.
+#[test]
+fn convert_default_and_no_includes_agree_for_reference_line() {
+    let dir = fixture_dir(&[("c1.lex", "- Apple\n[#2]\n- Banana\n")]);
+    let main = path_in(&dir, "c1.lex");
+
+    let default_out = lexd()
+        .arg(&main)
+        .arg("--to")
+        .arg("html")
+        .output()
+        .expect("run lexd --to html");
+    assert!(default_out.status.success());
+    let default_stdout = String::from_utf8(default_out.stdout).unwrap();
+
+    let noinc_out = lexd()
+        .arg("--no-includes")
+        .arg(&main)
+        .arg("--to")
+        .arg("html")
+        .output()
+        .expect("run lexd --no-includes --to html");
+    assert!(noinc_out.status.success());
+    let noinc_stdout = String::from_utf8(noinc_out.stdout).unwrap();
+
+    assert_eq!(
+        default_stdout, noinc_stdout,
+        "default (includes-on) convert must equal --no-includes for a \
+         reference-line document with no includes"
+    );
+}
+
+// ============================================================================
 // --no-includes: opts out
 // ============================================================================
 
