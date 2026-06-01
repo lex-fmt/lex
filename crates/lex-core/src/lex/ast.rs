@@ -102,6 +102,7 @@
 //! out at compile time. See `docs/architecture/type-safe-containers.md` for
 //! details and compile-fail examples.
 
+pub mod anchoring;
 pub mod diagnostics;
 pub mod elements;
 pub mod error;
@@ -114,6 +115,7 @@ pub mod trait_helpers;
 pub mod traits;
 
 // Re-export commonly used types at module root
+pub use anchoring::{AnchoredElement, ReferenceAnchor, ReferenceLine};
 pub use diagnostics::{validate_references, validate_structure, Diagnostic, DiagnosticSeverity};
 pub use elements::{
     Annotation, ContentItem, Data, Definition, Document, DocumentTitle, Label, List, ListItem,

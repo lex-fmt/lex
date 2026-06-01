@@ -118,6 +118,10 @@ impl Document {
         // Collect structure validation errors
         diagnostics.extend(validate_structure(self));
 
+        // Reference-line anchoring warnings (overlap / stacking, §2.3.3) are
+        // computed during parsing and stored on the document.
+        diagnostics.extend(self.reference_line_diagnostics.iter().cloned());
+
         diagnostics
     }
 }

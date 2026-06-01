@@ -135,10 +135,31 @@ pub fn run_string_to_ast(
         s
     };
 
-    // Run lexing
-    let tokens = LEXING.run(source.clone())?;
+    // Reference-line pre-pass (§2.3): identify whole-element-anchoring reference
+    // lines so their tokens can be removed from the stream *before* structural
+    // parsing — the surrounding lines then keep their original adjacency (a
+    // reference line must not be mistaken for the blank line that separates a
+    // definition from a session). See `crate::lex::anchoring`.
+    //
+    // Critically, we do *not* edit the source string. We tokenize the ORIGINAL
+    // source (so every token keeps its original byte range), drop the tokens
+    // belonging to each reference line — including each line's terminating
+    // newline, so the lines above and below become directly adjacent — and then
+    // run semantic indentation and parse against the original source. The result
+    // is that every AST node range stays in original-source coordinates, even
+    // for elements that appear *after* a reference line. (Editing the source
+    // string instead would shift every downstream offset into a "cleaned-source"
+    // coordinate system that no longer matches what the editor holds.)
+    let prepass = crate::lex::anchoring::extract_reference_lines(&source);
 
-    // Parse to AST
+    // Core tokenization on the original source (flat tokens, original ranges),
+    // then drop the reference-line tokens, then semantic indentation.
+    let core_tokens = CoreTokenization::new().run(source.clone())?;
+    let core_tokens = prepass.filter_tokens(core_tokens);
+    let tokens = SemanticIndentation::new().run(core_tokens)?;
+
+    // Parse to AST against the original source (keeps location tracking in
+    // original-source coordinates).
     let mut output =
         crate::lex::parsing::engine::parse_from_flat_tokens(tokens, &source).map_err(|e| {
             crate::lex::transforms::TransformError::StageFailed {
@@ -152,7 +173,7 @@ pub fn run_string_to_ast(
 
     // Parse inlines in document title if present
     if let Some(ref mut title) = output.title {
-        title.content.ensure_inline_parsed();
+        title.content.ensure_inline_parsed_with_anchors();
     }
 
     // Attach root session and title to a document
@@ -170,6 +191,11 @@ pub fn run_string_to_ast(
 
     // Apply table config from :: table :: annotations (header, align)
     doc = crate::lex::assembling::stages::ApplyTableConfig::new().run(doc)?;
+
+    // Attach the reference-line pre-pass results to the document so consumers
+    // (babel serializers, LSP documentLink) can read the resolved anchors.
+    doc.reference_lines = prepass.reference_lines;
+    doc.reference_line_diagnostics = prepass.diagnostics;
 
     Ok(doc)
 }

@@ -236,6 +236,7 @@ mod tests {
             annotations: Vec::new(),
             title: None,
             root: session,
+            ..Document::new()
         };
 
         assert_ast(&doc).root_location_starts_at(0, 0);
@@ -251,6 +252,7 @@ mod tests {
             annotations: Vec::new(),
             title: None,
             root: session,
+            ..Document::new()
         };
 
         assert_ast(&doc).root_location_starts_at(5, 0);
@@ -265,6 +267,7 @@ mod tests {
             annotations: Vec::new(),
             title: None,
             root: session,
+            ..Document::new()
         };
 
         assert_ast(&doc).root_location_ends_at(2, 15);
@@ -280,6 +283,7 @@ mod tests {
             annotations: Vec::new(),
             title: None,
             root: session,
+            ..Document::new()
         };
 
         assert_ast(&doc).root_location_ends_at(2, 10);
@@ -294,6 +298,7 @@ mod tests {
             annotations: Vec::new(),
             title: None,
             root: session,
+            ..Document::new()
         };
 
         assert_ast(&doc).root_location_contains(2, 5);
@@ -309,6 +314,7 @@ mod tests {
             annotations: Vec::new(),
             title: None,
             root: session,
+            ..Document::new()
         };
 
         assert_ast(&doc).root_location_contains(5, 5);
@@ -323,6 +329,7 @@ mod tests {
             annotations: Vec::new(),
             title: None,
             root: session,
+            ..Document::new()
         };
 
         assert_ast(&doc).root_location_excludes(5, 5);
@@ -338,6 +345,7 @@ mod tests {
             annotations: Vec::new(),
             title: None,
             root: session,
+            ..Document::new()
         };
 
         assert_ast(&doc).root_location_excludes(2, 5);
@@ -352,6 +360,7 @@ mod tests {
             annotations: Vec::new(),
             title: None,
             root: session,
+            ..Document::new()
         };
 
         assert_ast(&doc)
