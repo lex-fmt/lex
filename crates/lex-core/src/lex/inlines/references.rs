@@ -28,7 +28,12 @@ pub(super) fn classify_reference_node(node: InlineNode) -> InlineNode {
 }
 
 /// Determine the reference type from raw content.
-fn determine_reference_type(raw: &str) -> ReferenceType {
+///
+/// Exposed to the crate so the reference-line pre-pass
+/// ([`crate::lex::anchoring`]) classifies a bracketed reference identically to
+/// the inline parser — the link-like vs marker-only split (§2.3.4) must agree
+/// between an inline `[...]` and a standalone reference line.
+pub(crate) fn determine_reference_type(raw: &str) -> ReferenceType {
     let trimmed = raw.trim();
     if trimmed.is_empty() || !trimmed.chars().any(|ch| ch.is_alphanumeric()) {
         return ReferenceType::NotSure;

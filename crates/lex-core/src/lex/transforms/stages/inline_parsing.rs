@@ -140,6 +140,6 @@ impl InlineProcessor {
     }
 
     fn process_text_content(&self, content: &mut TextContent) {
-        content.ensure_inline_parsed();
+        content.ensure_inline_parsed_with_anchors();
     }
 }

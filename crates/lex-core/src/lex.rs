@@ -65,6 +65,7 @@
 //!
 //!     For the complete end-to-end pipeline documentation, see [parsing](parsing) module.
 
+pub mod anchoring;
 pub mod annotation;
 pub mod assembling;
 pub mod ast;

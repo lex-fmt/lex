@@ -118,6 +118,7 @@ enum StackNode {
     },
     Verbatim {
         subject: Option<String>,
+        subject_href: Option<String>,
         language: Option<String>,
         content: String,
         parameters: Vec<(String, String)>,
@@ -185,6 +186,7 @@ impl StackNode {
             } => DocNode::Definition(Definition { term, description }),
             StackNode::Verbatim {
                 subject,
+                subject_href,
                 language,
                 content,
                 parameters,
@@ -228,6 +230,7 @@ impl StackNode {
                 }
                 DocNode::Verbatim(Verbatim {
                     subject,
+                    subject_href,
                     language,
                     content,
                     parameters,
@@ -764,10 +767,12 @@ pub fn events_to_tree(events: &[Event]) -> Result<Document, ConversionError> {
             Event::StartVerbatim {
                 language,
                 subject,
+                subject_href,
                 parameters,
             } => {
                 stack.push(StackNode::Verbatim {
                     subject: subject.clone(),
+                    subject_href: subject_href.clone(),
                     language: language.clone(),
                     content: String::new(),
                     parameters: parameters.clone(),
@@ -1169,6 +1174,7 @@ mod tests {
             Event::StartVerbatim {
                 language: Some("rust".to_string()),
                 subject: None,
+                subject_href: None,
                 parameters: Vec::new(),
             },
             Event::Inline(InlineContent::Text("fn main() {}".to_string())),

@@ -374,18 +374,23 @@ fn test_citation_anchor_excludes_locator() {
 
 #[test]
 fn test_placeholder_reference_as_text() {
-    let lex_src = "This needs citation [TK-REF-2025-01].\n";
+    // `[TK-ref]` classifies as a To-Come placeholder (lowercase identifier per
+    // references-general.lex §8.2), which is marker-style (§2.3.4) — it never
+    // takes a word anchor and renders as plain text with escaped brackets.
+    // (An uppercase / multi-segment spelling like `TK-REF-2025-01` is *not* a
+    // valid TK identifier; lex-core classifies it as a General link instead.)
+    let lex_src = "This needs citation [TK-ref].\n";
     let lex_doc = STRING_TO_AST.run(lex_src.to_string()).unwrap();
     let md = MarkdownFormat.serialize(&lex_doc).unwrap();
 
     // Placeholders should render as plain text with escaped brackets
     // since they're not recognized as links
     assert!(
-        md.contains("\\[TK-REF-2025-01\\]"),
-        "Placeholder should be visible as text with escaped brackets"
+        md.contains("\\[TK-ref\\]"),
+        "Placeholder should be visible as text with escaped brackets, got: {md}"
     );
     assert!(
-        md.contains("TK-REF-2025-01"),
+        md.contains("TK-ref"),
         "Placeholder content should be present"
     );
 }
@@ -755,4 +760,98 @@ fn test_nested_numbering_round_trip() {
 
     assert!(md2.contains("Top Level"), "Top level survives round-trip");
     assert!(md2.contains("Nested"), "Nested survives round-trip");
+}
+
+// ============================================================================
+// REFERENCE ANCHORING (references-general.lex §2.3) — PR B
+// ============================================================================
+
+/// Lex → Markdown string for the anchoring tests.
+fn lex_to_md(lex_src: &str) -> String {
+    let lex_doc = STRING_TO_AST.run(lex_src.to_string()).unwrap();
+    MarkdownFormat.serialize(&lex_doc).unwrap()
+}
+
+#[test]
+fn test_md_inline_word_anchor_preceding() {
+    let md = lex_to_md("Body intro.\n\nthe project website [https://lex.ing] today\n\n");
+    assert!(
+        md.contains("the project [website](https://lex.ing) today"),
+        "preceding word anchor, got: {md}"
+    );
+    assert!(!md.contains("[https://lex.ing]"), "bracket not literal");
+}
+
+#[test]
+fn test_md_inline_word_anchor_following() {
+    let md = lex_to_md("Body intro.\n\n[https://lex.ing] is the home page.\n\n");
+    assert!(
+        md.contains("[is](https://lex.ing) the home page."),
+        "following word anchor, got: {md}"
+    );
+}
+
+#[test]
+fn test_md_whole_element_anchor_session_title() {
+    let md = lex_to_md("Getting Started\n[./readme.txt]\n\n    Welcome to the docs.\n\n");
+    assert!(
+        md.contains("## [Getting Started](./readme.txt)"),
+        "session title wrapped, got: {md}"
+    );
+}
+
+#[test]
+fn test_md_whole_element_anchor_list_item() {
+    let md = lex_to_md("Intro.\n\n- Food\n- Water\n[https://water.example]\n- Bread\n\n");
+    assert!(
+        md.contains("- [Water](https://water.example)"),
+        "list item wrapped, got: {md}"
+    );
+    assert!(md.contains("- Food") && md.contains("- Bread"));
+}
+
+#[test]
+fn test_md_whole_element_anchor_definition_term() {
+    let md = lex_to_md("API Endpoint:\n[./endpoint.txt]\n    A URL that provides access.\n\n");
+    assert!(
+        md.contains("[API Endpoint](./endpoint.txt)"),
+        "definition term wrapped (no trailing colon), got: {md}"
+    );
+}
+
+#[test]
+fn test_md_whole_element_anchor_verbatim_subject() {
+    let md = lex_to_md("Example Source:\n[./example.rs]\n    fn main() {}\n:: rust ::\n\n");
+    assert!(
+        md.contains("**[Example Source](./example.rs)**"),
+        "verbatim subject caption wraps a link, got: {md}"
+    );
+}
+
+#[test]
+fn test_md_self_link_reference_line() {
+    let md = lex_to_md("See the upstream project:\n\n[https://github.com/lex-fmt/lex]\n\n");
+    // Comrak renders a link whose text equals its href as an autolink `<url>`.
+    assert!(
+        md.contains("<https://github.com/lex-fmt/lex>")
+            || md.contains("[https://github.com/lex-fmt/lex](https://github.com/lex-fmt/lex)"),
+        "self-link standalone, got: {md}"
+    );
+}
+
+#[test]
+fn test_md_marker_references_unchanged() {
+    let md = lex_to_md("Body.\n\nSee [42] and [@smith2023] later.\n\n");
+    // Footnote stays escaped-bracket text; citation links to #ref-key.
+    assert!(
+        md.contains("\\[42\\]"),
+        "footnote marker unchanged, got: {md}"
+    );
+    assert!(
+        md.contains("[@smith2023](#ref-smith2023)"),
+        "citation marker unchanged, got: {md}"
+    );
+    // No word anchor stole "See"/"and".
+    assert!(!md.contains("[See](42)"));
+    assert!(!md.contains("[and](#ref-smith2023)"));
 }

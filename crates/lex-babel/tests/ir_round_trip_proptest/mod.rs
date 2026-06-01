@@ -264,6 +264,7 @@ prop_compose! {
         }
         Verbatim {
             subject: subject.map(|s| s.trim_end().to_string()).filter(|s| !s.is_empty()),
+            subject_href: None,
             language: lang.filter(|s| !s.is_empty()),
             content,
             parameters,
@@ -302,6 +303,7 @@ fn verbatim_with_third_party_label_and_params_survives_round_trip() {
     // `parameters` through the lex round-trip.
     let verb = Verbatim {
         subject: Some("Snippet".to_string()),
+        subject_href: None,
         language: Some("acme.snippet".to_string()),
         content: "x = 1\ny = 2".to_string(),
         parameters: vec![
@@ -485,16 +487,20 @@ fn table_round_trips() {
 // (markdown / rfc-xml importers), but after a round-trip through Lex
 // the classifier re-runs and the `kind` is populated.
 //
-// Linkable kinds (Url / File / Session) are rewritten to
-// `InlineContent::Link` by `resolve_implicit_anchors` on the
-// lex → IR side — documented behaviour, see the module-level "Accepted
-// losses" doc on `crates/lex-babel/src/ir/mod.rs`. The tests below
-// assert the post-round-trip Link shape for those kinds, and the
-// post-round-trip Reference + typed kind for the non-linkable kinds
-// (Citation / FootnoteNumber / AnnotationReference / ToCome / General).
+// Reference anchoring is resolved authoritatively by lex-core during
+// *parsing* (references-general.lex §2.3): an inline reference's word
+// anchor and a reference line's whole-element / self-link anchor are
+// computed from source position. This round-trip starts from a
+// programmatically-built IR (no parsing), so no anchor data is present —
+// every reference therefore survives as a classified `Reference` (its
+// type re-derived on the lex → IR leg). The rendered self-link is
+// unchanged: the HTML / Markdown serializers render a bare link-like
+// `Reference` as `<a href="raw">raw</a>` (its own text). The tests below
+// assert the post-round-trip `Reference` + typed kind. See the
+// module-level "Accepted losses" doc on `crates/lex-babel/src/ir/mod.rs`.
 
 #[test]
-fn reference_url_resolves_to_link_after_round_trip() {
+fn reference_url_classifies_after_round_trip() {
     let node = DocNode::Paragraph(Paragraph {
         content: vec![InlineContent::Reference {
             raw: "https://example.com".to_string(),
@@ -504,18 +510,21 @@ fn reference_url_resolves_to_link_after_round_trip() {
     let back = round_trip_node(node);
     match back {
         DocNode::Paragraph(p) => match &p.content[..] {
-            [InlineContent::Link { text, href }] => {
-                assert_eq!(href, "https://example.com");
-                assert_eq!(text, "https://example.com");
+            [InlineContent::Reference { raw, kind }] => {
+                assert_eq!(raw, "https://example.com");
+                assert!(
+                    matches!(kind, ReferenceType::Url { target } if target == "https://example.com"),
+                    "expected Url, got {kind:?}"
+                );
             }
-            other => panic!("expected single Link, got {other:?}"),
+            other => panic!("expected single Reference, got {other:?}"),
         },
         other => panic!("expected Paragraph, got {other:?}"),
     }
 }
 
 #[test]
-fn reference_session_resolves_to_link_after_round_trip() {
+fn reference_session_classifies_after_round_trip() {
     let node = DocNode::Paragraph(Paragraph {
         content: vec![InlineContent::Reference {
             raw: "#2.1".to_string(),
@@ -525,21 +534,21 @@ fn reference_session_resolves_to_link_after_round_trip() {
     let back = round_trip_node(node);
     match back {
         DocNode::Paragraph(p) => match &p.content[..] {
-            [InlineContent::Link { text, href }] => {
-                assert_eq!(href, "#2.1");
-                assert_eq!(text, "#2.1");
+            [InlineContent::Reference { raw, .. }] => {
+                assert_eq!(raw, "#2.1");
             }
-            other => panic!("expected single Link, got {other:?}"),
+            other => panic!("expected single Reference, got {other:?}"),
         },
         other => panic!("expected Paragraph, got {other:?}"),
     }
 }
 
 #[test]
-fn reference_url_with_anchor_text_resolves_to_link() {
-    // The anchor heuristic pulls the preceding word as link text. With
-    // the surrounding text present we land in the "word before"
-    // branch of `resolve_implicit_anchors`.
+fn reference_url_with_preceding_text_stays_reference_without_parse() {
+    // A reference adjacent to text would anchor the preceding word *when
+    // parsed* (§2.3.1), but this IR is built programmatically so no word
+    // anchor was resolved — the reference survives intact and the text is
+    // preserved alongside it.
     let node = DocNode::Paragraph(Paragraph {
         content: vec![
             InlineContent::Text("visit example ".to_string()),
@@ -552,14 +561,15 @@ fn reference_url_with_anchor_text_resolves_to_link() {
     let back = round_trip_node(node);
     match back {
         DocNode::Paragraph(p) => {
-            // After round-trip: [Text("visit "), Link { text: "example", href: "https://example.com" }]
-            // The exact shape depends on the anchor extraction; assert
-            // that a Link with the expected href exists.
-            let found_link = p.content.iter().any(|i| {
-                matches!(i, InlineContent::Link { href, text }
-                    if href == "https://example.com" && text == "example")
+            let found_ref = p.content.iter().any(|i| {
+                matches!(i, InlineContent::Reference { raw, .. } if raw == "https://example.com")
             });
-            assert!(found_link, "expected Link with extracted anchor, got {p:?}");
+            assert!(found_ref, "expected Reference preserved, got {p:?}");
+            let text: String = inline_text(&p.content);
+            assert!(
+                text.contains("visit example"),
+                "text preserved, got {text:?}"
+            );
         }
         other => panic!("expected Paragraph, got {other:?}"),
     }
@@ -590,7 +600,7 @@ fn reference_footnote_classifies_after_round_trip() {
 }
 
 #[test]
-fn reference_file_resolves_to_link_after_round_trip() {
+fn reference_file_classifies_after_round_trip() {
     let node = DocNode::Paragraph(Paragraph {
         content: vec![InlineContent::Reference {
             raw: "./readme.md".to_string(),
@@ -600,11 +610,14 @@ fn reference_file_resolves_to_link_after_round_trip() {
     let back = round_trip_node(node);
     match back {
         DocNode::Paragraph(p) => match &p.content[..] {
-            [InlineContent::Link { text, href }] => {
-                assert_eq!(href, "./readme.md");
-                assert_eq!(text, "./readme.md");
+            [InlineContent::Reference { raw, kind }] => {
+                assert_eq!(raw, "./readme.md");
+                assert!(
+                    matches!(kind, ReferenceType::File { target } if target == "./readme.md"),
+                    "expected File, got {kind:?}"
+                );
             }
-            other => panic!("expected single Link, got {other:?}"),
+            other => panic!("expected single Reference, got {other:?}"),
         },
         other => panic!("expected Paragraph, got {other:?}"),
     }

@@ -24,9 +24,11 @@ mod parser;
 mod references;
 
 pub use crate::lex::ast::elements::inlines::{
-    InlineContent, InlineNode, PageFormat, ReferenceInline, ReferenceType,
+    AnchorDirection, AnchorKind, InlineContent, InlineNode, PageFormat, ReferenceInline,
+    ReferenceType, WordAnchor,
 };
 pub use crate::lex::token::InlineKind;
 pub use parser::{
     parse_inlines, parse_inlines_with_parser, InlineParser, InlinePostProcessor, InlineSpec,
 };
+pub(crate) use references::determine_reference_type;

@@ -18,6 +18,7 @@ mod location_integrity;
 mod parser;
 mod parser_kitchensink;
 mod parser_regression;
+mod reference_anchoring;
 mod runtime_type_safety;
 mod spec_documents;
 mod spec_validation;

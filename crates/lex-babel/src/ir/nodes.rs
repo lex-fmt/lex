@@ -121,6 +121,14 @@ pub struct Definition {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Verbatim {
     pub subject: Option<String>,
+    /// Destination href when a reference line anchors the verbatim subject
+    /// (references-general.lex §2.3.2). The subject renders as a plain-text
+    /// caption, so the resolved link travels alongside it: when `Some`, the
+    /// HTML / Markdown serializers wrap the caption text in a link to this
+    /// target. `None` for an unanchored subject and for IR built from non-lex
+    /// sources. Not round-tripped — the reference line is reconstructed from
+    /// `Document::reference_lines()`, not from the IR.
+    pub subject_href: Option<String>,
     pub language: Option<String>,
     pub content: String,
     /// Closing-data parameters from the source, mirroring lex-core's
@@ -214,11 +222,16 @@ pub enum InlineContent {
     /// defaults to `ReferenceType::NotSure` since those importers don't
     /// classify against lex's reference grammar.
     ///
-    /// Format adapters (HTML, markdown) and the anchor-heuristic
-    /// `common/links.rs::resolve_implicit_anchors` dispatch on `kind`
-    /// (Url / File / General → linkable; Citation / FootnoteNumber /
-    /// Session / etc. → format-specific shapes) instead of re-parsing
-    /// the raw string. Issue #614 follow-up.
+    /// Format adapters (HTML, markdown) dispatch on `kind`
+    /// (Citation / FootnoteNumber / AnnotationReference → marker shapes)
+    /// instead of re-parsing the raw string. Issue #614 follow-up.
+    ///
+    /// References that lex-core resolved an anchor for (an inline word
+    /// anchor, or a reference-line whole-element / self-link anchor;
+    /// references-general.lex §2.3) never reach this variant — they are
+    /// rewritten to `Link` during IR construction by `ir/anchoring.rs`.
+    /// Only marker-style references and link-like references with no
+    /// adjacent word to anchor survive as `Reference`.
     Reference {
         raw: String,
         kind: ReferenceType,

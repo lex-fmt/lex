@@ -711,6 +711,7 @@ mod tests {
     fn test_verbatim_with_language() {
         let ir_verb = Verbatim {
             subject: None,
+            subject_href: None,
             language: Some("rust".to_string()),
             content: "fn main() {}\nlet x = 1;".to_string(),
             parameters: Vec::new(),

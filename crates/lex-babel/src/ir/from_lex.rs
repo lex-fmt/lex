@@ -25,10 +25,22 @@ use lex_core::lex::wire::{origin_string, range_to_wire};
 use lex_extension::wire::{AnnotationBody, HostNodeKind, LabelCtx, NodeRef, WireNode};
 use lex_extension_host::registry::Registry;
 
+use super::anchoring::AnchorIndex;
 use super::nodes::{
     Annotation, Audio, Definition, DocNode, Document, Heading, Image, InlineContent, List,
     ListForm, ListItem, ListStyle, Paragraph, Verbatim, Video,
 };
+
+/// Shared context threaded through IR construction.
+///
+/// Bundles the extension `registry` (for verbatim `on_ir_build` dispatch) with
+/// the document's resolved reference-line [`AnchorIndex`] (for whole-element and
+/// self-link anchoring, references-general.lex §2.3.2–§2.3.4), so every
+/// converter has both without a long parameter list.
+struct ConvCtx<'a> {
+    registry: &'a Registry,
+    anchors: &'a AnchorIndex,
+}
 
 /// Converts a lex document to the IR.
 ///
@@ -61,6 +73,12 @@ use super::nodes::{
 /// document-scope metadata must be attached at the document level
 /// (lex-core's `doc.annotations` slot).
 pub fn from_lex_document(doc: &LexDocument, registry: &Registry) -> Document {
+    let anchors = AnchorIndex::from_document(doc);
+    let ctx = ConvCtx {
+        registry,
+        anchors: &anchors,
+    };
+
     // Extract document title and subtitle
     let title = doc
         .title
@@ -72,12 +90,19 @@ pub fn from_lex_document(doc: &LexDocument, registry: &Registry) -> Document {
         .and_then(|t| t.subtitle.as_ref())
         .map(convert_inline_content);
 
-    let children = convert_children(&doc.root.children, 2, registry);
+    let mut children = convert_children(&doc.root.children, 2, &ctx);
+
+    // Splice self-link reference lines (§2.3.2: a reference line with no element
+    // directly above stands alone and links its own text) into the top-level
+    // child stream in source order. They were removed from the structural stream
+    // by lex-core, so they have no element to attach to and render as standalone
+    // link paragraphs.
+    splice_self_links(&mut children, &doc.root.children, &anchors);
 
     let document_annotations = doc
         .annotations
         .iter()
-        .map(|a| ir_annotation_from_lex(a, registry))
+        .map(|a| ir_annotation_from_lex(a, &ctx))
         .collect();
 
     Document {
@@ -88,10 +113,238 @@ pub fn from_lex_document(doc: &LexDocument, registry: &Registry) -> Document {
     }
 }
 
+/// Insert standalone self-link paragraphs into the child stream at the position
+/// their source reference falls, by source order, recursing into the nested
+/// container that actually contains each self-link.
+///
+/// `lex_children` is the original lex-AST child list (carrying source spans);
+/// `ir_children` is the already-converted IR list. A self-link reference line
+/// can appear at the top level *or* nested inside a container (session body,
+/// list item, definition description, annotation body). Each self-link is placed
+/// relative to its own source span:
+///
+/// - If it falls inside a structural element's source span, recurse into that
+///   element's IR child container and splice it there.
+/// - Otherwise it is a sibling at this level: insert it just before the first
+///   element whose source starts after the self-link.
+///
+/// The two lists are not index-aligned: attached annotations expand into extra
+/// leading IR nodes (each structural element converts to
+/// `attached_annotations(item).len() + 1` IR nodes). Sibling positioning maps the
+/// structural-element slot to the real IR index by summing that expansion over
+/// the preceding structural elements, so a self-link never lands between an
+/// element and its own attached annotations.
+fn splice_self_links(
+    ir_children: &mut Vec<DocNode>,
+    lex_children: &[LexContentItem],
+    anchors: &AnchorIndex,
+) {
+    let self_links = anchors.self_links_in(0..usize::MAX);
+    if self_links.is_empty() {
+        return;
+    }
+    splice_self_links_into(ir_children, lex_children, &self_links);
+}
+
+/// Recursive worker for [`splice_self_links`]. Distributes `self_links` (those
+/// whose span falls inside a nested container recurse into it; the rest splice
+/// at this level) against the `(lex_children, ir_children)` pair produced by
+/// [`convert_children`].
+fn splice_self_links_into(
+    ir_children: &mut Vec<DocNode>,
+    lex_children: &[LexContentItem],
+    self_links: &[&super::anchoring::SelfLink],
+) {
+    use lex_core::lex::ast::traits::AstNode;
+
+    // Walk the structural (non-blank) lex children in order, tracking the IR
+    // index of each element's *own* node (after its leading annotation nodes).
+    // Record, per structural element, its source span and IR node index, so we
+    // can both recurse into containers and map sibling slots to IR indices.
+    struct Slot {
+        span: std::ops::Range<usize>,
+        ir_index: usize,
+    }
+    let mut slots: Vec<Slot> = Vec::new();
+    let mut ir_cursor = 0usize;
+    for item in lex_children
+        .iter()
+        .filter(|c| !matches!(c, LexContentItem::BlankLineGroup(_)))
+    {
+        let anno_count = attached_annotations(item).len();
+        let ir_index = ir_cursor + anno_count;
+        slots.push(Slot {
+            span: item.range().span.clone(),
+            ir_index,
+        });
+        ir_cursor = ir_index + 1;
+    }
+
+    // Iterate structural items in parallel with `slots` for recursion.
+    let structural: Vec<&LexContentItem> = lex_children
+        .iter()
+        .filter(|c| !matches!(c, LexContentItem::BlankLineGroup(_)))
+        .collect();
+
+    // Partition the self-links: those contained in a structural element recurse
+    // into it; the rest stay as siblings at this level. `nested[si]` collects
+    // the self-links that fall inside the `si`-th structural element.
+    let mut siblings: Vec<&super::anchoring::SelfLink> = Vec::new();
+    let mut nested: Vec<Vec<&super::anchoring::SelfLink>> = vec![Vec::new(); structural.len()];
+
+    for &sl in self_links {
+        // Find the structural element whose span strictly contains the self-link
+        // (start < sl.start AND sl.start < end) and that has a recursable child
+        // stream. A self-link sits *inside* a container when its bracket falls
+        // within that container's source span.
+        let container = structural.iter().enumerate().find(|(_, item)| {
+            let span = item.range().span.clone();
+            span.start < sl.span.start && sl.span.start < span.end && has_recursable_children(item)
+        });
+        match container {
+            Some((si, _item)) => nested[si].push(sl),
+            None => siblings.push(sl),
+        }
+    }
+
+    // Recurse into each container that received nested self-links.
+    for (si, links) in nested.iter().enumerate() {
+        if links.is_empty() {
+            continue;
+        }
+        let item = structural[si];
+        let ir_index = slots[si].ir_index;
+        recurse_into_container(&mut ir_children[ir_index], item, links);
+    }
+
+    // Splice the sibling self-links at this level (descending source order so
+    // earlier inserts don't shift later indices).
+    let mut siblings_sorted = siblings;
+    siblings_sorted.sort_by_key(|s| std::cmp::Reverse(s.span.start));
+    for sl in siblings_sorted {
+        // Map the sibling to the IR index just after the last structural element
+        // that starts before it. `slots` is in source order, so count the
+        // elements before the self-link and take the IR index following the last
+        // one (or 0 when the self-link precedes every element).
+        let preceding = slots
+            .iter()
+            .filter(|s| s.span.start < sl.span.start)
+            .count();
+        let ir_index = if preceding == 0 {
+            0
+        } else {
+            slots[preceding - 1].ir_index + 1
+        };
+        let node = self_link_node(sl);
+        if ir_index <= ir_children.len() {
+            ir_children.insert(ir_index, node);
+        } else {
+            ir_children.push(node);
+        }
+    }
+}
+
+/// True when `item` is a container whose IR counterpart holds a child `DocNode`
+/// stream a nested self-link could be spliced into.
+fn has_recursable_children(item: &LexContentItem) -> bool {
+    matches!(
+        item,
+        LexContentItem::Session(_)
+            | LexContentItem::List(_)
+            | LexContentItem::ListItem(_)
+            | LexContentItem::Definition(_)
+            | LexContentItem::Annotation(_)
+    )
+}
+
+/// Recurse into a container IR node, splicing the `links` that fall within it.
+///
+/// Pairs the lex container's child list with the matching IR child `Vec` and
+/// recurses through [`splice_self_links_into`]. A `List` has no direct child
+/// stream of its own — its self-links live inside one of its `ListItem`s — so it
+/// dispatches to the list item whose span contains each link.
+fn recurse_into_container(
+    ir_node: &mut DocNode,
+    lex_item: &LexContentItem,
+    links: &[&super::anchoring::SelfLink],
+) {
+    use lex_core::lex::ast::traits::AstNode;
+
+    match (ir_node, lex_item) {
+        (DocNode::Heading(h), LexContentItem::Session(s)) => {
+            splice_self_links_into(&mut h.children, &s.children, links);
+        }
+        (DocNode::ListItem(li), LexContentItem::ListItem(lex_li)) => {
+            splice_self_links_into(&mut li.children, &lex_li.children, links);
+        }
+        (DocNode::Definition(d), LexContentItem::Definition(lex_d)) => {
+            splice_self_links_into(&mut d.description, &lex_d.children, links);
+        }
+        (DocNode::Annotation(a), LexContentItem::Annotation(lex_a)) => {
+            splice_self_links_into(&mut a.content, &lex_a.children, links);
+        }
+        (DocNode::List(list), LexContentItem::List(lex_list)) => {
+            // A list has no direct child stream — its self-links live inside one
+            // of its items. A reference line indented under an item is removed
+            // from the source, so its byte offset can land *past* that item's
+            // recorded span end (the span reflects only the surviving tokens) yet
+            // before the next item. Strict containment would miss it, so assign
+            // each link to the item it *trails*: the item with the greatest start
+            // offset still less than the link's. Items are in source order.
+            let lex_items: Vec<&LexContentItem> = lex_list
+                .items
+                .iter()
+                .filter(|c| matches!(c, LexContentItem::ListItem(_)))
+                .collect();
+            let item_starts: Vec<usize> = lex_items.iter().map(|c| c.range().span.start).collect();
+            // Bucket links by trailing-item index.
+            let mut buckets: Vec<Vec<&super::anchoring::SelfLink>> =
+                vec![Vec::new(); lex_items.len()];
+            for &sl in links {
+                let target = item_starts.iter().rposition(|&start| start < sl.span.start);
+                if let Some(ti) = target {
+                    buckets[ti].push(sl);
+                }
+                // A link before the first item is unexpected (it would not be
+                // inside the list span); drop-free fallback: it stays unplaced,
+                // which can't happen given the outer containment check.
+            }
+            for (ir_li, (lex_li, bucket)) in list
+                .items
+                .iter_mut()
+                .zip(lex_items.iter().zip(buckets.iter()))
+            {
+                if bucket.is_empty() {
+                    continue;
+                }
+                if let LexContentItem::ListItem(lex_li) = lex_li {
+                    splice_self_links_into(&mut ir_li.children, &lex_li.children, bucket);
+                }
+            }
+        }
+        _ => {
+            // Shape mismatch (should not happen given has_recursable_children).
+            // Leave the links unplaced rather than panic; correctness-preserving
+            // fallback per the PR's nested-placement note.
+        }
+    }
+}
+
+/// A standalone self-link reference line: a paragraph holding a single `Link`
+/// whose text and href are both the reference's own raw content.
+fn self_link_node(sl: &super::anchoring::SelfLink) -> DocNode {
+    DocNode::Paragraph(Paragraph {
+        content: vec![InlineContent::Link {
+            text: sl.raw.clone(),
+            href: super::anchoring::reference_href(&sl.raw),
+        }],
+    })
+}
+
 /// Build an IR `Annotation` directly from a lex-core annotation, without
 /// the `DocNode` enum wrapper that [`from_lex_annotation`] returns. Used
 /// by [`from_lex_document`] to populate `Document::document_annotations`.
-fn ir_annotation_from_lex(annotation: &LexAnnotation, registry: &Registry) -> Annotation {
+fn ir_annotation_from_lex(annotation: &LexAnnotation, ctx: &ConvCtx) -> Annotation {
     let label = annotation.data.label.value.clone();
     let form = annotation.data.label.form;
     let parameters = annotation
@@ -100,7 +353,7 @@ fn ir_annotation_from_lex(annotation: &LexAnnotation, registry: &Registry) -> An
         .iter()
         .map(|p| (p.key.clone(), p.value.clone()))
         .collect();
-    let content = convert_children(&annotation.children, 2, registry);
+    let content = convert_children(&annotation.children, 2, ctx);
     Annotation {
         label,
         parameters,
@@ -111,25 +364,22 @@ fn ir_annotation_from_lex(annotation: &LexAnnotation, registry: &Registry) -> An
 
 /// Helper: Converts a list of content items, filtering out blank lines
 /// Also extracts annotations attached to each element
-fn convert_children(items: &[LexContentItem], level: usize, registry: &Registry) -> Vec<DocNode> {
+fn convert_children(items: &[LexContentItem], level: usize, ctx: &ConvCtx) -> Vec<DocNode> {
     items
         .iter()
         .filter(|item| !matches!(item, LexContentItem::BlankLineGroup(_)))
         .flat_map(|item| {
-            let mut nodes = extract_attached_annotations(item, level, registry);
-            nodes.push(from_lex_content_item_with_level(item, level, registry));
+            let mut nodes = extract_attached_annotations(item, level, ctx);
+            nodes.push(from_lex_content_item_with_level(item, level, ctx));
             nodes
         })
         .collect()
 }
 
-/// Extracts annotations attached to a content item and converts them to IR nodes
-fn extract_attached_annotations(
-    item: &LexContentItem,
-    level: usize,
-    registry: &Registry,
-) -> Vec<DocNode> {
-    let annotations = match item {
+/// Annotations attached to a content item (the same set
+/// [`extract_attached_annotations`] converts to leading IR nodes).
+fn attached_annotations(item: &LexContentItem) -> &[LexAnnotation] {
+    match item {
         LexContentItem::Session(session) => session.annotations(),
         LexContentItem::Paragraph(paragraph) => paragraph.annotations(),
         LexContentItem::List(list) => list.annotations(),
@@ -138,29 +388,41 @@ fn extract_attached_annotations(
         LexContentItem::VerbatimBlock(verbatim) => verbatim.annotations(),
         LexContentItem::Table(table) => table.annotations(),
         _ => &[],
-    };
+    }
+}
 
-    annotations
+/// Extracts annotations attached to a content item and converts them to IR nodes
+fn extract_attached_annotations(
+    item: &LexContentItem,
+    level: usize,
+    ctx: &ConvCtx,
+) -> Vec<DocNode> {
+    attached_annotations(item)
         .iter()
-        .map(|anno| from_lex_annotation(anno, level, registry))
+        .map(|anno| from_lex_annotation(anno, level, ctx))
         .collect()
 }
 
-/// Converts TextContent to IR InlineContent, resolving implicit anchors for linkable references.
+/// Converts TextContent to IR InlineContent, applying §2.3.1 word anchors.
+///
+/// lex-core resolves each inline reference's word anchor during parsing and
+/// stores it on the `ReferenceInline`. [`apply_word_anchors`] reads that
+/// resolved data: a link-like reference with an adjacent word becomes a `Link`
+/// wrapping that word (the bracketed reference itself renders nothing), while
+/// marker-style references and references with no adjacent word pass through
+/// unchanged for the serializer to render.
 fn convert_inline_content(text: &TextContent) -> Vec<InlineContent> {
-    use crate::common::links::resolve_implicit_anchors;
+    use crate::ir::anchoring::apply_word_anchors;
 
-    // Get inline items from TextContent
+    // Get inline items from TextContent.
     let inline_items = text.inline_items();
 
-    let content = if inline_items.is_empty() {
-        // If no inline items, use raw string
-        vec![InlineContent::Text(text.as_string().to_string())]
-    } else {
-        inline_items.iter().map(convert_inline_node).collect()
-    };
+    if inline_items.is_empty() {
+        // If no inline items, use raw string.
+        return vec![InlineContent::Text(text.as_string().to_string())];
+    }
 
-    resolve_implicit_anchors(content)
+    apply_word_anchors(&inline_items, &convert_inline_node)
 }
 
 /// Converts a single InlineNode to IR InlineContent
@@ -182,21 +444,35 @@ fn convert_inline_node(node: &InlineNode) -> InlineContent {
     }
 }
 
+/// Converts a head-line `TextContent` to IR inline content, applying a
+/// whole-element anchor (references-general.lex §2.3.2) when a reference line
+/// targets this head line.
+///
+/// When the head line's source span contains a resolved whole-element anchor,
+/// the entire head line is rendered as a single `Link` of the anchor's text;
+/// the reference line itself emits no separate output (it was removed from the
+/// structural stream by lex-core). Otherwise the head line converts normally,
+/// including any §2.3.1 inline word anchors.
+fn convert_head_line(text: &TextContent, ctx: &ConvCtx) -> Vec<InlineContent> {
+    if !ctx.anchors.is_empty() {
+        if let Some(anchor) = ctx.anchors.match_head_line(text) {
+            return super::anchoring::wrap_head_line(anchor);
+        }
+    }
+    convert_inline_content(text)
+}
+
 /// Converts a lex content item to an IR node with a given level.
-fn from_lex_content_item_with_level(
-    item: &LexContentItem,
-    level: usize,
-    registry: &Registry,
-) -> DocNode {
+fn from_lex_content_item_with_level(item: &LexContentItem, level: usize, ctx: &ConvCtx) -> DocNode {
     match item {
-        LexContentItem::Session(session) => from_lex_session(session, level, registry),
-        LexContentItem::Paragraph(paragraph) => from_lex_paragraph(paragraph),
-        LexContentItem::List(list) => from_lex_list(list, level, registry),
-        LexContentItem::ListItem(list_item) => from_lex_list_item(list_item, level, registry),
-        LexContentItem::Definition(definition) => from_lex_definition(definition, level, registry),
-        LexContentItem::VerbatimBlock(verbatim) => from_lex_verbatim(verbatim, registry),
-        LexContentItem::Table(table) => from_lex_table(table, registry),
-        LexContentItem::Annotation(annotation) => from_lex_annotation(annotation, level, registry),
+        LexContentItem::Session(session) => from_lex_session(session, level, ctx),
+        LexContentItem::Paragraph(paragraph) => from_lex_paragraph(paragraph, ctx),
+        LexContentItem::List(list) => from_lex_list(list, level, ctx),
+        LexContentItem::ListItem(list_item) => from_lex_list_item(list_item, level, ctx),
+        LexContentItem::Definition(definition) => from_lex_definition(definition, level, ctx),
+        LexContentItem::VerbatimBlock(verbatim) => from_lex_verbatim(verbatim, ctx),
+        LexContentItem::Table(table) => from_lex_table(table, ctx),
+        LexContentItem::Annotation(annotation) => from_lex_annotation(annotation, level, ctx),
         LexContentItem::TextLine(text_line) => from_lex_text_line(text_line),
         LexContentItem::VerbatimLine(verbatim_line) => from_lex_verbatim_line(verbatim_line),
         LexContentItem::BlankLineGroup(_) => {
@@ -212,10 +488,10 @@ fn from_lex_content_item_with_level(
 /// title text and are preserved as regular `InlineContent::Text` — not as a
 /// separate structural variant. The full title text (including any numbering
 /// prefix) is kept in `Heading.content`.
-fn from_lex_session(session: &LexSession, level: usize, registry: &Registry) -> DocNode {
-    let content = convert_inline_content(&session.title);
+fn from_lex_session(session: &LexSession, level: usize, ctx: &ConvCtx) -> DocNode {
+    let content = convert_head_line(&session.title, ctx);
 
-    let children = convert_children(&session.children, level + 1, registry);
+    let children = convert_children(&session.children, level + 1, ctx);
     DocNode::Heading(Heading {
         level,
         content,
@@ -224,12 +500,16 @@ fn from_lex_session(session: &LexSession, level: usize, registry: &Registry) -> 
 }
 
 /// Converts a lex paragraph to an IR paragraph.
-fn from_lex_paragraph(paragraph: &LexParagraph) -> DocNode {
+///
+/// Each paragraph line is a head-line candidate for a whole-element anchor
+/// (§2.3.2: a reference line on a paragraph anchors the single line directly
+/// above it), so lines convert through [`convert_head_line`].
+fn from_lex_paragraph(paragraph: &LexParagraph, ctx: &ConvCtx) -> DocNode {
     // Paragraphs have multiple lines, each is a TextLine with TextContent
     let mut content = Vec::new();
     for line_item in &paragraph.lines {
         if let LexContentItem::TextLine(text_line) = line_item {
-            content.extend(convert_inline_content(&text_line.content));
+            content.extend(convert_head_line(&text_line.content, ctx));
             // Add newline between lines except for the last line
             if line_item != paragraph.lines.last().unwrap() {
                 content.push(InlineContent::Text("\n".to_string()));
@@ -240,13 +520,13 @@ fn from_lex_paragraph(paragraph: &LexParagraph) -> DocNode {
 }
 
 /// Converts a lex list to an IR list.
-fn from_lex_list(list: &LexList, level: usize, registry: &Registry) -> DocNode {
+fn from_lex_list(list: &LexList, level: usize, ctx: &ConvCtx) -> DocNode {
     let items: Vec<ListItem> = list
         .items
         .iter()
         .filter_map(|item| {
             if let LexContentItem::ListItem(li) = item {
-                Some(convert_list_item(li, level, registry))
+                Some(convert_list_item(li, level, ctx))
             } else {
                 None
             }
@@ -280,27 +560,33 @@ fn from_lex_list(list: &LexList, level: usize, registry: &Registry) -> DocNode {
 }
 
 /// Converts a lex list item to an IR list item node.
-fn from_lex_list_item(list_item: &LexListItem, level: usize, registry: &Registry) -> DocNode {
-    DocNode::ListItem(convert_list_item(list_item, level, registry))
+fn from_lex_list_item(list_item: &LexListItem, level: usize, ctx: &ConvCtx) -> DocNode {
+    DocNode::ListItem(convert_list_item(list_item, level, ctx))
 }
 
 /// Converts a lex list item to an IR list item struct.
 ///
 /// List markers are structural (captured by `List.style` and `List.form` on the
-/// parent) and are not included in the item's inline content.
-fn convert_list_item(list_item: &LexListItem, level: usize, registry: &Registry) -> ListItem {
+/// parent) and are not included in the item's inline content. The item's own
+/// line is a head-line candidate for a whole-element anchor (§2.3.2), so it
+/// converts through [`convert_head_line`].
+fn convert_list_item(list_item: &LexListItem, level: usize, ctx: &ConvCtx) -> ListItem {
     let mut content = Vec::new();
     for text_content in &list_item.text {
-        content.extend(convert_inline_content(text_content));
+        content.extend(convert_head_line(text_content, ctx));
     }
-    let children = convert_children(&list_item.children, level, registry);
+    let children = convert_children(&list_item.children, level, ctx);
     ListItem { content, children }
 }
 
 /// Converts a lex definition to an IR definition.
-fn from_lex_definition(definition: &LexDefinition, level: usize, registry: &Registry) -> DocNode {
-    let term = convert_inline_content(&definition.subject);
-    let description = convert_children(&definition.children, level, registry);
+///
+/// The subject term is a head-line candidate for a whole-element anchor
+/// (§2.3.2; the trailing colon is excluded, matching the resolved anchor text),
+/// so it converts through [`convert_head_line`].
+fn from_lex_definition(definition: &LexDefinition, level: usize, ctx: &ConvCtx) -> DocNode {
+    let term = convert_head_line(&definition.subject, ctx);
+    let description = convert_children(&definition.children, level, ctx);
     DocNode::Definition(Definition { term, description })
 }
 
@@ -322,13 +608,20 @@ fn from_lex_definition(definition: &LexDefinition, level: usize, registry: &Regi
 /// when the returned wire kind isn't one this builder knows how to
 /// type (third-party verbatim labels without an IR-build hook,
 /// unrecognised labels, future wire variants).
-fn from_lex_verbatim(verbatim: &LexVerbatim, registry: &Registry) -> DocNode {
+fn from_lex_verbatim(verbatim: &LexVerbatim, ctx: &ConvCtx) -> DocNode {
     let subject_str = verbatim.subject.as_string();
     let subject = if subject_str.is_empty() {
         None
     } else {
         Some(subject_str.to_string())
     };
+    // A reference line can anchor the verbatim subject (§2.3.2; trailing colon
+    // excluded). The subject renders as a plain-text caption, so the resolved
+    // link travels alongside it as `subject_href` for the serializers to wrap.
+    let subject_href = ctx
+        .anchors
+        .match_head_line(&verbatim.subject)
+        .map(|a| a.href.clone());
     let language = Some(verbatim.closing_data.label.value.clone());
     let content = verbatim
         .children
@@ -361,7 +654,7 @@ fn from_lex_verbatim(verbatim: &LexVerbatim, registry: &Registry) -> DocNode {
             .map(|p| (p.key.clone(), serde_json::Value::String(p.unquoted_value())))
             .collect(),
     );
-    let ctx = LabelCtx {
+    let label_ctx = LabelCtx {
         label,
         params: params_object,
         body: AnnotationBody::Text(content.clone()),
@@ -371,7 +664,7 @@ fn from_lex_verbatim(verbatim: &LexVerbatim, registry: &Registry) -> DocNode {
             origin: origin_string(&verbatim.location),
         },
     };
-    if let Ok(Some(mut wire_node)) = registry.dispatch_ir_build(&ctx) {
+    if let Ok(Some(mut wire_node)) = ctx.registry.dispatch_ir_build(&label_ctx) {
         // The subject line on a verbatim is part of the host's context,
         // not the hydrated wire payload — built-in IR-build handlers
         // (and well-behaved third-party ones) read params + body only.
@@ -383,7 +676,7 @@ fn from_lex_verbatim(verbatim: &LexVerbatim, registry: &Registry) -> DocNode {
                 inject_subject_into_wire_node(&mut wire_node, s);
             }
         }
-        if let Some(node) = from_wire_typed(&wire_node, registry, &content) {
+        if let Some(node) = from_wire_typed(&wire_node, ctx, &content) {
             return node;
         }
     }
@@ -396,6 +689,7 @@ fn from_lex_verbatim(verbatim: &LexVerbatim, registry: &Registry) -> DocNode {
         .collect();
     DocNode::Verbatim(Verbatim {
         subject,
+        subject_href,
         language,
         content,
         parameters,
@@ -451,11 +745,7 @@ fn inject_subject_into_wire_node(wire_node: &mut WireNode, subject: &str) {
 ///
 /// Returns `None` when the wire variant isn't one this builder knows
 /// how to type — the caller falls back to a generic `DocNode::Verbatim`.
-fn from_wire_typed(
-    wire_node: &WireNode,
-    registry: &Registry,
-    fallback_content: &str,
-) -> Option<DocNode> {
+fn from_wire_typed(wire_node: &WireNode, ctx: &ConvCtx, fallback_content: &str) -> Option<DocNode> {
     match wire_node {
         WireNode::Table { .. } => {
             // Tables hydrate via the lex-core AST round-trip — IR's
@@ -469,7 +759,7 @@ fn from_wire_typed(
             let LexContentItem::Table(table) = items.into_iter().next()? else {
                 return None;
             };
-            Some(from_lex_table(&table, registry))
+            Some(from_lex_table(&table, ctx))
         }
         WireNode::Image {
             src, alt, title, ..
@@ -498,7 +788,7 @@ fn from_wire_typed(
 }
 
 /// Converts a lex annotation to an IR annotation.
-fn from_lex_annotation(annotation: &LexAnnotation, level: usize, registry: &Registry) -> DocNode {
+fn from_lex_annotation(annotation: &LexAnnotation, level: usize, ctx: &ConvCtx) -> DocNode {
     let label = annotation.data.label.value.clone();
     let form = annotation.data.label.form;
     let parameters = annotation
@@ -507,7 +797,7 @@ fn from_lex_annotation(annotation: &LexAnnotation, level: usize, registry: &Regi
         .iter()
         .map(|p| (p.key.clone(), p.value.clone()))
         .collect();
-    let content = convert_children(&annotation.children, level, registry);
+    let content = convert_children(&annotation.children, level, ctx);
     DocNode::Annotation(Annotation {
         label,
         parameters,
@@ -526,7 +816,7 @@ fn from_lex_text_line(text_line: &LexTextLine) -> DocNode {
 /// Converts a VerbatimLine to an IR verbatim block.
 /// VerbatimLines are typically parts of VerbatimBlocks, but can appear standalone.
 /// Converts a native lex Table AST node to an IR Table node.
-fn from_lex_table(table: &lex_core::lex::ast::Table, registry: &Registry) -> DocNode {
+fn from_lex_table(table: &lex_core::lex::ast::Table, ctx: &ConvCtx) -> DocNode {
     use crate::ir::nodes::{
         Table as IrTable, TableCell as IrTableCell, TableCellAlignment as IrAlign,
         TableRow as IrTableRow,
@@ -548,7 +838,7 @@ fn from_lex_table(table: &lex_core::lex::ast::Table, registry: &Registry) -> Doc
                 .iter()
                 .map(|cell| {
                     let content = if cell.has_block_content() {
-                        convert_children(&cell.children, 2, registry)
+                        convert_children(&cell.children, 2, ctx)
                     } else {
                         vec![DocNode::Paragraph(Paragraph {
                             content: convert_inline_content(&cell.content),
@@ -577,7 +867,7 @@ fn from_lex_table(table: &lex_core::lex::ast::Table, registry: &Registry) -> Doc
     let footnotes = table
         .footnotes
         .as_ref()
-        .map(|list| vec![from_lex_list(list, 2, registry)])
+        .map(|list| vec![from_lex_list(list, 2, ctx)])
         .unwrap_or_default();
 
     let fullwidth = matches!(
@@ -598,6 +888,7 @@ fn from_lex_verbatim_line(verbatim_line: &LexVerbatimLine) -> DocNode {
     let content = verbatim_line.content.as_string().to_string();
     DocNode::Verbatim(Verbatim {
         subject: None,
+        subject_href: None,
         language: None,
         content,
         parameters: Vec::new(),
@@ -676,10 +967,22 @@ mod tests {
         crate::default_registry()
     }
 
+    /// Test-scope `ConvCtx` with an empty anchor index, for unit tests that
+    /// call the internal `from_lex_*` converters directly (the public
+    /// `from_lex_document` builds its own context). The leaked empty index is a
+    /// `'static` borrow so the returned context can be passed by reference.
+    fn test_ctx() -> ConvCtx<'static> {
+        static ANCHORS: std::sync::OnceLock<AnchorIndex> = std::sync::OnceLock::new();
+        ConvCtx {
+            registry: test_registry(),
+            anchors: ANCHORS.get_or_init(AnchorIndex::default),
+        }
+    }
+
     #[test]
     fn test_simple_paragraph_conversion() {
         let lex_para = LexParagraph::from_line("Hello world".to_string());
-        let ir_node = from_lex_paragraph(&lex_para);
+        let ir_node = from_lex_paragraph(&lex_para, &test_ctx());
 
         match ir_node {
             DocNode::Paragraph(para) => {
@@ -695,7 +998,7 @@ mod tests {
     #[test]
     fn test_session_to_heading() {
         let session = LexSession::with_title("Test Section".to_string());
-        let ir_node = from_lex_session(&session, 1, test_registry());
+        let ir_node = from_lex_session(&session, 1, &test_ctx());
 
         match ir_node {
             DocNode::Heading(heading) => {
@@ -713,7 +1016,7 @@ mod tests {
         let item2 = LexListItem::new("-".to_string(), "Item 2".to_string());
         let list = LexList::new(vec![item1, item2]);
 
-        let ir_node = from_lex_list(&list, 1, test_registry());
+        let ir_node = from_lex_list(&list, 1, &test_ctx());
 
         match ir_node {
             DocNode::List(list) => {
@@ -740,7 +1043,7 @@ mod tests {
             lex_core::lex::ast::elements::verbatim::VerbatimBlockMode::Inflow,
         );
 
-        let ir_node = from_lex_verbatim(&verb, test_registry());
+        let ir_node = from_lex_verbatim(&verb, &test_ctx());
 
         match ir_node {
             DocNode::Verbatim(verb) => {
@@ -759,7 +1062,7 @@ mod tests {
             Vec::new(),
         ));
 
-        let children = convert_children(&[para, blank], 1, test_registry());
+        let children = convert_children(&[para, blank], 1, &test_ctx());
 
         assert_eq!(children.len(), 1);
     }
@@ -886,7 +1189,7 @@ mod tests {
             closing_data,
             lex_core::lex::ast::elements::verbatim::VerbatimBlockMode::Inflow,
         );
-        let ir_node = from_lex_verbatim(&verb, test_registry());
+        let ir_node = from_lex_verbatim(&verb, &test_ctx());
         match ir_node {
             DocNode::Image(image) => {
                 assert_eq!(image.src, "sunset.jpg");
@@ -918,7 +1221,7 @@ mod tests {
             closing_data,
             lex_core::lex::ast::elements::verbatim::VerbatimBlockMode::Inflow,
         );
-        let ir_node = from_lex_verbatim(&verb, test_registry());
+        let ir_node = from_lex_verbatim(&verb, &test_ctx());
         match ir_node {
             DocNode::Table(table) => {
                 let caption = table
@@ -969,7 +1272,7 @@ mod tests {
             closing_data,
             lex_core::lex::ast::elements::verbatim::VerbatimBlockMode::Inflow,
         );
-        let ir_node = from_lex_verbatim(&verb, test_registry());
+        let ir_node = from_lex_verbatim(&verb, &test_ctx());
         match ir_node {
             DocNode::Image(image) => {
                 assert_eq!(image.title.as_deref(), Some("Param Wins"));
@@ -1023,7 +1326,7 @@ mod tests {
             closing_data,
             lex_core::lex::ast::elements::verbatim::VerbatimBlockMode::Inflow,
         );
-        match from_lex_verbatim(&verb, test_registry()) {
+        match from_lex_verbatim(&verb, &test_ctx()) {
             DocNode::Table(_) => {}
             other => panic!(
                 "table verbatim must hydrate via dispatch_ir_build to DocNode::Table; got {other:?}"
@@ -1058,7 +1361,7 @@ mod tests {
             closing_data,
             lex_core::lex::ast::elements::verbatim::VerbatimBlockMode::Inflow,
         );
-        match from_lex_verbatim(&verb, test_registry()) {
+        match from_lex_verbatim(&verb, &test_ctx()) {
             DocNode::Video(video) => {
                 assert_eq!(video.src, "intro.mp4");
                 assert_eq!(video.poster.as_deref(), Some("intro.png"));
@@ -1092,7 +1395,7 @@ mod tests {
             closing_data,
             lex_core::lex::ast::elements::verbatim::VerbatimBlockMode::Inflow,
         );
-        match from_lex_verbatim(&verb, test_registry()) {
+        match from_lex_verbatim(&verb, &test_ctx()) {
             DocNode::Verbatim(v) => {
                 assert_eq!(v.content, "raw body");
                 assert_eq!(v.language.as_deref(), Some("acme.unknown"));
@@ -1160,5 +1463,104 @@ mod tests {
             RenderOut::String { string } => assert_eq!(string, "author: \"Alice\"\n"),
             other => panic!("expected String, got {other:?}"),
         }
+    }
+
+    // ========================================================================
+    // SELF-LINK SPLICING (references-general.lex §2.3.2 — #720 fixups #5)
+    // ========================================================================
+
+    use lex_core::lex::transforms::standard::STRING_TO_AST;
+
+    /// Flatten an IR paragraph's first inline into its link href, if any.
+    fn paragraph_link_href(node: &DocNode) -> Option<&str> {
+        if let DocNode::Paragraph(p) = node {
+            if let Some(InlineContent::Link { href, .. }) = p.content.first() {
+                return Some(href.as_str());
+            }
+        }
+        None
+    }
+
+    /// #5(a): a self-link after a paragraph that itself carries an attached
+    /// annotation must splice *after* the paragraph (and its expanded annotation
+    /// IR node), not between them. With the old structural-slot indexing the
+    /// self-link landed one slot too early and split the paragraph from its
+    /// annotation.
+    #[test]
+    fn self_link_after_paragraph_with_attached_annotation_lands_after_it() {
+        // The annotation `:: note ::` attaches to "Anchored paragraph." (no blank
+        // line between them); the self-link follows after a blank line.
+        let src = "First paragraph.\n\n:: note ::\n    A side note.\nAnchored paragraph.\n\n[https://after.example]\n\nTrailing paragraph.\n";
+        let doc = STRING_TO_AST.run(src.to_string()).expect("parse ok");
+        let ir = from_lex_document(&doc, test_registry());
+
+        // Locate the self-link paragraph.
+        let sl_pos = ir
+            .children
+            .iter()
+            .position(|c| paragraph_link_href(c) == Some("https://after.example"))
+            .expect("self-link paragraph must be present");
+
+        // The node immediately before the self-link must be the anchored
+        // paragraph's own content ("Anchored paragraph."), proving the link did
+        // not slip between the annotation and the paragraph it annotates.
+        let before = &ir.children[sl_pos - 1];
+        let before_is_anchored_para = matches!(
+            before,
+            DocNode::Paragraph(p) if p.content.iter().any(|c| matches!(c, InlineContent::Text(t) if t.contains("Anchored paragraph")))
+        );
+        assert!(
+            before_is_anchored_para,
+            "self-link must follow the annotated paragraph, not split it from its annotation; got {before:?}"
+        );
+
+        // And the annotation IR node still precedes that paragraph.
+        let annotation_before_para = ir.children[..sl_pos]
+            .iter()
+            .any(|c| matches!(c, DocNode::Annotation(a) if a.label == "note"));
+        assert!(
+            annotation_before_para,
+            "the attached annotation must remain ahead of its paragraph"
+        );
+    }
+
+    /// #5(b): a self-link nested inside a list item's body must be spliced into
+    /// that list item's children, not at the document top level.
+    #[test]
+    fn self_link_nested_in_list_item_lands_in_that_item() {
+        let src =
+            "Intro.\n\n- First item\n    Nested body.\n\n    [https://nested.example]\n- Second item\n\nDone.\n";
+        let doc = STRING_TO_AST.run(src.to_string()).expect("parse ok");
+        let ir = from_lex_document(&doc, test_registry());
+
+        // The self-link must NOT appear at the document top level.
+        let at_top = ir
+            .children
+            .iter()
+            .any(|c| paragraph_link_href(c) == Some("https://nested.example"));
+        assert!(
+            !at_top,
+            "nested self-link must not be spliced at the document top level"
+        );
+
+        // It must appear inside the first list item's children.
+        let list = ir
+            .children
+            .iter()
+            .find_map(|c| match c {
+                DocNode::List(l) => Some(l),
+                _ => None,
+            })
+            .expect("a list must be present");
+        let first_item = list.items.first().expect("list has a first item");
+        let nested = first_item
+            .children
+            .iter()
+            .any(|c| paragraph_link_href(c) == Some("https://nested.example"));
+        assert!(
+            nested,
+            "nested self-link must be spliced into the first list item's children; got {:?}",
+            first_item.children
+        );
     }
 }

@@ -272,6 +272,7 @@ fn parse_verbatim(node: Node) -> Result<DocNode, FormatError> {
     let text = node.text().unwrap_or("").to_string();
     Ok(DocNode::Verbatim(Verbatim {
         subject: None,
+        subject_href: None,
         language: node.attribute("type").map(|s| s.to_string()),
         content: text,
         parameters: Vec::new(),
