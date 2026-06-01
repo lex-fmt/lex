@@ -120,6 +120,7 @@ fn walk_node(node: &DocNode, events: &mut Vec<Event>) {
         }
         DocNode::Verbatim(Verbatim {
             subject,
+            subject_href,
             language,
             content,
             parameters,
@@ -127,6 +128,7 @@ fn walk_node(node: &DocNode, events: &mut Vec<Event>) {
             events.push(Event::StartVerbatim {
                 language: language.clone(),
                 subject: subject.clone(),
+                subject_href: subject_href.clone(),
                 parameters: parameters.clone(),
             });
             events.push(Event::Inline(InlineContent::Text(content.clone())));
@@ -266,6 +268,7 @@ mod tests {
                         content: vec![InlineContent::Text("Item".to_string())],
                         children: vec![DocNode::Verbatim(Verbatim {
                             subject: None,
+                            subject_href: None,
                             language: Some("rust".to_string()),
                             content: "fn main() {}".to_string(),
                             parameters: Vec::new(),
@@ -319,6 +322,7 @@ mod tests {
             Event::StartVerbatim {
                 language: Some("rust".to_string()),
                 subject: None,
+                subject_href: None,
                 parameters: Vec::new(),
             },
             Event::Inline(InlineContent::Text("fn main() {}".to_string())),

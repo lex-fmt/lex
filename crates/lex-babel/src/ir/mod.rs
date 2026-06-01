@@ -42,12 +42,14 @@
 //!   them. A `Table { caption: Some(_), … }` round-trips with
 //!   `caption: None`. Footnotes survive via nested `lex.footnote.*`
 //!   annotations.
-//! - **Linkable references resolve to `Link`.** A bare
-//!   `InlineContent::Reference { kind: Url|File|Session, .. }` in a
-//!   paragraph is rewritten to `InlineContent::Link { text, href }` by
-//!   `common/links.rs::resolve_implicit_anchors` on every lex → IR
-//!   conversion. This is a deliberate shape change (#570 anchor
-//!   heuristic), not an information loss in user-visible terms: the
+//! - **Anchored references resolve to `Link`.** An inline
+//!   `InlineContent::Reference { kind: Url|File|Session|General, .. }`
+//!   that lex-core resolved a word anchor for (references-general.lex
+//!   §2.3.1) is rewritten to `InlineContent::Link { text, href }` by
+//!   `ir/anchoring.rs::apply_word_anchors` on every lex → IR conversion,
+//!   and a reference line's whole-element / self-link anchor likewise
+//!   produces a `Link`. This is a deliberate shape change (anchor
+//!   resolution), not information loss in user-visible terms: the
 //!   reference target survives as `Link.href`. But the typed
 //!   `ReferenceType` does *not* survive — `Link` carries only strings,
 //!   and consumers that want the classification back must re-infer it
@@ -62,6 +64,7 @@
 //! (#570 Phase 3b) — round-trips losslessly as of the #613 symmetry
 //! work-stream.
 
+pub mod anchoring;
 pub mod events;
 pub mod from_lex;
 pub mod nodes;

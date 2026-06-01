@@ -401,6 +401,7 @@ fn build_html_dom_with_splice(
             Event::StartVerbatim {
                 language,
                 subject,
+                subject_href,
                 parameters: _,
             } => {
                 current_heading = None;
@@ -408,11 +409,19 @@ fn build_html_dom_with_splice(
                 verbatim_language = language.clone();
                 verbatim_content.clear();
 
-                // Render subject as a caption before the code block
+                // Render subject as a caption before the code block. A reference
+                // line can anchor the subject (references-general.lex §2.3.2):
+                // when `subject_href` is set, the caption text is wrapped in a
+                // link to that target.
                 if let Some(subj) = subject {
                     let caption = create_element("div", vec![("class", "lex-verbatim-subject")]);
-                    let text = create_text(subj);
-                    caption.children.borrow_mut().push(text);
+                    if let Some(href) = subject_href {
+                        let anchor = create_element("a", vec![("href", href)]);
+                        anchor.children.borrow_mut().push(create_text(subj));
+                        caption.children.borrow_mut().push(anchor);
+                    } else {
+                        caption.children.borrow_mut().push(create_text(subj));
+                    }
                     current_parent.children.borrow_mut().push(caption);
                 }
             }
