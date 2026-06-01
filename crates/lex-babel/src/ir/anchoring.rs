@@ -94,25 +94,34 @@ pub(crate) fn apply_word_anchors(
             AnchorDirection::Preceding => {
                 if !wrap_preceding_word(&mut out, &word_anchor.word, &href) {
                     // Could not find the word in already-emitted output (e.g. it
-                    // sat inside a formatting span); emit a standalone link so
-                    // the destination is never lost.
+                    // sat inside a formatting span). Fall back to emitting the
+                    // original reference unchanged — the anchored word is still
+                    // present as plain text elsewhere, so a standalone link here
+                    // would duplicate the visible text. The serializer renders
+                    // the bare reference as a self-link of its own destination.
+                    out.push(convert(node));
+                }
+            }
+            // Following: the anchored word is the first word of the text after
+            // the reference. Compute the remainder of the following text node
+            // (first word removed) up front; if the following node isn't a
+            // splittable text node, fall back to emitting the original reference
+            // so the anchored word isn't duplicated. Otherwise emit the link,
+            // then the remainder text, and skip the consumed node.
+            AnchorDirection::Following => match consume_following_word(nodes, i, &word_anchor.word)
+            {
+                Some(consumed) => {
                     out.push(InlineContent::Link {
                         text: word_anchor.word.clone(),
                         href,
                     });
+                    if !consumed.remainder.is_empty() {
+                        out.push(InlineContent::Text(consumed.remainder));
+                    }
+                    skip = Some(consumed.index);
                 }
-            }
-            // Following: the anchored word is the first word of the text after
-            // the reference. Emit the link now, then replace the following text
-            // node with its remainder (first word removed) and skip it in the
-            // main loop so it isn't emitted twice.
-            AnchorDirection::Following => {
-                out.push(InlineContent::Link {
-                    text: word_anchor.word.clone(),
-                    href,
-                });
-                skip = consume_following_word(nodes, i, &word_anchor.word, &mut out);
-            }
+                None => out.push(convert(node)),
+            },
         }
     }
 
@@ -121,20 +130,19 @@ pub(crate) fn apply_word_anchors(
 
 /// Wrap the final word of the most recently emitted text node in a `Link`.
 ///
-/// Walks back over already-emitted `InlineContent`, finds the last `Text` node
-/// whose trailing word matches `word` (ignoring surrounding punctuation, which
-/// lex-core strips from the stored anchor word), and splits it so the prefix
-/// stays as text and the word becomes a `Link`. Returns `false` when no such
-/// text node exists.
+/// Walks back over already-emitted `InlineContent`, skipping non-text nodes
+/// (formatting spans, links from earlier anchors), and splits the first `Text`
+/// node — scanning from the end — whose trailing word matches `word` (ignoring
+/// surrounding punctuation, which lex-core strips from the stored anchor word).
+/// The prefix stays as text and the word becomes a `Link`. Returns `false` when
+/// no such text node exists, so the caller can fall back safely.
 fn wrap_preceding_word(out: &mut Vec<InlineContent>, word: &str, href: &str) -> bool {
     for idx in (0..out.len()).rev() {
         let InlineContent::Text(text) = &out[idx] else {
-            // Only split plain text. A formatting span can't be split here.
-            if matches!(out[idx], InlineContent::Link { .. }) {
-                // A previous reference already consumed text here; keep looking.
-                continue;
-            }
-            return false;
+            // Only plain text can be split. Skip non-text nodes (formatting
+            // spans, earlier links) and keep scanning back: an earlier text
+            // node may still hold the anchored word.
+            continue;
         };
         let trimmed_end = text.trim_end();
         if trimmed_end.is_empty() {
@@ -146,7 +154,9 @@ fn wrap_preceding_word(out: &mut Vec<InlineContent>, word: &str, href: &str) -> 
             None => ("", trimmed_end),
         };
         if strip_word_punct(last_word) != word {
-            return false;
+            // This text node's trailing word isn't the anchor; an earlier text
+            // node might still match, so keep scanning rather than giving up.
+            continue;
         }
 
         let prefix = prefix.to_string();
@@ -171,17 +181,30 @@ fn wrap_preceding_word(out: &mut Vec<InlineContent>, word: &str, href: &str) -> 
     false
 }
 
-/// Remove the first word of the text that immediately follows a first-on-line
-/// reference, pushing the remainder (the text after the anchored word) so the
-/// line reads `<link> rest…`. Returns the index of the node that was consumed,
-/// so the caller can skip re-emitting it; `None` if no matching following text
-/// node was found (the caller then leaves later nodes to be emitted normally).
+/// The result of consuming the first word out of a following text node: the
+/// index of the node that was consumed (so the caller can skip re-emitting it)
+/// and the remainder text that should follow the emitted link.
+struct ConsumedFollowing {
+    index: usize,
+    remainder: String,
+}
+
+/// Compute the remainder of the text that immediately follows a first-on-line
+/// reference once its first word (the anchored word) is removed, so the line
+/// reads `<link> rest…`. Returns the consumed node's index plus that remainder;
+/// `None` if no matching following text node was found (the caller then falls
+/// back to emitting the original reference).
+///
+/// The stored anchor word is punctuation-stripped, so the source first word may
+/// carry leading/trailing punctuation (`is,`). Leading punctuation is part of
+/// the matched word and dropped with it; **trailing** punctuation is preserved
+/// and prepended to the suffix so no characters are lost — e.g. `[url] is,
+/// indeed` keeps the `,` and renders `<link>is</link>, indeed`.
 fn consume_following_word(
     nodes: &[InlineNode],
     ref_index: usize,
     word: &str,
-    out: &mut Vec<InlineContent>,
-) -> Option<usize> {
+) -> Option<ConsumedFollowing> {
     let j = ref_index + 1;
     let InlineNode::Plain { text, .. } = nodes.get(j)? else {
         return None;
@@ -195,13 +218,21 @@ fn consume_following_word(
     if strip_word_punct(first_word) != word {
         return None;
     }
+    // The first word may carry trailing punctuation that is not part of the
+    // anchored word (e.g. `is,`). Recover it: everything after the matched word
+    // within `first_word` is trailing punctuation that must survive the drop.
+    let trailing_punct = match first_word.rfind(word) {
+        Some(pos) => &first_word[pos + word.len()..],
+        None => "",
+    };
     // Drop the anchored first word (and the whitespace that separated it from
-    // the reference); keep the suffix (which already starts with the space
-    // before the next word).
-    if !suffix.is_empty() {
-        out.push(InlineContent::Text(suffix.to_string()));
-    }
-    Some(j)
+    // the reference); keep any trailing punctuation, then the suffix (which
+    // already starts with the space before the next word).
+    let remainder = format!("{trailing_punct}{suffix}");
+    Some(ConsumedFollowing {
+        index: j,
+        remainder,
+    })
 }
 
 /// Strip leading/trailing non-alphanumeric characters from a word, matching the
@@ -343,6 +374,15 @@ mod tests {
         }
     }
 
+    /// Like `convert` but also handles `Code` inlines, for the fallback tests
+    /// that model an unsplittable inline preceding/following the reference.
+    fn convert_full(node: &InlineNode) -> InlineContent {
+        match node {
+            InlineNode::Code { text, .. } => InlineContent::Code(text.clone()),
+            other => convert(other),
+        }
+    }
+
     fn plain(text: &str) -> InlineNode {
         InlineNode::plain(text.to_string())
     }
@@ -473,6 +513,145 @@ mod tests {
                 },
                 InlineContent::Text(" later.".into()),
             ]
+        );
+    }
+
+    #[test]
+    fn following_word_keeps_trailing_punctuation() {
+        // "[https://x] is, indeed here" — the source first word is "is,".
+        // The anchored word is "is"; the trailing "," must survive on the
+        // remainder, so no characters are lost.
+        let nodes = vec![
+            reference(
+                "https://x",
+                ReferenceType::Url {
+                    target: "https://x".into(),
+                },
+                Some(WordAnchor {
+                    word: "is".into(),
+                    direction: AnchorDirection::Following,
+                }),
+            ),
+            plain(" is, indeed here"),
+        ];
+        let out = apply_word_anchors(&nodes, &convert);
+        assert_eq!(
+            out,
+            vec![
+                InlineContent::Link {
+                    text: "is".into(),
+                    href: "https://x".into(),
+                },
+                InlineContent::Text(", indeed here".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn preceding_word_in_earlier_text_node_is_found() {
+        // The anchored word "website" sits in an *earlier* text node, with a
+        // non-text node (a Link from a prior anchor) and an empty/non-matching
+        // text node in between. The backward scan must skip those and still wrap
+        // "website", rather than aborting at the first non-text node or the
+        // first text node whose trailing word doesn't match.
+        let mut out = vec![
+            InlineContent::Text("the project website".into()),
+            InlineContent::Link {
+                text: "prior".into(),
+                href: "https://prior".into(),
+            },
+            InlineContent::Text("".into()),
+        ];
+        let found = wrap_preceding_word(&mut out, "website", "https://lex.ing");
+        assert!(found, "must locate the word in an earlier text node");
+        assert_eq!(
+            out,
+            vec![
+                InlineContent::Text("the project ".into()),
+                InlineContent::Link {
+                    text: "website".into(),
+                    href: "https://lex.ing".into(),
+                },
+                InlineContent::Link {
+                    text: "prior".into(),
+                    href: "https://prior".into(),
+                },
+                InlineContent::Text("".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn preceding_word_not_found_falls_back_to_reference() {
+        // The anchored word can't be located in already-emitted output (it sat
+        // inside a formatting span the splitter can't break). Rather than emit a
+        // standalone Link that duplicates the visible word, fall back to the
+        // original Reference.
+        let nodes = vec![
+            // Model the "unsplittable" preceding inline with a Code span: it
+            // carries the anchor word but isn't a Text node the splitter can
+            // break, so wrap_preceding_word can't find it.
+            InlineNode::code("website".into()),
+            reference(
+                "https://lex.ing",
+                ReferenceType::Url {
+                    target: "https://lex.ing".into(),
+                },
+                Some(WordAnchor {
+                    word: "website".into(),
+                    direction: AnchorDirection::Preceding,
+                }),
+            ),
+        ];
+        let out = apply_word_anchors(&nodes, &convert_full);
+        assert_eq!(
+            out,
+            vec![
+                InlineContent::Code("website".into()),
+                // Original reference preserved — not a standalone Link.
+                InlineContent::Reference {
+                    raw: "https://lex.ing".into(),
+                    kind: ReferenceType::Url {
+                        target: "https://lex.ing".into(),
+                    },
+                },
+            ],
+            "unfound preceding anchor must fall back to the original reference"
+        );
+    }
+
+    #[test]
+    fn following_non_text_node_falls_back_to_reference() {
+        // The node after a first-on-line reference is not plain text (here a
+        // Code span), so the first word can't be consumed. The fallback emits
+        // the original reference, not a standalone Link that would leave the
+        // following word rendered twice.
+        let nodes = vec![
+            reference(
+                "https://lex.ing",
+                ReferenceType::Url {
+                    target: "https://lex.ing".into(),
+                },
+                Some(WordAnchor {
+                    word: "code".into(),
+                    direction: AnchorDirection::Following,
+                }),
+            ),
+            InlineNode::code("code".into()),
+        ];
+        let out = apply_word_anchors(&nodes, &convert_full);
+        assert_eq!(
+            out,
+            vec![
+                InlineContent::Reference {
+                    raw: "https://lex.ing".into(),
+                    kind: ReferenceType::Url {
+                        target: "https://lex.ing".into(),
+                    },
+                },
+                InlineContent::Code("code".into()),
+            ],
+            "non-text following node must fall back to the original reference"
         );
     }
 

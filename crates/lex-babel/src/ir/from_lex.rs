@@ -113,52 +113,219 @@ pub fn from_lex_document(doc: &LexDocument, registry: &Registry) -> Document {
     }
 }
 
-/// Insert standalone self-link paragraphs into the top-level child stream at the
-/// position their source reference falls, by source order.
+/// Insert standalone self-link paragraphs into the child stream at the position
+/// their source reference falls, by source order, recursing into the nested
+/// container that actually contains each self-link.
 ///
 /// `lex_children` is the original lex-AST child list (carrying source spans);
-/// `ir_children` is the already-converted IR list. A self-link is positioned
-/// just before the first top-level element whose source starts after the
-/// self-link's reference; self-links after every element append at the end.
+/// `ir_children` is the already-converted IR list. A self-link reference line
+/// can appear at the top level *or* nested inside a container (session body,
+/// list item, definition description, annotation body). Each self-link is placed
+/// relative to its own source span:
 ///
-/// The two lists are not index-aligned (attached annotations expand into extra
-/// leading IR nodes), so positioning is anchored on the count of structural
-/// (non-blank) lex children that precede each IR insertion point. When that
-/// count would exceed the IR list length we append rather than risk an
-/// out-of-bounds insert — a self-link is never dropped.
+/// - If it falls inside a structural element's source span, recurse into that
+///   element's IR child container and splice it there.
+/// - Otherwise it is a sibling at this level: insert it just before the first
+///   element whose source starts after the self-link.
+///
+/// The two lists are not index-aligned: attached annotations expand into extra
+/// leading IR nodes (each structural element converts to
+/// `attached_annotations(item).len() + 1` IR nodes). Sibling positioning maps the
+/// structural-element slot to the real IR index by summing that expansion over
+/// the preceding structural elements, so a self-link never lands between an
+/// element and its own attached annotations.
 fn splice_self_links(
     ir_children: &mut Vec<DocNode>,
     lex_children: &[LexContentItem],
     anchors: &AnchorIndex,
 ) {
-    use lex_core::lex::ast::traits::AstNode;
-
     let self_links = anchors.self_links_in(0..usize::MAX);
     if self_links.is_empty() {
         return;
     }
+    splice_self_links_into(ir_children, lex_children, &self_links);
+}
 
-    // Source start offset of each top-level structural lex element, in order.
-    let element_starts: Vec<usize> = lex_children
+/// Recursive worker for [`splice_self_links`]. Distributes `self_links` (those
+/// whose span falls inside a nested container recurse into it; the rest splice
+/// at this level) against the `(lex_children, ir_children)` pair produced by
+/// [`convert_children`].
+fn splice_self_links_into(
+    ir_children: &mut Vec<DocNode>,
+    lex_children: &[LexContentItem],
+    self_links: &[&super::anchoring::SelfLink],
+) {
+    use lex_core::lex::ast::traits::AstNode;
+
+    // Walk the structural (non-blank) lex children in order, tracking the IR
+    // index of each element's *own* node (after its leading annotation nodes).
+    // Record, per structural element, its source span and IR node index, so we
+    // can both recurse into containers and map sibling slots to IR indices.
+    struct Slot {
+        span: std::ops::Range<usize>,
+        ir_index: usize,
+    }
+    let mut slots: Vec<Slot> = Vec::new();
+    let mut ir_cursor = 0usize;
+    for item in lex_children
         .iter()
         .filter(|c| !matches!(c, LexContentItem::BlankLineGroup(_)))
-        .map(|c| c.range().span.start)
+    {
+        let anno_count = attached_annotations(item).len();
+        let ir_index = ir_cursor + anno_count;
+        slots.push(Slot {
+            span: item.range().span.clone(),
+            ir_index,
+        });
+        ir_cursor = ir_index + 1;
+    }
+
+    // Iterate structural items in parallel with `slots` for recursion.
+    let structural: Vec<&LexContentItem> = lex_children
+        .iter()
+        .filter(|c| !matches!(c, LexContentItem::BlankLineGroup(_)))
         .collect();
 
-    // For each self-link (descending source order so earlier inserts don't shift
-    // later indices), find how many elements precede it and insert there.
-    let mut sorted: Vec<&super::anchoring::SelfLink> = self_links;
-    sorted.sort_by_key(|s| std::cmp::Reverse(s.span.start));
-    for sl in sorted {
-        let slot = element_starts
+    // Partition the self-links: those contained in a structural element recurse
+    // into it; the rest stay as siblings at this level. `nested[si]` collects
+    // the self-links that fall inside the `si`-th structural element.
+    let mut siblings: Vec<&super::anchoring::SelfLink> = Vec::new();
+    let mut nested: Vec<Vec<&super::anchoring::SelfLink>> = vec![Vec::new(); structural.len()];
+
+    for &sl in self_links {
+        // Find the structural element whose span strictly contains the self-link
+        // (start < sl.start AND sl.start < end) and that has a recursable child
+        // stream. A self-link sits *inside* a container when its bracket falls
+        // within that container's source span.
+        let container = structural.iter().enumerate().find(|(_, item)| {
+            let span = item.range().span.clone();
+            span.start < sl.span.start && sl.span.start < span.end && has_recursable_children(item)
+        });
+        match container {
+            Some((si, _item)) => nested[si].push(sl),
+            None => siblings.push(sl),
+        }
+    }
+
+    // Recurse into each container that received nested self-links.
+    for (si, links) in nested.iter().enumerate() {
+        if links.is_empty() {
+            continue;
+        }
+        let item = structural[si];
+        let ir_index = slots[si].ir_index;
+        recurse_into_container(&mut ir_children[ir_index], item, links);
+    }
+
+    // Splice the sibling self-links at this level (descending source order so
+    // earlier inserts don't shift later indices).
+    let mut siblings_sorted = siblings;
+    siblings_sorted.sort_by_key(|s| std::cmp::Reverse(s.span.start));
+    for sl in siblings_sorted {
+        // Map the sibling to the IR index just after the last structural element
+        // that starts before it. `slots` is in source order, so count the
+        // elements before the self-link and take the IR index following the last
+        // one (or 0 when the self-link precedes every element).
+        let preceding = slots
             .iter()
-            .take_while(|&&start| start < sl.span.start)
+            .filter(|s| s.span.start < sl.span.start)
             .count();
+        let ir_index = if preceding == 0 {
+            0
+        } else {
+            slots[preceding - 1].ir_index + 1
+        };
         let node = self_link_node(sl);
-        if slot <= ir_children.len() {
-            ir_children.insert(slot, node);
+        if ir_index <= ir_children.len() {
+            ir_children.insert(ir_index, node);
         } else {
             ir_children.push(node);
+        }
+    }
+}
+
+/// True when `item` is a container whose IR counterpart holds a child `DocNode`
+/// stream a nested self-link could be spliced into.
+fn has_recursable_children(item: &LexContentItem) -> bool {
+    matches!(
+        item,
+        LexContentItem::Session(_)
+            | LexContentItem::List(_)
+            | LexContentItem::ListItem(_)
+            | LexContentItem::Definition(_)
+            | LexContentItem::Annotation(_)
+    )
+}
+
+/// Recurse into a container IR node, splicing the `links` that fall within it.
+///
+/// Pairs the lex container's child list with the matching IR child `Vec` and
+/// recurses through [`splice_self_links_into`]. A `List` has no direct child
+/// stream of its own — its self-links live inside one of its `ListItem`s — so it
+/// dispatches to the list item whose span contains each link.
+fn recurse_into_container(
+    ir_node: &mut DocNode,
+    lex_item: &LexContentItem,
+    links: &[&super::anchoring::SelfLink],
+) {
+    use lex_core::lex::ast::traits::AstNode;
+
+    match (ir_node, lex_item) {
+        (DocNode::Heading(h), LexContentItem::Session(s)) => {
+            splice_self_links_into(&mut h.children, &s.children, links);
+        }
+        (DocNode::ListItem(li), LexContentItem::ListItem(lex_li)) => {
+            splice_self_links_into(&mut li.children, &lex_li.children, links);
+        }
+        (DocNode::Definition(d), LexContentItem::Definition(lex_d)) => {
+            splice_self_links_into(&mut d.description, &lex_d.children, links);
+        }
+        (DocNode::Annotation(a), LexContentItem::Annotation(lex_a)) => {
+            splice_self_links_into(&mut a.content, &lex_a.children, links);
+        }
+        (DocNode::List(list), LexContentItem::List(lex_list)) => {
+            // A list has no direct child stream — its self-links live inside one
+            // of its items. A reference line indented under an item is removed
+            // from the source, so its byte offset can land *past* that item's
+            // recorded span end (the span reflects only the surviving tokens) yet
+            // before the next item. Strict containment would miss it, so assign
+            // each link to the item it *trails*: the item with the greatest start
+            // offset still less than the link's. Items are in source order.
+            let lex_items: Vec<&LexContentItem> = lex_list
+                .items
+                .iter()
+                .filter(|c| matches!(c, LexContentItem::ListItem(_)))
+                .collect();
+            let item_starts: Vec<usize> = lex_items.iter().map(|c| c.range().span.start).collect();
+            // Bucket links by trailing-item index.
+            let mut buckets: Vec<Vec<&super::anchoring::SelfLink>> =
+                vec![Vec::new(); lex_items.len()];
+            for &sl in links {
+                let target = item_starts.iter().rposition(|&start| start < sl.span.start);
+                if let Some(ti) = target {
+                    buckets[ti].push(sl);
+                }
+                // A link before the first item is unexpected (it would not be
+                // inside the list span); drop-free fallback: it stays unplaced,
+                // which can't happen given the outer containment check.
+            }
+            for (ir_li, (lex_li, bucket)) in list
+                .items
+                .iter_mut()
+                .zip(lex_items.iter().zip(buckets.iter()))
+            {
+                if bucket.is_empty() {
+                    continue;
+                }
+                if let LexContentItem::ListItem(lex_li) = lex_li {
+                    splice_self_links_into(&mut ir_li.children, &lex_li.children, bucket);
+                }
+            }
+        }
+        _ => {
+            // Shape mismatch (should not happen given has_recursable_children).
+            // Leave the links unplaced rather than panic; correctness-preserving
+            // fallback per the PR's nested-placement note.
         }
     }
 }
@@ -209,13 +376,10 @@ fn convert_children(items: &[LexContentItem], level: usize, ctx: &ConvCtx) -> Ve
         .collect()
 }
 
-/// Extracts annotations attached to a content item and converts them to IR nodes
-fn extract_attached_annotations(
-    item: &LexContentItem,
-    level: usize,
-    ctx: &ConvCtx,
-) -> Vec<DocNode> {
-    let annotations = match item {
+/// Annotations attached to a content item (the same set
+/// [`extract_attached_annotations`] converts to leading IR nodes).
+fn attached_annotations(item: &LexContentItem) -> &[LexAnnotation] {
+    match item {
         LexContentItem::Session(session) => session.annotations(),
         LexContentItem::Paragraph(paragraph) => paragraph.annotations(),
         LexContentItem::List(list) => list.annotations(),
@@ -224,9 +388,16 @@ fn extract_attached_annotations(
         LexContentItem::VerbatimBlock(verbatim) => verbatim.annotations(),
         LexContentItem::Table(table) => table.annotations(),
         _ => &[],
-    };
+    }
+}
 
-    annotations
+/// Extracts annotations attached to a content item and converts them to IR nodes
+fn extract_attached_annotations(
+    item: &LexContentItem,
+    level: usize,
+    ctx: &ConvCtx,
+) -> Vec<DocNode> {
+    attached_annotations(item)
         .iter()
         .map(|anno| from_lex_annotation(anno, level, ctx))
         .collect()
@@ -1291,5 +1462,104 @@ mod tests {
             RenderOut::String { string } => assert_eq!(string, "author: \"Alice\"\n"),
             other => panic!("expected String, got {other:?}"),
         }
+    }
+
+    // ========================================================================
+    // SELF-LINK SPLICING (references-general.lex §2.3.2 — #720 fixups #5)
+    // ========================================================================
+
+    use lex_core::lex::transforms::standard::STRING_TO_AST;
+
+    /// Flatten an IR paragraph's first inline into its link href, if any.
+    fn paragraph_link_href(node: &DocNode) -> Option<&str> {
+        if let DocNode::Paragraph(p) = node {
+            if let Some(InlineContent::Link { href, .. }) = p.content.first() {
+                return Some(href.as_str());
+            }
+        }
+        None
+    }
+
+    /// #5(a): a self-link after a paragraph that itself carries an attached
+    /// annotation must splice *after* the paragraph (and its expanded annotation
+    /// IR node), not between them. With the old structural-slot indexing the
+    /// self-link landed one slot too early and split the paragraph from its
+    /// annotation.
+    #[test]
+    fn self_link_after_paragraph_with_attached_annotation_lands_after_it() {
+        // The annotation `:: note ::` attaches to "Anchored paragraph." (no blank
+        // line between them); the self-link follows after a blank line.
+        let src = "First paragraph.\n\n:: note ::\n    A side note.\nAnchored paragraph.\n\n[https://after.example]\n\nTrailing paragraph.\n";
+        let doc = STRING_TO_AST.run(src.to_string()).expect("parse ok");
+        let ir = from_lex_document(&doc, test_registry());
+
+        // Locate the self-link paragraph.
+        let sl_pos = ir
+            .children
+            .iter()
+            .position(|c| paragraph_link_href(c) == Some("https://after.example"))
+            .expect("self-link paragraph must be present");
+
+        // The node immediately before the self-link must be the anchored
+        // paragraph's own content ("Anchored paragraph."), proving the link did
+        // not slip between the annotation and the paragraph it annotates.
+        let before = &ir.children[sl_pos - 1];
+        let before_is_anchored_para = matches!(
+            before,
+            DocNode::Paragraph(p) if p.content.iter().any(|c| matches!(c, InlineContent::Text(t) if t.contains("Anchored paragraph")))
+        );
+        assert!(
+            before_is_anchored_para,
+            "self-link must follow the annotated paragraph, not split it from its annotation; got {before:?}"
+        );
+
+        // And the annotation IR node still precedes that paragraph.
+        let annotation_before_para = ir.children[..sl_pos]
+            .iter()
+            .any(|c| matches!(c, DocNode::Annotation(a) if a.label == "note"));
+        assert!(
+            annotation_before_para,
+            "the attached annotation must remain ahead of its paragraph"
+        );
+    }
+
+    /// #5(b): a self-link nested inside a list item's body must be spliced into
+    /// that list item's children, not at the document top level.
+    #[test]
+    fn self_link_nested_in_list_item_lands_in_that_item() {
+        let src =
+            "Intro.\n\n- First item\n    Nested body.\n\n    [https://nested.example]\n- Second item\n\nDone.\n";
+        let doc = STRING_TO_AST.run(src.to_string()).expect("parse ok");
+        let ir = from_lex_document(&doc, test_registry());
+
+        // The self-link must NOT appear at the document top level.
+        let at_top = ir
+            .children
+            .iter()
+            .any(|c| paragraph_link_href(c) == Some("https://nested.example"));
+        assert!(
+            !at_top,
+            "nested self-link must not be spliced at the document top level"
+        );
+
+        // It must appear inside the first list item's children.
+        let list = ir
+            .children
+            .iter()
+            .find_map(|c| match c {
+                DocNode::List(l) => Some(l),
+                _ => None,
+            })
+            .expect("a list must be present");
+        let first_item = list.items.first().expect("list has a first item");
+        let nested = first_item
+            .children
+            .iter()
+            .any(|c| paragraph_link_href(c) == Some("https://nested.example"));
+        assert!(
+            nested,
+            "nested self-link must be spliced into the first list item's children; got {:?}",
+            first_item.children
+        );
     }
 }
