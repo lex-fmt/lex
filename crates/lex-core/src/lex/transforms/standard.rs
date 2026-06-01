@@ -111,23 +111,40 @@ pub static STRING_TO_AST: Lazy<AstTransform> = Lazy::new(|| {
     })
 });
 
-/// Run the full source→AST pipeline with a chosen
-/// [`NormalizeLabels`](crate::lex::assembling::stages::NormalizeLabels)
-/// mode. The standard pipeline ([`STRING_TO_AST`]) is the strict-mode
-/// instantiation of this; the LSP's permissive parse path
-/// ([`crate::lex::parsing::process_full_permissive`]) is the
-/// permissive-mode instantiation.
+/// Shared source→`Document` front-end, **before** annotation attachment.
 ///
-/// Keeping both modes routed through a single pipeline function
-/// avoids the maintenance hazard of forking the lexing / parsing /
-/// assembling sequence — adding a new stage or reordering existing
-/// ones only needs to happen here.
-pub fn run_string_to_ast(
+/// This is the single, canonical parser front-end. It owns every stage
+/// from raw source to an [`AttachRoot`]-assembled [`Document`] whose
+/// labelled annotations are still standalone children (annotation
+/// *attachment* — folding them into metadata — happens downstream).
+///
+/// Both entry points share this:
+/// - [`run_string_to_ast`] (the standard / LSP pipeline) calls it, then
+///   attaches annotations, normalizes labels, applies table config, and
+///   copies the prepass results onto the document.
+/// - the include resolver ([`crate::lex::includes::resolve_from_source`])
+///   calls it, then splices included subtrees into the still-detached
+///   children, defers attachment until after the splice, and uses
+///   permissive label mode.
+///
+/// Keeping both behind one function is the whole point of de-duplication
+/// (lex#722): the reference-line pre-pass — and any future front-end
+/// stage — lives in exactly one place and can never drift between the
+/// direct-parse path and the include-resolver path again.
+///
+/// Returns the assembled (pre-attachment) [`Document`] together with the
+/// [`AnchoringPrepass`](crate::lex::anchoring::AnchoringPrepass) so the
+/// caller can copy `reference_lines` / `diagnostics` onto the final
+/// document at whatever point in its tail suits it.
+pub(crate) fn parse_to_attached_root(
     s: String,
-    label_mode: crate::lex::assembling::stages::normalize_labels::Mode,
-) -> Result<crate::lex::ast::Document, crate::lex::transforms::TransformError> {
-    use crate::lex::assembling::stages::normalize_labels::Mode;
-
+) -> Result<
+    (
+        crate::lex::ast::Document,
+        crate::lex::anchoring::AnchoringPrepass,
+    ),
+    crate::lex::transforms::TransformError,
+> {
     // Ensure source ends with newline (required for parsing)
     let source = if !s.is_empty() && !s.ends_with('\n') {
         format!("{s}\n")
@@ -176,8 +193,33 @@ pub fn run_string_to_ast(
         title.content.ensure_inline_parsed_with_anchors();
     }
 
-    // Attach root session and title to a document
-    let mut doc = AttachRoot::new().run(output)?;
+    // Attach root session and title to a document (annotations stay as
+    // standalone children — the caller decides when to attach them).
+    let doc = AttachRoot::new().run(output)?;
+
+    Ok((doc, prepass))
+}
+
+/// Run the full source→AST pipeline with a chosen
+/// [`NormalizeLabels`](crate::lex::assembling::stages::NormalizeLabels)
+/// mode. The standard pipeline ([`STRING_TO_AST`]) is the strict-mode
+/// instantiation of this; the LSP's permissive parse path
+/// ([`crate::lex::parsing::process_full_permissive`]) is the
+/// permissive-mode instantiation.
+///
+/// Keeping both modes routed through a single pipeline function
+/// avoids the maintenance hazard of forking the lexing / parsing /
+/// assembling sequence — adding a new stage or reordering existing
+/// ones only needs to happen here.
+pub fn run_string_to_ast(
+    s: String,
+    label_mode: crate::lex::assembling::stages::normalize_labels::Mode,
+) -> Result<crate::lex::ast::Document, crate::lex::transforms::TransformError> {
+    use crate::lex::assembling::stages::normalize_labels::Mode;
+
+    // Shared front-end: source → assembled Document (annotations still
+    // standalone) + reference-line pre-pass results.
+    let (mut doc, prepass) = parse_to_attached_root(s)?;
 
     // Attach annotations as metadata
     doc = AttachAnnotations::new().run(doc)?;
