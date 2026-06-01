@@ -28,17 +28,13 @@
 //! and rewrite the source in reverse byte order. No re-parsing, no
 //! regex heuristics, no ambiguity.
 
-use crate::lex::assembling::stages::{
-    ApplyTableConfig, AttachAnnotations, AttachRoot, NormalizeLabels,
-};
+use crate::lex::assembling::stages::normalize_labels::Mode;
 use crate::lex::ast::elements::annotation::Annotation;
 use crate::lex::ast::elements::content_item::ContentItem;
 use crate::lex::ast::elements::label::Label;
 use crate::lex::ast::elements::verbatim::Verbatim;
 use crate::lex::ast::Document;
-use crate::lex::transforms::stages::ParseInlines;
-use crate::lex::transforms::standard::LEXING;
-use crate::lex::transforms::Runnable;
+use crate::lex::transforms::standard::run_string_to_ast;
 
 /// Mapping of legacy label inputs to the canonical they migrate to.
 /// Local to the migration tool — the parse-time `NormalizeLabels` no
@@ -113,11 +109,16 @@ impl MigrationOutcome {
 /// from the parser are ignored; only hard parse errors abort.
 pub fn migrate_labels_in_source(src: &str) -> Result<MigrationOutcome, MigrationError> {
     // Strict-mode parse rejects legacy `doc.*` and bare non-shortcuts —
-    // exactly the inputs the migration tool needs to rewrite. Run a
-    // permissive pipeline so legacy spellings survive into the AST,
-    // then walk it to map source spans onto the rewrite table.
-    let doc = parse_permissive(src).map_err(|e| MigrationError::ParseFailed {
-        message: e.to_string(),
+    // exactly the inputs the migration tool needs to rewrite. Run the
+    // canonical pipeline in permissive mode so legacy spellings survive
+    // into the AST, then walk it to map source spans onto the rewrite
+    // table. Routing through `run_string_to_ast` (rather than a local
+    // copy of the stage sequence) keeps the migration parse in lockstep
+    // with every other parse path — see #724.
+    let doc = run_string_to_ast(src.to_string(), Mode::Permissive).map_err(|e| {
+        MigrationError::ParseFailed {
+            message: e.to_string(),
+        }
     })?;
 
     let mut sites = Vec::new();
@@ -128,35 +129,6 @@ pub fn migrate_labels_in_source(src: &str) -> Result<MigrationOutcome, Migration
         rewritten,
         migrations: sites,
     })
-}
-
-/// Run the parse + assembly stages with NormalizeLabels in permissive
-/// mode so legacy label spellings (`doc.*`, bare non-shortcut metadata)
-/// flow through unchanged. Mirrors `STRING_TO_AST` exactly except for
-/// the NormalizeLabels constructor.
-fn parse_permissive(src: &str) -> Result<Document, crate::lex::transforms::TransformError> {
-    let source = if !src.is_empty() && !src.ends_with('\n') {
-        format!("{src}\n")
-    } else {
-        src.to_string()
-    };
-    let tokens = LEXING.run(source.clone())?;
-    let mut output =
-        crate::lex::parsing::engine::parse_from_flat_tokens(tokens, &source).map_err(|e| {
-            crate::lex::transforms::TransformError::StageFailed {
-                stage: "Parser".to_string(),
-                message: e.to_string(),
-            }
-        })?;
-    output.root = ParseInlines::new().run(output.root)?;
-    if let Some(ref mut title) = output.title {
-        title.content.ensure_inline_parsed();
-    }
-    let mut doc = AttachRoot::new().run(output)?;
-    doc = AttachAnnotations::new().run(doc)?;
-    doc = NormalizeLabels::permissive().run(doc)?;
-    doc = ApplyTableConfig::new().run(doc)?;
-    Ok(doc)
 }
 
 /// Errors surfaced by [`migrate_labels_in_source`].
@@ -383,6 +355,37 @@ mod tests {
                 out.rewritten
             );
         }
+    }
+
+    #[test]
+    fn reference_line_document_migrates_through_canonical_pipeline() {
+        // Regression for #724 (follow-up to #722). `migrate-labels` used
+        // to run a hand-rolled copy of the parser front-end that lacked
+        // the reference-line pre-pass, so a whole-element reference line
+        // (`[#2]` on its own line) mis-parsed the surrounding structure
+        // — the list collapsed into a paragraph. The migration now
+        // routes through the canonical `run_string_to_ast(_, Permissive)`,
+        // so reference-line documents parse the same as every other path.
+        //
+        // The document combines a whole-element reference line with a
+        // legacy `:: doc.image ::` annotation. Migration must still find
+        // and rewrite the legacy label, and must leave the reference line
+        // untouched in the output.
+        let src = "- Apple\n[#2]\n- Banana\n\n:: doc.image :: photo.png\n";
+        let out = migrate_labels_in_source(src).expect("migrate ok");
+
+        assert!(out.is_modified(), "legacy doc.image must migrate");
+        assert_eq!(out.migrations.len(), 1);
+        assert_eq!(out.migrations[0].from, "doc.image");
+        assert_eq!(out.migrations[0].to, "image");
+        // Reference line preserved verbatim; label rewritten in place.
+        assert!(
+            out.rewritten.contains("[#2]"),
+            "reference line must survive migration verbatim, got: {}",
+            out.rewritten
+        );
+        assert!(out.rewritten.contains(":: image :: photo.png"));
+        assert!(!out.rewritten.contains(":: doc.image ::"));
     }
 
     #[test]
