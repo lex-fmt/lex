@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+## 0.16.0 - 2026-06-02
+
 ### Fixed — whole-element reference-line anchors render on the default `lexd <file> --to <fmt>` path ([#722](https://github.com/lex-fmt/lex/issues/722))
 
 Whole-element reference-line anchors (the `[#id]`-on-its-own-line form) were silently dropped on the default file-convert path, which routes through the include resolver even when a file has no includes. The resolver used a hand-rolled copy of the source→AST front-end that never ran the reference-line pre-pass, so the list collapsed into a self-linking paragraph. The two front-ends are now unified into a single `parse_to_attached_root` stage that both the standard pipeline and the include resolver call, so the pre-pass (and any future front-end stage) lives in exactly one place. Entry-file reference lines now anchor correctly; reference lines authored inside included files are not yet propagated through the wire codec (dropped rather than emitted with a wrong range — a documented follow-up).
