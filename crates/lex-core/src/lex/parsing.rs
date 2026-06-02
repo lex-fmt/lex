@@ -135,7 +135,7 @@ pub fn parse_document(source: &str) -> ProcessResult {
 /// with `Mode::Permissive` so strict + permissive parses share a
 /// single pipeline definition — no risk of the LSP parsing
 /// differently from `lexd format` when the pipeline grows new stages.
-pub fn process_full_permissive(source: &str) -> ProcessResult {
+pub fn parse_document_permissive(source: &str) -> ProcessResult {
     use crate::lex::assembling::stages::normalize_labels::Mode;
     use crate::lex::transforms::standard::run_string_to_ast;
     run_string_to_ast(source.to_string(), Mode::Permissive).map_err(|e| e.to_string())

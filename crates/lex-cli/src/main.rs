@@ -673,7 +673,7 @@ fn main() {
 /// - `2`: I/O failure (file not found) or fatal parse error.
 fn handle_check_labels_command(sub: &ArgMatches) -> i32 {
     use lex_analysis::diagnostics::{analyze, DiagnosticKind};
-    use lex_core::lex::parsing::process_full_permissive;
+    use lex_core::lex::parsing::parse_document_permissive;
 
     let path: PathBuf = sub
         .get_one::<String>("path")
@@ -688,7 +688,7 @@ fn handle_check_labels_command(sub: &ArgMatches) -> i32 {
         }
     };
 
-    let document = match process_full_permissive(&source) {
+    let document = match parse_document_permissive(&source) {
         Ok(doc) => doc,
         Err(e) => {
             eprintln!(

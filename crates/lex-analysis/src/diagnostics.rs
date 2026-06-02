@@ -692,11 +692,11 @@ fn compute_row_widths(rows: &[&TableRow]) -> Vec<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lex_core::lex::parsing::process_full_permissive;
+    use lex_core::lex::parsing::parse_document_permissive;
     use lex_core::lex::testing::lexplore::Lexplore;
 
     fn unclosed_annotation_diags(source: &str) -> Vec<AnalysisDiagnostic> {
-        let doc = process_full_permissive(source).expect("permissive parse");
+        let doc = parse_document_permissive(source).expect("permissive parse");
         analyze(&doc)
             .into_iter()
             .filter(|d| d.kind == DiagnosticKind::UnclosedAnnotation)
@@ -745,7 +745,7 @@ mod tests {
     }
 
     fn label_diags(source: &str) -> Vec<AnalysisDiagnostic> {
-        let doc = process_full_permissive(source).expect("permissive parse");
+        let doc = parse_document_permissive(source).expect("permissive parse");
         analyze(&doc)
             .into_iter()
             .filter(|d| {

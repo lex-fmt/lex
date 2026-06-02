@@ -843,7 +843,7 @@ mod tests {
     }
 
     fn parse_permissive(source: &str) -> Document {
-        lex_core::lex::parsing::process_full_permissive(source).expect("permissive parse")
+        lex_core::lex::parsing::parse_document_permissive(source).expect("permissive parse")
     }
 
     #[test]

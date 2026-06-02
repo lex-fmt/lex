@@ -221,7 +221,7 @@ impl DocumentStore {
         // the diagnostic surface; without permissive parse here, a
         // single forbidden label would blank out every LSP feature
         // for the document.
-        let parsed = match parsing::process_full_permissive(&text) {
+        let parsed = match parsing::parse_document_permissive(&text) {
             Ok(document) => Some(DocumentEntry {
                 document: Arc::new(document),
                 text: Arc::new(text),
