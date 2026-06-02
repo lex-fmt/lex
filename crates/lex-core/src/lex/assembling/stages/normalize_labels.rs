@@ -717,8 +717,8 @@ mod tests {
         use crate::lex::transforms::standard::LEXING;
         let source = format!("{src}\n");
         let tokens = LEXING.run(source.clone()).expect("tokens");
-        let grouped_tokens =
-            crate::lex::lexing::transformations::LineTokenGroupingMapper::new().map(tokens);
+        let mut mapper = crate::lex::lexing::transformations::LineTokenGroupingMapper::new();
+        let grouped_tokens = mapper.map(tokens);
         let mut output =
             crate::lex::parsing::engine::parse_from_grouped_stream(grouped_tokens, &source)
                 .expect("parse");

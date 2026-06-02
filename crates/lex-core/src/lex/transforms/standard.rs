@@ -178,8 +178,8 @@ pub(crate) fn parse_to_attached_root(
     // Parse to AST against the original source (keeps location tracking in
     // original-source coordinates). Group the flat tokens into lines before
     // handing them to the main grouped-stream entry point.
-    let grouped_tokens =
-        crate::lex::lexing::transformations::LineTokenGroupingMapper::new().map(tokens);
+    let mut mapper = crate::lex::lexing::transformations::LineTokenGroupingMapper::new();
+    let grouped_tokens = mapper.map(tokens);
     let mut output =
         crate::lex::parsing::engine::parse_from_grouped_stream(grouped_tokens, &source).map_err(
             |e| crate::lex::transforms::TransformError::StageFailed {

@@ -23,7 +23,8 @@ fn parse_annotation_without_attachment(source: &str) -> Result<Document, String>
         source.to_string()
     };
     let tokens = LEXING.run(source.clone()).map_err(|e| e.to_string())?;
-    let grouped_tokens = LineTokenGroupingMapper::new().map(tokens);
+    let mut mapper = LineTokenGroupingMapper::new();
+    let grouped_tokens = mapper.map(tokens);
     let root = parse_from_grouped_stream(grouped_tokens, &source)?;
     AttachRoot::new().run(root).map_err(|e| e.to_string())
 }
