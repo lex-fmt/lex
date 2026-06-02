@@ -38,11 +38,13 @@
 //! # Strict vs Permissive
 //!
 //! The standard parse pipeline ([`STRING_TO_AST`](crate::lex::transforms::standard::STRING_TO_AST))
-//! uses strict mode: `doc.*` (reserved-forbidden) and unrecognized
-//! bare labels surface as `TransformError`s, which propagate out as
-//! parse errors. The migration tool ([`crate::lex::migrate`]) uses
-//! permissive mode so it can parse legacy `doc.*` source and rewrite
-//! it before the source reaches a strict-mode parse.
+//! uses strict mode: the two policy-violating cases — `doc.*`
+//! (reserved-forbidden, see §4.1) and unknown `lex.*` literals (not a
+//! registered canonical) — surface as `TransformError`s and propagate
+//! out as parse errors. Bare unknowns are *not* rejected; they resolve
+//! to [`LabelForm::Community`]. Permissive mode instead keeps the
+//! policy-violating labels in the AST so the LSP and diagnostics can
+//! report on them without failing the parse mid-edit.
 
 use crate::lex::ast::elements::annotation::Annotation;
 use crate::lex::ast::elements::content_item::ContentItem;
