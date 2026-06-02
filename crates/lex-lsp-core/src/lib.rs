@@ -8,5 +8,6 @@ pub mod available_actions;
 pub mod document_links;
 pub mod footnotes;
 pub mod formatting;
+pub mod prepare_paste;
 pub mod table_format;
 pub mod table_navigation;
