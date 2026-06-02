@@ -1,4 +1,4 @@
-//! Output format implementations for AST and token serialization
+//! Output format implementations for AST serialization
 //!
 //! This module contains different format implementations for serializing
 //! AST Documents to various output formats (tag, treeviz).
