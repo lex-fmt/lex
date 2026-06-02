@@ -55,7 +55,7 @@ Time to read a file, parse it, and emit HTML.
 
 ### 2.3. Raw Parser Throughput & Scaling
 
-Full in-memory parse cost (no I/O), comparing `lex_core::lex::parsing::parse_document` against `comrak::parse_document`. Note that `lex_core::…::parse_document` is an alias for `process_full` and runs Lex's complete pipeline (lex → analysis → build → inline parse → assemble), not just AST construction; `comrak::parse_document` is comrak's equivalent end-to-end parse. The numbers below charge each parser for everything its public entry point does, which is what library consumers actually pay.
+Full in-memory parse cost (no I/O), comparing `lex_core::lex::parsing::parse_document` against `comrak::parse_document`. Note that `lex_core::…::parse_document` runs Lex's complete pipeline (lex → analysis → build → inline parse → assemble), not just AST construction; `comrak::parse_document` is comrak's equivalent end-to-end parse. The numbers below charge each parser for everything its public entry point does, which is what library consumers actually pay.
 
 The `comrak` configuration matches `lex_babel::formats::markdown::parser::default_comrak_options` (CommonMark + GFM extensions: table, strikethrough, autolink, tasklist, superscript, front matter) so the comparison is against the same parser configuration Lex actually uses in production — not against bare `ComrakOptions::default()`, which would bias `comrak` favourably with a less-featureful parse.
 

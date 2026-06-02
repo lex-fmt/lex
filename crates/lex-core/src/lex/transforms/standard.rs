@@ -207,7 +207,7 @@ pub(crate) fn parse_to_attached_root(
 /// [`NormalizeLabels`](crate::lex::assembling::stages::NormalizeLabels)
 /// mode. The standard pipeline ([`STRING_TO_AST`]) is the strict-mode
 /// instantiation of this; the LSP's permissive parse path
-/// ([`crate::lex::parsing::process_full_permissive`]) is the
+/// ([`crate::lex::parsing::parse_document_permissive`]) is the
 /// permissive-mode instantiation.
 ///
 /// Keeping both modes routed through a single pipeline function
