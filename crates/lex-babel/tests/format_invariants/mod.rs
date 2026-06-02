@@ -25,12 +25,10 @@
 //!   - annotation label *spelling*        (canonical `.value` kept)
 //!   - table cell padding                 (cell text trimmed)
 //!
-//! Note on footnote normalization: `format` here is `format_lex_source`, which
-//! runs `normalize_footnotes` before serializing. That step rewrites a trailing
-//! legacy "Notes"/"Footnotes" *session* into a canonical `:: notes ::` *list*.
-//! The legacy session form is deprecated and should not occur in practice, so
-//! `canon` intentionally does not model the equivalence and no test input uses
-//! it — the canonical `:: notes ::` list form is the only one exercised.
+//! Note on footnotes: the only footnote form is the canonical `:: notes ::`
+//! *list*, which the formatter serializes as-is. (A legacy session→list
+//! migration once ran here as part of `format`; it has been removed, so `canon`
+//! does not model that equivalence and no test input uses the legacy form.)
 
 use lex_babel::transforms::format_lex_source;
 use lex_core::lex::ast::elements::inlines::{InlineNode, ReferenceType};
@@ -42,9 +40,9 @@ use lex_core::lex::parsing::parse_document;
 // format() — the function under test
 // -----------------------------------------------------------------------------
 
-/// `format(D)` = parse, `normalize_footnotes`, serialize (default rules) — the
-/// same path as `lexd format`. Returns the formatter error as `Err` rather than
-/// panicking, so proptest can shrink a formatting failure to a minimal input.
+/// `format(D)` = parse, serialize (default rules) — the same path as
+/// `lexd format`. Returns the formatter error as `Err` rather than panicking,
+/// so proptest can shrink a formatting failure to a minimal input.
 fn format(source: &str) -> Result<String, String> {
     format_lex_source(source).map_err(|e| format!("formatting failed: {e}"))
 }

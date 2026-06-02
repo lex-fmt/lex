@@ -87,8 +87,8 @@ impl ToLexString for Token {
 /// # Examples
 ///
 /// ```ignore
-/// use lex::lex::formats::detokenizer::detokenize;
-/// use lex::lex::lexing::tokenize;
+/// use lex_core::lex::token::formatting::detokenize;
+/// use lex_core::lex::lexing::tokenize;
 ///
 /// let source = "Hello world";
 /// let tokens: Vec<_> = tokenize(source).into_iter().map(|(t, _)| t).collect();

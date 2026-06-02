@@ -24,8 +24,9 @@
 //!    canonical, resolve to that canonical and tag [`LabelForm::Stripped`].
 //! 4. **Reject.** Otherwise, the stage in [`Strict`] mode returns a
 //!    [`TransformError`] with the offending input; in [`Permissive`]
-//!    mode the label is left unchanged (used by the migration tool,
-//!    which needs to walk legacy source bytes).
+//!    mode the label is left unchanged, so the LSP and diagnostics can
+//!    parse and report on policy-violating labels without failing the
+//!    parse mid-edit.
 //!
 //! Step 2's community branch deliberately preempts step 3's
 //! prefix-strip when the input has registered community semantics;
@@ -38,11 +39,13 @@
 //! # Strict vs Permissive
 //!
 //! The standard parse pipeline ([`STRING_TO_AST`](crate::lex::transforms::standard::STRING_TO_AST))
-//! uses strict mode: `doc.*` (reserved-forbidden) and unrecognized
-//! bare labels surface as `TransformError`s, which propagate out as
-//! parse errors. The migration tool ([`crate::lex::migrate`]) uses
-//! permissive mode so it can parse legacy `doc.*` source and rewrite
-//! it before the source reaches a strict-mode parse.
+//! uses strict mode: the two policy-violating cases — `doc.*`
+//! (reserved-forbidden, see §4.1) and unknown `lex.*` literals (not a
+//! registered canonical) — surface as `TransformError`s and propagate
+//! out as parse errors. Bare unknowns are *not* rejected; they resolve
+//! to [`LabelForm::Community`]. Permissive mode instead keeps the
+//! policy-violating labels in the AST so the LSP and diagnostics can
+//! report on them without failing the parse mid-edit.
 
 use crate::lex::ast::elements::annotation::Annotation;
 use crate::lex::ast::elements::content_item::ContentItem;
@@ -133,9 +136,10 @@ pub enum Mode {
     /// Standard parse pipeline behavior — rejected inputs surface as
     /// `TransformError`. Used by [`STRING_TO_AST`].
     Strict,
-    /// Migration-tool behavior — rejected inputs leave the label
-    /// unchanged, value and form untouched, so the walker can still
-    /// reach legacy spellings to rewrite them.
+    /// Lenient behavior used by the LSP and diagnostics — rejected
+    /// inputs leave the label unchanged (value and form untouched), so
+    /// the parse still succeeds and policy violations can be reported
+    /// without failing mid-edit.
     Permissive,
 }
 
@@ -243,7 +247,7 @@ impl NormalizeLabels {
         Self { mode: Mode::Strict }
     }
 
-    /// Permissive-mode constructor used by the migration tool.
+    /// Permissive-mode constructor used by the LSP and diagnostics.
     pub fn permissive() -> Self {
         Self {
             mode: Mode::Permissive,
@@ -278,7 +282,7 @@ impl Runnable<Document, Document> for NormalizeLabels {
 
 /// Resolve `label` in place against the namespace policy. Strict mode
 /// surfaces rejections as `TransformError`; permissive mode leaves
-/// rejected labels untouched (used by the migration tool).
+/// rejected labels untouched (used by the LSP and diagnostics).
 fn normalize_label(label: &mut Label, mode: Mode) -> Result<(), TransformError> {
     apply_resolution(label, classify_label(&label.value), mode)
 }
@@ -706,8 +710,8 @@ mod tests {
 
     #[test]
     fn permissive_mode_keeps_doc_table_unchanged() {
-        // The migration tool needs to walk legacy source; permissive
-        // mode classifies what it can and silently leaves the rest.
+        // Permissive mode classifies what it can and silently leaves
+        // the rest, so the LSP and diagnostics can keep parsing.
         let src = "Table:\n\n    | a | b |\n    |---|---|\n    | 1 | 2 |\n:: doc.table ::\n";
         // Bypass STRING_TO_AST (which always uses strict mode); run
         // the earlier stages explicitly and finish with permissive
@@ -717,8 +721,11 @@ mod tests {
         use crate::lex::transforms::standard::LEXING;
         let source = format!("{src}\n");
         let tokens = LEXING.run(source.clone()).expect("tokens");
+        let mut mapper = crate::lex::lexing::transformations::LineTokenGroupingMapper::new();
+        let grouped_tokens = mapper.map(tokens);
         let mut output =
-            crate::lex::parsing::engine::parse_from_flat_tokens(tokens, &source).expect("parse");
+            crate::lex::parsing::engine::parse_from_grouped_stream(grouped_tokens, &source)
+                .expect("parse");
         output.root = ParseInlines::new().run(output.root).expect("inlines");
         let mut doc = AttachRoot::new().run(output).expect("attach root");
         doc = AttachAnnotations::new().run(doc).expect("attach anns");
@@ -733,7 +740,7 @@ mod tests {
         assert_eq!(
             verbatim_label.as_deref(),
             Some("doc.table"),
-            "permissive mode must leave doc.* untouched so the migration tool can rewrite it"
+            "permissive mode must leave doc.* untouched so the LSP and diagnostics can report on it"
         );
     }
 
