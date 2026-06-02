@@ -87,7 +87,7 @@ impl ToLexString for Token {
 /// # Examples
 ///
 /// ```ignore
-/// use lex::lex::formats::detokenizer::detokenize;
+/// use lex::lex::token::formatting::detokenize;
 /// use lex::lex::lexing::tokenize;
 ///
 /// let source = "Hello world";
