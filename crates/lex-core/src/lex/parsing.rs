@@ -87,6 +87,9 @@ type ProcessResult = Result<Document, String>;
 
 /// Process source text through the complete pipeline: lex, analyze, and build.
 ///
+/// "Parse" here is colloquial — the name covers the whole pipeline
+/// (lexing + analysis + building), not just the syntactic phase.
+///
 /// This is the primary entry point for processing lex documents. It performs:
 /// 1. Lexing: Tokenizes the source text
 /// 2. Analysis: Performs syntactic analysis to produce IR nodes
@@ -104,19 +107,19 @@ type ProcessResult = Result<Document, String>;
 /// # Example
 ///
 /// ```rust,ignore
-/// use lex::lex::parsing::process_full;
+/// use lex_core::lex::parsing::parse_document;
 ///
 /// let source = "Hello world\n";
-/// let document = process_full(source)?;
+/// let document = parse_document(source)?;
 /// ```
-pub fn process_full(source: &str) -> ProcessResult {
+pub fn parse_document(source: &str) -> ProcessResult {
     use crate::lex::transforms::standard::STRING_TO_AST;
     STRING_TO_AST
         .run(source.to_string())
         .map_err(|e| e.to_string())
 }
 
-/// Same as [`process_full`] but runs `NormalizeLabels` in permissive
+/// Same as [`parse_document`] but runs `NormalizeLabels` in permissive
 /// mode so labels that strict mode would reject (`doc.*`,
 /// unrecognised `lex.*`) flow through into the AST instead of failing
 /// the parse. Intended for hosts that want to surface label-policy
@@ -136,13 +139,4 @@ pub fn process_full_permissive(source: &str) -> ProcessResult {
     use crate::lex::assembling::stages::normalize_labels::Mode;
     use crate::lex::transforms::standard::run_string_to_ast;
     run_string_to_ast(source.to_string(), Mode::Permissive).map_err(|e| e.to_string())
-}
-
-/// Alias for `process_full` to maintain backward compatibility.
-///
-/// The term "parse" colloquially refers to the entire processing pipeline
-/// (lexing + analysis + building), even though technically parsing is just
-/// the syntactic analysis phase.
-pub fn parse_document(source: &str) -> ProcessResult {
-    process_full(source)
 }
