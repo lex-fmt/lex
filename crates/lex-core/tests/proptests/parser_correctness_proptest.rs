@@ -8,7 +8,8 @@
 use lex_core::lex::assembling::AttachRoot;
 use lex_core::lex::ast::elements::sequence_marker::{DecorationStyle, Form, Separator};
 use lex_core::lex::ast::ContentItem;
-use lex_core::lex::parsing::engine::parse_from_flat_tokens;
+use lex_core::lex::lexing::transformations::LineTokenGroupingMapper;
+use lex_core::lex::parsing::engine::parse_from_grouped_stream;
 use lex_core::lex::parsing::{parse_document, Document};
 use lex_core::lex::testing::{assert_ast, InlineAssertion, InlineExpectation};
 use lex_core::lex::transforms::standard::LEXING;
@@ -30,7 +31,8 @@ fn ensure_trailing_newline(source: &str) -> String {
 fn parse_annotation_without_attachment(source: &str) -> Result<Document, String> {
     let source = ensure_trailing_newline(source);
     let tokens = LEXING.run(source.clone()).map_err(|e| e.to_string())?;
-    let root = parse_from_flat_tokens(tokens, &source)?;
+    let grouped_tokens = LineTokenGroupingMapper::new().map(tokens);
+    let root = parse_from_grouped_stream(grouped_tokens, &source)?;
     AttachRoot::new().run(root).map_err(|e| e.to_string())
 }
 

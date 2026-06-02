@@ -176,14 +176,17 @@ pub(crate) fn parse_to_attached_root(
     let tokens = SemanticIndentation::new().run(core_tokens)?;
 
     // Parse to AST against the original source (keeps location tracking in
-    // original-source coordinates).
+    // original-source coordinates). Group the flat tokens into lines before
+    // handing them to the main grouped-stream entry point.
+    let grouped_tokens =
+        crate::lex::lexing::transformations::LineTokenGroupingMapper::new().map(tokens);
     let mut output =
-        crate::lex::parsing::engine::parse_from_flat_tokens(tokens, &source).map_err(|e| {
-            crate::lex::transforms::TransformError::StageFailed {
+        crate::lex::parsing::engine::parse_from_grouped_stream(grouped_tokens, &source).map_err(
+            |e| crate::lex::transforms::TransformError::StageFailed {
                 stage: "Parser".to_string(),
                 message: e.to_string(),
-            }
-        })?;
+            },
+        )?;
 
     // Parse inline elements in root session before assembly
     output.root = ParseInlines::new().run(output.root)?;

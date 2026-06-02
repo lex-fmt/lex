@@ -717,8 +717,11 @@ mod tests {
         use crate::lex::transforms::standard::LEXING;
         let source = format!("{src}\n");
         let tokens = LEXING.run(source.clone()).expect("tokens");
+        let grouped_tokens =
+            crate::lex::lexing::transformations::LineTokenGroupingMapper::new().map(tokens);
         let mut output =
-            crate::lex::parsing::engine::parse_from_flat_tokens(tokens, &source).expect("parse");
+            crate::lex::parsing::engine::parse_from_grouped_stream(grouped_tokens, &source)
+                .expect("parse");
         output.root = ParseInlines::new().run(output.root).expect("inlines");
         let mut doc = AttachRoot::new().run(output).expect("attach root");
         doc = AttachAnnotations::new().run(doc).expect("attach anns");

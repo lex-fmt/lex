@@ -8,7 +8,8 @@
 
 use lex_core::lex::assembling::AttachRoot;
 use lex_core::lex::escape::escape_quoted;
-use lex_core::lex::parsing::engine::parse_from_flat_tokens;
+use lex_core::lex::lexing::transformations::LineTokenGroupingMapper;
+use lex_core::lex::parsing::engine::parse_from_grouped_stream;
 use lex_core::lex::parsing::{parse_document, ContentItem, Document};
 use lex_core::lex::testing::assert_ast;
 use lex_core::lex::transforms::standard::LEXING;
@@ -22,7 +23,8 @@ fn parse_annotation_without_attachment(source: &str) -> Result<Document, String>
         source.to_string()
     };
     let tokens = LEXING.run(source.clone()).map_err(|e| e.to_string())?;
-    let root = parse_from_flat_tokens(tokens, &source)?;
+    let grouped_tokens = LineTokenGroupingMapper::new().map(tokens);
+    let root = parse_from_grouped_stream(grouped_tokens, &source)?;
     AttachRoot::new().run(root).map_err(|e| e.to_string())
 }
 

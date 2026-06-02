@@ -25,8 +25,7 @@
 use super::parser;
 use crate::lex::building::ast_tree::{AstTreeBuilder, BuildOutput};
 use crate::lex::parsing::ir::{NodeType, ParseNode};
-use crate::lex::token::{to_line_container, LineContainer, Token};
-use std::ops::Range as ByteRange;
+use crate::lex::token::{to_line_container, LineContainer};
 
 /// Parse from grouped token stream (main entry point).
 ///
@@ -60,37 +59,14 @@ pub fn parse_from_grouped_stream(
     let tree = to_line_container::build_line_container(line_tokens);
 
     // Parse using existing logic
-    parse_experimental_v2(tree, source)
+    parse_grammar_tree(tree, source)
 }
 
-/// Parse from flat token stream (legacy/test entry point).
+/// Parse a LineContainer tree into the AST using the declarative grammar engine.
 ///
-/// This entry point is kept for backward compatibility with existing tests.
-/// Production code should use parse_from_grouped_stream instead.
-///
-/// # Arguments
-/// * `tokens` - Flat vector of (Token, Range) pairs
-/// * `source` - The original source text (for location tracking)
-///
-/// # Returns
-/// The root session tree if successful
-pub fn parse_from_flat_tokens(
-    tokens: Vec<(Token, ByteRange<usize>)>,
-    source: &str,
-) -> Result<BuildOutput, String> {
-    // Apply grouping transformation inline for tests/legacy code
-    use crate::lex::lexing::transformations::LineTokenGroupingMapper;
-
-    let mut mapper = LineTokenGroupingMapper::new();
-    let grouped_tokens = mapper.map(tokens);
-
-    parse_from_grouped_stream(grouped_tokens, source)
-}
-
-/// Parse using the new declarative grammar engine (Delivery 2).
-///
-/// This is the main entry point for the parser using LineContainerToken.
-/// It uses the declarative grammar matcher and recursive descent parser.
+/// This is the production parser core: given the LineContainer tree produced by
+/// the lexing/grouping pipeline, it runs the declarative grammar matcher and
+/// recursive-descent parser, then builds the AST.
 ///
 /// # Arguments
 /// * `tree` - The token tree from the lexer (LineContainerToken)
@@ -98,7 +74,7 @@ pub fn parse_from_flat_tokens(
 ///
 /// # Returns
 /// The root session tree if successful
-pub fn parse_experimental_v2(tree: LineContainer, source: &str) -> Result<BuildOutput, String> {
+pub fn parse_grammar_tree(tree: LineContainer, source: &str) -> Result<BuildOutput, String> {
     // Extract children from root container
     let children = match tree {
         LineContainer::Container { children, .. } => children,
@@ -127,13 +103,27 @@ mod tests {
         Ok(crate::lex::lexing::lex(tokens)?)
     }
 
+    // Test helper: group a flat token stream and run the main parser. Applies the
+    // same LineTokenGroupingMapper step the lexing pipeline performs before
+    // `parse_from_grouped_stream`.
+    fn parse_flat(
+        tokens: Vec<(crate::lex::token::Token, std::ops::Range<usize>)>,
+        source: &str,
+    ) -> Result<BuildOutput, String> {
+        use crate::lex::lexing::transformations::LineTokenGroupingMapper;
+
+        let mut mapper = LineTokenGroupingMapper::new();
+        let grouped_tokens = mapper.map(tokens);
+        parse_from_grouped_stream(grouped_tokens, source)
+    }
+
     #[test]
     fn test_parse_simple_paragraphs() {
         // Use tokens from the lexer pipeline
         let source = "Simple paragraph\n";
         let tokens = lex_helper(source).expect("Failed to tokenize");
 
-        let result = parse_from_flat_tokens(tokens, source);
+        let result = parse_flat(tokens, source);
         assert!(result.is_ok(), "Parser should succeed");
 
         let root = result.unwrap().root;
@@ -148,7 +138,7 @@ mod tests {
         let source = "Definition:\n    This is the definition content\n";
         let tokens = lex_helper(source).expect("Failed to tokenize");
 
-        let result = parse_from_flat_tokens(tokens, source);
+        let result = parse_flat(tokens, source);
         assert!(result.is_ok(), "Parser should succeed");
 
         let root = result.unwrap().root;
@@ -166,7 +156,7 @@ mod tests {
         let source = "Session:\n\n    Session content here\n";
         let tokens = lex_helper(source).expect("Failed to tokenize");
 
-        let result = parse_from_flat_tokens(tokens, source);
+        let result = parse_flat(tokens, source);
         assert!(result.is_ok(), "Parser should succeed");
 
         let root = result.unwrap().root;
@@ -184,7 +174,7 @@ mod tests {
         let source = "Title Two\n\n\n    Content with two blank lines.\n";
         let tokens = lex_helper(source).expect("Failed to tokenize");
 
-        let result = parse_from_flat_tokens(tokens, source);
+        let result = parse_flat(tokens, source);
         assert!(result.is_ok(), "Parser should succeed");
 
         let root = result.unwrap().root;
@@ -212,7 +202,7 @@ mod tests {
         let source = "Title Three\n\n\n\n    Content with three blank lines.\n";
         let tokens = lex_helper(source).expect("Failed to tokenize");
 
-        let result = parse_from_flat_tokens(tokens, source);
+        let result = parse_flat(tokens, source);
         assert!(result.is_ok(), "Parser should succeed");
 
         let root = result.unwrap().root;
@@ -229,9 +219,7 @@ mod tests {
             "Code Example:\n\n    function hello() {\n        return \"world\";\n    }\n\n:: javascript ::\n";
         let tokens = lex_helper(source).expect("Failed to tokenize");
 
-        let root = parse_from_flat_tokens(tokens, source)
-            .expect("Parser failed")
-            .root;
+        let root = parse_flat(tokens, source).expect("Parser failed").root;
 
         let has_verbatim = root
             .children
@@ -259,9 +247,7 @@ mod tests {
         let source = "1. Session\n\n    Some content.\n\n    :: note-editor :: Maybe this could be better rephrased?\n    :: note.author :: Done keeping it simple\n\n    More content.\n";
         let tokens = lex_helper(source).expect("Failed to tokenize");
 
-        let root = parse_from_flat_tokens(tokens, source)
-            .expect("Parser failed")
-            .root;
+        let root = parse_flat(tokens, source).expect("Parser failed").root;
 
         // Should have a session
         let session = root
@@ -301,7 +287,7 @@ mod tests {
         let source = ":: test.note ::\n";
         let tokens = lex_helper(source).expect("Failed to tokenize");
 
-        let result = parse_from_flat_tokens(tokens, source);
+        let result = parse_flat(tokens, source);
         assert!(result.is_ok(), "Parser should succeed");
 
         let root = result.unwrap().root;
@@ -341,9 +327,7 @@ Final paragraph.
 
         let tokens = lex_helper(source).expect("Failed to tokenize");
 
-        let root = parse_from_flat_tokens(tokens, source)
-            .expect("Parser failed")
-            .root;
+        let root = parse_flat(tokens, source).expect("Parser failed").root;
 
         eprintln!("\n=== ANNOTATIONS + TRIFECTA COMBINED ===");
         eprintln!("Root items count: {}", root.children.len());
@@ -391,7 +375,7 @@ Final paragraph.
     fn test_parse_empty_input() {
         let source = "";
         let tokens = lex_helper(source).expect("Failed to tokenize");
-        let result = parse_from_flat_tokens(tokens, source);
+        let result = parse_flat(tokens, source);
 
         assert!(result.is_ok(), "Empty input should parse successfully");
         let root = result.unwrap().root;
@@ -406,7 +390,7 @@ Final paragraph.
     fn test_parse_only_whitespace() {
         let source = "   \n\n   \n";
         let tokens = lex_helper(source).expect("Failed to tokenize");
-        let result = parse_from_flat_tokens(tokens, source);
+        let result = parse_flat(tokens, source);
 
         assert!(
             result.is_ok(),
@@ -423,7 +407,7 @@ Final paragraph.
 No closing marker
 "#;
         let tokens = lex_helper(source).expect("Failed to tokenize");
-        let result = parse_from_flat_tokens(tokens, source);
+        let result = parse_flat(tokens, source);
 
         assert!(
             result.is_ok(),
