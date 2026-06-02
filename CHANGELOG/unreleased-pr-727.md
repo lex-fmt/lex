@@ -1,0 +1,8 @@
+### Removed — pre-1.0 legacy backward-compatibility scaffolding ([#727](https://github.com/lex-fmt/lex/issues/727))
+
+Lex is pre-1.0 with no install base, so the compatibility shims that existed only to ease migration from older formats are removed wholesale. Four user- and API-facing surfaces go away:
+
+- **`lexd migrate-labels` subcommand removed** ([#728](https://github.com/lex-fmt/lex/issues/728)). The standalone label-migration command and its `lex_core::lex::migrate` module (including `blessed_for_legacy`) are deleted. The LSP `forbidden-label-prefix` quickfix that previously rewrote a legacy label through the curated "blessed" table now simply strips the reserved `doc.` prefix, which covers the only case that arises in practice.
+- **`lexd format` no longer migrates legacy session-based footnotes** ([#729](https://github.com/lex-fmt/lex/issues/729)). The dual-format path that detected child sessions titled `1. Note` and converted them to list-based footnotes during formatting is gone (`normalize_footnotes`, `convert_session_notes_to_list`, `split_numbered_title`). List-based footnote formatting is unchanged; the legacy session form was documented as "should not occur in practice".
+- **Legacy detokenizer re-export shim removed** ([#730](https://github.com/lex-fmt/lex/issues/730)). The canonical detokenizer lives in `lex_core::lex::token::formatting`; the old `lex::formats::detokenizer` re-export that preserved historical import paths is deleted. Direct consumers import `{detokenize, ToLexString}` from `token::formatting`.
+- **Parser entry points consolidated** ([#731](https://github.com/lex-fmt/lex/issues/731)). Internal naming around the parser front-end is unified; no behavior change.
