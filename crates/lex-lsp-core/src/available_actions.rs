@@ -1,6 +1,5 @@
 use lex_analysis::utils::collect_footnote_definitions;
 use lex_core::lex::ast::Document;
-use lex_core::lex::migrate::blessed_for_legacy;
 use lsp_types::{
     CodeAction, CodeActionKind, CodeActionParams, Position, Range, TextEdit, WorkspaceEdit,
 };
@@ -68,16 +67,12 @@ pub fn compute_actions(
     // 1b. `forbidden-label-prefix` quickfix.
     //
     // Each `:: doc.X ::` diagnostic gets its own QuickFix that
-    // rewrites the label. First try the curated legacy table —
-    // `doc.table` → `table` (blessed shortcut), `doc.image` →
-    // `image`, etc. via `lex_core::lex::migrate::blessed_for_legacy`.
-    // If that lookup misses (the user wrote `doc.foo` /
-    // `doc.unknown-thing` / etc.), fall back to a generic "strip
-    // `doc.` prefix" rewrite so every `forbidden-label-prefix`
-    // diagnostic has a quickfix attached. The fallback produces a
-    // bare-name label that the parser then re-classifies via the
-    // namespace policy (shortcut → Shortcut, registered Canonical →
-    // resolved, etc., or Community if nothing matches).
+    // rewrites the label by stripping the reserved `doc.` prefix so
+    // every `forbidden-label-prefix` diagnostic has a quickfix
+    // attached. The rewrite produces a bare-name label that the parser
+    // then re-classifies via the namespace policy (shortcut →
+    // Shortcut, registered Canonical → resolved, etc., or Community if
+    // nothing matches).
     //
     // The diagnostic range points at the label token; the
     // replacement operates on that exact slice so surrounding `::`
@@ -101,12 +96,10 @@ pub fn compute_actions(
         else {
             continue;
         };
-        let blessed: String = if let Some(curated) = blessed_for_legacy(&label) {
-            curated.to_string()
-        } else if let Some(stripped) = label.strip_prefix("doc.") {
-            // Generic fallback. Empty-after-strip (`doc.`) shouldn't
-            // appear in practice (the parser rejects empty labels
-            // earlier) but guard against it anyway.
+        let blessed: String = if let Some(stripped) = label.strip_prefix("doc.") {
+            // Strip the reserved `doc.` prefix. Empty-after-strip
+            // (`doc.`) shouldn't appear in practice (the parser rejects
+            // empty labels earlier) but guard against it anyway.
             if stripped.is_empty() {
                 continue;
             }
@@ -192,7 +185,7 @@ pub fn compute_actions(
 /// Reads the source text spanned by the diagnostic range and splits
 /// it into `(leading_ws, trimmed_label, trailing_ws)`. The
 /// `forbidden-label-prefix` quickfix uses the trimmed label for the
-/// `blessed_for_legacy(...)` lookup and re-applies the leading +
+/// `doc.`-prefix-strip rewrite and re-applies the leading +
 /// trailing whitespace to the replacement text so the separator
 /// between the label and any following parameters is preserved —
 /// the parser-emitted label location bounding-box includes that
@@ -884,10 +877,9 @@ mod tests {
     }
 
     #[test]
-    fn forbidden_label_quickfix_falls_back_to_strip_doc_prefix_for_unknown_legacy() {
-        // `doc.random` isn't in the LEGACY_TO_BLESSED curated table;
-        // the generic "strip `doc.` prefix" fallback should still
-        // produce a quickfix.
+    fn forbidden_label_quickfix_strips_doc_prefix() {
+        // The "strip `doc.` prefix" rewrite produces a quickfix for any
+        // `doc.*` label.
         let src = ":: doc.random ::\nBody.\n";
         let doc = parse_permissive(src);
         let diag = forbidden_label_diag(0, 3, 13, "doc.random");
