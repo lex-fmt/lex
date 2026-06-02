@@ -96,17 +96,15 @@ pub fn compute_actions(
         else {
             continue;
         };
-        let blessed: String = if let Some(stripped) = label.strip_prefix("doc.") {
-            // Strip the reserved `doc.` prefix. Empty-after-strip
-            // (`doc.`) shouldn't appear in practice (the parser rejects
-            // empty labels earlier) but guard against it anyway.
-            if stripped.is_empty() {
+        // Strip the reserved `doc.` prefix. Empty-after-strip (`doc.`)
+        // shouldn't appear in practice (the parser rejects empty labels
+        // earlier) but `filter` guards against it anyway.
+        let blessed: String =
+            if let Some(stripped) = label.strip_prefix("doc.").filter(|s| !s.is_empty()) {
+                stripped.to_string()
+            } else {
                 continue;
-            }
-            stripped.to_string()
-        } else {
-            continue;
-        };
+            };
         actions.push(CodeAction {
             title: format!("Rewrite `{label}` to `{blessed}`"),
             kind: Some(CodeActionKind::QUICKFIX),
