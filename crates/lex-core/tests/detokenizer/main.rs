@@ -1,6 +1,6 @@
-use lex_core::lex::formats::detokenizer::detokenize;
 use lex_core::lex::lexing::{lex, tokenize};
 use lex_core::lex::testing::lexplore::Lexplore;
+use lex_core::lex::token::formatting::detokenize;
 
 mod lexplore_tests {
     use super::*;

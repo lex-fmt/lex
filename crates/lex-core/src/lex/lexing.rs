@@ -279,7 +279,7 @@ mod tests {
     #[test]
     fn test_blank_line_round_trip() {
         // Verify that tokenization -> detokenization preserves the source
-        use crate::lex::formats::detokenizer::detokenize;
+        use crate::lex::token::formatting::detokenize;
 
         let inputs = vec![
             "First\nSecond",       // Single newline
