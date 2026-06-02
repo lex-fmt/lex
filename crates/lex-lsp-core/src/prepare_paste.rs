@@ -183,8 +183,16 @@ fn is_in_table(source: &str, pos: Position) -> bool {
 /// at document top level — the anchor is zero.
 pub fn resolve_anchor(document: &Document, source: &str, pos: Position) -> usize {
     let ast_pos = to_ast_position(pos);
+    // Pre-split the source into lines *once*. `content_indent` reads a line per
+    // candidate container child; without this, each read re-split the whole
+    // source (`line_at`), giving O(N²) over the document. A shared slice keeps
+    // the walk linear.
+    let lines: Vec<&str> = source
+        .split('\n')
+        .map(|l| l.strip_suffix('\r').unwrap_or(l))
+        .collect();
     let mut best: Option<usize> = None;
-    visit_containers(&document.root.children, source, ast_pos, &mut best);
+    visit_containers(&document.root.children, &lines, ast_pos, &mut best);
     best.unwrap_or(0)
 }
 
@@ -193,7 +201,7 @@ pub fn resolve_anchor(document: &Document, source: &str, pos: Position) -> usize
 /// containers overwrite shallower ones, yielding the innermost anchor.
 fn visit_containers(
     items: &[lex_core::lex::ast::ContentItem],
-    source: &str,
+    lines: &[&str],
     pos: AstPosition,
     best: &mut Option<usize>,
 ) {
@@ -202,28 +210,28 @@ fn visit_containers(
         match item {
             ContentItem::Session(session) => {
                 if encloses_body(session.range(), pos) {
-                    if let Some(indent) = content_indent(&session.children, source) {
+                    if let Some(indent) = content_indent(&session.children, lines) {
                         *best = Some(indent);
                     }
-                    visit_containers(&session.children, source, pos, best);
+                    visit_containers(&session.children, lines, pos, best);
                 }
             }
             ContentItem::Definition(def) => {
                 if encloses_body(def.range(), pos) {
-                    if let Some(indent) = content_indent(&def.children, source) {
+                    if let Some(indent) = content_indent(&def.children, lines) {
                         *best = Some(indent);
                     }
-                    visit_containers(&def.children, source, pos, best);
+                    visit_containers(&def.children, lines, pos, best);
                 }
             }
             ContentItem::List(list) => {
                 for entry in &list.items {
                     if let ContentItem::ListItem(li) = entry {
                         if encloses_body(li.range(), pos) {
-                            if let Some(indent) = content_indent(&li.children, source) {
+                            if let Some(indent) = content_indent(&li.children, lines) {
                                 *best = Some(indent);
                             }
-                            visit_containers(&li.children, source, pos, best);
+                            visit_containers(&li.children, lines, pos, best);
                         }
                     }
                 }
@@ -248,7 +256,7 @@ fn encloses_body(range: &lex_core::lex::ast::Range, pos: AstPosition) -> bool {
 /// its children. `None` when the container has no materialised content line to
 /// read (e.g. an empty body) — the caller then falls back to a shallower
 /// container or to zero.
-fn content_indent(children: &[lex_core::lex::ast::ContentItem], source: &str) -> Option<usize> {
+fn content_indent(children: &[lex_core::lex::ast::ContentItem], lines: &[&str]) -> Option<usize> {
     use lex_core::lex::ast::{AstNode, ContentItem};
     for child in children {
         // Skip blank-line groups — they carry no content indentation.
@@ -256,7 +264,7 @@ fn content_indent(children: &[lex_core::lex::ast::ContentItem], source: &str) ->
             continue;
         }
         let start_line = child.range().start.line;
-        if let Some(line) = line_at(source, start_line) {
+        if let Some(line) = lines.get(start_line) {
             if !line.trim().is_empty() {
                 return Some(leading_width(line));
             }
@@ -273,8 +281,24 @@ fn content_indent(children: &[lex_core::lex::ast::ContentItem], source: &str) ->
 pub fn is_fresh_line(source: &str, pos: Position) -> bool {
     match line_at(source, pos.line as usize) {
         Some(line) => {
-            let before: String = line.chars().take(pos.character as usize).collect();
-            before.trim().is_empty()
+            // `pos.character` is a UTF-8 *byte* offset, not a char count — the
+            // rest of this server treats LSP columns as byte offsets (see
+            // `slice_text_by_range` in `lexd-lsp`'s `server.rs`). Walk chars,
+            // accumulating their byte lengths, and stop at the caret column:
+            // counting `chars().take(character)` would over-read on any line
+            // with multi-byte content before the caret. No allocation.
+            let caret = pos.character as usize;
+            let mut bytes_seen = 0;
+            for ch in line.chars() {
+                if bytes_seen >= caret {
+                    break;
+                }
+                if !ch.is_whitespace() {
+                    return false;
+                }
+                bytes_seen += ch.len_utf8();
+            }
+            true
         }
         // No such line (e.g. paste at the very end past the last newline):
         // there is no pre-existing content to merge into, so it's fresh.

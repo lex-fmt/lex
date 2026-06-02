@@ -151,6 +151,44 @@ fn reanchor_baseline_is_min_over_nonblank_lines() {
 }
 
 // ---------------------------------------------------------------------------
+// Fresh-line vs. merge detection (§4.4). `Position.character` is a UTF-8 byte
+// offset in this server, so multi-byte content before the caret must not throw
+// off the whitespace check.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn is_fresh_line_blank_line_is_fresh() {
+    let source = "Top\n\n    body\n";
+    assert!(is_fresh_line(source, pos(1, 0)));
+}
+
+#[test]
+fn is_fresh_line_after_content_is_merge() {
+    let source = "Top\n\n    body\n";
+    // Caret after "    body" (byte 8) — content precedes it, so it's a merge.
+    assert!(!is_fresh_line(source, pos(2, 8)));
+}
+
+#[test]
+fn is_fresh_line_multibyte_before_caret_uses_byte_offset() {
+    // "    café" — the 'é' is two UTF-8 bytes, so the byte offset of the caret
+    // at end-of-content (9) exceeds the char count (8). A char-counting check
+    // would stop one char early; a byte-correct check sees the non-whitespace
+    // content and reports a merge.
+    let source = "Top\n\n    café\n";
+    let caret = "    café".len() as u32; // 9 bytes
+    assert!(!is_fresh_line(source, pos(2, caret)));
+}
+
+#[test]
+fn is_fresh_line_whitespace_only_prefix_with_later_multibyte_is_fresh() {
+    // Caret sits within the leading whitespace; the multi-byte content after it
+    // must not be consumed (we stop at the caret byte offset).
+    let source = "Top\n\n    café\n";
+    assert!(is_fresh_line(source, pos(2, 4)));
+}
+
+// ---------------------------------------------------------------------------
 // Classification (§3), innermost-first.
 // ---------------------------------------------------------------------------
 
