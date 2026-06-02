@@ -41,6 +41,9 @@ use lex_core::lex::builtins as lex_builtins;
 use lex_core::lex::includes::{resolve_from_source, FsLoader, IncludeError, ResolveConfig};
 use lex_core::lex::parsing;
 use lex_extension_host::registry::Registry;
+use lex_lsp_core::prepare_paste::{
+    prepare_paste as prepare_paste_transform, PasteMode, PreparePasteParams, PreparePasteResult,
+};
 use serde_json::{json, Value};
 use tokio::sync::RwLock;
 use tower_lsp::async_trait;
@@ -1160,6 +1163,11 @@ where
                 }),
                 file_operations: None,
             }),
+            // Advertise the custom `lex/preparePaste` request under
+            // `experimental` so editors enable paste interception only against a
+            // server that implements smart paste (comms#73 §5); a server without
+            // this flag falls back to native paste.
+            experimental: Some(json!({ "lexPreparePaste": true })),
             ..ServerCapabilities::default()
         };
 
@@ -1769,6 +1777,35 @@ where
 
         Ok(Some(
             serde_json::to_value(edit).map_err(|_| Error::internal_error())?,
+        ))
+    }
+
+    /// Handler for the custom `lex/preparePaste` request (smart paste,
+    /// comms#73). The editor sends the document identity, the range the paste
+    /// replaces, and the raw clipboard text; the server reuses the
+    /// already-parsed buffer state to classify the paste and re-anchor the
+    /// clipboard to the caret's structural context, returning the text to
+    /// splice across the range plus the [`PasteMode`] it applied.
+    ///
+    /// Pure with respect to document state: it reads the parse, computes a
+    /// string, and mutates nothing. When the document is not open in the
+    /// server (no parse to consult), the response echoes the clipboard back in
+    /// `re-anchor` mode — a safe no-op so the editor still completes the paste.
+    pub async fn prepare_paste(&self, params: PreparePasteParams) -> Result<PreparePasteResult> {
+        let Some(entry) = self.document_entry(&params.text_document.uri).await else {
+            // No parsed buffer to consult — hand the clipboard back unchanged
+            // rather than fail; the editor applies it as an ordinary paste.
+            return Ok(PreparePasteResult {
+                text: params.pasted_text,
+                mode: PasteMode::Reanchor,
+            });
+        };
+
+        Ok(prepare_paste_transform(
+            &entry.document,
+            &entry.text,
+            params.range,
+            &params.pasted_text,
         ))
     }
 }
@@ -3480,5 +3517,124 @@ mod tests {
             )),
             "untitled URIs should produce no include-* diagnostics, got {diags:?}"
         );
+    }
+
+    // ========================================================================
+    // Smart paste — `lex/preparePaste` request wiring (comms#73).
+    //
+    // The transform itself is exhaustively table-tested in
+    // `lex_lsp_core::prepare_paste`; these tests cover the server-side wiring:
+    // capability advertisement, document-store lookup, and the missing-buffer
+    // fallback.
+    // ========================================================================
+
+    #[tokio::test]
+    async fn initialize_advertises_prepare_paste_capability() {
+        let provider = Arc::new(MockFeatureProvider::default());
+        let server = LexLanguageServer::with_features(NoopClient, provider);
+
+        let result = server
+            .initialize(InitializeParams::default())
+            .await
+            .unwrap();
+
+        let experimental = result
+            .capabilities
+            .experimental
+            .expect("experimental capabilities advertised");
+        assert_eq!(experimental["lexPreparePaste"], serde_json::json!(true));
+    }
+
+    #[tokio::test]
+    async fn prepare_paste_reanchors_against_open_buffer() {
+        let provider = Arc::new(MockFeatureProvider::default());
+        let server = LexLanguageServer::with_features(NoopClient, provider);
+        let uri = Url::from_file_path("/tmp/paste.lex").unwrap();
+
+        server
+            .did_open(DidOpenTextDocumentParams {
+                text_document: TextDocumentItem {
+                    uri: uri.clone(),
+                    language_id: "lex".into(),
+                    version: 1,
+                    text: "Top:\n\n    existing\n\n".to_string(),
+                },
+            })
+            .await;
+
+        // Fresh blank line 3, inside the session (content indent 4). Paste a
+        // column-zero two-line block; both lines re-anchor to indent 4.
+        let result = server
+            .prepare_paste(PreparePasteParams {
+                text_document: TextDocumentIdentifier { uri },
+                range: Range {
+                    start: Position::new(3, 0),
+                    end: Position::new(3, 0),
+                },
+                pasted_text: "first\n    second\n".to_string(),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(result.mode, PasteMode::Reanchor);
+        assert_eq!(result.text, "    first\n        second\n");
+    }
+
+    #[tokio::test]
+    async fn prepare_paste_passes_through_verbatim() {
+        let provider = Arc::new(MockFeatureProvider::default());
+        let server = LexLanguageServer::with_features(NoopClient, provider);
+        let uri = Url::from_file_path("/tmp/verb.lex").unwrap();
+
+        server
+            .did_open(DidOpenTextDocumentParams {
+                text_document: TextDocumentItem {
+                    uri: uri.clone(),
+                    language_id: "lex".into(),
+                    version: 1,
+                    text: "Code:\n    line one\n    line two\n:: text ::\n".to_string(),
+                },
+            })
+            .await;
+
+        let pasted = "  weird\n      indent\n".to_string();
+        let result = server
+            .prepare_paste(PreparePasteParams {
+                text_document: TextDocumentIdentifier { uri },
+                range: Range {
+                    start: Position::new(1, 8),
+                    end: Position::new(1, 8),
+                },
+                pasted_text: pasted.clone(),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(result.mode, PasteMode::PassthroughVerbatim);
+        assert_eq!(result.text, pasted);
+    }
+
+    #[tokio::test]
+    async fn prepare_paste_unopened_buffer_echoes_clipboard() {
+        let provider = Arc::new(MockFeatureProvider::default());
+        let server = LexLanguageServer::with_features(NoopClient, provider);
+        let uri = Url::from_file_path("/tmp/never-opened.lex").unwrap();
+
+        let pasted = "anything\n    here\n".to_string();
+        let result = server
+            .prepare_paste(PreparePasteParams {
+                text_document: TextDocumentIdentifier { uri },
+                range: Range {
+                    start: Position::new(0, 0),
+                    end: Position::new(0, 0),
+                },
+                pasted_text: pasted.clone(),
+            })
+            .await
+            .unwrap();
+
+        // No parse to consult — clipboard echoed back unchanged so the editor
+        // still completes the paste.
+        assert_eq!(result.text, pasted);
     }
 }

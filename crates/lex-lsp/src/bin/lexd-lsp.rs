@@ -18,7 +18,12 @@ async fn main() -> ExitCode {
     // Default: run as LSP server
     let stdin = stdin();
     let stdout = stdout();
-    let (service, socket) = LspService::new(LexLanguageServer::new);
+    let (service, socket) = LspService::build(LexLanguageServer::new)
+        // Custom smart-paste request (comms#73). Registered here because
+        // tower-lsp's `LanguageServer` trait covers only standard methods;
+        // custom JSON-RPC methods are added through the service builder.
+        .custom_method("lex/preparePaste", LexLanguageServer::prepare_paste)
+        .finish();
     Server::new(stdin, stdout, socket).serve(service).await;
     ExitCode::SUCCESS
 }
