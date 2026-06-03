@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+## 0.17.0 - 2026-06-03
+
+### Added — smart paste: `lex/preparePaste` re-anchors pasted text to the caret's structural level ([#708](https://github.com/lex-fmt/lex/issues/708))
+
+The language server now implements a custom `lex/preparePaste` request. On paste, lex-lsp classifies the clipboard (verbatim / table / single-line / re-anchor) and, for the re-anchor case, shifts the pasted block's indentation to match the structural container enclosing the caret — so copy-paste between and into Lex documents lands at the right structural level instead of the source's original indentation. Advertised via a capability flag so editors enable interception only against a server that implements it. Editor glue that calls the request ships separately, one PR per editor.
+
 ## 0.16.0 - 2026-06-02
 
 ### Fixed — whole-element reference-line anchors render on the default `lexd <file> --to <fmt>` path ([#722](https://github.com/lex-fmt/lex/issues/722))
