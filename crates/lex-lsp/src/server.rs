@@ -3466,7 +3466,8 @@ mod tests {
         );
     }
 
-    /// `slice_text_by_range` treats `Range.character` as a UTF-8 byte
+    /// `slice_text_by_range` treats each endpoint's `Position.character`
+    /// (`range.start.character` / `range.end.character`) as a UTF-8 byte
     /// offset, matching lex-core's `SourceLocation::byte_to_position`
     /// (which sets `column = byte_offset - line_start`). Char-based
     /// slicing would mis-slice selections containing multi-byte chars;
