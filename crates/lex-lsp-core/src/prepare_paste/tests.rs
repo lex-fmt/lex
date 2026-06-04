@@ -218,8 +218,8 @@ fn classify_single_line_merge_passthrough() {
     // current line, so it stays passthrough — there is no new block to anchor.
     let source = "Top\n\n    body line\n";
     let doc = parse_document(source).expect("parse");
-    // Caret at byte 12 — past "    body line" content, a merge position.
-    let result = prepare_paste(&doc, source, empty_range(2, 12), "just one line");
+    // Caret at byte 13 — end of "    body line" (4 + 9), a merge position.
+    let result = prepare_paste(&doc, source, empty_range(2, 13), "just one line");
     assert_eq!(result.mode, PasteMode::PassthroughSingleLine);
     assert_eq!(result.text, "just one line");
 }
@@ -482,7 +482,7 @@ fn partial_indentation_carried_through_end_to_end() {
 fn single_line_clipboard_merge_inside_session_passes_through() {
     let source = "Top\n\n    existing\n";
     let doc = parse_document(source).expect("parse");
-    // Caret at byte 12 — past "    existing", a merge position.
+    // Caret at byte 12 — end of "    existing" (4 + 8), a merge position.
     let result = prepare_paste(&doc, source, empty_range(2, 12), "one liner");
     assert_eq!(result.mode, PasteMode::PassthroughSingleLine);
     assert_eq!(result.text, "one liner");
