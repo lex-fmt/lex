@@ -109,7 +109,8 @@ pub fn prepare_paste(
         };
     }
 
-    let mode = classify(document, source, range.start, pasted_text);
+    let fresh_line = is_fresh_line(source, range.start);
+    let mode = classify(document, source, range.start, pasted_text, fresh_line);
 
     let text = match mode {
         PasteMode::PassthroughVerbatim
@@ -117,7 +118,6 @@ pub fn prepare_paste(
         | PasteMode::PassthroughSingleLine => pasted_text.to_string(),
         PasteMode::Reanchor => {
             let anchor = resolve_anchor(document, source, range.start);
-            let fresh_line = is_fresh_line(source, range.start);
             reanchor(pasted_text, anchor, fresh_line)
         }
     };
@@ -126,11 +126,16 @@ pub fn prepare_paste(
 }
 
 /// §3: classify the paste by the caret's structural context, innermost-first.
+///
+/// `fresh_line` (§4.4) is the caret-position signal computed by [`is_fresh_line`]:
+/// `true` when everything before the caret on its source line is whitespace (the
+/// paste starts a new block), `false` when the paste merges into existing content.
 fn classify(
     document: &Document,
     source: &str,
     anchor_pos: Position,
     pasted_text: &str,
+    fresh_line: bool,
 ) -> PasteMode {
     let ast_pos = to_ast_position(anchor_pos);
 
@@ -147,8 +152,14 @@ fn classify(
         return PasteMode::PassthroughTable;
     }
 
-    // Single-line clipboard: no inter-line structure to re-anchor.
-    if is_single_line(pasted_text) {
+    // Single-line clipboard: split on caret context (§3, gemini refinement).
+    //   - Merge (caret follows existing content): no structural block is being
+    //     placed — the line continues the current one, so it stays passthrough.
+    //   - Fresh line (caret on a blank/whitespace-only prefix): the single line
+    //     IS a new block being dropped at this structural level, so it is
+    //     re-anchored just like a multi-line fresh paste. A line carrying the
+    //     source's absolute indentation would otherwise land at the wrong level.
+    if is_single_line(pasted_text) && !fresh_line {
         return PasteMode::PassthroughSingleLine;
     }
 
@@ -310,7 +321,8 @@ pub fn is_fresh_line(source: &str, pos: Position) -> bool {
 ///
 /// - `anchor`: target content indentation (display columns).
 /// - `fresh_line`: §4.4 — `true` re-anchors every line; `false` (merge) strips
-///   line 1's whitespace with no anchor and re-anchors lines 2..n.
+///   line 1 down to the clipboard baseline (preserving any relative indentation
+///   it carried *beyond* the baseline) with no anchor, and re-anchors lines 2..n.
 ///
 /// The clipboard's trailing newline (and internal blank lines) are preserved.
 pub fn reanchor(pasted_text: &str, anchor: usize, fresh_line: bool) -> String {
@@ -349,8 +361,15 @@ pub fn reanchor(pasted_text: &str, anchor: usize, fresh_line: bool) -> String {
         let (orig_indent, content) = split_leading(line);
 
         if idx == 0 && !fresh_line {
-            // §4.4 merge: the first pasted line continues existing content —
-            // strip its whitespace entirely, apply no anchor.
+            // §4.4 merge: the first pasted line continues existing content, so
+            // it gets no anchor. But strip only down to the clipboard *baseline*,
+            // not to bare content: if line 1 was indented deeper than the block
+            // baseline, that extra relative indentation is part of the copied
+            // structure and is preserved (gemini refinement). `orig_indent` is
+            // never below `baseline` (baseline is the per-line min), so the
+            // subtraction is non-negative; `max(0, …)` keeps it total.
+            let rel_indent = orig_indent.saturating_sub(baseline);
+            out.extend(std::iter::repeat_n(' ', rel_indent));
             out.push_str(content);
             continue;
         }

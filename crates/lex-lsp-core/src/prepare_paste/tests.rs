@@ -87,8 +87,28 @@ fn reanchor_table() {
             pasted: "    joined\n        second\n",
             anchor: 4,
             fresh_line: false,
-            // baseline = 4, delta = 0. line1 merge -> "joined"; line2 (8) -> 8.
+            // baseline = 4, delta = 0. line1 at baseline -> "joined"; line2 (8) -> 8.
             expected: "joined\n        second\n",
+        },
+        ReanchorCase {
+            name: "merge first line deeper than baseline preserves relative indent",
+            // gemini refinement (#2): baseline = min(8, 4) = 4. delta = anchor(8)
+            // - baseline(4) = +4. line1 (8) merges -> strip only to baseline,
+            // keep 8-4=4 relative spaces ("    joined"); line2 (4) re-anchors:
+            // 4 + delta(4) = 8.
+            pasted: "        joined\n    second\n",
+            anchor: 8,
+            fresh_line: false,
+            expected: "    joined\n        second\n",
+        },
+        ReanchorCase {
+            name: "merge single deeper-than-baseline line keeps relative indent",
+            // A one-line merge whose sole line is indented: baseline equals that
+            // indent, so relative indent is zero — strips entirely, as before.
+            pasted: "        only\n",
+            anchor: 4,
+            fresh_line: false,
+            expected: "only\n",
         },
         ReanchorCase {
             name: "trailing newline preserved",
@@ -193,12 +213,41 @@ fn is_fresh_line_whitespace_only_prefix_with_later_multibyte_is_fresh() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn classify_single_line_passthrough() {
+fn classify_single_line_merge_passthrough() {
+    // Merge case (caret follows existing content): a single line continues the
+    // current line, so it stays passthrough — there is no new block to anchor.
     let source = "Top\n\n    body line\n";
     let doc = parse_document(source).expect("parse");
-    let result = prepare_paste(&doc, source, empty_range(2, 4), "just one line");
+    // Caret at byte 13 — end of "    body line" (4 + 9), a merge position.
+    let result = prepare_paste(&doc, source, empty_range(2, 13), "just one line");
     assert_eq!(result.mode, PasteMode::PassthroughSingleLine);
     assert_eq!(result.text, "just one line");
+}
+
+#[test]
+fn classify_single_line_fresh_reanchors() {
+    // Fresh-line case (gemini refinement): a single line dropped onto a
+    // blank/whitespace-only prefix IS a new block, so it re-anchors to the
+    // caret's structural level rather than passing through verbatim.
+    let source = "Top\n\n    existing\n\n";
+    let doc = parse_document(source).expect("parse");
+    // Blank line 4, inside the session (content indent 4). A column-zero single
+    // line re-anchors to 4.
+    let result = prepare_paste(&doc, source, empty_range(4, 0), "just one line");
+    assert_eq!(result.mode, PasteMode::Reanchor);
+    assert_eq!(result.text, "    just one line");
+}
+
+#[test]
+fn classify_single_line_fresh_dedents_overindented_clipboard() {
+    // A single line lifted from deep nesting (absolute indent 8) dropped on a
+    // fresh line at a shallower level (anchor 4) is re-anchored down to 4 —
+    // exactly the bug smart paste exists to fix, now reached for single lines.
+    let source = "Top\n\n    existing\n\n";
+    let doc = parse_document(source).expect("parse");
+    let result = prepare_paste(&doc, source, empty_range(4, 0), "        deep line");
+    assert_eq!(result.mode, PasteMode::Reanchor);
+    assert_eq!(result.text, "    deep line");
 }
 
 #[test]
@@ -320,6 +369,27 @@ fn merge_first_line_joins_existing_content() {
 }
 
 #[test]
+fn merge_first_line_deeper_than_baseline_preserves_relative_indent() {
+    // gemini refinement (#2), end-to-end: the first clipboard line is indented
+    // deeper than the block baseline. On a merge it must NOT be stripped to bare
+    // content — the extra relative indentation (orig - baseline) is preserved.
+    let source = "Top\n\n    existing text\n";
+    let doc = parse_document(source).expect("parse");
+    // Merge caret mid-content on line 2 (byte 13, after "    existing ").
+    // Clipboard baseline = min(8, 4) = 4; first line at 8 keeps 8-4 = 4 spaces.
+    let result = prepare_paste(
+        &doc,
+        source,
+        empty_range(2, 13),
+        "        joined\n    tail\n",
+    );
+    assert_eq!(result.mode, PasteMode::Reanchor);
+    // line1 merge: keep relative indent 4 -> "    joined".
+    // line2: anchor 4, baseline 4, delta 0; tail (4) -> 4.
+    assert_eq!(result.text, "    joined\n    tail\n");
+}
+
+#[test]
 fn selection_replace_anchor_from_selection_start() {
     let source = "Top\n\n    Nested\n\n        deep one\n        deep two\n";
     let doc = parse_document(source).expect("parse");
@@ -409,10 +479,11 @@ fn partial_indentation_carried_through_end_to_end() {
 }
 
 #[test]
-fn single_line_clipboard_inside_session_passes_through() {
+fn single_line_clipboard_merge_inside_session_passes_through() {
     let source = "Top\n\n    existing\n";
     let doc = parse_document(source).expect("parse");
-    let result = prepare_paste(&doc, source, empty_range(2, 4), "one liner");
+    // Caret at byte 12 — end of "    existing" (4 + 8), a merge position.
+    let result = prepare_paste(&doc, source, empty_range(2, 12), "one liner");
     assert_eq!(result.mode, PasteMode::PassthroughSingleLine);
     assert_eq!(result.text, "one liner");
 }
