@@ -9,17 +9,18 @@
 //!     line — NOT a UTF-16 code unit (the LSP default) nor a `char` count. This is the
 //!     single load-bearing convention for every position↔text conversion here.
 //!
-//!     It originates upstream: lex-core's `LineColumnLocator::byte_to_position` computes
+//!     It originates upstream: lex-core's `SourceLocation::byte_to_position` computes
 //!     `column = byte_offset - line_start`, and `to_lsp_position` forwards that value to
 //!     LSP unchanged. Every consumer of a `Position` in this crate must read `.character`
 //!     back as a byte offset to stay consistent.
 //!
 //!     Practical consequence: to take the text up to a caret, slice on the byte offset
-//!     (`&line[..pos.character as usize]`, guarding `is_char_boundary`) — never
-//!     `line.chars().take(pos.character)`. A `char`-based count silently over-reads past
-//!     the caret on any line containing multi-byte characters (this caused a real bug in
-//!     #740). See `slice_text_by_range` in `server.rs` for the canonical byte-offset
-//!     slicing routine, including the multi-byte-boundary guards.
+//!     (`line.get(..pos.character as usize)`, which returns `None` rather than panicking
+//!     on an out-of-bounds or mid-`char` index) — never `line.chars().take(pos.character)`.
+//!     A `char`-based count silently over-reads past the caret on any line containing
+//!     multi-byte characters (this caused a real bug in #740). See `slice_text_by_range`
+//!     in `server.rs` for the canonical byte-offset slicing routine, including the
+//!     multi-byte-boundary guards.
 //!
 //! Design Decision: tower-lsp
 //!

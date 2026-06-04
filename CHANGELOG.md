@@ -4,8 +4,6 @@
 
 ## Unreleased
 
-- docs(lsp): document the `Position.character` == UTF-8 byte-offset convention at lex-lsp module level, so feature authors find it before reaching for a char-based offset ([#741](https://github.com/lex-fmt/lex/issues/741))
-
 ## 0.17.0 - 2026-06-03
 
 ### Added — smart paste: `lex/preparePaste` re-anchors pasted text to the caret's structural level ([#708](https://github.com/lex-fmt/lex/issues/708))
