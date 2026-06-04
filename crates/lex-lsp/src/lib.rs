@@ -5,14 +5,14 @@
 //!
 //! Position Encoding — read before touching any `Position`
 //!
-//!     Throughout this server, `Position.character` is a **UTF-8 byte offset** into the
-//!     line — NOT a UTF-16 code unit (the LSP default) nor a `char` count. This is the
-//!     single load-bearing convention for every position↔text conversion here.
+//!     In this server, `Position.character` is a **UTF-8 byte offset** into the line —
+//!     NOT a UTF-16 code unit (the LSP default) nor a `char` count. This is the
+//!     load-bearing convention every position↔text conversion here must honor.
 //!
 //!     It originates upstream: lex-core's `SourceLocation::byte_to_position` computes
 //!     `column = byte_offset - line_start`, and `to_lsp_position` forwards that value to
-//!     LSP unchanged. Every consumer of a `Position` in this crate must read `.character`
-//!     back as a byte offset to stay consistent.
+//!     LSP unchanged. Every consumer of a `Position` in this crate must therefore read
+//!     `.character` back as a byte offset to stay consistent.
 //!
 //!     Practical consequence: to take the text up to a caret, slice on the byte offset
 //!     (`line.get(..pos.character as usize)`, which returns `None` rather than panicking
@@ -21,6 +21,11 @@
 //!     multi-byte characters (this caused a real bug in #740). See `slice_text_by_range`
 //!     in `server.rs` for the canonical byte-offset slicing routine, including the
 //!     multi-byte-boundary guards.
+//!
+//!     Caveat — not yet uniform: `indent_level_from_position` in `server.rs` still uses
+//!     the `chars().take()` form. It is currently harmless there (it only consumes leading
+//!     ASCII indentation, where byte and `char` counts coincide), but it does not yet
+//!     follow this convention and is a separate cleanup, not a reason to copy the pattern.
 //!
 //! Design Decision: tower-lsp
 //!

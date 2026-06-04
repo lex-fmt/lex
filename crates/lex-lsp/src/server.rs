@@ -1814,10 +1814,11 @@ where
 /// outside the document or splits a multi-byte character.
 ///
 /// `character` is treated as a **UTF-8 byte offset** to match the rest
-/// of the server: lex-core's `LineColumnLocator::byte_to_position`
+/// of the server: lex-core's `SourceLocation::byte_to_position`
 /// computes `column = byte_offset - line_start`, and `to_lsp_position`
 /// forwards that value to LSP as-is. Using char offsets here would
-/// mis-slice any selection containing multi-byte characters.
+/// mis-slice any selection containing multi-byte characters. See the
+/// crate-level "Position Encoding" docs for the full convention.
 fn slice_text_by_range(text: &str, range: Range) -> Option<String> {
     let start_line = range.start.line as usize;
     let end_line = range.end.line as usize;
@@ -3464,7 +3465,7 @@ mod tests {
     }
 
     /// `slice_text_by_range` treats `Range.character` as a UTF-8 byte
-    /// offset, matching lex-core's `LineColumnLocator::byte_to_position`
+    /// offset, matching lex-core's `SourceLocation::byte_to_position`
     /// (which sets `column = byte_offset - line_start`). Char-based
     /// slicing would mis-slice selections containing multi-byte chars;
     /// this test pins the byte semantics.
