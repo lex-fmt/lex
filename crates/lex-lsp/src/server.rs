@@ -1813,12 +1813,14 @@ where
 /// Slice `text` by an LSP `Range`. Returns `None` when the range falls
 /// outside the document or splits a multi-byte character.
 ///
-/// `character` is treated as a **UTF-8 byte offset** to match the rest
-/// of the server: lex-core's `SourceLocation::byte_to_position`
-/// computes `column = byte_offset - line_start`, and `to_lsp_position`
-/// forwards that value to LSP as-is. Using char offsets here would
-/// mis-slice any selection containing multi-byte characters. See the
-/// crate-level "Position Encoding" docs for the full convention.
+/// `character` is treated as a **UTF-8 byte offset**, following the
+/// crate's position-encoding convention: lex-core's
+/// `SourceLocation::byte_to_position` computes
+/// `column = byte_offset - line_start`, and `to_lsp_position` forwards
+/// that value to LSP as-is. Using char offsets here would mis-slice any
+/// selection containing multi-byte characters. See the crate-level
+/// "Position Encoding" docs for the full convention (and its one known
+/// straggler).
 fn slice_text_by_range(text: &str, range: Range) -> Option<String> {
     let start_line = range.start.line as usize;
     let end_line = range.end.line as usize;

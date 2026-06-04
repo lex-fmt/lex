@@ -16,7 +16,8 @@
 //!
 //!     Practical consequence: to take the text up to a caret, slice on the byte offset
 //!     (`line.get(..pos.character as usize)`, which returns `None` rather than panicking
-//!     on an out-of-bounds or mid-`char` index) — never `line.chars().take(pos.character)`.
+//!     on an out-of-bounds or mid-`char` index) — never
+//!     `line.chars().take(pos.character as usize)`.
 //!     A `char`-based count silently over-reads past the caret on any line containing
 //!     multi-byte characters (this caused a real bug in #740). See `slice_text_by_range`
 //!     in `server.rs` for the canonical byte-offset slicing routine, including the
