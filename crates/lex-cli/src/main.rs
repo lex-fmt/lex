@@ -813,6 +813,16 @@ fn handle_config_gen(
         surface_override: None,
     });
 
+    // Surface non-fatal boot problems (unresolvable namespaces, trust-gate
+    // denials, …) to stderr — otherwise a namespace that failed to register
+    // would silently drop its declared codes from the discovery section below.
+    for diag in &outcome.diagnostics {
+        match &diag.namespace {
+            Some(ns) => eprintln!("lexd config gen: {ns}: {}", diag.message),
+            None => eprintln!("lexd config gen: {}", diag.message),
+        }
+    }
+
     if let Some(section) = render_declared_diagnostics_section(&outcome) {
         if !rendered.ends_with('\n') {
             rendered.push('\n');
@@ -861,7 +871,12 @@ fn render_declared_diagnostics_section(
         let mut block = format!("# {} (declared diagnostic codes)\n", ns.name);
         for decl in &declared {
             if let Some(desc) = &decl.description {
-                block.push_str(&format!("# {desc}\n"));
+                // Comment EVERY line — a multi-line description (e.g. a YAML
+                // block scalar) would otherwise leave its continuation lines
+                // bare and produce invalid TOML once an entry is uncommented.
+                for line in desc.lines() {
+                    block.push_str(&format!("# {line}\n"));
+                }
             }
             block.push_str(&format!(
                 "# default severity: {}\n",
@@ -876,11 +891,15 @@ fn render_declared_diagnostics_section(
         return None;
     }
 
+    // The discovery section is fully COMMENTED and emits NO `[diagnostics.rules]`
+    // table header: the base clapfig template already defines that table, so a
+    // second header (or a top-level dotted key) would redefine it — invalid TOML.
+    // Users copy an entry up under the existing `[diagnostics.rules]` table.
     let mut section = String::from(
         "# Extension diagnostic rules\n\
-         # Uncomment an entry below to override an extension diagnostic's\n\
-         # severity. Allowed values: \"allow\", \"warn\", \"deny\".\n\
-         [diagnostics.rules]\n",
+         # The extension diagnostic codes below can be overridden under the\n\
+         # `[diagnostics.rules]` table above — copy an entry there and set its\n\
+         # severity. Allowed values: \"allow\", \"warn\", \"deny\".\n",
     );
     section.push_str(&blocks.join("#\n"));
     Some(section)
