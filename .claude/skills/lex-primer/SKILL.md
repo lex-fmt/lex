@@ -1,1 +1,0 @@
-../../../.release/.claude/skills/lex-primer/SKILL.md

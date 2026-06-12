@@ -1,0 +1,1 @@
+- Migrate to WS7 managed baseline; rename release caller wasm-package to wasm-packages

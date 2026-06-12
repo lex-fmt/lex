@@ -51,7 +51,7 @@ jobs:
       # previous hand-rolled .github/workflows/release-wasm.yml (deleted
       # in this PR) — the canonical pipeline now does the build once and
       # distributes the artifact to GH release + npm in one tag-push.
-      wasm-package: lex-wasm
+      wasm-packages: lex-wasm
       wasm-npm-scope: lex-fmt
     # `secrets: inherit` doesn't propagate cross-org (lex-fmt → arthur-debert),
     # so secrets must be passed explicitly. Note: lex-fmt/lex stores the
