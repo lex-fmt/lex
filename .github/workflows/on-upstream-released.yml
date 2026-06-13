@@ -1,6 +1,6 @@
 # Layer 2 handler: react to an upstream's release.
 #
-# Thin caller of arthur-debert/release's canonical `cascade-handler@v1`.
+# Thin caller of arthur-debert/release's canonical `cascade-handler@v3`.
 # The reusable workflow runs the 5 `scripts/release/` primitives in order:
 #   should-release → get-current-version → (compute new) → update-release
 #   → commit + branch + admin-merge PR → trigger-release
@@ -30,7 +30,7 @@ permissions:
 
 jobs:
   cascade:
-    uses: arthur-debert/release/.github/workflows/cascade-handler.yml@v2
+    uses: arthur-debert/release/.github/workflows/cascade-handler.yml@v3
     with:
       git-author-name: lex-fmt release-bot
       git-author-email: release-bot@lex-fmt.local
