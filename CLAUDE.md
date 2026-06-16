@@ -1,4 +1,4 @@
-<!-- BEGIN release-managed orientation — managed by release-sync; do not edit -->
+<!-- BEGIN release-managed orientation — managed by release-core; do not edit -->
 This repo's quality gate, build, release, and PR/dev flow are provided by
 `release-core` (installed at session start; not stored in this repo).
 

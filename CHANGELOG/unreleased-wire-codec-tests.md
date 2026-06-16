@@ -1,1 +1,0 @@
-- Add direct unit tests for the wire/inline codec helpers and the FromWireError Display surface (covers each WireInline arm forward+reverse, raises wire/inline.rs line coverage 35% → 94% and wire/error.rs 0% → 100%).

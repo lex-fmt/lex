@@ -4,6 +4,20 @@
 
 ## Unreleased
 
+## 0.17.1 - 2026-06-16
+
+lexd config gen enumerates declared extension diagnostic codes as commented [diagnostics.rules] entries
+- Migrate to WS7 managed baseline; rename release caller wasm-package to wasm-packages
+- docs(lsp): document the `Position.character` == UTF-8 byte-offset convention at lex-lsp module level, so feature authors find it before reaching for a char-based offset ([#741](https://github.com/lex-fmt/lex/issues/741))
+### Changed — smart paste: single-line fresh-line re-anchor + merge first-line strip-to-baseline ([#743](https://github.com/lex-fmt/lex/issues/743))
+
+Two refinements to the `lex/preparePaste` re-anchor transform, from the comms#73 spec review:
+
+- **Single-line paste on a fresh line now re-anchors.** A single clipboard line dropped onto a blank/whitespace-only caret position is a new block, so it is re-anchored to the caret's structural level instead of inserted verbatim (a deep-indented line lifted from a nesting no longer lands over-indented). Single-line pastes that *merge* into existing content still pass through unchanged.
+- **Merge-case first line strips only to the clipboard baseline.** Previously the first line of a merge paste had its leading whitespace stripped entirely; if that line was indented deeper than the block baseline, the extra relative indentation was lost. It is now stripped only down to the baseline, preserving `max(0, original_indent - baseline)`.
+- ci: migrate release reusable-workflow callers from @v2 to @v3
+- Add direct unit tests for the wire/inline codec helpers and the FromWireError Display surface (covers each WireInline arm forward+reverse, raises wire/inline.rs line coverage 35% → 94% and wire/error.rs 0% → 100%).
+
 ## 0.17.0 - 2026-06-03
 
 ### Added — smart paste: `lex/preparePaste` re-anchors pasted text to the caret's structural level ([#708](https://github.com/lex-fmt/lex/issues/708))

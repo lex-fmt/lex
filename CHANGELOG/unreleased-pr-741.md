@@ -1,1 +1,0 @@
-- docs(lsp): document the `Position.character` == UTF-8 byte-offset convention at lex-lsp module level, so feature authors find it before reaching for a char-based offset ([#741](https://github.com/lex-fmt/lex/issues/741))
