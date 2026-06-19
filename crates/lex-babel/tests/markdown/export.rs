@@ -464,6 +464,103 @@ fn test_placeholder_reference_as_text() {
     );
 }
 
+#[test]
+fn test_multi_group_verbatim_exports_every_group_as_a_fence() {
+    // lex#769: a verbatim block with multiple subject/content groups sharing one
+    // closing marker (`:: shell ::`) must export EVERY group as its own fenced
+    // code block. Pre-fix, only the first group survived the lex → IR conversion
+    // (the IR verbatim node holds a single subject + content), so groups 2..N
+    // silently vanished from the markdown.
+    let lex_src = "First group:\n\n    cmd one\nSecond group:\n\n    cmd two\nThird group:\n\n    cmd three\n:: shell ::\n";
+    let lex_doc = STRING_TO_AST.run(lex_src.to_string()).unwrap();
+    let md = MarkdownFormat.serialize(&lex_doc).unwrap();
+
+    // Every group's command lands in the output, not just the first.
+    for cmd in ["cmd one", "cmd two", "cmd three"] {
+        assert!(md.contains(cmd), "group command `{cmd}` missing: {md}");
+    }
+    // No later group leaked as escaped prose.
+    assert!(
+        !md.contains("\\#") && !md.contains("cmd two cmd"),
+        "later groups must not render as escaped/joined prose: {md}"
+    );
+
+    // Walk the comrak tree: exactly three CodeBlocks, each carrying one command
+    // and the shared `shell` language hint.
+    let arena = Arena::new();
+    let options = ComrakOptions::default();
+    let root = parse_document(&arena, &md, &options);
+
+    fn collect_code_blocks<'a>(
+        node: &'a comrak::nodes::AstNode<'a>,
+        out: &mut Vec<(String, String)>,
+    ) {
+        if let NodeValue::CodeBlock(cb) = &node.data.borrow().value {
+            out.push((cb.info.clone(), cb.literal.clone()));
+        }
+        for child in node.children() {
+            collect_code_blocks(child, out);
+        }
+    }
+
+    let mut blocks = Vec::new();
+    collect_code_blocks(root, &mut blocks);
+    assert_eq!(
+        blocks.len(),
+        3,
+        "all three verbatim groups must become separate code fences: {blocks:?}"
+    );
+    for (info, literal) in &blocks {
+        assert_eq!(info, "shell", "each group keeps the shared language hint");
+        assert!(
+            literal.contains("cmd "),
+            "each fence carries its group's command: {literal:?}"
+        );
+    }
+}
+
+#[test]
+fn test_anchorless_file_reference_becomes_a_link_not_escaped_text() {
+    // lex#770: a `[./path]` file reference with no anchorable adjacent word
+    // (here the two refs abut each other, so word-anchoring finds no word to
+    // wrap) must still emit a real Markdown link using the target as its own
+    // link text — not fall through to escaped literal `\[./why\]`.
+    let lex_src = "Nav: [./editors] [./why]\n";
+    let lex_doc = STRING_TO_AST.run(lex_src.to_string()).unwrap();
+    let md = MarkdownFormat.serialize(&lex_doc).unwrap();
+
+    // The anchorless `[./why]` is a self-link: text and href both the target.
+    assert!(
+        md.contains("[./why](./why)"),
+        "anchorless file ref must self-link, got: {md}"
+    );
+    // It must NOT be escaped as literal bracket text.
+    assert!(
+        !md.contains("\\[./why\\]"),
+        "anchorless file ref must not be escaped to literal text, got: {md}"
+    );
+}
+
+#[test]
+fn test_anchored_file_reference_unchanged() {
+    // Guard for lex#770: when an adjacent anchor word IS present, the existing
+    // word-anchoring path wins — `Editors [./editors]` links the word "Editors"
+    // to the target. The anchorless fix must not perturb this.
+    let lex_src = "See Editors [./editors] for details.\n";
+    let lex_doc = STRING_TO_AST.run(lex_src.to_string()).unwrap();
+    let md = MarkdownFormat.serialize(&lex_doc).unwrap();
+
+    assert!(
+        md.contains("[Editors](./editors)"),
+        "anchored file ref must link the anchor word, got: {md}"
+    );
+    // The bare target must not also appear as a separate self-link.
+    assert!(
+        !md.contains("[./editors](./editors)"),
+        "anchored ref must not additionally self-link the target, got: {md}"
+    );
+}
+
 // ============================================================================
 // ISSUE C: Markdown List Formatting Tests
 // ============================================================================

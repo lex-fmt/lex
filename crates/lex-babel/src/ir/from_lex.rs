@@ -370,6 +370,17 @@ fn convert_children(items: &[LexContentItem], level: usize, ctx: &ConvCtx) -> Ve
         .filter(|item| !matches!(item, LexContentItem::BlankLineGroup(_)))
         .flat_map(|item| {
             let mut nodes = extract_attached_annotations(item, level, ctx);
+            // A multi-group verbatim block (multiple subject/content pairs
+            // sharing one closing marker, e.g. `verbatim-11-group-shell.lex`)
+            // is flattened into one IR `DocNode::Verbatim` per group: the IR
+            // verbatim node carries a single subject + content, so without this
+            // every group after the first would be dropped (#769).
+            if let LexContentItem::VerbatimBlock(verbatim) = item {
+                if verbatim.group_len() > 1 {
+                    nodes.extend(from_lex_verbatim_groups(verbatim, ctx));
+                    return nodes;
+                }
+            }
             nodes.push(from_lex_content_item_with_level(item, level, ctx));
             nodes
         })
@@ -694,6 +705,60 @@ fn from_lex_verbatim(verbatim: &LexVerbatim, ctx: &ConvCtx) -> DocNode {
         content,
         parameters,
     })
+}
+
+/// Expand a multi-group verbatim block into one IR `DocNode::Verbatim` per
+/// group. A multi-group verbatim is always a plain code/text block (the typed
+/// media/tabular hydration in [`from_lex_verbatim`] only ever applies to a
+/// single-group block), so each group becomes a generic verbatim sharing the
+/// block's single closing label + parameters. Without this, only the first
+/// group survived the lex → IR conversion and later groups vanished from every
+/// serializer's output (#769).
+fn from_lex_verbatim_groups(verbatim: &LexVerbatim, ctx: &ConvCtx) -> Vec<DocNode> {
+    let language = Some(verbatim.closing_data.label.value.clone());
+    let parameters: Vec<(String, String)> = verbatim
+        .closing_data
+        .parameters
+        .iter()
+        .map(|p| (p.key.clone(), p.value.clone()))
+        .collect();
+
+    verbatim
+        .group()
+        .map(|group| {
+            let subject_str = group.subject.as_string();
+            let subject = if subject_str.is_empty() {
+                None
+            } else {
+                Some(subject_str.to_string())
+            };
+            // A reference line can anchor each group's subject (§2.3.2), exactly
+            // as for a single-group verbatim subject.
+            let subject_href = ctx
+                .anchors
+                .match_head_line(group.subject)
+                .map(|a| a.href.clone());
+            let content = group
+                .children
+                .iter()
+                .map(|item| {
+                    if let LexContentItem::VerbatimLine(vl) = item {
+                        vl.content.as_string().to_string()
+                    } else {
+                        String::new()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            DocNode::Verbatim(Verbatim {
+                subject,
+                subject_href,
+                language: language.clone(),
+                content,
+                parameters: parameters.clone(),
+            })
+        })
+        .collect()
 }
 
 /// Restore the verbatim subject as a default caption / title / alt on
