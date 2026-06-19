@@ -57,6 +57,8 @@ use crate::lex::inlines::{
     determine_reference_type, parse_inlines, AnchorDirection, AnchorKind, InlineNode,
     ReferenceInline, WordAnchor,
 };
+use crate::lex::lexing::line_classification::classify_line_tokens;
+use crate::lex::token::{LineType, Token};
 use std::ops::Range;
 
 /// Result of the reference-line pre-pass.
@@ -252,10 +254,206 @@ fn list_marker_len(body: &str) -> Option<usize> {
     None
 }
 
+/// Per-physical-line classification used by the verbatim-region scan: the
+/// line's [`LineType`] and its indentation depth (number of leading 4-space
+/// indentation units).
+struct ClassifiedLine {
+    line_type: LineType,
+    indent: usize,
+}
+
+/// Classify one physical line the same way the lexer's line grouper does:
+/// tokenize it and run [`classify_line_tokens`], and count leading
+/// [`Token::Indentation`] tokens for the indentation depth.
+///
+/// A trailing newline is appended before tokenizing because the line text
+/// produced by [`physical_lines`] has its `\n` stripped, and the classifier's
+/// blank-line / colon handling expects the line's tokens as the lexer would
+/// emit them.
+fn classify_physical_line(text: &str) -> ClassifiedLine {
+    let with_newline = format!("{text}\n");
+    let tokens: Vec<Token> = crate::lex::lexing::base_tokenization::tokenize(&with_newline)
+        .into_iter()
+        .map(|(t, _)| t)
+        .collect();
+    let indent = tokens
+        .iter()
+        .take_while(|t| matches!(t, Token::Indentation))
+        .count();
+    ClassifiedLine {
+        line_type: classify_line_tokens(&tokens),
+        indent,
+    }
+}
+
+/// Compute which physical lines fall inside a verbatim block (subject through
+/// closing `:: label ::` marker, inclusive). Reference-line extraction must
+/// skip these lines: a verbatim block's body is raw, so a `[token]` line inside
+/// it (e.g. a TOML table header `[server]`) must stay literal — never be
+/// ejected and re-emitted as a whole-element anchor / auto-link (lex#755).
+///
+/// This mirrors the structural verbatim grammar
+/// ([`match_verbatim_block`](crate::lex::parsing::parser::GrammarMatcher::match_verbatim_block)):
+/// a subject line, then one or more groups of body content, terminated by a
+/// `DataMarkerLine` (`:: label ::`) at the subject's indentation. Body content
+/// may be deeper-indented (inflow) or at the subject's indentation (fullwidth /
+/// groups); a group is another subject + body before the single shared closing
+/// marker. Crucially the scan only marks a region verbatim once it has *seen*
+/// the closing marker — a subject with no closing marker is an ordinary
+/// session/definition and its lines stay eligible for reference extraction.
+///
+/// # The anchoring-slot exception
+///
+/// One position inside a verbatim region is deliberately *not* protected: the
+/// reference line that anchors the block's subject. Per §2.3 (see this module's
+/// header) a link-like reference on its own line directly below a subject — at
+/// the subject's indentation, with the indented body following — anchors that
+/// subject and is transparent to structure:
+///
+/// ```text
+/// Example Source:
+/// [./example.rs]       <- anchors "Example Source"; removed, NOT body
+///     fn main() {}     <- the actual (deeper-indented) body
+/// :: rust ::
+/// ```
+///
+/// That slot — the first non-blank line directly after a subject, at the
+/// subject's indentation — keeps its existing whole-element-anchor behavior.
+/// Every *other* line in the region (notably the deeper-indented inflow body
+/// where TOML headers like `[server]` live, lex#755) is protected and stays
+/// literal.
+fn verbatim_protected_lines(lines: &[PhysicalLine<'_>]) -> Vec<bool> {
+    let classified: Vec<ClassifiedLine> = lines
+        .iter()
+        .map(|l| classify_physical_line(l.text))
+        .collect();
+
+    let mut protected = vec![false; lines.len()];
+    let len = lines.len();
+    let mut idx = 0;
+
+    while idx < len {
+        // Skip blank lines between blocks.
+        if matches!(classified[idx].line_type, LineType::BlankLine) {
+            idx += 1;
+            continue;
+        }
+
+        // A verbatim block opens on a subject line.
+        if !matches!(
+            classified[idx].line_type,
+            LineType::SubjectLine | LineType::SubjectOrListItemLine
+        ) {
+            idx += 1;
+            continue;
+        }
+
+        let subject_idx = idx;
+        let subject_indent = classified[subject_idx].indent;
+
+        // Scan forward for a closing data marker at the subject's indentation.
+        // Allow further subject lines (verbatim groups) and any body lines in
+        // between. Stop — without claiming a verbatim block — if we hit a
+        // content line shallower than the subject that is not the closing
+        // marker, which means the structure closed before any closing marker
+        // appeared (so it was an ordinary session/definition, not verbatim).
+        let mut cursor = subject_idx + 1;
+        let mut closing: Option<usize> = None;
+        while cursor < len {
+            let line = &classified[cursor];
+            match line.line_type {
+                LineType::BlankLine => {
+                    cursor += 1;
+                }
+                LineType::DataMarkerLine if line.indent == subject_indent => {
+                    closing = Some(cursor);
+                    break;
+                }
+                _ => {
+                    if line.indent < subject_indent {
+                        break;
+                    }
+                    cursor += 1;
+                }
+            }
+        }
+
+        if let Some(closing_idx) = closing {
+            // Protect every line of the region except the subject lines
+            // themselves (they are normal anchorable head lines) and the
+            // anchoring slot directly after a subject (see the doc comment).
+            let mut after_subject = false;
+            for i in subject_idx..=closing_idx {
+                let is_subject = matches!(
+                    classified[i].line_type,
+                    LineType::SubjectLine | LineType::SubjectOrListItemLine
+                );
+                let is_blank = matches!(classified[i].line_type, LineType::BlankLine);
+
+                if is_subject {
+                    protected[i] = false;
+                    after_subject = true;
+                    continue;
+                }
+                if is_blank {
+                    // Blank lines never carry a reference; leave them
+                    // unprotected and keep looking for the anchoring slot, which
+                    // may follow a blank line after the subject.
+                    continue;
+                }
+                // First non-blank, non-subject line after a subject at the
+                // subject's indentation is the anchoring slot — leave it to the
+                // existing whole-element-anchor handling — *but only when real
+                // body content follows it*. The documented anchoring shape is
+                // `subject` / `[ref]` / indented-body / `:: marker ::`: the
+                // reference anchors the subject and the body follows. If instead
+                // the bracket line is itself the block's body (nothing but the
+                // closing marker follows), it must stay literal (lex#755), so we
+                // protect it rather than ejecting it as an anchor.
+                if after_subject
+                    && classified[i].indent == subject_indent
+                    && has_body_after(&classified, i, closing_idx)
+                {
+                    protected[i] = false;
+                    after_subject = false;
+                    continue;
+                }
+                after_subject = false;
+                protected[i] = true;
+            }
+            idx = closing_idx + 1;
+        } else {
+            // Not a verbatim block; resume scanning after the subject.
+            idx = subject_idx + 1;
+        }
+    }
+
+    protected
+}
+
+/// True when at least one non-blank, non-marker body line lies strictly between
+/// the anchoring-slot candidate at `slot_idx` and the block's closing marker at
+/// `closing_idx`. Used to tell the documented anchoring shape (a reference line
+/// whose subject's body follows it) from a verbatim block whose *only* content
+/// is the bracket line itself, which must stay literal (lex#755).
+fn has_body_after(classified: &[ClassifiedLine], slot_idx: usize, closing_idx: usize) -> bool {
+    ((slot_idx + 1)..closing_idx).any(|i| {
+        !matches!(
+            classified[i].line_type,
+            LineType::BlankLine | LineType::DataMarkerLine
+        )
+    })
+}
+
 /// Run the reference-line pre-pass over `source`.
 pub fn extract_reference_lines(source: &str) -> AnchoringPrepass {
     let lines = physical_lines(source);
     let loc = SourceLocation::new(source);
+
+    // Verbatim block bodies are raw: a `[token]` line inside one must stay
+    // literal, never be ejected as a reference line (lex#755). Compute the
+    // protected line set once and skip those lines below.
+    let in_verbatim = verbatim_protected_lines(&lines);
 
     let mut reference_lines: Vec<ReferenceLine> = Vec::new();
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
@@ -270,6 +468,10 @@ pub fn extract_reference_lines(source: &str) -> AnchoringPrepass {
     let mut anchored_line: Vec<bool> = vec![false; lines.len()];
 
     for idx in 0..lines.len() {
+        // Lines inside a verbatim block body are raw — never a reference line.
+        if in_verbatim[idx] {
+            continue;
+        }
         let line = &lines[idx];
         let trimmed = line.trimmed();
         let Some(inner) = bracketed_inner(trimmed) else {
@@ -945,5 +1147,108 @@ mod tests {
         let (anchor, kind) = sole_whole_anchor(src);
         assert_eq!(anchor, "First item");
         assert_eq!(kind, AnchoredElement::ListItem);
+    }
+
+    // -- §lex#755: verbatim bodies are raw, `[...]`-led lines stay literal ---
+
+    /// Every `[...]`-led verbatim body line, in document order — collected by
+    /// walking the verbatim block's groups. Empty when there is no verbatim
+    /// block. Used to assert bracket lines survive the parse literally.
+    fn verbatim_body_lines(doc: &crate::lex::ast::Document) -> Vec<String> {
+        use crate::lex::ast::elements::ContentItem;
+        let mut out = Vec::new();
+        for child in &doc.root.children {
+            if let ContentItem::VerbatimBlock(vb) = child {
+                for group in vb.group() {
+                    for line in group.children.iter() {
+                        if let ContentItem::VerbatimLine(vl) = line {
+                            out.push(vl.content.as_string().to_string());
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn verbatim_body_bracket_lines_stay_literal() {
+        // The lex#755 repro: a TOML example inside an inflow verbatim block. A
+        // single-word table header (`[server]`) and a dotted one
+        // (`[formatting.rules]`) must both survive verbatim — never be ejected
+        // as reference lines and re-emitted as auto-links.
+        let src = "Config example:\n\n    [server]\n    [formatting.rules]\n    port = 8080\n:: toml ::\n\n";
+        let doc = parse_document(src).unwrap();
+
+        // No reference line was ejected from the verbatim body.
+        assert!(
+            doc.reference_lines.is_empty(),
+            "verbatim body lines must not become reference lines: {:?}",
+            doc.reference_lines
+        );
+        // And no inline reference leaked out of the raw body.
+        assert!(
+            doc.iter_all_references().next().is_none(),
+            "verbatim body must carry no parsed references"
+        );
+
+        // Both bracket lines are preserved literally inside the block.
+        let lines = verbatim_body_lines(&doc);
+        assert!(
+            lines.iter().any(|l| l == "[server]"),
+            "`[server]` must stay literal in the verbatim body: {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l == "[formatting.rules]"),
+            "`[formatting.rules]` must stay literal in the verbatim body: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn fullwidth_verbatim_sole_bracket_body_stays_literal() {
+        // A fullwidth verbatim block whose entire body is a single bracket line.
+        // With no body following it, the bracket is the block's content, not an
+        // anchoring reference line for the subject — it must stay literal.
+        let src = "Config:\n[section]\n:: toml ::\n\n";
+        let doc = parse_document(src).unwrap();
+        assert!(
+            doc.reference_lines.is_empty(),
+            "sole-body bracket must not become a reference line: {:?}",
+            doc.reference_lines
+        );
+        let lines = verbatim_body_lines(&doc);
+        assert!(
+            lines.iter().any(|l| l == "[section]"),
+            "`[section]` must stay literal: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn prose_bracket_line_still_becomes_a_reference_line() {
+        // No-regression guard: a `[token]` line in ORDINARY prose (not inside a
+        // verbatim block) must still be extracted as a reference line and anchor
+        // the paragraph above — exactly as before lex#755's fix.
+        let src = "First paragraph line.\nThe project home page.\n[server]\n\n";
+        let (anchor, kind) = sole_whole_anchor(src);
+        assert_eq!(anchor, "The project home page.");
+        assert_eq!(kind, AnchoredElement::WholeLine);
+    }
+
+    #[test]
+    fn verbatim_subject_anchor_still_works_with_body_following() {
+        // No-regression guard for the documented anchoring shape: a reference
+        // line directly below a verbatim subject, with the indented body
+        // following, still anchors the subject (it is not protected as body).
+        let src = "Example Source:\n[https://lex.ing]\n    fn main() {}\n:: rust ::\n\n";
+        let (anchor, kind) = sole_whole_anchor(src);
+        assert_eq!(anchor, "Example Source");
+        assert_eq!(kind, AnchoredElement::Subject);
+        // The body line is still literal inside the block.
+        let doc = parse_document(src).unwrap();
+        let lines = verbatim_body_lines(&doc);
+        assert!(
+            lines.iter().any(|l| l == "fn main() {}"),
+            "verbatim body preserved: {lines:?}"
+        );
     }
 }

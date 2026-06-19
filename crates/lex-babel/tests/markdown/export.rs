@@ -322,6 +322,63 @@ fn test_reference_url_converted_to_link() {
 }
 
 #[test]
+fn test_verbatim_bracket_lines_stay_literal_not_autolinks() {
+    // lex#755: a `[...]`-led line inside a verbatim body (e.g. a TOML table
+    // header `[server]` or a dotted one `[formatting.rules]`) must stay literal
+    // inside the fence — it must NOT be ejected from the block and re-emitted as
+    // a dangling shortcut auto-link `[server](server)` outside it.
+    let lex_src =
+        "Config example:\n\n    [server]\n    [formatting.rules]\n    port = 8080\n:: toml ::\n";
+    let lex_doc = STRING_TO_AST.run(lex_src.to_string()).unwrap();
+    let md = MarkdownFormat.serialize(&lex_doc).unwrap();
+
+    // Both bracket lines appear literally in the output...
+    assert!(
+        md.contains("[server]"),
+        "`[server]` must be present literally: {md}"
+    );
+    assert!(
+        md.contains("[formatting.rules]"),
+        "`[formatting.rules]` must be present literally: {md}"
+    );
+    // ...and never as a shortcut auto-link `(...)`.
+    assert!(
+        !md.contains("[server](server)") && !md.contains("](server)"),
+        "`[server]` must not become an auto-link: {md}"
+    );
+    assert!(
+        !md.contains("](formatting.rules)"),
+        "`[formatting.rules]` must not become an auto-link: {md}"
+    );
+
+    // The bracket lines must live INSIDE the code fence, not as a sibling
+    // paragraph after it. Parse the markdown and confirm the brackets only
+    // occur within a CodeBlock node and there is no Link node.
+    let arena = Arena::new();
+    let options = ComrakOptions::default();
+    let root = parse_document(&arena, &md, &options);
+
+    fn assert_brackets_only_in_code<'a>(node: &'a comrak::nodes::AstNode<'a>) {
+        let value = &node.data.borrow().value;
+        match value {
+            NodeValue::CodeBlock(cb) => {
+                assert!(
+                    cb.literal.contains("[server]") && cb.literal.contains("[formatting.rules]"),
+                    "code fence must contain both bracket lines: {:?}",
+                    cb.literal
+                );
+            }
+            NodeValue::Link(_) => panic!("verbatim bracket line leaked out as a link"),
+            _ => {}
+        }
+        for child in node.children() {
+            assert_brackets_only_in_code(child);
+        }
+    }
+    assert_brackets_only_in_code(root);
+}
+
+#[test]
 fn test_reference_anchor_converted_to_link() {
     let lex_src = "See section [#introduction] above.\n";
     let lex_doc = STRING_TO_AST.run(lex_src.to_string()).unwrap();
