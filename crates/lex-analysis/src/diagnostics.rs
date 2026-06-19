@@ -68,8 +68,9 @@ pub enum DiagnosticKind {
     /// label or definition subject in the merged document. Opt-in
     /// (`check --references`).
     MissingCitationTarget,
-    /// A URL reference (`[https://…]`, `[mailto:…]`) that is not
-    /// well-formed (embedded space, empty host, otherwise unparseable).
+    /// A URL reference (`[http://…]`, `[https://…]`, `[mailto:…]`) that
+    /// is not well-formed (embedded space, empty host, otherwise
+    /// unparseable).
     /// Opt-in (`check --references`); a pure parse check — network
     /// reachability is out of scope. Emitted by [`analyze_references`].
     MalformedUrl,

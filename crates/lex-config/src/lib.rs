@@ -591,8 +591,9 @@ pub struct DiagnosticsRulesConfig {
     /// (`check --references`). Intrinsic default: warn.
     #[clapfig(value, default = "warn")]
     pub missing_citation_target: RuleConfig,
-    /// A URL reference (`[https://…]`, `[mailto:…]`) that is not
-    /// well-formed (embedded space, empty host, otherwise unparseable).
+    /// A URL reference (`[http://…]`, `[https://…]`, `[mailto:…]`) that
+    /// is not well-formed (embedded space, empty host, otherwise
+    /// unparseable).
     /// Opt-in (`check --references`); well-formedness only — network
     /// reachability is not checked. Intrinsic default: warn.
     #[clapfig(value, default = "warn")]
