@@ -372,6 +372,16 @@ pub fn collect_file_diagnostics(
     // file's own directory (`workspace_for`). NOT the entry directory
     // unconditionally, which would spuriously trip root-escape for valid
     // workspace-relative paths when the entry lives in a subdir.
+    //
+    // Computed from `entry_abs` (the fully-canonicalized entry), NOT
+    // reused from `workspace` above: `workspace_for(entry)` canonicalizes
+    // only the entry's *parent*, so on a platform where an ancestor is a
+    // symlink (macOS `/var` -> `/private/var`) it yields the pre-canonical
+    // form, while the resolver's own paths are fully canonical. A root in
+    // the symlink form then fails the canonical-prefix root-escape check
+    // for every include. `workspace_for(&entry_abs)` is the canonical form
+    // the resolver agrees with — the duplicate ancestor probe is the price
+    // of that correctness.
     let root = opts
         .includes_root
         .clone()

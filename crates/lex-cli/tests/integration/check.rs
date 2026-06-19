@@ -670,7 +670,7 @@ fn references_lex_toml_allow_silences_malformed_url() {
 // --references: file-path reference validation (#761)
 //
 // Validates non-include file-path references (inline `ReferenceType::File`
-// + image/data verbatim `src=`) against the filesystem, origin-aware.
+// + any verbatim block's `src=`) against the filesystem, origin-aware.
 // `lex.include src=` is excluded — the base command validates it.
 // ============================================================================
 
@@ -723,8 +723,7 @@ fn references_existing_inline_file_is_clean() {
         .stdout(predicate::str::is_empty());
 }
 
-/// A missing image/data verbatim `src=` is flagged; an existing one is
-/// not (second file in the pair exists).
+/// A missing verbatim `src=` is flagged; an existing one is not.
 #[test]
 fn references_flags_missing_verbatim_src() {
     let dir = fixture_dir(&[
