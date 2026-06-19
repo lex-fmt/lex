@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+## 0.18.1 - 2026-06-19
+
+- Keep [...]-led lines literal inside verbatim blocks (lex#755)
+
 ## 0.18.0 - 2026-06-19
 
 - lexd check --references: use try_exists for file refs and tighten is_url_like against Windows drive paths
