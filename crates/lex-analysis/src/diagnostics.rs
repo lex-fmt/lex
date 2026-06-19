@@ -385,12 +385,13 @@ pub fn analyze_references(document: &Document) -> Vec<AnalysisDiagnostic> {
                     // document resolution), so it emits inline and
                     // `continue`s like the citation arm rather than
                     // falling through to the target-resolution tail.
-                    if url_is_malformed(target.trim()) {
+                    let target = target.trim();
+                    if url_is_malformed(target) {
                         diagnostics.push(AnalysisDiagnostic {
                             range: reference.range.clone(),
                             severity: DiagnosticSeverity::Warning,
                             kind: DiagnosticKind::MalformedUrl,
-                            message: format!("URL [{}] is malformed", target.trim()),
+                            message: format!("URL [{target}] is malformed"),
                         });
                     }
                     continue;
