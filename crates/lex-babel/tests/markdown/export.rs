@@ -561,6 +561,36 @@ fn test_anchored_file_reference_unchanged() {
     );
 }
 
+#[test]
+fn test_self_link_placed_after_multi_group_verbatim_not_between_groups() {
+    // Regression for the #769 fix: expanding a multi-group verbatim into N IR
+    // nodes must keep the self-link index mapping aligned, so a sibling
+    // reference-line self-link following the block lands AFTER all its groups —
+    // not spliced between them. A `[https://...]` alone on its line anchors the
+    // preceding element as a self-link.
+    let lex_src = "First:\n\n    cmd one\nSecond:\n\n    cmd two\n:: shell ::\n\n[https://after.example.com]\n\n2. Tail\n\n    More body.\n";
+    let lex_doc = STRING_TO_AST.run(lex_src.to_string()).unwrap();
+    let md = MarkdownFormat.serialize(&lex_doc).unwrap();
+
+    // The self-link must appear after BOTH `cmd one` and `cmd two`.
+    let after_pos = md
+        .find("after.example.com")
+        .unwrap_or_else(|| panic!("self-link missing: {md}"));
+    let cmd_two_pos = md
+        .find("cmd two")
+        .unwrap_or_else(|| panic!("second group missing: {md}"));
+    assert!(
+        after_pos > cmd_two_pos,
+        "self-link must land after all verbatim groups, not between them: {md}"
+    );
+    // And before the tail section.
+    let tail_pos = md.find("Tail").unwrap();
+    assert!(
+        after_pos < tail_pos,
+        "self-link must precede the following section: {md}"
+    );
+}
+
 // ============================================================================
 // ISSUE C: Markdown List Formatting Tests
 // ============================================================================

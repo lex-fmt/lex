@@ -177,7 +177,12 @@ fn splice_self_links_into(
             span: item.range().span.clone(),
             ir_index,
         });
-        ir_cursor = ir_index + 1;
+        // A lex item usually maps to exactly one IR node, but a multi-group
+        // verbatim block expands to one node per group (see `convert_children`
+        // / `from_lex_verbatim_groups`, #769). Advance the cursor by the actual
+        // node count so every subsequent slot's `ir_index` — and the recursion /
+        // sibling-splice indices derived from it — stay aligned with the IR list.
+        ir_cursor = ir_index + ir_node_count(item);
     }
 
     // Iterate structural items in parallel with `slots` for recursion.
@@ -233,7 +238,11 @@ fn splice_self_links_into(
         let ir_index = if preceding == 0 {
             0
         } else {
-            slots[preceding - 1].ir_index + 1
+            // Land just past the preceding element's *last* IR node. That
+            // element may expand to several nodes (a multi-group verbatim,
+            // #769), so step over all of them — not a fixed `+ 1` — or the
+            // sibling self-link would be spliced between the groups.
+            slots[preceding - 1].ir_index + ir_node_count(structural[preceding - 1])
         };
         let node = self_link_node(sl);
         if ir_index <= ir_children.len() {
@@ -242,6 +251,21 @@ fn splice_self_links_into(
             ir_children.push(node);
         }
     }
+}
+
+/// Number of IR `DocNode`s the item's *own* content expands to (excluding its
+/// leading attached-annotation nodes, which are counted separately). One for
+/// every item except a multi-group verbatim block, which `convert_children`
+/// expands into one node per group (#769) — the self-link index mapping must
+/// advance by that count to stay aligned with the IR list.
+fn ir_node_count(item: &LexContentItem) -> usize {
+    if let LexContentItem::VerbatimBlock(verbatim) = item {
+        let groups = verbatim.group_len();
+        if groups > 1 {
+            return groups;
+        }
+    }
+    1
 }
 
 /// True when `item` is a container whose IR counterpart holds a child `DocNode`
