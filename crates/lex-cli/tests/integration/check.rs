@@ -120,6 +120,34 @@ fn no_includes_skips_expansion() {
 }
 
 // ============================================================================
+// Include root defaults to the workspace (.lex.toml ancestor), like
+// convert/inspect — not the entry dir unconditionally.
+// ============================================================================
+
+#[test]
+fn include_root_defaults_to_workspace_for_subdir_entry() {
+    // Entry lives in a subdir; the include uses a root-absolute path
+    // (`/shared.lex`) that resolves against the workspace root where
+    // `.lex.toml` sits. If the default root were the entry's own dir,
+    // this would fail to resolve (or trip include-root-escape). It must
+    // resolve cleanly, matching `convert`/`inspect`.
+    let dir = fixture_dir(&[
+        (".lex.toml", ""),
+        (
+            "chapters/ch1.lex",
+            ":: lex.include src=\"/shared.lex\" ::\n",
+        ),
+        ("shared.lex", "Shared content.\n"),
+    ]);
+    lexd()
+        .arg("check")
+        .arg(path_in(&dir, "chapters/ch1.lex"))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("include-").not());
+}
+
+// ============================================================================
 // --format json valid + stable
 // ============================================================================
 

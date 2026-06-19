@@ -287,7 +287,11 @@ pub fn collect_file_diagnostics(
 ) -> Result<Vec<CheckFinding>, String> {
     // Boot the extension registry from the workspace `[labels]` block so
     // schema/handler diagnostics fire — same boot the LSP and
-    // `labels validate` perform.
+    // `labels validate` perform. Surface boot diagnostics (unresolvable
+    // namespaces, trust denials, …) to stderr so a silently un-booted
+    // namespace — whose schema/handler diagnostics then never run — is
+    // visible; stdout stays reserved for findings (important under
+    // `--format json`), matching `lexd config gen` / `labels list`.
     let workspace = workspace_for(entry);
     let outcome = boot_registry(ExtensionSetup {
         workspace_root: &workspace,
@@ -296,6 +300,12 @@ pub fn collect_file_diagnostics(
         enable_handlers: opts.enable_handlers,
         surface_override: Some(lex_extension_host::Surface::CliOneShot),
     });
+    for diag in &outcome.diagnostics {
+        match &diag.namespace {
+            Some(ns) => eprintln!("lexd check: [{ns}] {}", diag.message),
+            None => eprintln!("lexd check: {}", diag.message),
+        }
+    }
 
     let mut findings: Vec<CheckFinding> = Vec::new();
 
@@ -305,16 +315,17 @@ pub fn collect_file_diagnostics(
     // permissively so label-policy diagnostics still surface.
     let document = if opts.expand_includes && source.contains("lex.include") {
         let entry_abs = absolutize(entry);
+        // Default include root mirrors `convert`/`inspect`
+        // (`IncludeOptions::resolved_root`): the nearest ancestor
+        // containing `.lex.toml`, falling back to the entry file's own
+        // directory — NOT the entry directory unconditionally, which
+        // would spuriously trip `include-root-escape` for valid
+        // workspace-relative includes when the entry lives in a subdir.
         let root = opts
             .includes_root
             .clone()
             .map(|r| absolutize(&r))
-            .unwrap_or_else(|| {
-                entry_abs
-                    .parent()
-                    .map(Path::to_path_buf)
-                    .unwrap_or_else(|| PathBuf::from("."))
-            });
+            .unwrap_or_else(|| workspace_for(&entry_abs));
         let resolve_config = ResolveConfig {
             root: root.clone(),
             max_depth: opts.max_depth,
@@ -533,8 +544,13 @@ fn print_json(files: &[(PathBuf, Vec<CheckFinding>)]) {
 /// directory. Used to boot the extension registry relative to the
 /// document.
 pub fn workspace_for(entry: &Path) -> PathBuf {
+    // `Path::parent` of a bare filename (`file.lex`) is `Some("")`, and
+    // an empty path canonicalizes to an error and `pop`s to `false`
+    // immediately — which would skip the ancestor walk entirely. Treat
+    // an empty parent as "." (the current directory) so the walk runs.
     let fallback = entry
         .parent()
+        .filter(|p| !p.as_os_str().is_empty())
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
     let mut cur = fallback.canonicalize().unwrap_or_else(|_| fallback.clone());
@@ -545,5 +561,36 @@ pub fn workspace_for(entry: &Path) -> PathBuf {
         if !cur.pop() {
             return fallback;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn severity_threshold_ranks_error_highest() {
+        assert!(Severity::Error.rank() > Severity::Warning.rank());
+        assert!(Severity::Warning.rank() > Severity::Info.rank());
+        assert!(Severity::Info.rank() > Severity::Hint.rank());
+    }
+
+    #[test]
+    fn severity_parse_round_trips_the_legal_set() {
+        for s in ["error", "warning", "info", "hint"] {
+            assert_eq!(Severity::parse(s).expect("legal").as_str(), s);
+        }
+        assert!(Severity::parse("bogus").is_none());
+    }
+
+    #[test]
+    fn workspace_for_bare_filename_walks_from_cwd() {
+        // A bare filename has an empty `parent()`; `workspace_for` must
+        // treat that as "." and still return a real directory (not the
+        // empty path, which would skip the ancestor walk). We don't
+        // assert *which* dir — only that it is non-empty and absolute-ish
+        // (canonicalized "." is absolute), proving the empty-path guard.
+        let ws = workspace_for(Path::new("file.lex"));
+        assert!(!ws.as_os_str().is_empty(), "must not return the empty path");
     }
 }
