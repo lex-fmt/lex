@@ -686,10 +686,13 @@ fn main() {
 ///
 /// The actual collection + reporting lives in [`lexd::check`]; this
 /// handler only assembles [`lexd::check::CheckOptions`] from parsed args
-/// and the loaded config. `[labels]` is loaded from the workspace
-/// `.lex.toml` (nearest ancestor of the cwd), matching how every other
-/// subcommand resolves workspace config; `[diagnostics.rules]` rides on
-/// the already-loaded [`LexConfig`].
+/// and the loaded config. `[diagnostics.rules]` rides on the
+/// already-loaded [`LexConfig`]. `[labels]` is deliberately NOT loaded
+/// here: `check` loads it *per entry* in
+/// [`lexd::check::collect_file_diagnostics`] from each file's own
+/// workspace (`workspace_for(entry)`), so a file outside the CWD's
+/// workspace gets its own workspace's labels instead of a mismatched
+/// CWD config.
 fn handle_check_command(top: &ArgMatches, sub: &ArgMatches, config: &LexConfig) -> i32 {
     use lexd::check::{run, CheckOptions, OutputFormat, Severity};
 
