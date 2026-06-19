@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+## 0.18.2 - 2026-06-19
+
+- Export all verbatim groups in multi-group Definition blocks; link anchorless file references
+
 ## 0.18.1 - 2026-06-19
 
 - Keep [...]-led lines literal inside verbatim blocks (lex#755)
