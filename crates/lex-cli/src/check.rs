@@ -429,7 +429,7 @@ pub fn collect_file_diagnostics(
     // a `.lex.toml` downgrade silences a kind identically.
     if opts.check_references {
         let mut reference_diagnostics = analyze_references(&document);
-        // File-path references (inline `[./x]` + image/data verbatim
+        // File-path references (inline `[./x]` + any verbatim block's
         // `src=`) are validated here rather than inside the pure
         // `analyze_references` pass because existence is IO-bearing: it
         // needs the resolution `root` and disk access, neither of which
@@ -454,7 +454,7 @@ pub fn collect_file_diagnostics(
 /// diagnostic for each target that does not exist on disk — or that
 /// escapes `root` / is a platform-absolute path.
 ///
-/// The references themselves (inline `[./x.txt]` + image/data verbatim
+/// The references themselves (inline `[./x.txt]` + any verbatim block's
 /// `src=`, with `lex.include src=` structurally excluded) come from the
 /// pure [`collect_file_references`] pass; this function adds only the
 /// IO: resolution + existence.

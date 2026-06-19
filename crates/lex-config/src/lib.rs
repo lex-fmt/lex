@@ -599,7 +599,7 @@ pub struct DiagnosticsRulesConfig {
     #[clapfig(value, default = "warn")]
     pub malformed_url: RuleConfig,
     /// A file-path reference — an inline `[./x.txt]` / `[../y]` / `[/abs]`
-    /// or an image/data verbatim `src=` — points at a file that does not
+    /// or a verbatim block's `src=` — points at a file that does not
     /// exist on disk (or escapes the resolution root / is a
     /// platform-absolute path). Opt-in (`check --references`).
     /// `lex.include src=` is excluded — the base command validates it via

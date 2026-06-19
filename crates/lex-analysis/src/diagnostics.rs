@@ -75,8 +75,8 @@ pub enum DiagnosticKind {
     /// reachability is out of scope. Emitted by [`analyze_references`].
     MalformedUrl,
     /// A file-path reference — an inline `ReferenceType::File`
-    /// (`[./x.txt]`, `[../y]`, `[/abs]`) or an image/data verbatim
-    /// `src=` — that points at no file on disk, or whose target escapes
+    /// (`[./x.txt]`, `[../y]`, `[/abs]`) or a verbatim block's `src=`
+    /// parameter — that points at no file on disk, or whose target escapes
     /// the resolution root / is a platform-absolute path. Opt-in:
     /// emitted only by `check --references` (the existence check is
     /// IO-bearing, so it runs in the CLI seam, not the pure analyser).
@@ -490,7 +490,8 @@ pub struct FileReference {
 
 /// Collect every **non-include** file-path reference in the (merged)
 /// `document`: inline [`ReferenceType::File`] (`[./x.txt]`, `[../y]`,
-/// `[/abs]`) and image/data verbatim `src=` parameters.
+/// `[/abs]`) and the `src=` parameter of any verbatim block (image,
+/// data, video, …) — `lex.include` excepted (see below).
 ///
 /// This is the pure (no-IO) half of the `check --references` file-path
 /// check: it gathers the targets and their origin-stamped ranges; the
@@ -526,9 +527,10 @@ pub fn collect_file_references(document: &Document) -> Vec<FileReference> {
         }
     });
 
-    // Image/data verbatim `src=` parameters. The verbatim's own range
-    // carries its origin; `lex.include` is an annotation, not a verbatim
-    // block, so it is structurally excluded here.
+    // Any verbatim block's `src=` parameter (image, data, video, …). The
+    // verbatim's own range carries its origin; `lex.include` is an
+    // annotation, not a verbatim block, so it is structurally excluded
+    // here.
     //
     // Two normalizations the inline path gets for free but verbatim does
     // not, because a verbatim `src=` parameter is *not* pre-classified:
