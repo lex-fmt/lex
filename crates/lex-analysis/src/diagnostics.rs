@@ -53,6 +53,21 @@ pub enum DiagnosticKind {
     /// warns the author that what looks like metadata is being treated as
     /// content. The fix is to close the marker: `:: label ::`.
     UnclosedAnnotation,
+    /// A session reference (`[#2.1]`) whose identifier matches no session
+    /// in the merged document. Emitted only by the opt-in
+    /// [`analyze_references`] pass (`check --references`), never by the
+    /// always-on analyser.
+    MissingSessionTarget,
+    /// A definition reference (`[Title]`) whose subject matches no
+    /// definition in the merged document. Opt-in (`check --references`).
+    MissingDefinitionTarget,
+    /// An annotation reference (`[::label]`) whose label matches no
+    /// annotation in the merged document. Opt-in (`check --references`).
+    MissingAnnotationTarget,
+    /// A citation reference (`[@key]`) whose key matches no annotation
+    /// label or definition subject in the merged document. Opt-in
+    /// (`check --references`).
+    MissingCitationTarget,
 }
 
 /// Severity for analysis-emitted diagnostics. The analyser populates
@@ -134,6 +149,10 @@ impl DiagnosticKind {
             DiagnosticKind::ForbiddenLabelPrefix => "forbidden-label-prefix".into(),
             DiagnosticKind::UnknownLexCanonical => "unknown-lex-canonical".into(),
             DiagnosticKind::UnclosedAnnotation => "unclosed-annotation".into(),
+            DiagnosticKind::MissingSessionTarget => "missing-session-target".into(),
+            DiagnosticKind::MissingDefinitionTarget => "missing-definition-target".into(),
+            DiagnosticKind::MissingAnnotationTarget => "missing-annotation-target".into(),
+            DiagnosticKind::MissingCitationTarget => "missing-citation-target".into(),
         }
     }
 }
@@ -288,6 +307,106 @@ pub fn analyze_with_rules(
 ) -> Vec<AnalysisDiagnostic> {
     let mut diagnostics = analyze_with_registry(document, registry);
     apply_rules(&mut diagnostics, |code| rules.lookup_by_code(code).cloned());
+    diagnostics
+}
+
+/// Opt-in pass: validate internal cross-references over the (merged)
+/// document and emit a `missing-*-target` diagnostic for each dangling
+/// in-document reference.
+///
+/// **Deliberately separate from [`analyze_with_registry`]** so the
+/// always-on analyser (and thus the LSP, which calls
+/// [`analyze_with_rules`] on every keystroke) does *not* emit these.
+/// `check --references` calls this explicitly; the LSP can opt in later.
+///
+/// Resolution runs over the single merged tree, so it is bidirectional:
+/// a reference resolves against targets defined anywhere in the document
+/// — any included fragment or the master — and a `missing-*` fires only
+/// when the target is absent from the *whole* tree. Each finding's range
+/// carries the reference's origin (via [`extract_references`]), so the
+/// caller blames it on the file the reference was authored in.
+///
+/// Checked kinds and their codes:
+///
+/// - [`ReferenceType::Session`] → `missing-session-target`
+/// - [`ReferenceType::General`] → `missing-definition-target`
+/// - [`ReferenceType::AnnotationReference`] → `missing-annotation-target`
+/// - [`ReferenceType::Citation`] → `missing-citation-target`
+///
+/// `ToCome` / `NotSure` are intentional placeholders and never flagged;
+/// `FootnoteNumber` is validated by the always-on analyser
+/// ([`check_footnotes`]); `Url` / `File` are out of scope here (epic
+/// #758, issues #761–#762). All emitted diagnostics default to
+/// [`DiagnosticSeverity::Warning`] — callers apply
+/// `[diagnostics.rules]` via [`apply_rules`] for per-kind overrides.
+pub fn analyze_references(document: &Document) -> Vec<AnalysisDiagnostic> {
+    use crate::reference_targets::{targets_from_reference_type, ReferenceTarget};
+    use crate::references::target_resolves;
+
+    let mut diagnostics = Vec::new();
+    crate::utils::for_each_text_content(document, &mut |text| {
+        for reference in extract_references(text) {
+            let (kind, render): (DiagnosticKind, String) = match &reference.reference_type {
+                ReferenceType::Session { target } if !target.trim().is_empty() => (
+                    DiagnosticKind::MissingSessionTarget,
+                    format!(
+                        "Session reference [#{}] has no matching session",
+                        target.trim()
+                    ),
+                ),
+                ReferenceType::General { target } if !target.trim().is_empty() => (
+                    DiagnosticKind::MissingDefinitionTarget,
+                    format!("Reference [{}] has no matching definition", target.trim()),
+                ),
+                ReferenceType::AnnotationReference { label } if !label.trim().is_empty() => (
+                    DiagnosticKind::MissingAnnotationTarget,
+                    format!(
+                        "Annotation reference [::{}] has no matching annotation",
+                        label.trim()
+                    ),
+                ),
+                ReferenceType::Citation(data) => {
+                    // A citation may carry multiple keys; each is its own
+                    // potential dangling target. Emit per unresolved key.
+                    for key in &data.keys {
+                        if key.trim().is_empty() {
+                            continue;
+                        }
+                        let target = ReferenceTarget::CitationKey(key.trim().to_string());
+                        if !target_resolves(document, &target) {
+                            diagnostics.push(AnalysisDiagnostic {
+                                range: reference.range.clone(),
+                                severity: DiagnosticSeverity::Warning,
+                                kind: DiagnosticKind::MissingCitationTarget,
+                                message: format!(
+                                    "Citation [@{}] has no matching annotation or definition",
+                                    key.trim()
+                                ),
+                            });
+                        }
+                    }
+                    continue;
+                }
+                // Placeholders, footnotes (always-on), URL/File (out of
+                // scope), and empty-target references: skip.
+                _ => continue,
+            };
+
+            // Non-citation kinds: resolve via the reference's targets and
+            // emit when none match anywhere in the merged tree.
+            let resolves = targets_from_reference_type(&reference.reference_type)
+                .iter()
+                .any(|t| target_resolves(document, t));
+            if !resolves {
+                diagnostics.push(AnalysisDiagnostic {
+                    range: reference.range.clone(),
+                    severity: DiagnosticSeverity::Warning,
+                    kind,
+                    message: render,
+                });
+            }
+        }
+    });
     diagnostics
 }
 
@@ -1201,5 +1320,128 @@ mod tests {
         assert_eq!(diags[0].severity, DiagnosticSeverity::Warning);
         assert_eq!(diags[1].kind, DiagnosticKind::TableInconsistentColumns);
         assert_eq!(diags[1].severity, DiagnosticSeverity::Error);
+    }
+
+    // ========================================================================
+    // analyze_references (opt-in `check --references`) unit tests
+    // ========================================================================
+
+    fn reference_diags(source: &str) -> Vec<AnalysisDiagnostic> {
+        let doc = parse_document_permissive(source).expect("permissive parse");
+        analyze_references(&doc)
+    }
+
+    fn ref_codes(source: &str) -> Vec<String> {
+        let mut codes: Vec<String> = reference_diags(source)
+            .into_iter()
+            .map(|d| d.kind.code().into_owned())
+            .collect();
+        codes.sort();
+        codes
+    }
+
+    #[test]
+    fn references_pass_is_not_run_by_the_always_on_analyser() {
+        // A dangling definition reference produces nothing from `analyze`
+        // (the always-on path) — only the opt-in pass flags it. This pins
+        // the separation that keeps the LSP from emitting these unasked.
+        let doc = parse_document_permissive("Body with a [Dangling] reference.\n")
+            .expect("permissive parse");
+        let always_on = analyze(&doc);
+        assert!(
+            always_on
+                .iter()
+                .all(|d| !d.kind.code().starts_with("missing-")
+                    || d.kind == DiagnosticKind::MissingFootnoteDefinition),
+            "always-on analyser must not emit reference-target diagnostics"
+        );
+    }
+
+    #[test]
+    fn dangling_definition_reference_flagged() {
+        let codes = ref_codes("1. Intro\n\n    See [Nope].\n");
+        assert_eq!(codes, vec!["missing-definition-target"]);
+    }
+
+    #[test]
+    fn dangling_session_reference_flagged() {
+        let codes = ref_codes("1. Intro\n\n    See [#9.9].\n");
+        assert_eq!(codes, vec!["missing-session-target"]);
+    }
+
+    #[test]
+    fn dangling_annotation_reference_flagged() {
+        let codes = ref_codes("1. Intro\n\n    See [::ghost].\n");
+        assert_eq!(codes, vec!["missing-annotation-target"]);
+    }
+
+    #[test]
+    fn dangling_citation_flagged() {
+        let codes = ref_codes("1. Intro\n\n    See [@missing2024].\n");
+        assert_eq!(codes, vec!["missing-citation-target"]);
+    }
+
+    #[test]
+    fn resolved_references_are_clean() {
+        // Definition + annotation + session all defined; references to
+        // each resolve and produce no findings.
+        let source = ":: mynote ::\n\
+             \x20   Note body.\n\
+             \n\
+             Cache:\n\
+             \x20   Definition body.\n\
+             \n\
+             2. Topic\n\
+             \n\
+             \x20   See [Cache] and [::mynote] and [#2].\n";
+        assert!(
+            reference_diags(source).is_empty(),
+            "resolved references must be clean: {:?}",
+            reference_diags(source)
+        );
+    }
+
+    #[test]
+    fn citation_resolves_via_annotation_label() {
+        // `[@spec]` resolves to a `:: spec ::` annotation (its label is a
+        // citation key too).
+        let source = ":: spec ::\n    Body.\n\n1. Intro\n\n    See [@spec].\n";
+        assert!(reference_diags(source).is_empty());
+    }
+
+    #[test]
+    fn annotation_matching_is_case_insensitive() {
+        // `[::MyNote]` resolves to `:: mynote ::` — resolution is
+        // case-insensitive, mirroring `references::reference_matches`.
+        let source = ":: mynote ::\n    Body.\n\n1. Intro\n\n    See [::MyNote].\n";
+        assert!(reference_diags(source).is_empty());
+    }
+
+    #[test]
+    fn placeholders_never_flagged() {
+        // `[TK]` / `[TK-id]` and an unclassifiable reference are
+        // intentional placeholders — never flagged.
+        assert!(reference_diags("1. Intro\n\n    A [TK] and [TK-later].\n").is_empty());
+    }
+
+    #[test]
+    fn each_unresolved_citation_key_is_flagged() {
+        // A multi-key citation flags each unresolved key independently.
+        let diags = reference_diags("1. Intro\n\n    See [@a; @b].\n");
+        let citation = diags
+            .iter()
+            .filter(|d| d.kind == DiagnosticKind::MissingCitationTarget)
+            .count();
+        assert!(
+            citation >= 1,
+            "expected at least one citation finding: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn reference_findings_default_to_warning() {
+        let diags = reference_diags("1. Intro\n\n    See [Nope].\n");
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].severity, DiagnosticSeverity::Warning);
     }
 }

@@ -467,6 +467,13 @@ fn build_cli() -> Command {
                      Include-assembly failures (missing/cyclic/oversize includes) surface \
                      here as diagnostics blamed on the include site. Findings originating \
                      inside an included file are reported against that file's path.\n\n\
+                     Pass --references to also validate internal cross-references \
+                     (session / definition / annotation / citation) over the merged \
+                     document: a reference is flagged when its target is absent from the \
+                     whole tree. Resolution is bidirectional across includes (a fragment \
+                     may reference targets in its master and vice-versa). These findings \
+                     default to warning severity, configurable per-rule via \
+                     `[diagnostics.rules]`.\n\n\
                      Exit codes:\n  \
                      0: clean (no finding at/above the --fail-on threshold)\n  \
                      1: at least one finding met the threshold\n  \
@@ -494,6 +501,16 @@ fn build_cli() -> Command {
                         .help("Output format")
                         .value_parser(["human", "json"])
                         .default_value("human"),
+                )
+                .arg(
+                    Arg::new("references")
+                        .long("references")
+                        .help(
+                            "Also validate internal cross-references (session / \
+                             definition / annotation / citation) over the merged \
+                             document",
+                        )
+                        .action(ArgAction::SetTrue),
                 ),
         )
 }
@@ -715,6 +732,7 @@ fn handle_check_command(top: &ArgMatches, sub: &ArgMatches, config: &LexConfig) 
     };
 
     let expand_includes = !top.get_flag("no-includes");
+    let check_references = sub.get_flag("references");
 
     // `[labels]` is NOT loaded here: `check` loads it per-entry from each
     // file's own workspace (see `check::collect_file_diagnostics`), so a
@@ -743,6 +761,7 @@ fn handle_check_command(top: &ArgMatches, sub: &ArgMatches, config: &LexConfig) 
         rules: &config.diagnostics.rules,
         ext_schemas: &ext_schemas,
         enable_handlers,
+        check_references,
     };
 
     run(&paths, &opts)

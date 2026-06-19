@@ -130,11 +130,16 @@ impl<'a> ReferenceWalker<'a> {
     fn make_range(&self, start: usize, end: usize) -> Range {
         let start_pos = self.position_at(start);
         let end_pos = self.position_at(end);
-        Range::new(
+        let mut range = Range::new(
             (self.base_range.span.start + start)..(self.base_range.span.start + end),
             start_pos,
             end_pos,
-        )
+        );
+        // Carry the text's origin so reference diagnostics built from
+        // this range are blamed on the file the text came from (e.g. an
+        // included fragment), not the entry document.
+        range.origin_path = self.base_range.origin_path.clone();
+        range
     }
 
     fn position_at(&self, offset: usize) -> Position {

@@ -570,6 +570,27 @@ pub struct DiagnosticsRulesConfig {
     /// `AnalysisDiagnostic` / `DiagnosticKind` pipeline.
     #[clapfig(value, default = "warn")]
     pub spellcheck: RuleConfig,
+    /// A session reference (`[#2.1]`) points at a session identifier
+    /// that exists nowhere in the merged document. Opt-in: emitted only
+    /// by `check --references`. Intrinsic default: warn.
+    #[clapfig(value, default = "warn")]
+    pub missing_session_target: RuleConfig,
+    /// A definition reference (`[Title]`) has no matching definition in
+    /// the merged document. Opt-in (`check --references`). Intrinsic
+    /// default: warn — every `[...]` is a reference, so this can be
+    /// chatty in prose-heavy docs and is trivially silenced per-rule.
+    #[clapfig(value, default = "warn")]
+    pub missing_definition_target: RuleConfig,
+    /// An annotation reference (`[::label]`) points at a label that no
+    /// annotation declares. Opt-in (`check --references`). Intrinsic
+    /// default: warn.
+    #[clapfig(value, default = "warn")]
+    pub missing_annotation_target: RuleConfig,
+    /// A citation (`[@key]`) has no matching annotation label or
+    /// definition subject in the merged document. Opt-in
+    /// (`check --references`). Intrinsic default: warn.
+    #[clapfig(value, default = "warn")]
+    pub missing_citation_target: RuleConfig,
     /// Schema-validation diagnostics for extension labels.
     pub schema: SchemaRulesConfig,
 }
@@ -591,6 +612,10 @@ impl DiagnosticsRulesConfig {
             "table-inconsistent-columns" => Some(&self.table_inconsistent_columns),
             "forbidden-label-prefix" => Some(&self.forbidden_label_prefix),
             "unknown-lex-canonical" => Some(&self.unknown_lex_canonical),
+            "missing-session-target" => Some(&self.missing_session_target),
+            "missing-definition-target" => Some(&self.missing_definition_target),
+            "missing-annotation-target" => Some(&self.missing_annotation_target),
+            "missing-citation-target" => Some(&self.missing_citation_target),
             // `spellcheck` is intentionally absent: spellcheck
             // diagnostics emit through a separate path (see
             // `lex-analysis/src/spellcheck.rs`) and do not flow

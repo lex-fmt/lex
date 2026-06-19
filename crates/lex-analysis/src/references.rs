@@ -110,6 +110,44 @@ fn definition_ranges(document: &Document, subject: &str) -> Vec<Range> {
         .collect()
 }
 
+/// Does `target` resolve to at least one declaration anywhere in
+/// `document`? This is the boolean form of [`declaration_ranges`] — same
+/// resolution rules (case-insensitive throughout, citation keys fall
+/// back from annotation labels to definition subjects) — used by the
+/// opt-in `check --references` pass to decide whether a reference is
+/// dangling. Because it runs over the merged tree it resolves
+/// bidirectionally: the target may live in any included fragment or in
+/// the master, regardless of where the reference sits.
+pub fn target_resolves(document: &Document, target: &ReferenceTarget) -> bool {
+    match target {
+        ReferenceTarget::AnnotationLabel(label) => annotation_label_exists(document, label),
+        ReferenceTarget::CitationKey(key) => {
+            annotation_label_exists(document, key)
+                || !find_definitions_by_subject(document, key).is_empty()
+        }
+        ReferenceTarget::DefinitionSubject(subject) => {
+            !find_definitions_by_subject(document, subject).is_empty()
+        }
+        ReferenceTarget::Session(identifier) => {
+            !find_sessions_by_identifier(document, identifier).is_empty()
+        }
+    }
+}
+
+/// Case-insensitive existence check for an annotation label anywhere in
+/// the document (document-level annotations plus every annotation nested
+/// in the root session). `find_annotations_by_label` matches exactly;
+/// reference resolution is case-insensitive (see [`reference_matches`]),
+/// so this scans rather than delegating.
+fn annotation_label_exists(document: &Document, label: &str) -> bool {
+    let needle = label.trim();
+    document
+        .annotations()
+        .iter()
+        .chain(document.root.iter_annotations_recursive())
+        .any(|ann| ann.data.label.value.trim().eq_ignore_ascii_case(needle))
+}
+
 pub fn reference_occurrences(document: &Document, targets: &[ReferenceTarget]) -> Vec<Range> {
     let mut matches = Vec::new();
     for_each_text_content(document, &mut |text| {

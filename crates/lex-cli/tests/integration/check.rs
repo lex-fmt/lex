@@ -388,3 +388,168 @@ fn unknown_lex_canonical_still_flagged_by_plain_check() {
         .code(1)
         .stdout(predicate::str::contains("unknown-lex-canonical"));
 }
+
+// ============================================================================
+// --references: internal cross-reference validation (#760)
+// ============================================================================
+
+/// Each dangling reference kind (session / definition / annotation /
+/// citation) is flagged by `--references`, at warning severity.
+#[test]
+fn references_flags_each_dangling_kind() {
+    let dir = fixture_dir(&[(
+        "doc.lex",
+        "1. Intro\n\n    Def [Nope].\n    Session [#9.9].\n    \
+         Annotation [::ghost].\n    Citation [@missing2024].\n",
+    )]);
+    lexd()
+        .arg("check")
+        .arg(path_in(&dir, "doc.lex"))
+        .arg("--references")
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(
+            predicate::str::contains("missing-definition-target")
+                .and(predicate::str::contains("missing-session-target"))
+                .and(predicate::str::contains("missing-annotation-target"))
+                .and(predicate::str::contains("missing-citation-target"))
+                .and(predicate::str::contains("warning:")),
+        );
+}
+
+/// The reference pass is opt-in: without `--references` a dangling
+/// reference produces no finding (the always-on analyser never emits
+/// these, which is what keeps the LSP quiet too).
+#[test]
+fn references_pass_is_opt_in() {
+    let dir = fixture_dir(&[("doc.lex", "1. Intro\n\n    Dangling [Nope].\n")]);
+    lexd()
+        .arg("check")
+        .arg(path_in(&dir, "doc.lex"))
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+/// `ToCome` (`[TK]` / `[TK-id]`) placeholders are never flagged.
+#[test]
+fn references_skips_tk_placeholders() {
+    let dir = fixture_dir(&[("doc.lex", "1. Intro\n\n    A [TK] and [TK-later].\n")]);
+    lexd()
+        .arg("check")
+        .arg(path_in(&dir, "doc.lex"))
+        .arg("--references")
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+/// A reference whose target lives in an *included* file resolves with no
+/// finding — proving resolution runs over the merged tree (downward:
+/// reference in master, target in fragment).
+#[test]
+fn references_resolve_target_in_included_file() {
+    let dir = fixture_dir(&[
+        (
+            "master.lex",
+            "1. Top\n\n    See [Glossary].\n\n:: lex.include src=\"frag.lex\" ::\n",
+        ),
+        ("frag.lex", "Glossary:\n    Defined downstream.\n"),
+    ]);
+    lexd()
+        .arg("check")
+        .arg(path_in(&dir, "master.lex"))
+        .arg("--references")
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+/// An *upward* reference — from a fragment to a target defined in the
+/// master — resolves when checked from the entry document. Bidirectional
+/// resolution over the single merged tree.
+#[test]
+fn references_resolve_upward_from_fragment_to_master() {
+    let dir = fixture_dir(&[
+        (
+            "master.lex",
+            ":: lex.include src=\"frag.lex\" ::\n\nGlossary:\n    Defined in the master.\n",
+        ),
+        (
+            "frag.lex",
+            "1. Fragment\n\n    Upward reference to [Glossary].\n",
+        ),
+    ]);
+    lexd()
+        .arg("check")
+        .arg(path_in(&dir, "master.lex"))
+        .arg("--references")
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+/// A dangling reference authored inside an included fragment is blamed on
+/// the fragment's path, not the entry document (origin-faithful).
+#[test]
+fn references_dangling_inside_include_blamed_on_fragment() {
+    let dir = fixture_dir(&[
+        ("master.lex", ":: lex.include src=\"frag.lex\" ::\n"),
+        ("frag.lex", "1. Frag\n\n    A dangling [Nope] reference.\n"),
+    ]);
+    lexd()
+        .arg("check")
+        .arg(path_in(&dir, "master.lex"))
+        .arg("--references")
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(
+            predicate::str::contains("frag.lex")
+                .and(predicate::str::contains("missing-definition-target")),
+        );
+}
+
+/// A `.lex.toml` rule downgrade (`allow`) silences a reference kind.
+#[test]
+fn references_lex_toml_allow_silences_kind() {
+    let dir = fixture_dir(&[
+        ("doc.lex", "1. Intro\n\n    Dangling [Nope].\n"),
+        (
+            ".lex.toml",
+            "[diagnostics.rules]\nmissing_definition_target = \"allow\"\n",
+        ),
+    ]);
+    lexd()
+        .arg("check")
+        .arg(path_in(&dir, "doc.lex"))
+        .arg("--references")
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+// ============================================================================
+// Footnote resolution is bidirectional across the include merge (#760
+// fallout): a footnote reference inside an included fragment fires
+// missing-footnote over the merged tree, blamed on the fragment.
+// ============================================================================
+
+#[test]
+fn missing_footnote_inside_include_fires_blamed_on_fragment() {
+    let dir = fixture_dir(&[
+        ("book.lex", ":: lex.include src=\"frag.lex\" ::\n"),
+        ("frag.lex", "Text with [1] reference.\n"),
+    ]);
+    lexd()
+        .arg("check")
+        .arg(path_in(&dir, "book.lex"))
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(
+            predicate::str::contains("missing-footnote").and(predicate::str::contains("frag.lex")),
+        );
+}
