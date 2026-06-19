@@ -1,1 +1,0 @@
-- Add lexd check: lint documents over the include-expanded AST with a CI-friendly exit-code contract

@@ -1,1 +1,0 @@
-- lexd check --references: internal cross-reference validation (session/definition/annotation/citation) over the merged document; fixes reference diagnostics inside included fragments
