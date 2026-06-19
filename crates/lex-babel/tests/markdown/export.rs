@@ -542,6 +542,57 @@ fn test_anchorless_file_reference_becomes_a_link_not_escaped_text() {
 }
 
 #[test]
+fn test_anchorless_link_like_references_self_link_not_escaped() {
+    // Generalisation of the #770 fix (Copilot review on PR #771): every
+    // link-like reference kind (`Url` / `Session` / `General` / `File`, i.e.
+    // `AnchorKind::WholeLineCapable`) with no anchorable adjacent word must
+    // self-link rather than escape to literal brackets, matching the HTML
+    // serializer. The leading `X:` anchors the first ref, leaving the second
+    // ref of each pair anchorless.
+    let cases = [
+        (
+            "X: [https://a.example.com] [https://b.example.com]",
+            "b.example.com",
+        ),
+        ("X: [#sess-one] [#sess-two]", "#sess-two"),
+        ("X: [Introduction] [Conclusion]", "Conclusion"),
+    ];
+    for (lex_src, needle) in cases {
+        let lex_doc = STRING_TO_AST.run(format!("{lex_src}\n")).unwrap();
+        let md = MarkdownFormat.serialize(&lex_doc).unwrap();
+        // The anchorless ref must appear as a link target (comrak may render a
+        // URL as a `<...>` autolink or `[..](..)`, so assert on the destination).
+        assert!(
+            md.contains(needle),
+            "anchorless link-like ref `{needle}` must survive as a link: {md}"
+        );
+        assert!(
+            !md.contains(&format!("\\[{needle}")) && !md.contains("\\]"),
+            "anchorless link-like ref must not be escaped to literal text: {md}"
+        );
+    }
+}
+
+#[test]
+fn test_marker_reference_still_escaped_not_self_linked() {
+    // Guard for the generalised #770 fix: a marker-style reference
+    // (`AnchorKind::MarkerOnly`, here a `[TK-ref]` placeholder) has no
+    // destination and must NOT become a self-link — it stays plain escaped text.
+    let lex_src = "This needs [TK-ref].\n";
+    let lex_doc = STRING_TO_AST.run(lex_src.to_string()).unwrap();
+    let md = MarkdownFormat.serialize(&lex_doc).unwrap();
+
+    assert!(
+        md.contains("\\[TK-ref\\]"),
+        "marker-style placeholder must stay escaped, got: {md}"
+    );
+    assert!(
+        !md.contains("(TK-ref)"),
+        "marker-style placeholder must not self-link, got: {md}"
+    );
+}
+
+#[test]
 fn test_anchored_file_reference_unchanged() {
     // Guard for lex#770: when an adjacent anchor word IS present, the existing
     // word-anchoring path wins — `Editors [./editors]` links the word "Editors"
