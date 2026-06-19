@@ -181,8 +181,14 @@ pub enum OutputFormat {
 }
 
 /// Knobs for one `check` run, assembled by the CLI dispatch from parsed
-/// args + loaded config. `rules` and `labels_config` are borrowed for
-/// the lifetime of the run.
+/// args + loaded config. `rules` is borrowed for the lifetime of the run.
+///
+/// Note `[labels]` is NOT carried here: it is loaded *per entry* inside
+/// [`collect_file_diagnostics`] from the same workspace that anchors the
+/// registry boot ([`workspace_for`] of the entry). Deriving both from
+/// one workspace keeps them consistent when linting files that live in
+/// different workspaces — a CWD-loaded `[labels]` would otherwise be
+/// applied against a per-entry `workspace_root`, mis-resolving namespaces.
 pub struct CheckOptions<'a> {
     /// Expand `lex.include` before analysing (default true; `--no-includes`
     /// clears it).
@@ -197,12 +203,36 @@ pub struct CheckOptions<'a> {
     pub format: OutputFormat,
     /// `[diagnostics.rules]` from the resolved `.lex.toml`.
     pub rules: &'a DiagnosticsRulesConfig,
-    /// `[labels]` block used to boot the extension registry.
-    pub labels_config: &'a LabelsConfig,
     /// Extra `--ext-schema` namespace directories/files.
     pub ext_schemas: &'a [PathBuf],
     /// Whether subprocess handlers are permitted (`--enable-handlers`).
     pub enable_handlers: bool,
+}
+
+/// Load the workspace `[labels]` block for an entry from `workspace`'s
+/// `.lex.toml`. A missing file yields the default config; a malformed
+/// one is an operational error (mapped to exit 2 by the caller). Cached
+/// per workspace so a batch of files sharing a workspace pays the load
+/// (and the TOML parse) once.
+fn labels_for_workspace<'c>(
+    workspace: &Path,
+    cache: &'c mut std::collections::HashMap<PathBuf, LabelsConfig>,
+) -> Result<&'c LabelsConfig, String> {
+    let key = workspace.to_path_buf();
+    if !cache.contains_key(&key) {
+        let labels_path = workspace.join(CONFIG_FILE_NAME);
+        let config = match lex_config::load_labels_from_toml(&labels_path) {
+            Ok(c) => c,
+            Err(lex_config::LabelsConfigError::Io { source, .. })
+                if source.kind() == std::io::ErrorKind::NotFound =>
+            {
+                LabelsConfig::default()
+            }
+            Err(e) => return Err(format!("{e}")),
+        };
+        cache.insert(key.clone(), config);
+    }
+    Ok(cache.get(&key).expect("just inserted"))
 }
 
 /// Per-file outcome: either the collected findings, or an operational
@@ -224,9 +254,13 @@ pub fn run(paths: &[PathBuf], opts: &CheckOptions<'_>) -> i32 {
     let mut all_findings: Vec<(PathBuf, Vec<CheckFinding>)> = Vec::new();
     let mut had_operational = false;
     let mut operational_messages: Vec<String> = Vec::new();
+    // `[labels]` cache, keyed by each entry's resolved workspace, so a
+    // batch sharing one workspace loads it once.
+    let mut labels_cache: std::collections::HashMap<PathBuf, LabelsConfig> =
+        std::collections::HashMap::new();
 
     for entry in paths {
-        match collect_file_outcome(entry, opts) {
+        match collect_file_outcome(entry, opts, &mut labels_cache) {
             FileOutcome::Findings(findings) => {
                 all_findings.push((entry.clone(), findings));
             }
@@ -257,14 +291,18 @@ pub fn run(paths: &[PathBuf], opts: &CheckOptions<'_>) -> i32 {
 /// Collect findings for a single entry file, or report an operational
 /// failure. Factored so tests can drive one file without the
 /// aggregate/exit-code wrapper.
-fn collect_file_outcome(entry: &Path, opts: &CheckOptions<'_>) -> FileOutcome {
+fn collect_file_outcome(
+    entry: &Path,
+    opts: &CheckOptions<'_>,
+    labels_cache: &mut std::collections::HashMap<PathBuf, LabelsConfig>,
+) -> FileOutcome {
     let source = match std::fs::read_to_string(entry) {
         Ok(s) => s,
         Err(e) => {
             return FileOutcome::Operational(format!("cannot read {}: {e}", entry.display()));
         }
     };
-    match collect_file_diagnostics(entry, &source, opts) {
+    match collect_file_diagnostics(entry, &source, opts, labels_cache) {
         Ok(findings) => FileOutcome::Findings(findings),
         Err(msg) => FileOutcome::Operational(msg),
     }
@@ -284,18 +322,23 @@ pub fn collect_file_diagnostics(
     entry: &Path,
     source: &str,
     opts: &CheckOptions<'_>,
+    labels_cache: &mut std::collections::HashMap<PathBuf, LabelsConfig>,
 ) -> Result<Vec<CheckFinding>, String> {
     // Boot the extension registry from the workspace `[labels]` block so
     // schema/handler diagnostics fire — same boot the LSP and
-    // `labels validate` perform. Surface boot diagnostics (unresolvable
+    // `labels validate` perform. The `[labels]` config is loaded from the
+    // SAME workspace that anchors the boot (`workspace_for(entry)`), so a
+    // file outside the CWD's workspace gets its own workspace's labels,
+    // not a mismatched CWD config. Surface boot diagnostics (unresolvable
     // namespaces, trust denials, …) to stderr so a silently un-booted
     // namespace — whose schema/handler diagnostics then never run — is
     // visible; stdout stays reserved for findings (important under
     // `--format json`), matching `lexd config gen` / `labels list`.
     let workspace = workspace_for(entry);
+    let labels_config = labels_for_workspace(&workspace, labels_cache)?;
     let outcome = boot_registry(ExtensionSetup {
         workspace_root: &workspace,
-        labels_config: opts.labels_config,
+        labels_config,
         ext_schemas: opts.ext_schemas,
         enable_handlers: opts.enable_handlers,
         surface_override: Some(lex_extension_host::Surface::CliOneShot),

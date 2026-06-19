@@ -106,17 +106,32 @@ fn broken_include_exits_one_blamed_on_site() {
 
 #[test]
 fn no_includes_skips_expansion() {
-    // With expansion ON, a missing include target is a finding. With
-    // --no-includes, the resolver never runs, so the include-not-found
-    // finding does not appear.
     let dir = fixture_dir(&[("main.lex", ":: lex.include src=\"missing.lex\" ::\n")]);
 
+    // Expansion ON: the missing include target is resolved and fails →
+    // an include-not-found finding (exit 1).
+    lexd()
+        .arg("check")
+        .arg(path_in(&dir, "main.lex"))
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(predicate::str::contains("include-not-found"));
+
+    // Expansion OFF: the resolver never runs, so include-not-found does
+    // not appear. The unexpanded `lex.include` annotation is instead
+    // analysed in place (a schema finding), which proves expansion was
+    // genuinely skipped rather than the file going unread.
     lexd()
         .arg("check")
         .arg(path_in(&dir, "main.lex"))
         .arg("--no-includes")
         .assert()
-        .stdout(predicate::str::contains("include-not-found").not());
+        .stdout(
+            predicate::str::contains("include-not-found")
+                .not()
+                .and(predicate::str::contains("lex.include")),
+        );
 }
 
 // ============================================================================

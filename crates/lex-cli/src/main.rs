@@ -713,25 +713,11 @@ fn handle_check_command(top: &ArgMatches, sub: &ArgMatches, config: &LexConfig) 
 
     let expand_includes = !top.get_flag("no-includes");
 
-    // Workspace `[labels]` block, resolved like `lexd labels` does:
-    // walk ancestors of the cwd for `.lex.toml`. A missing file is not
-    // an error (default labels); a malformed one is operational (exit 2).
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let workspace = find_nearest_lex_toml_dir(&cwd).unwrap_or_else(|| cwd.clone());
-    let labels_path = workspace.join(CONFIG_FILE_NAME);
-    let labels_config = match lex_config::load_labels_from_toml(&labels_path) {
-        Ok(c) => c,
-        Err(lex_config::LabelsConfigError::Io { source, .. })
-            if source.kind() == std::io::ErrorKind::NotFound =>
-        {
-            lex_config::LabelsConfig::default()
-        }
-        Err(e) => {
-            eprintln!("lexd check: {e}");
-            return 2;
-        }
-    };
-
+    // `[labels]` is NOT loaded here: `check` loads it per-entry from each
+    // file's own workspace (see `check::collect_file_diagnostics`), so a
+    // file outside the CWD's workspace gets its own workspace's labels
+    // rather than a mismatched CWD config. Only the `--ext-schema` /
+    // `--enable-handlers` knobs and the include settings ride on opts.
     let ext_schemas: Vec<PathBuf> = top
         .get_many::<PathBuf>("ext-schema")
         .map(|values| values.cloned().collect())
@@ -752,7 +738,6 @@ fn handle_check_command(top: &ArgMatches, sub: &ArgMatches, config: &LexConfig) 
         fail_on,
         format,
         rules: &config.diagnostics.rules,
-        labels_config: &labels_config,
         ext_schemas: &ext_schemas,
         enable_handlers,
     };
