@@ -74,6 +74,15 @@ pub enum DiagnosticKind {
     /// Opt-in (`check --references`); a pure parse check — network
     /// reachability is out of scope. Emitted by [`analyze_references`].
     MalformedUrl,
+    /// A file-path reference — an inline `ReferenceType::File`
+    /// (`[./x.txt]`, `[../y]`, `[/abs]`) or an image/data verbatim
+    /// `src=` — that points at no file on disk, or whose target escapes
+    /// the resolution root / is a platform-absolute path. Opt-in:
+    /// emitted only by `check --references` (the existence check is
+    /// IO-bearing, so it runs in the CLI seam, not the pure analyser).
+    /// `lex.include src=` is excluded — its path is validated by the
+    /// base command via include expansion.
+    MissingFileTarget,
 }
 
 /// Severity for analysis-emitted diagnostics. The analyser populates
@@ -160,6 +169,7 @@ impl DiagnosticKind {
             DiagnosticKind::MissingAnnotationTarget => "missing-annotation-target".into(),
             DiagnosticKind::MissingCitationTarget => "missing-citation-target".into(),
             DiagnosticKind::MalformedUrl => "malformed-url".into(),
+            DiagnosticKind::MissingFileTarget => "missing-file-target".into(),
         }
     }
 }
@@ -459,6 +469,80 @@ pub fn analyze_references(document: &Document) -> Vec<AnalysisDiagnostic> {
 /// (issue #762: reachability out of scope).
 fn url_is_malformed(target: &str) -> bool {
     url::Url::parse(target).is_err()
+}
+
+/// A non-include file-path reference and the range to blame it on.
+///
+/// Produced by [`collect_file_references`] for the opt-in
+/// `check --references` *file-path* pass. The range is origin-stamped
+/// (it comes from the reference's authoring file, via
+/// [`extract_references`] for inline refs or the verbatim node's own
+/// range), so a consumer that resolves `target` relative to that origin
+/// — and blames findings on it — stays origin-faithful across an include
+/// merge.
+#[derive(Debug, Clone)]
+pub struct FileReference {
+    /// The raw path target as authored (`./x.txt`, `../y`, `/abs`).
+    pub target: String,
+    /// Origin-stamped range to resolve against and blame.
+    pub range: Range,
+}
+
+/// Collect every **non-include** file-path reference in the (merged)
+/// `document`: inline [`ReferenceType::File`] (`[./x.txt]`, `[../y]`,
+/// `[/abs]`) and image/data verbatim `src=` parameters.
+///
+/// This is the pure (no-IO) half of the `check --references` file-path
+/// check: it gathers the targets and their origin-stamped ranges; the
+/// caller performs filesystem resolution + existence (which needs a
+/// resolution root and disk access, neither of which belongs in a pure
+/// `&Document` analysis).
+///
+/// `lex.include src=` is intentionally **not** collected: it is an
+/// *annotation*, not a verbatim block, so it never matches the verbatim
+/// `src=` arm — and after include expansion it has been spliced out
+/// entirely (its path already validated by the base command, #759).
+///
+/// Inline refs reuse [`extract_references`], whose ranges are already
+/// origin-stamped (see `inline::ReferenceWalker::make_range`). Verbatim
+/// `src=` carries the verbatim node's own range, which the include
+/// resolver stamps with the authoring file's origin.
+pub fn collect_file_references(document: &Document) -> Vec<FileReference> {
+    use lex_core::lex::ast::traits::AstNode;
+
+    let mut refs = Vec::new();
+
+    // Inline `[./x]` file references — origin-stamped via extract_references.
+    crate::utils::for_each_text_content(document, &mut |text| {
+        for reference in extract_references(text) {
+            if let ReferenceType::File { target } = &reference.reference_type {
+                if !target.trim().is_empty() {
+                    refs.push(FileReference {
+                        target: target.clone(),
+                        range: reference.range.clone(),
+                    });
+                }
+            }
+        }
+    });
+
+    // Image/data verbatim `src=` parameters. The verbatim's own range
+    // carries its origin; `lex.include` is an annotation, not a verbatim
+    // block, so it is structurally excluded here.
+    for item in document.root.iter_all_nodes() {
+        if let ContentItem::VerbatimBlock(verbatim) = item {
+            if let Some(src) = verbatim.src_parameter() {
+                if !src.trim().is_empty() {
+                    refs.push(FileReference {
+                        target: src.to_string(),
+                        range: verbatim.range().clone(),
+                    });
+                }
+            }
+        }
+    }
+
+    refs
 }
 
 /// Walk every label site in the document and re-classify via
@@ -1557,5 +1641,46 @@ mod tests {
         assert!(!url_is_malformed("https://example.com"));
         assert!(url_is_malformed("https://exa mple.com"));
         assert!(!url_is_malformed("mailto:a@b.com"));
+    }
+
+    // ========================================================================
+    // collect_file_references (file-path pass, #761) unit tests
+    // ========================================================================
+
+    fn file_ref_targets(source: &str) -> Vec<String> {
+        let doc = parse_document_permissive(source).expect("permissive parse");
+        let mut targets: Vec<String> = collect_file_references(&doc)
+            .into_iter()
+            .map(|r| r.target)
+            .collect();
+        targets.sort();
+        targets
+    }
+
+    #[test]
+    fn collects_inline_file_references() {
+        // The three inline file-reference shapes (`./`, `../`, `/`) are
+        // all collected; a non-file `[General]` reference is not.
+        let source = "1. Intro\n\n    See [./a.txt] and [../b] and [/c] but not [Nope].\n";
+        assert_eq!(
+            file_ref_targets(source),
+            vec!["../b".to_string(), "./a.txt".to_string(), "/c".to_string()]
+        );
+    }
+
+    #[test]
+    fn collects_verbatim_src_but_not_lex_include() {
+        // An image verbatim `src=` is collected. `lex.include` is an
+        // annotation (not a verbatim block) and is structurally excluded
+        // — collecting it here would double-validate a path the base
+        // command already checks via expansion.
+        let source = "Photo:\n    Caption.\n:: image src=./diagram.png ::\n\n";
+        assert_eq!(file_ref_targets(source), vec!["./diagram.png".to_string()]);
+    }
+
+    #[test]
+    fn ignores_url_references() {
+        // URLs are out of scope for the file-path pass (#762 owns them).
+        assert!(file_ref_targets("1. Intro\n\n    See [https://example.com].\n").is_empty());
     }
 }

@@ -1,0 +1,1 @@
+- lexd check --references: file-path reference validation (inline [./x] + image/data verbatim src=), origin-aware against the merged document; excludes lex.include (validated by base command)

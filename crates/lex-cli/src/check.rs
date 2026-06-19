@@ -42,13 +42,15 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use lex_analysis::diagnostics::{
-    analyze_references, analyze_with_rules, apply_rules, AnalysisDiagnostic,
-    DiagnosticSeverity as AnalysisSeverity,
+    analyze_references, analyze_with_rules, apply_rules, collect_file_references,
+    AnalysisDiagnostic, DiagnosticKind, DiagnosticSeverity as AnalysisSeverity,
 };
 use lex_config::{DiagnosticsRulesConfig, LabelsConfig, CONFIG_FILE_NAME};
-use lex_core::lex::ast::{Position, Range};
+use lex_core::lex::ast::{Document, Position, Range};
 use lex_core::lex::builtins;
-use lex_core::lex::includes::{resolve_from_source, FsLoader, IncludeError, ResolveConfig};
+use lex_core::lex::includes::{
+    resolve_file_reference, resolve_from_source, FsLoader, IncludeError, ResolveConfig,
+};
 use lex_core::lex::parsing::parse_document_permissive;
 use lex_extension_host::registry::Registry;
 use serde::Serialize;
@@ -363,25 +365,26 @@ pub fn collect_file_diagnostics(
     // actually using the feature) we run the resolver; assembly failures
     // become findings against the include site. Otherwise we parse
     // permissively so label-policy diagnostics still surface.
+    let entry_abs = absolutize(entry);
+    // The resolution root, shared by include expansion and the
+    // `--references` file-path pass so both resolve targets identically:
+    // explicit override → nearest ancestor with `.lex.toml` → the entry
+    // file's own directory (`workspace_for`). NOT the entry directory
+    // unconditionally, which would spuriously trip root-escape for valid
+    // workspace-relative paths when the entry lives in a subdir.
+    let root = opts
+        .includes_root
+        .clone()
+        .map(|r| absolutize(&r))
+        .unwrap_or_else(|| workspace_for(&entry_abs));
+
     let document = if opts.expand_includes && source.contains("lex.include") {
-        let entry_abs = absolutize(entry);
-        // Default include root mirrors `convert`/`inspect`
-        // (`IncludeOptions::resolved_root`): the nearest ancestor
-        // containing `.lex.toml`, falling back to the entry file's own
-        // directory — NOT the entry directory unconditionally, which
-        // would spuriously trip `include-root-escape` for valid
-        // workspace-relative includes when the entry lives in a subdir.
-        let root = opts
-            .includes_root
-            .clone()
-            .map(|r| absolutize(&r))
-            .unwrap_or_else(|| workspace_for(&entry_abs));
         let resolve_config = ResolveConfig {
             root: root.clone(),
             max_depth: opts.max_depth,
             max_total_includes: opts.max_total_includes,
         };
-        let loader = FsLoader::new(root).with_max_file_size(opts.max_file_size);
+        let loader = FsLoader::new(root.clone()).with_max_file_size(opts.max_file_size);
         let registry = Registry::new();
         if let Err(e) = builtins::register_into(&registry, Arc::new(loader), resolve_config.clone())
         {
@@ -426,6 +429,15 @@ pub fn collect_file_diagnostics(
     // a `.lex.toml` downgrade silences a kind identically.
     if opts.check_references {
         let mut reference_diagnostics = analyze_references(&document);
+        // File-path references (inline `[./x]` + image/data verbatim
+        // `src=`) are validated here rather than inside the pure
+        // `analyze_references` pass because existence is IO-bearing: it
+        // needs the resolution `root` and disk access, neither of which
+        // belongs in a pure `&Document` analysis. `lex.include src=` is
+        // intentionally not seen here — by this point it has been spliced
+        // out by expansion (its path already validated by the base
+        // command), so only genuine file references remain.
+        reference_diagnostics.extend(file_reference_diagnostics(&document, &root));
         apply_rules(&mut reference_diagnostics, |code| {
             opts.rules.lookup_by_code(code).cloned()
         });
@@ -435,6 +447,61 @@ pub fn collect_file_diagnostics(
     }
 
     Ok(findings)
+}
+
+/// Validate every non-include file-path reference in the (merged)
+/// `document` against the filesystem, emitting a `missing-file-target`
+/// diagnostic for each target that does not exist on disk — or that
+/// escapes `root` / is a platform-absolute path.
+///
+/// The references themselves (inline `[./x.txt]` + image/data verbatim
+/// `src=`, with `lex.include src=` structurally excluded) come from the
+/// pure [`collect_file_references`] pass; this function adds only the
+/// IO: resolution + existence.
+///
+/// **Origin-aware resolution is the crux.** Each reference's range
+/// carries the `origin_path` of the file it was authored in (the
+/// resolver stamps it during include expansion), so a `[./foo]` inside
+/// an included chapter resolves against *that chapter's* directory, not
+/// the entry file's. We hand that origin to [`resolve_file_reference`]
+/// as `ref_origin`: relative targets resolve from its parent directory,
+/// root-absolute (`/foo`) targets from `root`. Root-escape and
+/// platform-absolute targets reuse the resolver's
+/// [`IncludeError::RootEscape`] / [`IncludeError::AbsolutePath`] and
+/// surface as the same `missing-file-target` code (with the error's
+/// message) — from the author's standpoint the reference still points at
+/// nothing reachable.
+///
+/// Every finding's range is the reference's own (origin-stamped) range,
+/// so [`analysis_finding`] blames it on the file the reference was
+/// authored in. Default severity `Warning`; the caller applies
+/// `[diagnostics.rules]` for per-rule overrides.
+fn file_reference_diagnostics(document: &Document, root: &Path) -> Vec<AnalysisDiagnostic> {
+    let mut diagnostics = Vec::new();
+    for file_ref in collect_file_references(document) {
+        let origin = file_ref.range.origin();
+        let message = match resolve_file_reference(&file_ref.target, origin, root) {
+            Ok(resolved) => {
+                if resolved.exists() {
+                    continue;
+                }
+                format!("File reference '{}' does not exist", file_ref.target)
+            }
+            // Root-escape / platform-absolute: the reference is invalid
+            // for the same reason it would be as an include path. Reuse
+            // the resolver's own message so the diagnostic explains the
+            // escape rather than a bland "missing".
+            Err(err) => err.to_string(),
+        };
+
+        diagnostics.push(AnalysisDiagnostic {
+            range: file_ref.range,
+            severity: AnalysisSeverity::Warning,
+            kind: DiagnosticKind::MissingFileTarget,
+            message,
+        });
+    }
+    diagnostics
 }
 
 /// Map an analyser diagnostic into a [`CheckFinding`], resolving the
