@@ -1,0 +1,1 @@
+- lexd check --references: use try_exists for file refs and tighten is_url_like against Windows drive paths

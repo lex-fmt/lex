@@ -493,12 +493,20 @@ fn file_reference_diagnostics(document: &Document, root: &Path) -> Vec<AnalysisD
         let origin = file_ref.range.origin();
         let target = &file_ref.target;
         let message = match resolve_file_reference(target, origin, root) {
-            Ok(resolved) => {
-                if resolved.exists() {
-                    continue;
-                }
-                format!("File reference '{target}' does not exist")
-            }
+            Ok(resolved) => match resolved.try_exists() {
+                // Genuinely absent — emit the finding.
+                Ok(false) => format!("File reference '{target}' does not exist"),
+                // Exists — no finding.
+                Ok(true) => continue,
+                // Existence could not be *determined* (e.g. permission
+                // denied on a parent dir). `exists()` would have collapsed
+                // this IO error into a `false` and reported a phantom
+                // "does not exist"; the file may well be there but
+                // unreadable, so don't flag it. The real problem is an
+                // IO/permission error, not a missing target — and we have
+                // no diagnostic kind for that, so silently skip.
+                Err(_) => continue,
+            },
             // The reference is invalid for the same reason it would be as
             // an include path, but phrase it in file-reference terms
             // rather than leaking the resolver's include-specific Display.

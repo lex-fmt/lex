@@ -572,11 +572,35 @@ pub fn collect_file_references(document: &Document) -> Vec<FileReference> {
 /// `mailto:`) plus a generic `scheme://` catch, so a verbatim
 /// `src=<url>` is excluded from the file-path existence check the same
 /// way an inline `[<url>]` is classified `Url` and skipped.
+///
+/// The generic `scheme://` arm requires a *real* URL scheme rather than
+/// a bare `"://"` substring: the part before `://` must be a valid
+/// RFC 3986 scheme — start with an ASCII letter, then ASCII
+/// alphanumerics / `+` / `-` / `.` — and be at least two characters
+/// long. The length-≥2 floor is the point of the fix: a single-letter
+/// "scheme" is exactly the Windows drive-letter ambiguity, so `C://path`
+/// is *not* treated as a URL (it falls through to be resolved / flagged
+/// as a platform-absolute path), while every real scheme we care about
+/// (`http`, `https`, …) is ≥2 chars and still matches. `mailto:` has no
+/// `//`, so it keeps its own explicit prefix arm.
 fn is_url_like(src: &str) -> bool {
     src.starts_with("http://")
         || src.starts_with("https://")
         || src.starts_with("mailto:")
-        || src.contains("://")
+        || has_url_scheme(src)
+}
+
+/// Does `src` begin with a genuine `scheme://` (a length-≥2 RFC 3986
+/// scheme), as opposed to a Windows drive path like `C://…`?
+fn has_url_scheme(src: &str) -> bool {
+    let Some((scheme, _)) = src.split_once("://") else {
+        return false;
+    };
+    scheme.len() >= 2
+        && scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+        && scheme
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
 }
 
 /// Walk every label site in the document and re-classify via
@@ -1736,5 +1760,21 @@ mod tests {
             "Photo:\n    Caption.\n:: image src=\"https://example.com/diagram.png\" ::\n\n"
         )
         .is_empty());
+    }
+
+    #[test]
+    fn is_url_like_matches_real_schemes_not_windows_drives() {
+        // A genuine `scheme://` URL is URL-like and filtered out.
+        assert!(is_url_like("https://example.com"));
+        assert!(is_url_like("http://example.com"));
+        assert!(is_url_like("mailto:user@example.com"));
+        // A length-≥2 custom scheme still matches.
+        assert!(is_url_like("ftp://host/path"));
+        // A Windows drive path is NOT a URL — its single-letter "scheme"
+        // is exactly the ambiguity the length-≥2 floor disambiguates.
+        assert!(!is_url_like("C://path"));
+        assert!(!is_url_like("C:\\path"));
+        // A plain relative path is not URL-like.
+        assert!(!is_url_like("./rel/path"));
     }
 }
