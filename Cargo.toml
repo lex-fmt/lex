@@ -39,6 +39,7 @@ once_cell = "1.21"
 pathdiff = "0.2"
 comrak = "0.29"
 sha2 = "0.10"
+url = "2.4"
 
 [profile.dist]
 inherits = "release"

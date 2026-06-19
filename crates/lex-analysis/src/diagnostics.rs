@@ -68,6 +68,11 @@ pub enum DiagnosticKind {
     /// label or definition subject in the merged document. Opt-in
     /// (`check --references`).
     MissingCitationTarget,
+    /// A URL reference (`[https://…]`, `[mailto:…]`) that is not
+    /// well-formed (embedded space, empty host, otherwise unparseable).
+    /// Opt-in (`check --references`); a pure parse check — network
+    /// reachability is out of scope. Emitted by [`analyze_references`].
+    MalformedUrl,
 }
 
 /// Severity for analysis-emitted diagnostics. The analyser populates
@@ -153,6 +158,7 @@ impl DiagnosticKind {
             DiagnosticKind::MissingDefinitionTarget => "missing-definition-target".into(),
             DiagnosticKind::MissingAnnotationTarget => "missing-annotation-target".into(),
             DiagnosticKind::MissingCitationTarget => "missing-citation-target".into(),
+            DiagnosticKind::MalformedUrl => "malformed-url".into(),
         }
     }
 }
@@ -332,13 +338,19 @@ pub fn analyze_with_rules(
 /// - [`ReferenceType::General`] → `missing-definition-target`
 /// - [`ReferenceType::AnnotationReference`] → `missing-annotation-target`
 /// - [`ReferenceType::Citation`] → `missing-citation-target`
+/// - [`ReferenceType::Url`] → `malformed-url` (well-formedness only)
+///
+/// The `Url` arm is *not* a cross-reference check: it validates the URL
+/// is well-formed (a pure, IO-free parse — **no network**, by design;
+/// reachability is out of scope, issue #762). It runs in this pass
+/// because well-formedness is pure and `--references` already gates it.
 ///
 /// `ToCome` / `NotSure` are intentional placeholders and never flagged;
 /// `FootnoteNumber` is validated by the always-on analyser
-/// ([`check_footnotes`]); `Url` / `File` are out of scope here (epic
-/// #758, issues #761–#762). All emitted diagnostics default to
-/// [`DiagnosticSeverity::Warning`] — callers apply
-/// `[diagnostics.rules]` via [`apply_rules`] for per-kind overrides.
+/// ([`check_footnotes`]); `File` is out of scope here (issue #761). All
+/// emitted diagnostics default to [`DiagnosticSeverity::Warning`] —
+/// callers apply `[diagnostics.rules]` via [`apply_rules`] for per-kind
+/// overrides.
 pub fn analyze_references(document: &Document) -> Vec<AnalysisDiagnostic> {
     use crate::reference_targets::{targets_from_reference_type, ReferenceTarget};
     use crate::references::target_resolves;
@@ -365,6 +377,23 @@ pub fn analyze_references(document: &Document) -> Vec<AnalysisDiagnostic> {
                         label.trim()
                     ),
                 ),
+                ReferenceType::Url { target } if !target.trim().is_empty() => {
+                    // URL references are validated for well-formedness
+                    // only — a pure, IO-free parse check (no network: see
+                    // [`url_is_malformed`]). This is self-contained (no
+                    // document resolution), so it emits inline and
+                    // `continue`s like the citation arm rather than
+                    // falling through to the target-resolution tail.
+                    if url_is_malformed(target.trim()) {
+                        diagnostics.push(AnalysisDiagnostic {
+                            range: reference.range.clone(),
+                            severity: DiagnosticSeverity::Warning,
+                            kind: DiagnosticKind::MalformedUrl,
+                            message: format!("URL [{}] is malformed", target.trim()),
+                        });
+                    }
+                    continue;
+                }
                 ReferenceType::Citation(data) => {
                     // A citation may carry multiple keys; each is its own
                     // potential dangling target. Emit per unresolved key.
@@ -408,6 +437,30 @@ pub fn analyze_references(document: &Document) -> Vec<AnalysisDiagnostic> {
         }
     });
     diagnostics
+}
+
+/// Is `target` a malformed URL? Pure, IO-free well-formedness check —
+/// **never opens a connection**. Classification
+/// ([`is_url_reference`](lex_core::lex::inlines)) already guarantees one
+/// of the `http://` / `https://` / `mailto:` scheme prefixes, so this
+/// catches what classification can't: embedded spaces, an empty host on
+/// a `//`-authority scheme, and otherwise-unparseable targets.
+///
+/// A future opt-in `--check-urls-online` would layer network
+/// reachability *on top* of this — deliberately unimplemented here
+/// (issue #762: reachability out of scope).
+fn url_is_malformed(target: &str) -> bool {
+    let Ok(parsed) = url::Url::parse(target) else {
+        // Unparseable (e.g. an embedded space) — malformed.
+        return true;
+    };
+    // For the `//`-authority schemes we validate, a present-but-empty
+    // host (e.g. `https://`) is malformed. `mailto:` has no host
+    // component, so an empty host is expected there and not flagged.
+    if matches!(parsed.scheme(), "http" | "https") {
+        return parsed.host_str().is_none_or(str::is_empty);
+    }
+    false
 }
 
 /// Walk every label site in the document and re-classify via
@@ -1445,5 +1498,66 @@ mod tests {
         let diags = reference_diags("1. Intro\n\n    See [Nope].\n");
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].severity, DiagnosticSeverity::Warning);
+    }
+
+    // ========================================================================
+    // URL well-formedness (issue #762). Validated inside analyze_references;
+    // pure parse, no network.
+    // ========================================================================
+
+    #[test]
+    fn malformed_url_embedded_space_flagged() {
+        // An embedded space makes the URL unparseable.
+        let codes = ref_codes("1. Intro\n\n    See [https://exa mple.com].\n");
+        assert_eq!(codes, vec!["malformed-url"]);
+    }
+
+    #[test]
+    fn malformed_url_empty_host_flagged() {
+        // `https://` with no host is well-formed-prefix but empty-host.
+        let codes = ref_codes("1. Intro\n\n    See [https:// ].\n");
+        assert_eq!(codes, vec!["malformed-url"]);
+    }
+
+    #[test]
+    fn well_formed_https_url_not_flagged() {
+        assert!(
+            reference_diags("1. Intro\n\n    See [https://example.com/path?q=1].\n").is_empty(),
+            "a well-formed https URL must not be flagged"
+        );
+    }
+
+    #[test]
+    fn well_formed_http_url_not_flagged() {
+        assert!(reference_diags("1. Intro\n\n    See [http://example.com].\n").is_empty());
+    }
+
+    #[test]
+    fn well_formed_mailto_not_flagged() {
+        // `mailto:` has no host component — an empty host is expected and
+        // must not be flagged.
+        assert!(
+            reference_diags("1. Intro\n\n    Write [mailto:hi@example.com].\n").is_empty(),
+            "a well-formed mailto must not be flagged"
+        );
+    }
+
+    #[test]
+    fn malformed_url_defaults_to_warning() {
+        let diags = reference_diags("1. Intro\n\n    See [https://exa mple.com].\n");
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].kind, DiagnosticKind::MalformedUrl);
+        assert_eq!(diags[0].severity, DiagnosticSeverity::Warning);
+    }
+
+    #[test]
+    fn url_check_makes_no_network_calls_by_construction() {
+        // `url_is_malformed` is a pure parse over a string — it borrows no
+        // socket, client, or runtime, so the default check path cannot
+        // make a network call. Exercising both a well-formed and a
+        // malformed URL here documents that the only work done is parsing.
+        assert!(!url_is_malformed("https://example.com"));
+        assert!(url_is_malformed("https://exa mple.com"));
+        assert!(!url_is_malformed("mailto:a@b.com"));
     }
 }

@@ -1233,6 +1233,7 @@ dependencies = [
  "pathdiff",
  "serde_json",
  "tempfile",
+ "url",
 ]
 
 [[package]]
