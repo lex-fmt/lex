@@ -455,28 +455,45 @@ fn build_cli() -> Command {
                 ),
         )
         .subcommand(
-            Command::new("check-labels")
-                .about("Check a .lex file for label-policy violations (CI-friendly)")
+            Command::new("check")
+                .about("Lint .lex documents and report diagnostics (CI-friendly)")
                 .long_about(
-                    "Parse a .lex file in permissive mode and report any label-policy \
-                     violations that strict-mode parsing would have rejected:\n\n  \
-                     - `forbidden-label-prefix` — labels using the reserved `doc.*` \
-                     prefix (see general.lex §4.1)\n  \
-                     - `unknown-lex-canonical` — `lex.*` literals that aren't \
-                     registered canonicals\n\n\
-                     Permissive parse means the rest of the file still produces \
-                     diagnostics — useful for batch CI runs where you want to see all \
-                     violations at once rather than failing on the first.\n\n\
+                    "Run lex-analysis diagnostics over one or more documents and report \
+                     findings with a CI-friendly exit-code contract.\n\n\
+                     Each file is parsed, its `lex.include` annotations are expanded by \
+                     default (use --no-includes to skip), the extension registry is booted \
+                     so schema/handler diagnostics fire, and the analysis pass runs with \
+                     any `[diagnostics.rules]` severity overrides from `.lex.toml` applied. \
+                     Include-assembly failures (missing/cyclic/oversize includes) surface \
+                     here as diagnostics blamed on the include site. Findings originating \
+                     inside an included file are reported against that file's path.\n\n\
                      Exit codes:\n  \
-                     0: clean (no label-policy violations)\n  \
-                     1: at least one violation found\n  \
-                     2: I/O failure (file not found) or fatal parse error",
+                     0: clean (no finding at/above the --fail-on threshold)\n  \
+                     1: at least one finding met the threshold\n  \
+                     2: operational error (unreadable file, bad arguments)",
                 )
                 .arg(
-                    Arg::new("path")
-                        .help("Path to the .lex document")
+                    Arg::new("paths")
+                        .help("Paths to the .lex documents (one or more)")
                         .value_hint(ValueHint::FilePath)
+                        .num_args(1..)
                         .required(true),
+                )
+                .arg(
+                    Arg::new("fail-on")
+                        .long("fail-on")
+                        .value_name("SEVERITY")
+                        .help("Severity at/above which a finding fails the run")
+                        .value_parser(["error", "warning", "info", "hint"])
+                        .default_value("warning"),
+                )
+                .arg(
+                    Arg::new("format")
+                        .long("format")
+                        .value_name("FORMAT")
+                        .help("Output format")
+                        .value_parser(["human", "json"])
+                        .default_value("human"),
                 ),
         )
 }
@@ -500,7 +517,7 @@ fn main() {
                 "token-at",
                 "generate-lex-css",
                 "labels",
-                "check-labels",
+                "check",
                 "help",
             ];
             let first_arg = args.get(1).map(String::as_str);
@@ -553,18 +570,6 @@ fn main() {
                     eprintln!("{e}");
                     std::process::exit(1);
                 });
-            }
-        }
-        // `check-labels` doesn't need workspace config — only the
-        // built-in `lex.*` canonical set, which the analysis pass
-        // consults through compile-in constants. Short-circuiting
-        // before `builder.load()` keeps the documented exit-code
-        // contract (0/1/2 only) — a config load failure inside this
-        // subcommand would otherwise exit with code 1 instead of 2.
-        Some(("check-labels", sub_matches)) => {
-            let exit = handle_check_labels_command(sub_matches);
-            if exit != 0 {
-                std::process::exit(exit);
             }
         }
         _ => {
@@ -660,6 +665,12 @@ fn main() {
                         std::process::exit(exit);
                     }
                 }
+                Some(("check", sub_matches)) => {
+                    let exit = handle_check_command(&matches, sub_matches, &config);
+                    if exit != 0 {
+                        std::process::exit(exit);
+                    }
+                }
                 _ => {
                     eprintln!("Unknown subcommand. Use --help for usage information.");
                     std::process::exit(1);
@@ -669,88 +680,84 @@ fn main() {
     }
 }
 
-/// Dispatch `lexd check-labels <path>`. Parses the file permissively
-/// so `doc.*` and unknown `lex.*` labels survive into the AST,
-/// then runs the analysis pass and filters to the label-policy
-/// diagnostics (`ForbiddenLabelPrefix` + `UnknownLexCanonical`).
-/// Reports each violation with line/column info; exits non-zero
-/// when any are found.
+/// Dispatch `lexd check [FILES...]`. Runs lex-analysis diagnostics over
+/// each document's include-expanded AST and reports findings with the
+/// CI-friendly exit-code contract (0 clean / 1 findings / 2 operational).
 ///
-/// Exit codes:
-///
-/// - `0`: clean (no label-policy violations).
-/// - `1`: at least one violation found.
-/// - `2`: I/O failure (file not found) or fatal parse error.
-fn handle_check_labels_command(sub: &ArgMatches) -> i32 {
-    use lex_analysis::diagnostics::{analyze, DiagnosticKind};
-    use lex_core::lex::parsing::parse_document_permissive;
+/// The actual collection + reporting lives in [`lexd::check`]; this
+/// handler only assembles [`lexd::check::CheckOptions`] from parsed args
+/// and the loaded config. `[labels]` is loaded from the workspace
+/// `.lex.toml` (nearest ancestor of the cwd), matching how every other
+/// subcommand resolves workspace config; `[diagnostics.rules]` rides on
+/// the already-loaded [`LexConfig`].
+fn handle_check_command(top: &ArgMatches, sub: &ArgMatches, config: &LexConfig) -> i32 {
+    use lexd::check::{run, CheckOptions, OutputFormat, Severity};
 
-    let path: PathBuf = sub
-        .get_one::<String>("path")
+    let paths: Vec<PathBuf> = sub
+        .get_many::<String>("paths")
+        .map(|vals| vals.map(PathBuf::from).collect())
+        .unwrap_or_default();
+
+    // clap's value_parser already constrains these to the legal token
+    // set, so the `expect`s below cannot trip in practice.
+    let fail_on = Severity::parse(
+        sub.get_one::<String>("fail-on")
+            .map(String::as_str)
+            .unwrap_or("warning"),
+    )
+    .expect("clap value_parser constrains --fail-on");
+    let format = match sub.get_one::<String>("format").map(String::as_str) {
+        Some("json") => OutputFormat::Json,
+        _ => OutputFormat::Human,
+    };
+
+    let expand_includes = !top.get_flag("no-includes");
+
+    // Workspace `[labels]` block, resolved like `lexd labels` does:
+    // walk ancestors of the cwd for `.lex.toml`. A missing file is not
+    // an error (default labels); a malformed one is operational (exit 2).
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let workspace = find_nearest_lex_toml_dir(&cwd).unwrap_or_else(|| cwd.clone());
+    let labels_path = workspace.join(CONFIG_FILE_NAME);
+    let labels_config = match lex_config::load_labels_from_toml(&labels_path) {
+        Ok(c) => c,
+        Err(lex_config::LabelsConfigError::Io { source, .. })
+            if source.kind() == std::io::ErrorKind::NotFound =>
+        {
+            lex_config::LabelsConfig::default()
+        }
+        Err(e) => {
+            eprintln!("lexd check: {e}");
+            return 2;
+        }
+    };
+
+    let ext_schemas: Vec<PathBuf> = top
+        .get_many::<PathBuf>("ext-schema")
+        .map(|values| values.cloned().collect())
+        .unwrap_or_default();
+    let enable_handlers = top.get_flag("enable-handlers");
+
+    let includes_root = top
+        .get_one::<String>("includes-root")
         .map(PathBuf::from)
-        .expect("clap enforces required");
+        .or_else(|| config.includes.root.as_ref().map(PathBuf::from));
 
-    let source = match std::fs::read_to_string(&path) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("lexd check-labels: failed to read {}: {e}", path.display());
-            return 2;
-        }
+    let opts = CheckOptions {
+        expand_includes,
+        includes_root,
+        max_depth: config.includes.max_depth,
+        max_total_includes: config.includes.max_total_includes,
+        max_file_size: config.includes.max_file_size,
+        fail_on,
+        format,
+        rules: &config.diagnostics.rules,
+        labels_config: &labels_config,
+        ext_schemas: &ext_schemas,
+        enable_handlers,
     };
 
-    let document = match parse_document_permissive(&source) {
-        Ok(doc) => doc,
-        Err(e) => {
-            eprintln!(
-                "lexd check-labels: {} could not be parsed: {e}",
-                path.display()
-            );
-            return 2;
-        }
-    };
-
-    // Only label-policy diagnostics are in scope for this subcommand.
-    // Other analysis diagnostics (missing-footnote, table-column,
-    // schema validation) keep firing through `lexd format` /
-    // `lex-lsp`; this command is the focused pre-flight check.
-    let label_diags: Vec<_> = analyze(&document)
-        .into_iter()
-        .filter(|d| {
-            matches!(
-                d.kind,
-                DiagnosticKind::ForbiddenLabelPrefix | DiagnosticKind::UnknownLexCanonical
-            )
-        })
-        .collect();
-
-    if label_diags.is_empty() {
-        return 0;
-    }
-
-    for diag in &label_diags {
-        let code = match diag.kind {
-            DiagnosticKind::ForbiddenLabelPrefix => "forbidden-label-prefix",
-            DiagnosticKind::UnknownLexCanonical => "unknown-lex-canonical",
-            _ => "label-policy",
-        };
-        // 1-based line/column for the human-readable report.
-        let line = diag.range.start.line + 1;
-        let col = diag.range.start.column + 1;
-        eprintln!(
-            "{}:{}:{}: error[{code}]: {}",
-            path.display(),
-            line,
-            col,
-            diag.message
-        );
-    }
-    eprintln!();
-    eprintln!(
-        "{}: {} label-policy violation(s)",
-        path.display(),
-        label_diags.len()
-    );
-    1
+    run(&paths, &opts)
 }
 
 /// Dispatch `lexd config gen`.

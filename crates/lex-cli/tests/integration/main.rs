@@ -1,5 +1,6 @@
 //! Consolidated integration-test binary for lexd.
 
+mod check;
 mod config_gen;
 mod element_at;
 mod format_config;
