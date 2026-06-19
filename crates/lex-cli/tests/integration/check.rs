@@ -553,3 +553,115 @@ fn missing_footnote_inside_include_fires_blamed_on_fragment() {
             predicate::str::contains("missing-footnote").and(predicate::str::contains("frag.lex")),
         );
 }
+
+// ============================================================================
+// --references: URL well-formedness validation (#762)
+//
+// Well-formedness only — a pure parse, no network. Fires under the same
+// --references flag as the cross-reference checks.
+// ============================================================================
+
+/// A malformed URL (embedded space) is flagged `malformed-url` at warning
+/// severity, under `--references`.
+#[test]
+fn references_flags_malformed_url() {
+    let dir = fixture_dir(&[("doc.lex", "1. Intro\n\n    See [https://exa mple.com].\n")]);
+    lexd()
+        .arg("check")
+        .arg(path_in(&dir, "doc.lex"))
+        .arg("--references")
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(
+            predicate::str::contains("malformed-url").and(predicate::str::contains("warning:")),
+        );
+}
+
+/// A well-formed `https://` URL is not flagged.
+#[test]
+fn references_well_formed_https_url_clean() {
+    let dir = fixture_dir(&[(
+        "doc.lex",
+        "1. Intro\n\n    See [https://example.com/path].\n",
+    )]);
+    lexd()
+        .arg("check")
+        .arg(path_in(&dir, "doc.lex"))
+        .arg("--references")
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+/// A well-formed `mailto:` is not flagged (no host component expected).
+#[test]
+fn references_well_formed_mailto_clean() {
+    let dir = fixture_dir(&[(
+        "doc.lex",
+        "1. Intro\n\n    Write [mailto:hi@example.com].\n",
+    )]);
+    lexd()
+        .arg("check")
+        .arg(path_in(&dir, "doc.lex"))
+        .arg("--references")
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+/// URL validation is opt-in: without `--references`, a malformed URL
+/// produces no finding.
+#[test]
+fn references_url_check_is_opt_in() {
+    let dir = fixture_dir(&[("doc.lex", "1. Intro\n\n    See [https://exa mple.com].\n")]);
+    lexd()
+        .arg("check")
+        .arg(path_in(&dir, "doc.lex"))
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+/// A malformed URL authored inside an included fragment is blamed on the
+/// fragment's path, not the entry document (origin-faithful).
+#[test]
+fn references_malformed_url_inside_include_blamed_on_fragment() {
+    let dir = fixture_dir(&[
+        ("master.lex", ":: lex.include src=\"frag.lex\" ::\n"),
+        (
+            "frag.lex",
+            "1. Frag\n\n    A bad [https://exa mple.com] link.\n",
+        ),
+    ]);
+    lexd()
+        .arg("check")
+        .arg(path_in(&dir, "master.lex"))
+        .arg("--references")
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(
+            predicate::str::contains("frag.lex").and(predicate::str::contains("malformed-url")),
+        );
+}
+
+/// A `.lex.toml` rule downgrade (`allow`) silences `malformed-url`.
+#[test]
+fn references_lex_toml_allow_silences_malformed_url() {
+    let dir = fixture_dir(&[
+        ("doc.lex", "1. Intro\n\n    See [https://exa mple.com].\n"),
+        (
+            ".lex.toml",
+            "[diagnostics.rules]\nmalformed_url = \"allow\"\n",
+        ),
+    ]);
+    lexd()
+        .arg("check")
+        .arg(path_in(&dir, "doc.lex"))
+        .arg("--references")
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}

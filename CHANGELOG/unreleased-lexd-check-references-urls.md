@@ -1,0 +1,1 @@
+- lexd check --references: URL well-formedness validation (malformed-url; embedded space / empty host); pure parse, no network

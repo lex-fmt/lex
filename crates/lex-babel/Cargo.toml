@@ -27,7 +27,7 @@ markup5ever_rcdom = "0.38"
 serde = { workspace = true }
 tempfile = { workspace = true, optional = true }
 which = { version = "8", optional = true }
-url = "2.4"
+url = { workspace = true }
 pathdiff = { workspace = true }
 roxmltree = "0.21"
 regex = { workspace = true }
