@@ -440,27 +440,23 @@ pub fn analyze_references(document: &Document) -> Vec<AnalysisDiagnostic> {
 }
 
 /// Is `target` a malformed URL? Pure, IO-free well-formedness check —
-/// **never opens a connection**. Classification
-/// ([`is_url_reference`](lex_core::lex::inlines)) already guarantees one
-/// of the `http://` / `https://` / `mailto:` scheme prefixes, so this
-/// catches what classification can't: embedded spaces, an empty host on
-/// a `//`-authority scheme, and otherwise-unparseable targets.
+/// **never opens a connection**. Classification (`ReferenceType::Url`)
+/// already guarantees one of the `http://` / `https://` / `mailto:`
+/// scheme prefixes, so this catches what classification can't: embedded
+/// spaces, an empty host, and otherwise-unparseable targets.
+///
+/// A bare `url::Url::parse(...).is_err()` is sufficient: under the WHATWG
+/// URL standard the `url` crate implements, the special schemes we
+/// validate (`http`/`https`) require a non-empty host, so a missing host
+/// (`https://`) already parse-fails with `EmptyHost`; `mailto:` is
+/// host-less and parses fine — exactly the behavior we want, with no
+/// scheme-specific host check needed.
 ///
 /// A future opt-in `--check-urls-online` would layer network
 /// reachability *on top* of this — deliberately unimplemented here
 /// (issue #762: reachability out of scope).
 fn url_is_malformed(target: &str) -> bool {
-    let Ok(parsed) = url::Url::parse(target) else {
-        // Unparseable (e.g. an embedded space) — malformed.
-        return true;
-    };
-    // For the `//`-authority schemes we validate, a present-but-empty
-    // host (e.g. `https://`) is malformed. `mailto:` has no host
-    // component, so an empty host is expected there and not flagged.
-    if matches!(parsed.scheme(), "http" | "https") {
-        return parsed.host_str().is_none_or(str::is_empty);
-    }
-    false
+    url::Url::parse(target).is_err()
 }
 
 /// Walk every label site in the document and re-classify via
