@@ -1426,15 +1426,17 @@ mod tests {
 
     #[test]
     fn each_unresolved_citation_key_is_flagged() {
-        // A multi-key citation flags each unresolved key independently.
+        // A multi-key citation flags each unresolved key independently —
+        // both `@a` and `@b`, not just the first. Exactly two pins the
+        // per-key behaviour against a regression that reports only one.
         let diags = reference_diags("1. Intro\n\n    See [@a; @b].\n");
         let citation = diags
             .iter()
             .filter(|d| d.kind == DiagnosticKind::MissingCitationTarget)
             .count();
-        assert!(
-            citation >= 1,
-            "expected at least one citation finding: {diags:?}"
+        assert_eq!(
+            citation, 2,
+            "both unresolved keys must be flagged: {diags:?}"
         );
     }
 

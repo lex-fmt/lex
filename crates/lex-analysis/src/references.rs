@@ -119,17 +119,23 @@ fn definition_ranges(document: &Document, subject: &str) -> Vec<Range> {
 /// bidirectionally: the target may live in any included fragment or in
 /// the master, regardless of where the reference sits.
 pub fn target_resolves(document: &Document, target: &ReferenceTarget) -> bool {
+    // Trim each query so resolution matches `reference_matches`'
+    // trimmed, case-insensitive comparison and never false-positives on
+    // an untrimmed target. (The `find_*` helpers normalize internally
+    // via `normalize_key`; trimming here makes the contract explicit and
+    // self-contained rather than relying on the callee.)
     match target {
-        ReferenceTarget::AnnotationLabel(label) => annotation_label_exists(document, label),
+        ReferenceTarget::AnnotationLabel(label) => annotation_label_exists(document, label.trim()),
         ReferenceTarget::CitationKey(key) => {
-            annotation_label_exists(document, key)
-                || !find_definitions_by_subject(document, key).is_empty()
+            let trimmed = key.trim();
+            annotation_label_exists(document, trimmed)
+                || !find_definitions_by_subject(document, trimmed).is_empty()
         }
         ReferenceTarget::DefinitionSubject(subject) => {
-            !find_definitions_by_subject(document, subject).is_empty()
+            !find_definitions_by_subject(document, subject.trim()).is_empty()
         }
         ReferenceTarget::Session(identifier) => {
-            !find_sessions_by_identifier(document, identifier).is_empty()
+            !find_sessions_by_identifier(document, identifier.trim()).is_empty()
         }
     }
 }
