@@ -322,9 +322,25 @@ fn classify_physical_line(line_text: &str) -> ClassifiedLine {
 /// where TOML headers like `[server]` live, lex#755) is protected and stays
 /// literal.
 fn verbatim_protected_lines(source: &str, lines: &[PhysicalLine<'_>]) -> Vec<bool> {
+    // Fast path: a verbatim block necessarily ends in a `:: label ::` data
+    // marker, so a source with no `::` at all has no verbatim block and no line
+    // to protect. This skips per-line tokenization on the overwhelmingly common
+    // reference-bearing-but-verbatim-free document.
+    if !source.contains("::") {
+        return vec![false; lines.len()];
+    }
+
     let classified: Vec<ClassifiedLine> = lines
         .iter()
-        .map(|l| classify_physical_line(source.get(l.start..l.end).unwrap_or("")))
+        .map(|l| {
+            // Each line's `[start, end)` is a byte range carved from `source` by
+            // `physical_lines`, so it is always valid and on char boundaries; a
+            // miss is an invariant violation, not a recoverable case.
+            let line_text = source
+                .get(l.start..l.end)
+                .expect("physical-line byte range must be valid in its own source");
+            classify_physical_line(line_text)
+        })
         .collect();
 
     let mut protected = vec![false; lines.len()];
@@ -1162,9 +1178,10 @@ mod tests {
 
     // -- §lex#755: verbatim bodies are raw, `[...]`-led lines stay literal ---
 
-    /// Every `[...]`-led verbatim body line, in document order — collected by
-    /// walking the verbatim block's groups. Empty when there is no verbatim
-    /// block. Used to assert bracket lines survive the parse literally.
+    /// Every verbatim body line, in document order — collected by walking the
+    /// verbatim block's groups. Empty when there is no verbatim block. Used to
+    /// assert that a given bracket line survives the parse literally (the tests
+    /// look it up among these lines).
     fn verbatim_body_lines(doc: &crate::lex::ast::Document) -> Vec<String> {
         use crate::lex::ast::elements::ContentItem;
         let mut out = Vec::new();

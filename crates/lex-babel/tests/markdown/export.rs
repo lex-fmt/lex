@@ -352,30 +352,42 @@ fn test_verbatim_bracket_lines_stay_literal_not_autolinks() {
     );
 
     // The bracket lines must live INSIDE the code fence, not as a sibling
-    // paragraph after it. Parse the markdown and confirm the brackets only
-    // occur within a CodeBlock node and there is no Link node.
+    // paragraph (auto-link OR escaped prose) after it. Walk the comrak tree and
+    // assert three things at once: (1) no Link node anywhere (no auto-link
+    // ejection), (2) the bracket text never appears in a Text node (no
+    // escaped-prose leak outside the fence), and (3) at least one CodeBlock
+    // carries both bracket lines.
     let arena = Arena::new();
     let options = ComrakOptions::default();
     let root = parse_document(&arena, &md, &options);
 
-    fn assert_brackets_only_in_code<'a>(node: &'a comrak::nodes::AstNode<'a>) {
-        let value = &node.data.borrow().value;
-        match value {
+    fn walk<'a>(node: &'a comrak::nodes::AstNode<'a>, saw_brackets_in_code: &mut bool) {
+        match &node.data.borrow().value {
+            NodeValue::Link(_) => panic!("verbatim bracket line leaked out as a link"),
             NodeValue::CodeBlock(cb) => {
+                if cb.literal.contains("[server]") && cb.literal.contains("[formatting.rules]") {
+                    *saw_brackets_in_code = true;
+                }
+            }
+            NodeValue::Text(t) => {
                 assert!(
-                    cb.literal.contains("[server]") && cb.literal.contains("[formatting.rules]"),
-                    "code fence must contain both bracket lines: {:?}",
-                    cb.literal
+                    !t.contains("[server]") && !t.contains("[formatting.rules]"),
+                    "bracket line leaked outside the fence as prose text: {t:?}"
                 );
             }
-            NodeValue::Link(_) => panic!("verbatim bracket line leaked out as a link"),
             _ => {}
         }
         for child in node.children() {
-            assert_brackets_only_in_code(child);
+            walk(child, saw_brackets_in_code);
         }
     }
-    assert_brackets_only_in_code(root);
+
+    let mut saw_brackets_in_code = false;
+    walk(root, &mut saw_brackets_in_code);
+    assert!(
+        saw_brackets_in_code,
+        "a code fence must carry both bracket lines literally: {md}"
+    );
 }
 
 #[test]
