@@ -1,3 +1,4 @@
+pub mod check;
 pub mod extension_setup;
 pub mod help;
 pub mod labels_subcommand;
