@@ -598,6 +598,14 @@ pub struct DiagnosticsRulesConfig {
     /// reachability is not checked. Intrinsic default: warn.
     #[clapfig(value, default = "warn")]
     pub malformed_url: RuleConfig,
+    /// A file-path reference — an inline `[./x.txt]` / `[../y]` / `[/abs]`
+    /// or a verbatim block's `src=` — points at a file that does not
+    /// exist on disk (or escapes the resolution root / is a
+    /// platform-absolute path). Opt-in (`check --references`).
+    /// `lex.include src=` is excluded — the base command validates it via
+    /// expansion. Intrinsic default: warn.
+    #[clapfig(value, default = "warn")]
+    pub missing_file_target: RuleConfig,
     /// Schema-validation diagnostics for extension labels.
     pub schema: SchemaRulesConfig,
 }
@@ -624,6 +632,7 @@ impl DiagnosticsRulesConfig {
             "missing-annotation-target" => Some(&self.missing_annotation_target),
             "missing-citation-target" => Some(&self.missing_citation_target),
             "malformed-url" => Some(&self.malformed_url),
+            "missing-file-target" => Some(&self.missing_file_target),
             // `spellcheck` is intentionally absent: spellcheck
             // diagnostics emit through a separate path (see
             // `lex-analysis/src/spellcheck.rs`) and do not flow

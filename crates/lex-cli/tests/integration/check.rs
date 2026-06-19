@@ -665,3 +665,218 @@ fn references_lex_toml_allow_silences_malformed_url() {
         .success()
         .stdout(predicate::str::is_empty());
 }
+
+// ============================================================================
+// --references: file-path reference validation (#761)
+//
+// Validates non-include file-path references (inline `ReferenceType::File`
+// + any verbatim block's `src=`) against the filesystem, origin-aware.
+// `lex.include src=` is excluded — the base command validates it.
+// ============================================================================
+
+/// A `.lex.toml` at the fixture root pins the resolution root to the
+/// fixture dir, so relative file references resolve there regardless of
+/// the test runner's CWD. (Without it the root is the entry file's own
+/// directory, which is the same here — but this makes intent explicit
+/// and matches how authors run `check` from a workspace.)
+const REFS_ROOT_TOML: (&str, &str) = (".lex.toml", "");
+
+/// A missing inline file reference (`[./nope.txt]`) is flagged at warning
+/// severity with the new code; an existing one is not.
+#[test]
+fn references_flags_missing_inline_file() {
+    let dir = fixture_dir(&[
+        REFS_ROOT_TOML,
+        ("doc.lex", "1. Intro\n\n    See [./nope.txt] for details.\n"),
+    ]);
+    lexd()
+        .arg("check")
+        .arg(path_in(&dir, "doc.lex"))
+        .arg("--references")
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(
+            predicate::str::contains("missing-file-target")
+                .and(predicate::str::contains("warning:"))
+                .and(predicate::str::contains("./nope.txt")),
+        );
+}
+
+/// An inline file reference whose target exists on disk is clean.
+#[test]
+fn references_existing_inline_file_is_clean() {
+    let dir = fixture_dir(&[
+        REFS_ROOT_TOML,
+        (
+            "doc.lex",
+            "1. Intro\n\n    See [./there.txt] for details.\n",
+        ),
+        ("there.txt", "I exist.\n"),
+    ]);
+    lexd()
+        .arg("check")
+        .arg(path_in(&dir, "doc.lex"))
+        .arg("--references")
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+/// A missing verbatim `src=` is flagged; an existing one is not.
+#[test]
+fn references_flags_missing_verbatim_src() {
+    let dir = fixture_dir(&[
+        REFS_ROOT_TOML,
+        (
+            // Quoted `src="..."` is the common authoring form; this also
+            // exercises end-to-end unquoting before the existence check.
+            "doc.lex",
+            "Sunset Photo:\n    Caption.\n:: image src=\"./missing.png\" ::\n\n",
+        ),
+    ]);
+    lexd()
+        .arg("check")
+        .arg(path_in(&dir, "doc.lex"))
+        .arg("--references")
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(
+            predicate::str::contains("missing-file-target")
+                .and(predicate::str::contains("./missing.png")),
+        );
+}
+
+#[test]
+fn references_existing_verbatim_src_is_clean() {
+    let dir = fixture_dir(&[
+        REFS_ROOT_TOML,
+        (
+            // Quoted form again — the existence check must unquote first.
+            "doc.lex",
+            "Sunset Photo:\n    Caption.\n:: image src=\"./diagram.png\" ::\n\n",
+        ),
+        ("diagram.png", "binary-ish\n"),
+    ]);
+    lexd()
+        .arg("check")
+        .arg(path_in(&dir, "doc.lex"))
+        .arg("--references")
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+/// The key origin-aware test: a `[./local.txt]` authored *inside* an
+/// included chapter resolves relative to THAT chapter's directory, not
+/// the entry file's. The target file sits next to the chapter (in a
+/// subdir); the entry dir has no such file. Resolution must succeed.
+#[test]
+fn references_inline_file_inside_include_resolves_against_origin_dir() {
+    let dir = fixture_dir(&[
+        REFS_ROOT_TOML,
+        ("master.lex", ":: lex.include src=\"chapters/ch1.lex\" ::\n"),
+        (
+            "chapters/ch1.lex",
+            "1. Chapter\n\n    See [./local.txt] next door.\n",
+        ),
+        // Target lives next to the chapter — origin-relative resolution
+        // finds it here. There is deliberately no `local.txt` at the
+        // entry dir, so an entry-relative resolver would wrongly flag it.
+        ("chapters/local.txt", "I live by the chapter.\n"),
+    ]);
+    lexd()
+        .arg("check")
+        .arg(path_in(&dir, "master.lex"))
+        .arg("--references")
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+/// Counterpart to the above: the same `[./local.txt]` inside the chapter,
+/// but with the file placed only at the ENTRY dir. Origin-aware
+/// resolution looks beside the chapter, does not find it, and flags it —
+/// blamed on the chapter's path, not the master.
+#[test]
+fn references_inline_file_inside_include_does_not_resolve_against_entry_dir() {
+    let dir = fixture_dir(&[
+        REFS_ROOT_TOML,
+        ("master.lex", ":: lex.include src=\"chapters/ch1.lex\" ::\n"),
+        (
+            "chapters/ch1.lex",
+            "1. Chapter\n\n    See [./local.txt] next door.\n",
+        ),
+        // Placed at the entry dir, NOT beside the chapter: origin-aware
+        // resolution (chapter-relative) must miss it.
+        ("local.txt", "I live by the master.\n"),
+    ]);
+    lexd()
+        .arg("check")
+        .arg(path_in(&dir, "master.lex"))
+        .arg("--references")
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(
+            predicate::str::contains("missing-file-target")
+                .and(predicate::str::contains("ch1.lex")),
+        );
+}
+
+/// A root-escaping reference (`[../../etc/passwd]`) is flagged — it never
+/// reaches the filesystem; the resolver's root-escape guard fires and is
+/// surfaced as `missing-file-target`.
+#[test]
+fn references_root_escape_is_flagged() {
+    let dir = fixture_dir(&[
+        REFS_ROOT_TOML,
+        ("doc.lex", "1. Intro\n\n    See [../../etc/passwd].\n"),
+    ]);
+    lexd()
+        .arg("check")
+        .arg(path_in(&dir, "doc.lex"))
+        .arg("--references")
+        .current_dir(dir.path())
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(predicate::str::contains("missing-file-target"));
+}
+
+/// The file-path pass is opt-in: without `--references`, a missing inline
+/// file reference produces no finding.
+#[test]
+fn references_file_pass_is_opt_in() {
+    let dir = fixture_dir(&[
+        REFS_ROOT_TOML,
+        ("doc.lex", "1. Intro\n\n    See [./nope.txt].\n"),
+    ]);
+    lexd()
+        .arg("check")
+        .arg(path_in(&dir, "doc.lex"))
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+/// A `.lex.toml` rule downgrade (`allow`) silences the file-target kind.
+#[test]
+fn references_file_target_lex_toml_allow_silences() {
+    let dir = fixture_dir(&[
+        (
+            ".lex.toml",
+            "[diagnostics.rules]\nmissing_file_target = \"allow\"\n",
+        ),
+        ("doc.lex", "1. Intro\n\n    See [./nope.txt].\n"),
+    ]);
+    lexd()
+        .arg("check")
+        .arg(path_in(&dir, "doc.lex"))
+        .arg("--references")
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
