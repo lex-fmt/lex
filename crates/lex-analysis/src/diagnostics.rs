@@ -529,12 +529,32 @@ pub fn collect_file_references(document: &Document) -> Vec<FileReference> {
     // Image/data verbatim `src=` parameters. The verbatim's own range
     // carries its origin; `lex.include` is an annotation, not a verbatim
     // block, so it is structurally excluded here.
+    //
+    // Two normalizations the inline path gets for free but verbatim does
+    // not, because a verbatim `src=` parameter is *not* pre-classified:
+    //
+    // - **Unquote.** `src="./x.png"` stores the raw, still-quoted value
+    //   on `Parameter.value`; we resolve a *path*, so unquote via the
+    //   canonical `Parameter::unquoted_value` (the same path
+    //   `Annotation::include_src` takes) — otherwise existence-checks
+    //   look for a filename that literally includes the quotes.
+    // - **Skip URLs.** The media `src` is documented as "URL or path", so
+    //   `src=https://…/d.png` is a URL, not a local file; checking it on
+    //   disk would be a guaranteed false positive. (Inline refs are
+    //   already classified `Url` vs `File`, so only this arm needs it.)
     for item in document.root.iter_all_nodes() {
         if let ContentItem::VerbatimBlock(verbatim) = item {
-            if let Some(src) = verbatim.src_parameter() {
-                if !src.trim().is_empty() {
+            if let Some(param) = verbatim
+                .closing_data
+                .parameters
+                .iter()
+                .find(|p| p.key == "src")
+            {
+                let target = param.unquoted_value();
+                let trimmed = target.trim();
+                if !trimmed.is_empty() && !is_url_like(trimmed) {
                     refs.push(FileReference {
-                        target: src.to_string(),
+                        target: target.clone(),
                         range: verbatim.range().clone(),
                     });
                 }
@@ -543,6 +563,18 @@ pub fn collect_file_references(document: &Document) -> Vec<FileReference> {
     }
 
     refs
+}
+
+/// Is `src` a URL rather than a local file path? Mirrors the inline
+/// reference classifier's URL detection (`http://`, `https://`,
+/// `mailto:`) plus a generic `scheme://` catch, so a verbatim
+/// `src=<url>` is excluded from the file-path existence check the same
+/// way an inline `[<url>]` is classified `Url` and skipped.
+fn is_url_like(src: &str) -> bool {
+    src.starts_with("http://")
+        || src.starts_with("https://")
+        || src.starts_with("mailto:")
+        || src.contains("://")
 }
 
 /// Walk every label site in the document and re-classify via
@@ -1679,8 +1711,28 @@ mod tests {
     }
 
     #[test]
+    fn verbatim_src_is_unquoted() {
+        // A quoted `src="./x.png"` is collected as the bare path, not the
+        // still-quoted raw value — otherwise the existence check looks for
+        // a filename that literally includes the quotes.
+        let source = "Photo:\n    Caption.\n:: image src=\"./diagram.png\" ::\n\n";
+        assert_eq!(file_ref_targets(source), vec!["./diagram.png".to_string()]);
+    }
+
+    #[test]
     fn ignores_url_references() {
         // URLs are out of scope for the file-path pass (#762 owns them).
+        // Inline `[<url>]` is classified `Url` (not `File`); a verbatim
+        // `src=<url>` is not pre-classified, so the collector filters it.
         assert!(file_ref_targets("1. Intro\n\n    See [https://example.com].\n").is_empty());
+        assert!(file_ref_targets(
+            "Photo:\n    Caption.\n:: image src=https://example.com/diagram.png ::\n\n"
+        )
+        .is_empty());
+        // Quoted URL form, too.
+        assert!(file_ref_targets(
+            "Photo:\n    Caption.\n:: image src=\"https://example.com/diagram.png\" ::\n\n"
+        )
+        .is_empty());
     }
 }

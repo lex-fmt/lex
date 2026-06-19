@@ -730,8 +730,10 @@ fn references_flags_missing_verbatim_src() {
     let dir = fixture_dir(&[
         REFS_ROOT_TOML,
         (
+            // Quoted `src="..."` is the common authoring form; this also
+            // exercises end-to-end unquoting before the existence check.
             "doc.lex",
-            "Sunset Photo:\n    Caption.\n:: image src=./missing.png ::\n\n",
+            "Sunset Photo:\n    Caption.\n:: image src=\"./missing.png\" ::\n\n",
         ),
     ]);
     lexd()
@@ -752,8 +754,9 @@ fn references_existing_verbatim_src_is_clean() {
     let dir = fixture_dir(&[
         REFS_ROOT_TOML,
         (
+            // Quoted form again — the existence check must unquote first.
             "doc.lex",
-            "Sunset Photo:\n    Caption.\n:: image src=./diagram.png ::\n\n",
+            "Sunset Photo:\n    Caption.\n:: image src=\"./diagram.png\" ::\n\n",
         ),
         ("diagram.png", "binary-ish\n"),
     ]);

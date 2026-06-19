@@ -467,10 +467,11 @@ pub fn collect_file_diagnostics(
 /// as `ref_origin`: relative targets resolve from its parent directory,
 /// root-absolute (`/foo`) targets from `root`. Root-escape and
 /// platform-absolute targets reuse the resolver's
-/// [`IncludeError::RootEscape`] / [`IncludeError::AbsolutePath`] and
-/// surface as the same `missing-file-target` code (with the error's
-/// message) — from the author's standpoint the reference still points at
-/// nothing reachable.
+/// [`IncludeError::RootEscape`] / [`IncludeError::AbsolutePath`] guards
+/// (the resolution rules are identical) but are reported with
+/// *file-reference* wording, since `IncludeError`'s own Display strings
+/// speak of "include path" — confusing on a `missing-file-target`
+/// finding that is about a `[./x]` or an image `src=`.
 ///
 /// Every finding's range is the reference's own (origin-stamped) range,
 /// so [`analysis_finding`] blames it on the file the reference was
@@ -480,17 +481,25 @@ fn file_reference_diagnostics(document: &Document, root: &Path) -> Vec<AnalysisD
     let mut diagnostics = Vec::new();
     for file_ref in collect_file_references(document) {
         let origin = file_ref.range.origin();
-        let message = match resolve_file_reference(&file_ref.target, origin, root) {
+        let target = &file_ref.target;
+        let message = match resolve_file_reference(target, origin, root) {
             Ok(resolved) => {
                 if resolved.exists() {
                     continue;
                 }
-                format!("File reference '{}' does not exist", file_ref.target)
+                format!("File reference '{target}' does not exist")
             }
-            // Root-escape / platform-absolute: the reference is invalid
-            // for the same reason it would be as an include path. Reuse
-            // the resolver's own message so the diagnostic explains the
-            // escape rather than a bland "missing".
+            // The reference is invalid for the same reason it would be as
+            // an include path, but phrase it in file-reference terms
+            // rather than leaking the resolver's include-specific Display.
+            Err(IncludeError::RootEscape { .. }) => {
+                format!("File reference '{target}' escapes the resolution root")
+            }
+            Err(IncludeError::AbsolutePath { .. }) => {
+                format!("File reference '{target}' is a platform-absolute path (not allowed)")
+            }
+            // Any other resolver error is unexpected here; surface it
+            // verbatim rather than mislabel it.
             Err(err) => err.to_string(),
         };
 
