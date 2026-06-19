@@ -266,13 +266,12 @@ struct ClassifiedLine {
 /// tokenize it and run [`classify_line_tokens`], and count leading
 /// [`Token::Indentation`] tokens for the indentation depth.
 ///
-/// A trailing newline is appended before tokenizing because the line text
-/// produced by [`physical_lines`] has its `\n` stripped, and the classifier's
-/// blank-line / colon handling expects the line's tokens as the lexer would
-/// emit them.
-fn classify_physical_line(text: &str) -> ClassifiedLine {
-    let with_newline = format!("{text}\n");
-    let tokens: Vec<Token> = crate::lex::lexing::base_tokenization::tokenize(&with_newline)
+/// `line_text` is sliced directly from the original source and so still carries
+/// its own trailing newline (every line except possibly the last) — no per-line
+/// allocation. The classifier's blank-line / colon handling tolerates the
+/// presence or absence of that newline either way.
+fn classify_physical_line(line_text: &str) -> ClassifiedLine {
+    let tokens: Vec<Token> = crate::lex::lexing::base_tokenization::tokenize(line_text)
         .into_iter()
         .map(|(t, _)| t)
         .collect();
@@ -322,10 +321,10 @@ fn classify_physical_line(text: &str) -> ClassifiedLine {
 /// Every *other* line in the region (notably the deeper-indented inflow body
 /// where TOML headers like `[server]` live, lex#755) is protected and stays
 /// literal.
-fn verbatim_protected_lines(lines: &[PhysicalLine<'_>]) -> Vec<bool> {
+fn verbatim_protected_lines(source: &str, lines: &[PhysicalLine<'_>]) -> Vec<bool> {
     let classified: Vec<ClassifiedLine> = lines
         .iter()
-        .map(|l| classify_physical_line(l.text))
+        .map(|l| classify_physical_line(source.get(l.start..l.end).unwrap_or("")))
         .collect();
 
     let mut protected = vec![false; lines.len()];
@@ -412,7 +411,7 @@ fn verbatim_protected_lines(lines: &[PhysicalLine<'_>]) -> Vec<bool> {
                 // protect it rather than ejecting it as an anchor.
                 if after_subject
                     && classified[i].indent == subject_indent
-                    && has_body_after(&classified, i, closing_idx)
+                    && has_inflow_body_after(&classified, i, closing_idx, subject_indent)
                 {
                     protected[i] = false;
                     after_subject = false;
@@ -431,17 +430,29 @@ fn verbatim_protected_lines(lines: &[PhysicalLine<'_>]) -> Vec<bool> {
     protected
 }
 
-/// True when at least one non-blank, non-marker body line lies strictly between
-/// the anchoring-slot candidate at `slot_idx` and the block's closing marker at
-/// `closing_idx`. Used to tell the documented anchoring shape (a reference line
-/// whose subject's body follows it) from a verbatim block whose *only* content
-/// is the bracket line itself, which must stay literal (lex#755).
-fn has_body_after(classified: &[ClassifiedLine], slot_idx: usize, closing_idx: usize) -> bool {
+/// True when *inflow* body content — a non-blank line indented strictly deeper
+/// than the subject — lies between the anchoring-slot candidate at `slot_idx`
+/// and the block's closing marker at `closing_idx`.
+///
+/// This is what tells the documented anchoring shape from a fullwidth body
+/// whose first line happens to be a bracket. The documented anchoring shape is
+/// `subject` / `[ref]` / *deeper-indented* body / `:: marker ::`: only then is
+/// the slot line a reference that anchors the subject. If the only content that
+/// follows is at the subject's own indentation (a fullwidth body), the bracket
+/// line is itself body and must stay literal (lex#755) — anchoring it would
+/// eject e.g. `[server]` from `Config:` / `[server]` / `port = 8080` /
+/// `:: toml ::` and reintroduce the bug for fullwidth blocks.
+fn has_inflow_body_after(
+    classified: &[ClassifiedLine],
+    slot_idx: usize,
+    closing_idx: usize,
+    subject_indent: usize,
+) -> bool {
     ((slot_idx + 1)..closing_idx).any(|i| {
         !matches!(
             classified[i].line_type,
             LineType::BlankLine | LineType::DataMarkerLine
-        )
+        ) && classified[i].indent > subject_indent
     })
 }
 
@@ -453,7 +464,7 @@ pub fn extract_reference_lines(source: &str) -> AnchoringPrepass {
     // Verbatim block bodies are raw: a `[token]` line inside one must stay
     // literal, never be ejected as a reference line (lex#755). Compute the
     // protected line set once and skip those lines below.
-    let in_verbatim = verbatim_protected_lines(&lines);
+    let in_verbatim = verbatim_protected_lines(source, &lines);
 
     let mut reference_lines: Vec<ReferenceLine> = Vec::new();
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
@@ -1220,6 +1231,27 @@ mod tests {
         assert!(
             lines.iter().any(|l| l == "[section]"),
             "`[section]` must stay literal: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn fullwidth_verbatim_first_bracket_body_line_stays_literal() {
+        // Regression for the fullwidth variant (caught in review): when the
+        // first fullwidth body line is a bracket AND more body follows at the
+        // subject's own indentation, that bracket is still body — it must stay
+        // literal, not be ejected as an anchor for the subject. The anchoring
+        // slot only applies when *deeper-indented* (inflow) body follows.
+        let src = "Config:\n[server]\nport = 8080\n:: toml ::\n\n";
+        let doc = parse_document(src).unwrap();
+        assert!(
+            doc.reference_lines.is_empty(),
+            "fullwidth first-line bracket must not become a reference line: {:?}",
+            doc.reference_lines
+        );
+        let lines = verbatim_body_lines(&doc);
+        assert!(
+            lines.iter().any(|l| l == "[server]"),
+            "`[server]` must stay literal in the fullwidth body: {lines:?}"
         );
     }
 
