@@ -322,6 +322,75 @@ fn test_reference_url_converted_to_link() {
 }
 
 #[test]
+fn test_verbatim_bracket_lines_stay_literal_not_autolinks() {
+    // lex#755: a `[...]`-led line inside a verbatim body (e.g. a TOML table
+    // header `[server]` or a dotted one `[formatting.rules]`) must stay literal
+    // inside the fence — it must NOT be ejected from the block and re-emitted as
+    // a dangling shortcut auto-link `[server](server)` outside it.
+    let lex_src =
+        "Config example:\n\n    [server]\n    [formatting.rules]\n    port = 8080\n:: toml ::\n";
+    let lex_doc = STRING_TO_AST.run(lex_src.to_string()).unwrap();
+    let md = MarkdownFormat.serialize(&lex_doc).unwrap();
+
+    // Both bracket lines appear literally in the output...
+    assert!(
+        md.contains("[server]"),
+        "`[server]` must be present literally: {md}"
+    );
+    assert!(
+        md.contains("[formatting.rules]"),
+        "`[formatting.rules]` must be present literally: {md}"
+    );
+    // ...and never as a shortcut auto-link `(...)`.
+    assert!(
+        !md.contains("[server](server)") && !md.contains("](server)"),
+        "`[server]` must not become an auto-link: {md}"
+    );
+    assert!(
+        !md.contains("](formatting.rules)"),
+        "`[formatting.rules]` must not become an auto-link: {md}"
+    );
+
+    // The bracket lines must live INSIDE the code fence, not as a sibling
+    // paragraph (auto-link OR escaped prose) after it. Walk the comrak tree and
+    // assert three things at once: (1) no Link node anywhere (no auto-link
+    // ejection), (2) the bracket text never appears in a Text node (no
+    // escaped-prose leak outside the fence), and (3) at least one CodeBlock
+    // carries both bracket lines.
+    let arena = Arena::new();
+    let options = ComrakOptions::default();
+    let root = parse_document(&arena, &md, &options);
+
+    fn walk<'a>(node: &'a comrak::nodes::AstNode<'a>, saw_brackets_in_code: &mut bool) {
+        match &node.data.borrow().value {
+            NodeValue::Link(_) => panic!("verbatim bracket line leaked out as a link"),
+            NodeValue::CodeBlock(cb) => {
+                if cb.literal.contains("[server]") && cb.literal.contains("[formatting.rules]") {
+                    *saw_brackets_in_code = true;
+                }
+            }
+            NodeValue::Text(t) => {
+                assert!(
+                    !t.contains("[server]") && !t.contains("[formatting.rules]"),
+                    "bracket line leaked outside the fence as prose text: {t:?}"
+                );
+            }
+            _ => {}
+        }
+        for child in node.children() {
+            walk(child, saw_brackets_in_code);
+        }
+    }
+
+    let mut saw_brackets_in_code = false;
+    walk(root, &mut saw_brackets_in_code);
+    assert!(
+        saw_brackets_in_code,
+        "a code fence must carry both bracket lines literally: {md}"
+    );
+}
+
+#[test]
 fn test_reference_anchor_converted_to_link() {
     let lex_src = "See section [#introduction] above.\n";
     let lex_doc = STRING_TO_AST.run(lex_src.to_string()).unwrap();

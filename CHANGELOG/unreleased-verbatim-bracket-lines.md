@@ -1,0 +1,1 @@
+- Keep [...]-led lines literal inside verbatim blocks (lex#755)
