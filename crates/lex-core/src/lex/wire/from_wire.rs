@@ -328,12 +328,39 @@ fn paragraph_from_wire(
     } else {
         raw.split('\n').collect()
     };
+    // Stamp each reconstructed line's `TextContent` with a location.
+    // Without it `lex_analysis::inline::extract_references` early-returns
+    // (it keys off `TextContent.location`), so reference-based
+    // diagnostics (missing-footnote and the `check --references` family)
+    // never fire inside an included/spliced fragment. The byte span is
+    // synthetic — the wire `Range` carries no byte offsets — but it is
+    // used only as an additive base by the inline walker, so a per-line
+    // `0..len` span yields correct *relative* reference positions. The
+    // `line`/`origin_path` carry the paragraph's, advanced one line per
+    // split entry, so a reference finding is reported on the right line
+    // and blamed on its origin file.
+    let base_line = location.start.line;
+    let base_column = location.start.column;
+    let origin_path = location.origin_path.clone();
     let lines: Vec<ContentItem> = line_strings
         .into_iter()
-        .map(|line_str| {
+        .enumerate()
+        .map(|(idx, line_str)| {
+            let line = base_line + idx;
+            // The first line keeps the paragraph's start column;
+            // continuation lines begin at column 0.
+            let column = if idx == 0 { base_column } else { 0 };
+            let len = line_str.len();
+            let utf16_len: usize = line_str.chars().map(char::len_utf16).sum();
+            let mut range = crate::lex::ast::range::Range::new(
+                0..len,
+                crate::lex::ast::range::Position::new(line, column),
+                crate::lex::ast::range::Position::new(line, column + utf16_len),
+            );
+            range.origin_path = origin_path.clone();
             ContentItem::TextLine(TextLine::new(TextContent::from_string(
                 line_str.to_string(),
-                None,
+                Some(range),
             )))
         })
         .collect();

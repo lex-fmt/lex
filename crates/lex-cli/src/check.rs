@@ -30,17 +30,20 @@
 //! ## Extension seam
 //!
 //! [`collect_file_diagnostics`] returns the full finding set for one
-//! file as a flat `Vec<CheckFinding>`. A future `--references` pass
-//! (epic #758, issues #760–#762) appends its post-merge reference
-//! diagnostics to that same vector before reporting — the reporting and
-//! exit-code layers operate on `CheckFinding`, not on any analysis-
-//! specific type, so they need no change to absorb new finding sources.
+//! file as a flat `Vec<CheckFinding>`. The opt-in `--references` pass
+//! (epic #758, issue #760 — internal cross-references; #761–#762 to
+//! come) appends its post-merge reference diagnostics
+//! ([`lex_analysis::diagnostics::analyze_references`]) to that same
+//! vector before reporting — the reporting and exit-code layers operate
+//! on `CheckFinding`, not on any analysis-specific type, so they absorb
+//! the new finding source unchanged.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use lex_analysis::diagnostics::{
-    analyze_with_rules, AnalysisDiagnostic, DiagnosticSeverity as AnalysisSeverity,
+    analyze_references, analyze_with_rules, apply_rules, AnalysisDiagnostic,
+    DiagnosticSeverity as AnalysisSeverity,
 };
 use lex_config::{DiagnosticsRulesConfig, LabelsConfig, CONFIG_FILE_NAME};
 use lex_core::lex::ast::{Position, Range};
@@ -207,6 +210,10 @@ pub struct CheckOptions<'a> {
     pub ext_schemas: &'a [PathBuf],
     /// Whether subprocess handlers are permitted (`--enable-handlers`).
     pub enable_handlers: bool,
+    /// Run the opt-in internal cross-reference validation pass
+    /// (`--references`) over the merged document, appending its findings
+    /// to the base diagnostics.
+    pub check_references: bool,
 }
 
 /// Load the workspace `[labels]` block for an entry from `workspace`'s
@@ -407,6 +414,24 @@ pub fn collect_file_diagnostics(
 
     for diag in diagnostics {
         findings.push(analysis_finding(diag, entry));
+    }
+
+    // Opt-in `--references` pass. Runs over the same (merged) `document`
+    // as the base analysis, so reference resolution is bidirectional
+    // across the include merge: a reference resolves against targets
+    // defined in any fragment or the master. Kept out of
+    // `analyze_with_rules` so the always-on analyser (and the LSP) never
+    // emits these unless asked. `[diagnostics.rules]` overrides are
+    // applied via the same `apply_rules` path the base command uses, so
+    // a `.lex.toml` downgrade silences a kind identically.
+    if opts.check_references {
+        let mut reference_diagnostics = analyze_references(&document);
+        apply_rules(&mut reference_diagnostics, |code| {
+            opts.rules.lookup_by_code(code).cloned()
+        });
+        for diag in reference_diagnostics {
+            findings.push(analysis_finding(diag, entry));
+        }
     }
 
     Ok(findings)
