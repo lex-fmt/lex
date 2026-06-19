@@ -1090,6 +1090,21 @@ fn add_inline_to_node<'a>(
                 ReferenceType::NotSure => ref_text
                     .strip_prefix('@')
                     .map(|citation| format!("#ref-{citation}")),
+                // A link-like reference (`Url` / `File` / `Session` / `General`,
+                // i.e. `AnchorKind::WholeLineCapable`) with no anchorable adjacent
+                // word reaches the serializer un-anchored — e.g. a bare
+                // `[./editors]` abutting another reference, so word-anchoring
+                // found no word to wrap. Emit it as a self-link (the raw target
+                // is both href and link text, matching `reference_href` and the
+                // HTML serializer) so the link survives instead of being escaped
+                // to literal `\[./editors\]`. Marker-style kinds (footnote /
+                // citation / annotation-ref / `TK`) have no destination and stay
+                // on the plain-text path below. (#770)
+                kind if kind.anchoring()
+                    == lex_core::lex::ast::elements::inlines::AnchorKind::WholeLineCapable =>
+                {
+                    Some(ref_text.clone())
+                }
                 _ => None,
             };
 

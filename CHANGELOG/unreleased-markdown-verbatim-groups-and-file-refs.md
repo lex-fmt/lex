@@ -1,0 +1,1 @@
+- Export all verbatim groups in multi-group Definition blocks; link anchorless file references

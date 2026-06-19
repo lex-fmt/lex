@@ -464,6 +464,184 @@ fn test_placeholder_reference_as_text() {
     );
 }
 
+#[test]
+fn test_multi_group_verbatim_exports_every_group_as_a_fence() {
+    // lex#769: a verbatim block with multiple subject/content groups sharing one
+    // closing marker (`:: shell ::`) must export EVERY group as its own fenced
+    // code block. Pre-fix, only the first group survived the lex → IR conversion
+    // (the IR verbatim node holds a single subject + content), so groups 2..N
+    // silently vanished from the markdown.
+    let lex_src = "First group:\n\n    cmd one\nSecond group:\n\n    cmd two\nThird group:\n\n    cmd three\n:: shell ::\n";
+    let lex_doc = STRING_TO_AST.run(lex_src.to_string()).unwrap();
+    let md = MarkdownFormat.serialize(&lex_doc).unwrap();
+
+    // Every group's command lands in the output, not just the first.
+    for cmd in ["cmd one", "cmd two", "cmd three"] {
+        assert!(md.contains(cmd), "group command `{cmd}` missing: {md}");
+    }
+    // No later group leaked as escaped prose.
+    assert!(
+        !md.contains("\\#") && !md.contains("cmd two cmd"),
+        "later groups must not render as escaped/joined prose: {md}"
+    );
+
+    // Walk the comrak tree: exactly three CodeBlocks, each carrying one command
+    // and the shared `shell` language hint.
+    let arena = Arena::new();
+    let options = ComrakOptions::default();
+    let root = parse_document(&arena, &md, &options);
+
+    fn collect_code_blocks<'a>(
+        node: &'a comrak::nodes::AstNode<'a>,
+        out: &mut Vec<(String, String)>,
+    ) {
+        if let NodeValue::CodeBlock(cb) = &node.data.borrow().value {
+            out.push((cb.info.clone(), cb.literal.clone()));
+        }
+        for child in node.children() {
+            collect_code_blocks(child, out);
+        }
+    }
+
+    let mut blocks = Vec::new();
+    collect_code_blocks(root, &mut blocks);
+    assert_eq!(
+        blocks.len(),
+        3,
+        "all three verbatim groups must become separate code fences: {blocks:?}"
+    );
+    for (info, literal) in &blocks {
+        assert_eq!(info, "shell", "each group keeps the shared language hint");
+        assert!(
+            literal.contains("cmd "),
+            "each fence carries its group's command: {literal:?}"
+        );
+    }
+}
+
+#[test]
+fn test_anchorless_file_reference_becomes_a_link_not_escaped_text() {
+    // lex#770: a `[./path]` file reference with no anchorable adjacent word
+    // (here the two refs abut each other, so word-anchoring finds no word to
+    // wrap) must still emit a real Markdown link using the target as its own
+    // link text — not fall through to escaped literal `\[./why\]`.
+    let lex_src = "Nav: [./editors] [./why]\n";
+    let lex_doc = STRING_TO_AST.run(lex_src.to_string()).unwrap();
+    let md = MarkdownFormat.serialize(&lex_doc).unwrap();
+
+    // The anchorless `[./why]` is a self-link: text and href both the target.
+    assert!(
+        md.contains("[./why](./why)"),
+        "anchorless file ref must self-link, got: {md}"
+    );
+    // It must NOT be escaped as literal bracket text.
+    assert!(
+        !md.contains("\\[./why\\]"),
+        "anchorless file ref must not be escaped to literal text, got: {md}"
+    );
+}
+
+#[test]
+fn test_anchorless_link_like_references_self_link_not_escaped() {
+    // Generalisation of the #770 fix (Copilot review on PR #771): every
+    // link-like reference kind (`Url` / `Session` / `General` / `File`, i.e.
+    // `AnchorKind::WholeLineCapable`) with no anchorable adjacent word must
+    // self-link rather than escape to literal brackets, matching the HTML
+    // serializer. The leading `X:` anchors the first ref, leaving the second
+    // ref of each pair anchorless.
+    let cases = [
+        (
+            "X: [https://a.example.com] [https://b.example.com]",
+            "b.example.com",
+        ),
+        ("X: [#sess-one] [#sess-two]", "#sess-two"),
+        ("X: [Introduction] [Conclusion]", "Conclusion"),
+    ];
+    for (lex_src, needle) in cases {
+        let lex_doc = STRING_TO_AST.run(format!("{lex_src}\n")).unwrap();
+        let md = MarkdownFormat.serialize(&lex_doc).unwrap();
+        // The anchorless ref must appear as a link target (comrak may render a
+        // URL as a `<...>` autolink or `[..](..)`, so assert on the destination).
+        assert!(
+            md.contains(needle),
+            "anchorless link-like ref `{needle}` must survive as a link: {md}"
+        );
+        assert!(
+            !md.contains(&format!("\\[{needle}")) && !md.contains("\\]"),
+            "anchorless link-like ref must not be escaped to literal text: {md}"
+        );
+    }
+}
+
+#[test]
+fn test_marker_reference_still_escaped_not_self_linked() {
+    // Guard for the generalised #770 fix: a marker-style reference
+    // (`AnchorKind::MarkerOnly`, here a `[TK-ref]` placeholder) has no
+    // destination and must NOT become a self-link — it stays plain escaped text.
+    let lex_src = "This needs [TK-ref].\n";
+    let lex_doc = STRING_TO_AST.run(lex_src.to_string()).unwrap();
+    let md = MarkdownFormat.serialize(&lex_doc).unwrap();
+
+    assert!(
+        md.contains("\\[TK-ref\\]"),
+        "marker-style placeholder must stay escaped, got: {md}"
+    );
+    assert!(
+        !md.contains("(TK-ref)"),
+        "marker-style placeholder must not self-link, got: {md}"
+    );
+}
+
+#[test]
+fn test_anchored_file_reference_unchanged() {
+    // Guard for lex#770: when an adjacent anchor word IS present, the existing
+    // word-anchoring path wins — `Editors [./editors]` links the word "Editors"
+    // to the target. The anchorless fix must not perturb this.
+    let lex_src = "See Editors [./editors] for details.\n";
+    let lex_doc = STRING_TO_AST.run(lex_src.to_string()).unwrap();
+    let md = MarkdownFormat.serialize(&lex_doc).unwrap();
+
+    assert!(
+        md.contains("[Editors](./editors)"),
+        "anchored file ref must link the anchor word, got: {md}"
+    );
+    // The bare target must not also appear as a separate self-link.
+    assert!(
+        !md.contains("[./editors](./editors)"),
+        "anchored ref must not additionally self-link the target, got: {md}"
+    );
+}
+
+#[test]
+fn test_self_link_placed_after_multi_group_verbatim_not_between_groups() {
+    // Regression for the #769 fix: expanding a multi-group verbatim into N IR
+    // nodes must keep the self-link index mapping aligned, so a sibling
+    // reference-line self-link following the block lands AFTER all its groups —
+    // not spliced between them. A `[https://...]` alone on its line anchors the
+    // preceding element as a self-link.
+    let lex_src = "First:\n\n    cmd one\nSecond:\n\n    cmd two\n:: shell ::\n\n[https://after.example.com]\n\n2. Tail\n\n    More body.\n";
+    let lex_doc = STRING_TO_AST.run(lex_src.to_string()).unwrap();
+    let md = MarkdownFormat.serialize(&lex_doc).unwrap();
+
+    // The self-link must appear after BOTH `cmd one` and `cmd two`.
+    let after_pos = md
+        .find("after.example.com")
+        .unwrap_or_else(|| panic!("self-link missing: {md}"));
+    let cmd_two_pos = md
+        .find("cmd two")
+        .unwrap_or_else(|| panic!("second group missing: {md}"));
+    assert!(
+        after_pos > cmd_two_pos,
+        "self-link must land after all verbatim groups, not between them: {md}"
+    );
+    // And before the tail section.
+    let tail_pos = md.find("Tail").unwrap();
+    assert!(
+        after_pos < tail_pos,
+        "self-link must precede the following section: {md}"
+    );
+}
+
 // ============================================================================
 // ISSUE C: Markdown List Formatting Tests
 // ============================================================================
