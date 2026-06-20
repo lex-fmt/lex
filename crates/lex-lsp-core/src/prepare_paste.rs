@@ -126,9 +126,10 @@ pub fn prepare_paste(
             // request range does not overwrite. That whitespace survives the
             // edit, so the server must account for it — otherwise the anchor it
             // emits on the first line stacks on top of the surviving spaces and
-            // the line is double-indented. Merge pastes follow existing content
-            // (no leading whitespace survives ahead of the splice), so this only
-            // applies to fresh lines.
+            // the line is double-indented. A merge paste's first line is not
+            // anchored at all (it continues existing content, §4.4), so there is
+            // no anchor to double there; compensation only matters where the
+            // first line carries an anchor, i.e. on a fresh line.
             let caret_indent = if fresh_line {
                 surviving_leading_indent(source, range.start)
             } else {
