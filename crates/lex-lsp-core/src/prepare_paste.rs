@@ -24,7 +24,10 @@
 //! - **§4.2/§4.3 baseline + offset** ([`reanchor`]): dedent the clipboard to its
 //!   common baseline, re-apply the anchor as one constant offset.
 //! - **§4.4 first line** (inside [`reanchor`]): fresh-line re-anchors every line;
-//!   merge strips line 1 and re-anchors the rest.
+//!   merge strips line 1 and re-anchors the rest. On a fresh line the transform
+//!   subtracts any whitespace the editor auto-indented ahead of the caret that
+//!   the request range does not overwrite, so the anchor is never doubled
+//!   (comms#73 #3, [`surviving_leading_indent`]).
 
 use lex_analysis::utils::find_verbatim_at_position;
 use lex_core::lex::ast::{Document, Position as AstPosition};
@@ -118,7 +121,20 @@ pub fn prepare_paste(
         | PasteMode::PassthroughSingleLine => pasted_text.to_string(),
         PasteMode::Reanchor => {
             let anchor = resolve_anchor(document, source, range.start);
-            reanchor(pasted_text, anchor, fresh_line)
+            // §4.4 / comms#73 #3: on a fresh-line paste the editor may have
+            // auto-indented the caret line with whitespace the (possibly empty)
+            // request range does not overwrite. That whitespace survives the
+            // edit, so the server must account for it — otherwise the anchor it
+            // emits on the first line stacks on top of the surviving spaces and
+            // the line is double-indented. Merge pastes follow existing content
+            // (no leading whitespace survives ahead of the splice), so this only
+            // applies to fresh lines.
+            let caret_indent = if fresh_line {
+                surviving_leading_indent(source, range.start)
+            } else {
+                0
+            };
+            reanchor(pasted_text, anchor, fresh_line, caret_indent)
         }
     };
 
@@ -317,15 +333,53 @@ pub fn is_fresh_line(source: &str, pos: Position) -> bool {
     }
 }
 
+/// §4.4 / comms#73 #3: the display width of the leading whitespace on `pos`'s
+/// line that lies *before* `pos` and therefore survives a replacement of the
+/// request range (whose start is `pos`). This is the whitespace an editor may
+/// have auto-indented onto a fresh line without the range covering it.
+///
+/// Walks chars up to the caret's byte offset (LSP columns are byte offsets in
+/// this server — see [`is_fresh_line`]) accumulating display width, stopping at
+/// the caret or at the first non-whitespace char. Callers invoke it only for
+/// fresh-line pastes, where the prefix is whitespace by definition; the
+/// non-whitespace `break` and the past-end case keep it total regardless.
+fn surviving_leading_indent(source: &str, pos: Position) -> usize {
+    let Some(line) = line_at(source, pos.line as usize) else {
+        return 0;
+    };
+    let caret = pos.character as usize;
+    let mut bytes_seen = 0;
+    let mut width = 0;
+    for ch in line.chars() {
+        if bytes_seen >= caret {
+            break;
+        }
+        match ch {
+            ' ' => width += 1,
+            '\t' => width += TAB_WIDTH - (width % TAB_WIDTH),
+            _ => break,
+        }
+        bytes_seen += ch.len_utf8();
+    }
+    width
+}
+
 /// The re-anchor transform (§4.2–§4.4), pure whitespace arithmetic over lines.
 ///
 /// - `anchor`: target content indentation (display columns).
 /// - `fresh_line`: §4.4 — `true` re-anchors every line; `false` (merge) strips
 ///   line 1 down to the clipboard baseline (preserving any relative indentation
 ///   it carried *beyond* the baseline) with no anchor, and re-anchors lines 2..n.
+/// - `caret_indent`: display width of whitespace already on the caret line that
+///   precedes the splice point and survives the edit (§4.4 / comms#73 #3). On a
+///   fresh line an editor may auto-indent the caret without the request range
+///   covering that whitespace; subtracting it from the first emitted line keeps
+///   the anchor from stacking on top of the surviving spaces. Zero for merge
+///   pastes and for fresh lines whose range already covers (or starts before)
+///   the leading whitespace.
 ///
 /// The clipboard's trailing newline (and internal blank lines) are preserved.
-pub fn reanchor(pasted_text: &str, anchor: usize, fresh_line: bool) -> String {
+pub fn reanchor(pasted_text: &str, anchor: usize, fresh_line: bool, caret_indent: usize) -> String {
     // Split into lines while remembering whether the text ended with a newline,
     // so we can reproduce a trailing newline exactly (§6).
     let had_trailing_newline = pasted_text.ends_with('\n');
@@ -375,7 +429,21 @@ pub fn reanchor(pasted_text: &str, anchor: usize, fresh_line: bool) -> String {
         }
 
         // §4.3: max(0, original_indent + delta) spaces, then stripped content.
-        let new_indent = (orig_indent as isize + delta).max(0) as usize;
+        let mut new_indent = (orig_indent as isize + delta).max(0) as usize;
+        // §4.4 / comms#73 #3: the first emitted line shares the caret's physical
+        // line, so any whitespace already present before the splice (and not
+        // overwritten by the range) is still in the buffer. Drop that much from
+        // the emitted indent so the two don't add up to a doubled anchor. Only
+        // the first line is affected; this branch is reached at idx == 0 only on
+        // a fresh-line paste (merge handles its own first line above), and
+        // `caret_indent` is zero for every non-fresh paste, so the guard is
+        // exact. A `saturating_sub` keeps it total when the surviving whitespace
+        // already exceeds the target — an insert-only edit cannot remove it, so
+        // the line clamps to no added indent (exact dedent then needs the editor
+        // to expand the range, per the §4.4 contract).
+        if idx == 0 {
+            new_indent = new_indent.saturating_sub(caret_indent);
+        }
         out.extend(std::iter::repeat_n(' ', new_indent));
         out.push_str(content);
     }

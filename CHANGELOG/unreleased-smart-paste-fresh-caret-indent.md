@@ -1,0 +1,1 @@
+- smart paste: compensate for editor auto-indent on fresh-line pastes so the anchor is not duplicated

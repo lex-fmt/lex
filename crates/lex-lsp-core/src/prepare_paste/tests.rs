@@ -154,7 +154,7 @@ fn reanchor_table() {
     ];
 
     for case in cases {
-        let got = reanchor(case.pasted, case.anchor, case.fresh_line);
+        let got = reanchor(case.pasted, case.anchor, case.fresh_line, 0);
         assert_eq!(
             got, case.expected,
             "case `{}`: got {:?}, expected {:?}",
@@ -166,8 +166,36 @@ fn reanchor_table() {
 #[test]
 fn reanchor_baseline_is_min_over_nonblank_lines() {
     // baseline must ignore blank lines: min(8, 4) = 4, not 0 from the blank.
-    let got = reanchor("        deep\n\n    shallow\n", 4, true);
+    let got = reanchor("        deep\n\n    shallow\n", 4, true, 0);
     assert_eq!(got, "        deep\n\n    shallow\n");
+}
+
+#[test]
+fn reanchor_subtracts_surviving_caret_indent_from_first_line() {
+    // comms#73 #3: the editor auto-indented the fresh line to the anchor (4) but
+    // its empty range leaves those 4 spaces in the buffer. The first emitted
+    // line must drop them (4 - 4 = 0) so the buffer total is the anchor, not
+    // double it; line 2 is a brand-new line and takes the full §4.3 treatment.
+    let got = reanchor("first\n    second\n", 4, true, 4);
+    assert_eq!(got, "first\n        second\n");
+}
+
+#[test]
+fn reanchor_caret_indent_only_affects_first_line() {
+    // A surviving caret indent shallower than the anchor still leaves the rest
+    // of the block at full anchor depth: baseline 0, anchor 8, caret_indent 4.
+    // line1: 8 - 4 = 4 emitted (+ 4 surviving = 8 total); line2: 4 + 8 = 12.
+    let got = reanchor("parent\n    child\n", 8, true, 4);
+    assert_eq!(got, "    parent\n            child\n");
+}
+
+#[test]
+fn reanchor_caret_indent_clamps_when_it_exceeds_target() {
+    // Surviving whitespace deeper than the anchor: an insert-only edit cannot
+    // remove it, so the first line clamps to no added indent (saturating_sub).
+    // Exact dedent here needs the editor to expand the range — the §4.4 contract.
+    let got = reanchor("only\n    tail\n", 4, true, 8);
+    assert_eq!(got, "only\n        tail\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -358,6 +386,24 @@ fn fresh_line_reanchors_first_line_too() {
 }
 
 #[test]
+fn fresh_line_with_auto_indent_does_not_double_anchor() {
+    // comms#73 #3, end-to-end: the editor auto-indented the fresh line to the
+    // session level (4 spaces) and sends a collapsed caret *after* them — an
+    // empty range that does not overwrite the whitespace. The returned first
+    // line must carry no anchor of its own (the 4 surviving spaces already are
+    // the anchor); without the compensation it would emit 4 more and the spliced
+    // line would land at column 8.
+    let source = "Top\n\n    existing\n    \n    tail\n";
+    let doc = parse_document(source).expect("parse");
+    // Line 3 is the whitespace-only auto-indented line; caret at its end (col 4).
+    let result = prepare_paste(&doc, source, empty_range(3, 4), "first\n    second\n");
+    assert_eq!(result.mode, PasteMode::Reanchor);
+    // First line emits no leading space (4 already survive in the buffer);
+    // second line re-anchors fully to 8.
+    assert_eq!(result.text, "first\n        second\n");
+}
+
+#[test]
 fn merge_first_line_joins_existing_content() {
     let source = "Top\n\n    existing text\n";
     let doc = parse_document(source).expect("parse");
@@ -400,8 +446,13 @@ fn selection_replace_anchor_from_selection_start() {
     };
     let result = prepare_paste(&doc, source, range, "a\n    b\n");
     assert_eq!(result.mode, PasteMode::Reanchor);
-    // Anchor 8 (nested content indent): a -> 8, b(4) -> 12.
-    assert_eq!(result.text, "        a\n            b\n");
+    // Anchor 8 (nested content indent). The selection starts at column 8, *after*
+    // the line's 8 leading spaces — those spaces are not in the replaced range
+    // and survive the splice, so the first emitted line carries no anchor of its
+    // own (8 - 8 = 0) and lands at column 8 once spliced; line 2 is a fresh line
+    // at 8 + delta(8) = 12 (comms#73 #3). Returning "        a" here would
+    // double the indent against the surviving spaces.
+    assert_eq!(result.text, "a\n            b\n");
 }
 
 #[test]
