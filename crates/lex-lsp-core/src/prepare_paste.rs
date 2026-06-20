@@ -27,7 +27,7 @@
 //!   merge strips line 1 and re-anchors the rest. On a fresh line the transform
 //!   subtracts any whitespace the editor auto-indented ahead of the caret that
 //!   the request range does not overwrite, so the anchor is never doubled
-//!   (comms#73 #3, [`surviving_leading_indent`]).
+//!   (comms#73 #3, `surviving_leading_indent`).
 
 use lex_analysis::utils::find_verbatim_at_position;
 use lex_core::lex::ast::{Document, Position as AstPosition};
