@@ -84,6 +84,10 @@ jobs:
     needs: release
     if: success()
     runs-on: ubuntu-latest
+    # This job authenticates the dispatch via the RELEASE_TOKEN PAT
+    # (GH_TOKEN below), so its automatic GITHUB_TOKEN needs no scopes.
+    # Drop them to none to keep the blast radius minimal.
+    permissions: {}
     steps:
       - name: Notify downstream editors
         env:
