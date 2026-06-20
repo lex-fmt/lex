@@ -53,6 +53,12 @@ jobs:
       # distributes the artifact to GH release + npm in one tag-push.
       wasm-packages: lex-wasm
       wasm-npm-scope: lex-fmt
+      # Layer 2 of the cross-repo release cascade (lex-fmt/lex#640). The
+      # reusable rust-cli.yml fires `upstream-released` to each repo here
+      # after a successful release (release@v3.8.0+). lex's downstreams are the
+      # editor extensions, which submodule lex and listen for the two-hop
+      # cascade from both lex and tree-sitter-lex. See arthur-debert/release#804.
+      notify-downstreams: lex-fmt/vscode lex-fmt/nvim lex-fmt/lexed
     # `secrets: inherit` doesn't propagate cross-org (lex-fmt → arthur-debert),
     # so secrets must be passed explicitly. Note: lex-fmt/lex stores the
     # crates.io token under `CARGO_REGISTRY_TOKEN`; the action's input is
@@ -67,40 +73,3 @@ jobs:
       CRATES_IO_KEY: ${{ secrets.CARGO_REGISTRY_TOKEN }}
       HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-  # Layer 2 of the cross-repo release cascade (lex-fmt/lex#640). The
-  # reusable rust-cli.yml does NOT dispatch downstreams itself — its
-  # notify-downstreams job is a no-op placeholder, because the fan-out
-  # list is repo-specific and lives co-located with its upstream. So a
-  # lex release must fire the dispatch here, mirroring comms's and
-  # tree-sitter-lex's release.yml.
-  #
-  # lex's direct downstreams are the editor extensions, which submodule
-  # lex and listen for `upstream-released` from BOTH lex and
-  # tree-sitter-lex (the two-hop cascade). Without this step a lex
-  # release never reached them and each editor had to be dispatched by
-  # hand. See arthur-debert/release#804.
-  notify-downstreams:
-    needs: release
-    if: success()
-    runs-on: ubuntu-latest
-    # This job authenticates the dispatch via the RELEASE_TOKEN PAT
-    # (GH_TOKEN below), so its automatic GITHUB_TOKEN needs no scopes.
-    # Drop them to none to keep the blast radius minimal.
-    permissions: {}
-    steps:
-      - name: Notify downstream editors
-        env:
-          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
-          VERSION: v${{ inputs.version }}
-        run: |
-          set -euo pipefail
-          for repo in lex-fmt/vscode lex-fmt/nvim lex-fmt/lexed; do
-            echo "Notifying ${repo} of lex@${VERSION}"
-            gh api "repos/${repo}/dispatches" --method POST \
-              -f event_type=upstream-released \
-              -F "client_payload[source]=lex" \
-              -F "client_payload[version]=${VERSION}" \
-              -F "client_payload[ts]=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-              -F "client_payload[run_url]=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          done
