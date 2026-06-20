@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+## 0.18.3 - 2026-06-20
+
+- smart paste: compensate for editor auto-indent on fresh-line pastes so the anchor is not duplicated
+
 ## 0.18.2 - 2026-06-19
 
 - Export all verbatim groups in multi-group Definition blocks; link anchorless file references
