@@ -434,15 +434,16 @@ pub fn reanchor(pasted_text: &str, anchor: usize, fresh_line: bool, caret_indent
         // §4.4 / comms#73 #3: the first emitted line shares the caret's physical
         // line, so any whitespace already present before the splice (and not
         // overwritten by the range) is still in the buffer. Drop that much from
-        // the emitted indent so the two don't add up to a doubled anchor. Only
-        // the first line is affected; this branch is reached at idx == 0 only on
-        // a fresh-line paste (merge handles its own first line above), and
-        // `caret_indent` is zero for every non-fresh paste, so the guard is
-        // exact. A `saturating_sub` keeps it total when the surviving whitespace
-        // already exceeds the target — an insert-only edit cannot remove it, so
-        // the line clamps to no added indent (exact dedent then needs the editor
-        // to expand the range, per the §4.4 contract).
-        if idx == 0 {
+        // the emitted indent so the two don't add up to a doubled anchor. The
+        // `fresh_line` guard makes the fresh-line-only contract self-contained:
+        // merge handles its own first line above (and passes `caret_indent` 0
+        // anyway), so this is reachable at idx == 0 only on a fresh line, but
+        // stating it guards against future misuse. A `saturating_sub` keeps it
+        // total when the surviving whitespace already exceeds the target — an
+        // insert-only edit cannot remove it, so the line clamps to no added
+        // indent (exact dedent then needs the editor to expand the range, per
+        // the §4.4 contract).
+        if idx == 0 && fresh_line {
             new_indent = new_indent.saturating_sub(caret_indent);
         }
         out.extend(std::iter::repeat_n(' ', new_indent));

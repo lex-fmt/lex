@@ -236,6 +236,32 @@ fn is_fresh_line_whitespace_only_prefix_with_later_multibyte_is_fresh() {
     assert!(is_fresh_line(source, pos(2, 4)));
 }
 
+#[test]
+fn surviving_leading_indent_counts_tabs_in_display_columns() {
+    // Auto-indent compensation measures the surviving whitespace in display
+    // columns (TAB_WIDTH), not bytes, so it matches the space-based anchor
+    // arithmetic for editors that indent with tabs. A single tab before the
+    // caret (byte offset 1) is 4 columns.
+    let source = "Top\n\n\t\n";
+    assert_eq!(surviving_leading_indent(source, pos(2, 1)), 4);
+}
+
+#[test]
+fn surviving_leading_indent_mixes_tabs_and_spaces() {
+    // Tab (advances to column 4) followed by two spaces = 6 columns; the caret
+    // is past all three (byte offset 3).
+    let source = "Top\n\n\t  \n";
+    assert_eq!(surviving_leading_indent(source, pos(2, 3)), 6);
+}
+
+#[test]
+fn surviving_leading_indent_stops_at_caret() {
+    // Only whitespace *before* the caret survives: a caret mid-indent counts
+    // just the spaces up to its byte offset, not the rest of the line.
+    let source = "Top\n\n        body\n";
+    assert_eq!(surviving_leading_indent(source, pos(2, 4)), 4);
+}
+
 // ---------------------------------------------------------------------------
 // Classification (§3), innermost-first.
 // ---------------------------------------------------------------------------
