@@ -55,7 +55,7 @@ jobs:
       wasm-npm-scope: lex-fmt
       # Layer 2 of the cross-repo release cascade (lex-fmt/lex#640). The
       # reusable rust-cli.yml fires `upstream-released` to each repo here
-      # after a successful release (release@v3+). lex's downstreams are the
+      # after a successful release (release@v3.8.0+). lex's downstreams are the
       # editor extensions, which submodule lex and listen for the two-hop
       # cascade from both lex and tree-sitter-lex. See arthur-debert/release#804.
       notify-downstreams: lex-fmt/vscode lex-fmt/nvim lex-fmt/lexed
