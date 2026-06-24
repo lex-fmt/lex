@@ -10,7 +10,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::Path;
 
+mod include_paths;
 mod rule_config;
+pub use include_paths::{absolutize_path, find_nearest_config_dir, resolve_include_root};
 pub use rule_config::{RuleConfig, RuleOptions, Severity};
 
 /// Canonical config file name used by the CLI and LSP.

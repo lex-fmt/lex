@@ -11,9 +11,14 @@ use std::path::{Path, PathBuf};
 
 use clapfig::{Boundary, Clapfig, SearchPath};
 use lex_config::{
-    collect_extension_diagnostic_rules, LexConfig, LoadedLexConfig, CONFIG_FILE_NAME,
-    DIAGNOSTICS_RULES_PATH,
+    collect_extension_diagnostic_rules, resolve_include_root, LexConfig, LoadedLexConfig,
+    CONFIG_FILE_NAME, DIAGNOSTICS_RULES_PATH,
 };
+
+// Re-export the shared `absolutize_path` under this module's path so existing
+// `config_loading::absolutize_path` call sites keep working; the implementation
+// now lives in `lex-config` (deduplicated from the copies in `lex-cli`).
+pub(crate) use lex_config::absolutize_path;
 
 /// Load a [`LoadedLexConfig`] via clapfig, searching from an optional
 /// workspace root. The wrapper carries both the typed [`LexConfig`] and
@@ -63,57 +68,9 @@ pub(crate) fn best_matching_root(roots: &[PathBuf], document_path: &Path) -> Opt
         .cloned()
 }
 
-/// Compute the include-resolution root for an entry document.
-///
-/// Order:
-/// 1. `[includes].root` from `LexConfig` if set.
-/// 2. Directory of the nearest `.lex.toml` walking upward from the
-///    entry document's directory.
-/// 3. The entry document's own directory.
-///
-/// Always returns an absolute, lexically-normalized path so the
-/// resolver's root-escape prefix check is sound.
+/// Compute the include-resolution root for an entry document from the LSP's
+/// [`LexConfig`]. Thin adapter over [`lex_config::resolve_include_root`] that
+/// threads `[includes].root` through as the override.
 pub(crate) fn inc_root_for(entry_path: &Path, cfg: &LexConfig) -> PathBuf {
-    let raw = if let Some(root) = cfg.includes.root.as_ref() {
-        PathBuf::from(root)
-    } else {
-        let start = entry_path
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."));
-        find_nearest_config_dir(&start).unwrap_or(start)
-    };
-    absolutize_path(&raw)
-}
-
-/// Walk upward from `start` looking for a directory that contains
-/// `.lex.toml`. Returns that directory, or `None` if we hit the
-/// filesystem root without finding one.
-pub(crate) fn find_nearest_config_dir(start: &Path) -> Option<PathBuf> {
-    let mut cur: PathBuf = start.canonicalize().unwrap_or_else(|_| start.to_path_buf());
-    loop {
-        if cur.join(CONFIG_FILE_NAME).is_file() {
-            return Some(cur);
-        }
-        if !cur.pop() {
-            return None;
-        }
-    }
-}
-
-/// Best-effort absolutize: try `Path::canonicalize` first (handles
-/// symlinks + resolves `..` against the real filesystem), falling back
-/// to `current_dir().join(path)` if the path doesn't exist on disk.
-/// Always returns an absolute path; `ResolveConfig::root` requires one
-/// for the root-escape prefix check to be sound.
-pub(crate) fn absolutize_path(p: &Path) -> PathBuf {
-    if let Ok(canon) = p.canonicalize() {
-        return canon;
-    }
-    if p.is_absolute() {
-        return p.to_path_buf();
-    }
-    std::env::current_dir()
-        .map(|cwd| cwd.join(p))
-        .unwrap_or_else(|_| p.to_path_buf())
+    resolve_include_root(entry_path, cfg.includes.root.as_deref().map(Path::new))
 }

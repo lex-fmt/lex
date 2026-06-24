@@ -6,11 +6,9 @@ use lex_babel::{
 };
 use lex_config::LexConfig;
 use lex_core::lex::builtins;
-use lex_core::lex::includes::{resolve_from_source, FsLoader, ResolveConfig};
-use lex_extension_host::registry::Registry;
+use lex_core::lex::includes::ResolveConfig;
 use lexd::transforms;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 /// Handle the inspect command
 pub(crate) fn handle_inspect_command(
@@ -68,23 +66,25 @@ fn expand_includes_to_source(source: &str, entry_path: &str, inc: &IncludeOption
     let entry = absolutize_path(&PathBuf::from(entry_path));
     let root = inc.resolved_root(&entry);
     let resolve_config = ResolveConfig {
-        root: root.clone(),
+        root,
         max_depth: inc.max_depth,
         max_total_includes: inc.max_total_includes,
     };
-    let loader = FsLoader::new(root).with_max_file_size(inc.max_file_size);
-    let registry = Registry::new();
-    builtins::register_into(&registry, Arc::new(loader), resolve_config.clone()).unwrap_or_else(
-        |e| {
-            eprintln!("Failed to register lex.* built-ins: {e}");
-            std::process::exit(1);
-        },
-    );
     let doc =
-        resolve_from_source(source, Some(entry), &resolve_config, &registry).unwrap_or_else(|e| {
-            eprintln!("Include resolution error: {e}");
-            std::process::exit(1);
-        });
+        match builtins::resolve_buffer(source, Some(entry), &resolve_config, inc.max_file_size) {
+            Ok(doc) => doc,
+            // Preserve the two distinct stderr wordings the hand-rolled path had:
+            // registry-setup failures and include-resolution failures read
+            // differently so the user can tell them apart.
+            Err(builtins::ResolveBufferError::Registry(e)) => {
+                eprintln!("Failed to register lex.* built-ins: {e}");
+                std::process::exit(1);
+            }
+            Err(builtins::ResolveBufferError::Resolve(e)) => {
+                eprintln!("Include resolution error: {e}");
+                std::process::exit(1);
+            }
+        };
 
     // Re-serialize with default formatting rules; the goal is just
     // to feed downstream transforms the merged source, not to
