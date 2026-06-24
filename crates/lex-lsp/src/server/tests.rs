@@ -11,6 +11,7 @@ use super::*;
 use crate::features::semantic_tokens::{LexSemanticToken, LexSemanticTokenKind};
 use lex_analysis::test_support::sample_source;
 use lex_core::lex::ast::{Position as AstPosition, Range as AstRange};
+use lex_lsp_core::prepare_paste::{PasteMode, PreparePasteParams};
 use serde::Deserialize;
 use std::fs;
 use std::sync::Mutex;
