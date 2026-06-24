@@ -15,10 +15,9 @@ use lex_config::{
     CONFIG_FILE_NAME, DIAGNOSTICS_RULES_PATH,
 };
 
-// Re-export the shared path helpers under this module's path so existing
-// `config_loading::{absolutize_path, find_nearest_config_dir}` call sites keep
-// working; the implementations now live in `lex-config` (deduplicated from the
-// copies in `lex-cli`).
+// Re-export the shared `absolutize_path` under this module's path so existing
+// `config_loading::absolutize_path` call sites keep working; the implementation
+// now lives in `lex-config` (deduplicated from the copies in `lex-cli`).
 pub(crate) use lex_config::absolutize_path;
 
 /// Load a [`LoadedLexConfig`] via clapfig, searching from an optional

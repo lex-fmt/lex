@@ -70,11 +70,21 @@ fn expand_includes_to_source(source: &str, entry_path: &str, inc: &IncludeOption
         max_depth: inc.max_depth,
         max_total_includes: inc.max_total_includes,
     };
-    let doc = builtins::resolve_buffer(source, Some(entry), &resolve_config, inc.max_file_size)
-        .unwrap_or_else(|e| {
-            eprintln!("Include resolution error: {e}");
-            std::process::exit(1);
-        });
+    let doc =
+        match builtins::resolve_buffer(source, Some(entry), &resolve_config, inc.max_file_size) {
+            Ok(doc) => doc,
+            // Preserve the two distinct stderr wordings the hand-rolled path had:
+            // registry-setup failures and include-resolution failures read
+            // differently so the user can tell them apart.
+            Err(builtins::ResolveBufferError::Registry(e)) => {
+                eprintln!("Failed to register lex.* built-ins: {e}");
+                std::process::exit(1);
+            }
+            Err(builtins::ResolveBufferError::Resolve(e)) => {
+                eprintln!("Include resolution error: {e}");
+                std::process::exit(1);
+            }
+        };
 
     // Re-serialize with default formatting rules; the goal is just
     // to feed downstream transforms the merged source, not to

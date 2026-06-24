@@ -133,13 +133,11 @@ where
     }
 
     async fn parse_and_store(&self, uri: Url, text: String) {
-        // Try include resolution first when the document has an on-disk
-        // path. If resolution succeeds, the resolved (merged) tree is what
-        // we store and analyze; downstream features (semantic tokens,
-        // hover, goto) see the post-include AST. If resolution fails, we
-        // fall back to a plain parse so the rest of the LSP keeps working,
-        // and surface the include error as a diagnostic at the include
-        // site.
+        // `resolve_and_upsert` always stores the *unresolved* host-buffer
+        // parse (so feature positions stay in the host's coordinate space)
+        // and runs the include resolver only to surface diagnostics — see
+        // its docstring. We then analyze that stored (unresolved) tree and
+        // publish the include diagnostics alongside the analysis ones.
         let include_diags = self.resolve_and_upsert(&uri, &text).await;
 
         let mut diagnostics: Vec<Diagnostic> = include_diags;

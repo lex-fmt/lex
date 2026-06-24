@@ -80,36 +80,26 @@ where
                         if let Ok(position) = serde_json::from_value::<Position>(pos_val.clone()) {
                             if let Some(document) = self.document(&uri).await {
                                 let ast_pos = from_lsp_position(position);
-                                let _resolved = command == commands::COMMAND_RESOLVE_ANNOTATION;
 
-                                // For toggle, we need to check current status, but lex-analysis toggle takes a boolean "resolved".
-                                // Wait, lex-analysis toggle_annotation_resolution takes "resolved: bool".
-                                // If we want to toggle, we need to know current state.
-                                // But the command name "toggle_annotations" implies switching.
-                                // Let's check lex-analysis signature again.
-                                // toggle_annotation_resolution(doc, pos, resolved) -> Option<Edit>
-                                // It sets status=resolved if resolved=true, removes it if false.
-                                // So "resolve" command should pass true.
-                                // "toggle" command needs to check if it's currently resolved and flip it.
-
+                                // `toggle_annotation_resolution(doc, pos, resolved)` is a
+                                // setter: `resolved=true` stamps `status=resolved`, `false`
+                                // clears it. So the "resolve" command always passes `true`,
+                                // while "toggle" must read the current state and flip it.
                                 let target_state =
                                     if command == commands::COMMAND_RESOLVE_ANNOTATION {
                                         true
+                                    } else if let Some(annotation) =
+                                        lex_analysis::utils::find_annotation_at_position(
+                                            &document, ast_pos,
+                                        )
+                                    {
+                                        let is_resolved =
+                                            annotation.data.parameters.iter().any(|p| {
+                                                p.key == "status" && p.value == "resolved"
+                                            });
+                                        !is_resolved
                                     } else {
-                                        // Check if currently resolved
-                                        if let Some(annotation) =
-                                            lex_analysis::utils::find_annotation_at_position(
-                                                &document, ast_pos,
-                                            )
-                                        {
-                                            let is_resolved =
-                                                annotation.data.parameters.iter().any(|p| {
-                                                    p.key == "status" && p.value == "resolved"
-                                                });
-                                            !is_resolved
-                                        } else {
-                                            return Ok(None);
-                                        }
+                                        return Ok(None);
                                     };
 
                                 if let Some(edit) =
