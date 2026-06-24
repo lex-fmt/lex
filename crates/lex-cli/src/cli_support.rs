@@ -11,7 +11,7 @@
 
 use clap::ArgMatches;
 use lex_babel::formats::lex::formatting_rules::FormattingRules;
-use lex_config::{LexConfig, PdfPageSize};
+use lex_config::{resolve_include_root, LexConfig, PdfPageSize};
 use lex_core::lex::includes::{LoadError, LoadedFile, Loader};
 use lex_core::lex::mojibake::detect_mojibake;
 use std::collections::HashMap;
@@ -20,7 +20,12 @@ use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use lex_config::CONFIG_FILE_NAME;
+// Path helpers now live in `lex-config` (deduplicated from the copies that
+// were in `lex-lsp` and `check.rs`); re-exported here under their existing
+// names so the command handlers' call sites are unchanged.
+pub(crate) use lex_config::{
+    absolutize_path, find_nearest_config_dir as find_nearest_lex_toml_dir,
+};
 
 /// Per-invocation include resolution settings derived from CLI flags +
 /// `[includes]` config + the entry-file's location.
@@ -72,60 +77,11 @@ impl IncludeOptions {
         }
     }
 
-    /// Resolution root for an entry file at `entry_path`, applying:
-    /// 1. `root_override` if present.
-    /// 2. Directory of the nearest `.lex.toml` walking up from the entry file.
-    /// 3. The entry file's own directory.
-    ///
-    /// In all three cases the returned path is run through
-    /// [`absolutize_path`] so it is absolute and lexically normalized —
-    /// `ResolveConfig::root` requires an absolute path or the
-    /// root-escape prefix check is weakened.
+    /// Resolution root for an entry file at `entry_path`. Thin adapter over
+    /// [`lex_config::resolve_include_root`] threading `root_override` through.
     pub(crate) fn resolved_root(&self, entry_path: &Path) -> PathBuf {
-        let raw = if let Some(r) = &self.root_override {
-            r.clone()
-        } else {
-            let start_dir = entry_path
-                .parent()
-                .map(Path::to_path_buf)
-                .unwrap_or_else(|| PathBuf::from("."));
-            find_nearest_lex_toml_dir(&start_dir).unwrap_or(start_dir)
-        };
-        absolutize_path(&raw)
+        resolve_include_root(entry_path, self.root_override.as_deref())
     }
-}
-
-/// Walk upward from `start` looking for a directory that contains
-/// `.lex.toml` (the canonical config name in this repo). Returns that
-/// directory, or `None` if we hit the filesystem root without finding one.
-pub(crate) fn find_nearest_lex_toml_dir(start: &Path) -> Option<PathBuf> {
-    let mut cur: PathBuf = start.canonicalize().unwrap_or_else(|_| start.to_path_buf());
-    loop {
-        if cur.join(CONFIG_FILE_NAME).is_file() {
-            return Some(cur);
-        }
-        if !cur.pop() {
-            return None;
-        }
-    }
-}
-
-/// Best-effort absolutize: try `Path::canonicalize` (handles symlinks
-/// and resolves `..` against the real filesystem), and fall back to
-/// `current_dir().join(path)` if the path doesn't exist on disk yet
-/// (rare but possible — e.g., a CLI flag pointing at a not-yet-created
-/// directory). Always returns an absolute path; the resolver requires
-/// one for the root-escape prefix check to be sound.
-pub(crate) fn absolutize_path(p: &Path) -> PathBuf {
-    if let Ok(canon) = p.canonicalize() {
-        return canon;
-    }
-    if p.is_absolute() {
-        return p.to_path_buf();
-    }
-    std::env::current_dir()
-        .map(|cwd| cwd.join(p))
-        .unwrap_or_else(|_| p.to_path_buf())
 }
 
 /// Read source content from a file path, or from stdin when the path is

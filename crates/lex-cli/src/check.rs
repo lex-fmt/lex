@@ -39,20 +39,19 @@
 //! the new finding source unchanged.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use lex_analysis::diagnostics::{
     analyze_references, analyze_with_rules, apply_rules, collect_file_references,
     AnalysisDiagnostic, DiagnosticKind, DiagnosticSeverity as AnalysisSeverity,
 };
-use lex_config::{DiagnosticsRulesConfig, LabelsConfig, CONFIG_FILE_NAME};
+use lex_config::{
+    absolutize_path, find_nearest_config_dir, DiagnosticsRulesConfig, LabelsConfig,
+    CONFIG_FILE_NAME,
+};
 use lex_core::lex::ast::{Document, Position, Range};
 use lex_core::lex::builtins;
-use lex_core::lex::includes::{
-    resolve_file_reference, resolve_from_source, FsLoader, IncludeError, ResolveConfig,
-};
+use lex_core::lex::includes::{resolve_file_reference, IncludeError, ResolveConfig};
 use lex_core::lex::parsing::parse_document_permissive;
-use lex_extension_host::registry::Registry;
 use serde::Serialize;
 
 use crate::extension_setup::{boot_registry, ExtensionSetup};
@@ -365,7 +364,7 @@ pub fn collect_file_diagnostics(
     // actually using the feature) we run the resolver; assembly failures
     // become findings against the include site. Otherwise we parse
     // permissively so label-policy diagnostics still surface.
-    let entry_abs = absolutize(entry);
+    let entry_abs = absolutize_path(entry);
     // The resolution root, shared by include expansion and the
     // `--references` file-path pass so both resolve targets identically:
     // explicit override → nearest ancestor with `.lex.toml` → the entry
@@ -385,7 +384,7 @@ pub fn collect_file_diagnostics(
     let root = opts
         .includes_root
         .clone()
-        .map(|r| absolutize(&r))
+        .map(|r| absolutize_path(&r))
         .unwrap_or_else(|| workspace_for(&entry_abs));
 
     let document = if opts.expand_includes && source.contains("lex.include") {
@@ -394,18 +393,20 @@ pub fn collect_file_diagnostics(
             max_depth: opts.max_depth,
             max_total_includes: opts.max_total_includes,
         };
-        let loader = FsLoader::new(root.clone()).with_max_file_size(opts.max_file_size);
-        let registry = Registry::new();
-        if let Err(e) = builtins::register_into(&registry, Arc::new(loader), resolve_config.clone())
-        {
-            return Err(format!(
-                "could not configure include resolver for {}: {e}",
-                entry.display()
-            ));
-        }
-        match resolve_from_source(source, Some(entry_abs.clone()), &resolve_config, &registry) {
+        match builtins::resolve_buffer(
+            source,
+            Some(entry_abs.clone()),
+            &resolve_config,
+            opts.max_file_size,
+        ) {
             Ok(doc) => doc,
-            Err(err) => {
+            Err(builtins::ResolveBufferError::Registry(e)) => {
+                return Err(format!(
+                    "could not configure include resolver for {}: {e}",
+                    entry.display()
+                ));
+            }
+            Err(builtins::ResolveBufferError::Resolve(err)) => {
                 // The document did not assemble. Report the assembly
                 // failure as a finding blamed on its include site and
                 // stop here: analysing the *un*-expanded fallback tree
@@ -602,21 +603,6 @@ fn head_range() -> Range {
     Range::new(0..0, Position::new(0, 0), Position::new(0, 0))
 }
 
-/// Best-effort absolutize for resolver paths (canonicalize, falling back
-/// to cwd-join). Mirrors `main.rs::absolutize_path` so include resolution
-/// behaves identically to `convert`/`inspect`.
-fn absolutize(p: &Path) -> PathBuf {
-    if let Ok(canon) = p.canonicalize() {
-        return canon;
-    }
-    if p.is_absolute() {
-        return p.to_path_buf();
-    }
-    std::env::current_dir()
-        .map(|cwd| cwd.join(p))
-        .unwrap_or_else(|_| p.to_path_buf())
-}
-
 /// Emit the report and return `true` when any finding met the `fail_on`
 /// threshold. Human format groups per file with a trailing summary;
 /// JSON emits a single flat array across all files.
@@ -715,15 +701,7 @@ pub fn workspace_for(entry: &Path) -> PathBuf {
         .filter(|p| !p.as_os_str().is_empty())
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
-    let mut cur = fallback.canonicalize().unwrap_or_else(|_| fallback.clone());
-    loop {
-        if cur.join(CONFIG_FILE_NAME).is_file() {
-            return cur;
-        }
-        if !cur.pop() {
-            return fallback;
-        }
-    }
+    find_nearest_config_dir(&fallback).unwrap_or(fallback)
 }
 
 #[cfg(test)]

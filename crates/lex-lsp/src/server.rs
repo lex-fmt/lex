@@ -29,8 +29,7 @@ use lex_config::{LabelsConfig, LoadedLexConfig};
 use lex_core::lex::ast::links::DocumentLink as AstDocumentLink;
 use lex_core::lex::ast::{Document, Position as AstPosition, Range as AstRange};
 use lex_core::lex::builtins as lex_builtins;
-use lex_core::lex::includes::{resolve_from_source, FsLoader, ResolveConfig};
-use lex_extension_host::registry::Registry;
+use lex_core::lex::includes::{FsLoader, ResolveConfig};
 use lex_lsp_core::prepare_paste::{
     prepare_paste as prepare_paste_transform, PasteMode, PreparePasteParams, PreparePasteResult,
 };
@@ -493,28 +492,22 @@ where
         drop(cfg);
 
         let resolve_config = ResolveConfig {
-            root: inc_root.clone(),
+            root: inc_root,
             max_depth,
             max_total_includes,
         };
-        let loader = FsLoader::new(inc_root).with_max_file_size(max_file_size);
-        let registry = Registry::new();
-        if let Err(e) = lex_builtins::register_into(
-            &registry,
-            std::sync::Arc::new(loader),
-            resolve_config.clone(),
-        ) {
-            return vec![registry_setup_diagnostic(&e.to_string())];
-        }
 
-        match resolve_from_source(text, Some(path), &resolve_config, &registry) {
-            Ok(_doc) => {
-                // Resolution succeeded. We *don't* store the merged
-                // tree — see fn-level docstring. The resolver was run
-                // only to surface errors; the tree itself is dropped.
-                Vec::new()
+        match lex_builtins::resolve_buffer(text, Some(path), &resolve_config, max_file_size) {
+            // Resolution succeeded. We *don't* store the merged tree —
+            // see fn-level docstring. The resolver was run only to
+            // surface errors; the tree itself is dropped.
+            Ok(_doc) => Vec::new(),
+            Err(lex_builtins::ResolveBufferError::Registry(e)) => {
+                vec![registry_setup_diagnostic(&e.to_string())]
             }
-            Err(err) => vec![include_error_to_diagnostic(&err)],
+            Err(lex_builtins::ResolveBufferError::Resolve(err)) => {
+                vec![include_error_to_diagnostic(&err)]
+            }
         }
     }
 

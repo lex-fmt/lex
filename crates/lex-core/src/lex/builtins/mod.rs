@@ -68,7 +68,9 @@ use lex_extension::{
 };
 use lex_extension_host::registry::{Registry, RegistryError};
 
-use crate::lex::includes::{Loader, ResolveConfig};
+use crate::lex::ast::Document;
+use crate::lex::includes::{resolve_from_source, FsLoader, IncludeError, Loader, ResolveConfig};
+use std::path::PathBuf;
 
 pub mod doc;
 pub mod include;
@@ -379,6 +381,55 @@ pub fn register_into(
 
     let doc_handler = Box::new(DocBuiltinsHandler);
     registry.register_namespace(DOC_NAMESPACE, doc::all_schemas(), doc_handler)
+}
+
+/// Failure from [`resolve_buffer`]: either the built-in registry could not be
+/// configured, or include resolution itself failed.
+#[derive(Debug)]
+pub enum ResolveBufferError {
+    /// `register_into` failed — the `lex.*`/`doc.*` namespaces could not be
+    /// attached. Should not happen with a fresh [`Registry`] in practice.
+    Registry(RegistryError),
+    /// Include resolution failed (cycle, missing target, depth/size limits, …).
+    /// Boxed because [`IncludeError`] is large and would otherwise bloat every
+    /// `Result` this error rides in (clippy `result_large_err`).
+    Resolve(Box<IncludeError>),
+}
+
+impl std::fmt::Display for ResolveBufferError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ResolveBufferError::Registry(e) => {
+                write!(f, "could not configure include resolver: {e}")
+            }
+            ResolveBufferError::Resolve(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for ResolveBufferError {}
+
+/// Resolve `:: lex.include ::` annotations in `source` against the filesystem,
+/// returning the merged [`Document`].
+///
+/// Builds a fresh [`Registry`] with the built-in `lex.*`/`doc.*` handlers
+/// wired to an [`FsLoader`] rooted at `config.root`, then runs
+/// [`resolve_from_source`]. This is the shared convenience the CLI
+/// (`convert`/`inspect`/`check`) and the LSP use instead of hand-rolling the
+/// loader + registry + resolve dance; callers that need a custom [`Loader`]
+/// (e.g. a scanning decorator) still wire it up themselves.
+pub fn resolve_buffer(
+    source: &str,
+    source_path: Option<PathBuf>,
+    config: &ResolveConfig,
+    max_file_size: u64,
+) -> Result<Document, ResolveBufferError> {
+    let loader = FsLoader::new(config.root.clone()).with_max_file_size(max_file_size);
+    let registry = Registry::new();
+    register_into(&registry, Arc::new(loader), config.clone())
+        .map_err(ResolveBufferError::Registry)?;
+    resolve_from_source(source, source_path, config, &registry)
+        .map_err(|e| ResolveBufferError::Resolve(Box::new(e)))
 }
 
 /// Reserved namespace owned by the document-level metadata family.
