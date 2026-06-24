@@ -11,23 +11,22 @@ use crate::extension_dispatch::{
 };
 use crate::features::commands::{self, execute_command};
 use crate::features::document_links::collect_document_links;
-use crate::features::document_symbols::{collect_document_symbols, LexDocumentSymbol};
+use crate::features::document_symbols::collect_document_symbols;
 use crate::features::extract::{self, ExtractError};
-use crate::features::folding_ranges::{folding_ranges as collect_folding_ranges, LexFoldingRange};
-use crate::features::formatting::{self, LineRange as FormattingLineRange, TextEditSpan};
+use crate::features::folding_ranges::folding_ranges as collect_folding_ranges;
+use crate::features::formatting::{self};
 use crate::features::go_to_definition::goto_definition;
-use crate::features::hover::{hover as compute_hover, HoverResult};
+use crate::features::hover::hover as compute_hover;
 use crate::features::references::find_references;
-use crate::features::semantic_tokens::{collect_semantic_tokens, LexSemanticToken};
-use lex_analysis::completion::{completion_items, CompletionCandidate, CompletionWorkspace};
+use crate::features::semantic_tokens::collect_semantic_tokens;
+use lex_analysis::completion::{completion_items, CompletionWorkspace};
 use lex_analysis::diagnostics::{analyze as analyze_diagnostics, apply_rules};
 use lex_babel::formats::lex::formatting_rules::FormattingRules;
 use lex_babel::templates::{
     build_asset_snippet, build_verbatim_snippet, AssetSnippetRequest, VerbatimSnippetRequest,
 };
 use lex_config::{LabelsConfig, LoadedLexConfig};
-use lex_core::lex::ast::links::DocumentLink as AstDocumentLink;
-use lex_core::lex::ast::{Document, Position as AstPosition, Range as AstRange};
+use lex_core::lex::ast::{Document, Position as AstPosition};
 use lex_core::lex::builtins as lex_builtins;
 use lex_core::lex::includes::{FsLoader, ResolveConfig};
 use lex_lsp_core::prepare_paste::{
@@ -101,126 +100,9 @@ impl LspClient for Client {
     }
 }
 
-pub trait FeatureProvider: Send + Sync + 'static {
-    fn semantic_tokens(&self, document: &Document) -> Vec<LexSemanticToken>;
-    fn document_symbols(&self, document: &Document) -> Vec<LexDocumentSymbol>;
-    fn folding_ranges(&self, document: &Document) -> Vec<LexFoldingRange>;
-    fn hover(&self, document: &Document, position: AstPosition) -> Option<HoverResult>;
-    fn goto_definition(&self, document: &Document, position: AstPosition) -> Vec<AstRange>;
-    fn references(
-        &self,
-        document: &Document,
-        position: AstPosition,
-        include_declaration: bool,
-    ) -> Vec<AstRange>;
-    fn document_links(&self, document: &Document) -> Vec<AstDocumentLink>;
-    fn format_document(
-        &self,
-        document: &Document,
-        source: &str,
-        rules: Option<FormattingRules>,
-    ) -> Vec<TextEditSpan>;
-    fn format_range(
-        &self,
-        document: &Document,
-        source: &str,
-        range: FormattingLineRange,
-        rules: Option<FormattingRules>,
-    ) -> Vec<TextEditSpan>;
-    fn completion(
-        &self,
-        document: &Document,
-        position: AstPosition,
-        current_line: Option<&str>,
-        workspace: Option<&CompletionWorkspace>,
-        trigger_char: Option<&str>,
-    ) -> Vec<CompletionCandidate>;
-    fn execute_command(&self, command: &str, arguments: &[Value]) -> Result<Option<Value>>;
-}
-
-#[derive(Default)]
-pub struct DefaultFeatureProvider;
-
-impl DefaultFeatureProvider {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-#[async_trait]
-impl FeatureProvider for DefaultFeatureProvider {
-    fn semantic_tokens(&self, document: &Document) -> Vec<LexSemanticToken> {
-        collect_semantic_tokens(document)
-    }
-
-    fn document_symbols(&self, document: &Document) -> Vec<LexDocumentSymbol> {
-        collect_document_symbols(document)
-    }
-
-    fn folding_ranges(&self, document: &Document) -> Vec<LexFoldingRange> {
-        collect_folding_ranges(document)
-    }
-
-    fn hover(&self, document: &Document, position: AstPosition) -> Option<HoverResult> {
-        compute_hover(document, position)
-    }
-
-    fn goto_definition(&self, document: &Document, position: AstPosition) -> Vec<AstRange> {
-        goto_definition(document, position)
-    }
-
-    fn references(
-        &self,
-        document: &Document,
-        position: AstPosition,
-        include_declaration: bool,
-    ) -> Vec<AstRange> {
-        find_references(document, position, include_declaration)
-    }
-
-    fn document_links(&self, document: &Document) -> Vec<AstDocumentLink> {
-        collect_document_links(document)
-    }
-
-    fn format_document(
-        &self,
-        document: &Document,
-        source: &str,
-        rules: Option<FormattingRules>,
-    ) -> Vec<TextEditSpan> {
-        formatting::format_document(document, source, rules)
-    }
-
-    fn format_range(
-        &self,
-        document: &Document,
-        source: &str,
-        range: FormattingLineRange,
-        rules: Option<FormattingRules>,
-    ) -> Vec<TextEditSpan> {
-        formatting::format_range(document, source, range, rules)
-    }
-
-    fn completion(
-        &self,
-        document: &Document,
-        position: AstPosition,
-        current_line: Option<&str>,
-        workspace: Option<&CompletionWorkspace>,
-        trigger_char: Option<&str>,
-    ) -> Vec<CompletionCandidate> {
-        completion_items(document, position, current_line, workspace, trigger_char)
-    }
-
-    fn execute_command(&self, command: &str, arguments: &[Value]) -> Result<Option<Value>> {
-        execute_command(command, arguments)
-    }
-}
-
-pub struct LexLanguageServer<C = Client, P = DefaultFeatureProvider> {
+pub struct LexLanguageServer<C = Client> {
     client: C,
     documents: DocumentStore,
-    features: Arc<P>,
     workspace_roots: RwLock<Vec<PathBuf>>,
     config: RwLock<LoadedLexConfig>,
     /// Extension registry + boot diagnostics, lazily populated on first
@@ -241,23 +123,15 @@ pub struct LexLanguageServer<C = Client, P = DefaultFeatureProvider> {
     extension_init: tokio::sync::Mutex<()>,
 }
 
-impl LexLanguageServer<Client, DefaultFeatureProvider> {
-    pub fn new(client: Client) -> Self {
-        Self::with_features(client, Arc::new(DefaultFeatureProvider::new()))
-    }
-}
-
-impl<C, P> LexLanguageServer<C, P>
+impl<C> LexLanguageServer<C>
 where
     C: LspClient,
-    P: FeatureProvider,
 {
-    pub fn with_features(client: C, features: Arc<P>) -> Self {
+    pub fn new(client: C) -> Self {
         let config = load_config(None);
         Self {
             client,
             documents: DocumentStore::default(),
-            features,
             workspace_roots: RwLock::new(Vec::new()),
             config: RwLock::new(config),
             extension: RwLock::new(None),
@@ -666,10 +540,9 @@ where
 }
 
 #[async_trait]
-impl<C, P> tower_lsp::LanguageServer for LexLanguageServer<C, P>
+impl<C> tower_lsp::LanguageServer for LexLanguageServer<C>
 where
     C: LspClient,
-    P: FeatureProvider,
 {
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
         self.update_workspace_roots(&params).await;
@@ -847,7 +720,7 @@ where
     ) -> Result<Option<SemanticTokensResult>> {
         if let Some(entry) = self.document_entry(&params.text_document.uri).await {
             let DocumentEntry { document, text } = entry;
-            let tokens = self.features.semantic_tokens(&document);
+            let tokens = collect_semantic_tokens(&document);
             let data = encode_semantic_tokens(&tokens, text.as_str());
             Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
                 result_id: None,
@@ -863,7 +736,7 @@ where
         params: DocumentSymbolParams,
     ) -> Result<Option<DocumentSymbolResponse>> {
         if let Some(document) = self.document(&params.text_document.uri).await {
-            let symbols = self.features.document_symbols(&document);
+            let symbols = collect_document_symbols(&document);
             let converted: Vec<DocumentSymbol> = symbols.iter().map(to_document_symbol).collect();
             Ok(Some(DocumentSymbolResponse::Nested(converted)))
         } else {
@@ -898,7 +771,7 @@ where
                 }
             }
 
-            if let Some(result) = self.features.hover(&document, position) {
+            if let Some(result) = compute_hover(&document, position) {
                 return Ok(Some(Hover {
                     contents: HoverContents::Markup(MarkupContent {
                         kind: MarkupKind::Markdown,
@@ -913,7 +786,7 @@ where
 
     async fn folding_range(&self, params: FoldingRangeParams) -> Result<Option<Vec<FoldingRange>>> {
         if let Some(document) = self.document(&params.text_document.uri).await {
-            let ranges = self.features.folding_ranges(&document);
+            let ranges = collect_folding_ranges(&document);
             Ok(Some(ranges.iter().map(to_lsp_folding_range).collect()))
         } else {
             Ok(None)
@@ -936,7 +809,7 @@ where
                 return Ok(Some(GotoDefinitionResponse::Scalar(loc)));
             }
 
-            let ranges = self.features.goto_definition(&document, position);
+            let ranges = goto_definition(&document, position);
             if ranges.is_empty() {
                 Ok(None)
             } else {
@@ -956,9 +829,7 @@ where
         if let Some(document) = self.document(&uri).await {
             let position = from_lsp_position(params.text_document_position.position);
             let include_declaration = params.context.include_declaration;
-            let ranges = self
-                .features
-                .references(&document, position, include_declaration);
+            let ranges = find_references(&document, position, include_declaration);
             if ranges.is_empty() {
                 Ok(None)
             } else {
@@ -977,7 +848,7 @@ where
     async fn document_link(&self, params: DocumentLinkParams) -> Result<Option<Vec<DocumentLink>>> {
         let uri = params.text_document.uri;
         if let Some(document) = self.document(&uri).await {
-            let links = self.features.document_links(&document);
+            let links = collect_document_links(&document);
             let resolved: Vec<DocumentLink> = links
                 .iter()
                 .filter_map(|link| build_document_link(&uri, link))
@@ -993,9 +864,7 @@ where
         if let Some(entry) = self.document_entry(&uri).await {
             let DocumentEntry { document, text } = entry;
             let rules = self.resolve_formatting_rules(&params.options).await;
-            let edits = self
-                .features
-                .format_document(&document, text.as_str(), Some(rules));
+            let edits = formatting::format_document(&document, text.as_str(), Some(rules));
             Ok(Some(spans_to_text_edits(text.as_str(), edits)))
         } else {
             Ok(None)
@@ -1011,9 +880,7 @@ where
             let DocumentEntry { document, text } = entry;
             let line_range = to_formatting_line_range(&params.range);
             let rules = self.resolve_formatting_rules(&params.options).await;
-            let edits =
-                self.features
-                    .format_range(&document, text.as_str(), line_range, Some(rules));
+            let edits = formatting::format_range(&document, text.as_str(), line_range, Some(rules));
             Ok(Some(spans_to_text_edits(text.as_str(), edits)))
         } else {
             Ok(None)
@@ -1036,7 +903,7 @@ where
             // Extract current line text for resilient parsing (e.g. "::" without following newline)
             let current_line = text.lines().nth(position.line);
 
-            let candidates = self.features.completion(
+            let candidates = completion_items(
                 &document,
                 position,
                 current_line,
@@ -1289,17 +1156,14 @@ where
             commands::COMMAND_EXTRACT_TO_INCLUDE => {
                 self.handle_extract_to_include(&params.arguments).await
             }
-            _ => self
-                .features
-                .execute_command(&params.command, &params.arguments),
+            _ => execute_command(&params.command, &params.arguments),
         }
     }
 }
 
-impl<C, P> LexLanguageServer<C, P>
+impl<C> LexLanguageServer<C>
 where
     C: LspClient,
-    P: FeatureProvider,
 {
     /// Handler for `lex.extractToInclude`. Args are **positional**:
     /// `[uri: string, range: lsp.Range, src: string]`.

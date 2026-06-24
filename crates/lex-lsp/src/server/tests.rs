@@ -2,26 +2,23 @@
 //!
 //! Split out of `server.rs` as a sibling module file (declared there as
 //! `#[cfg(test)] mod tests;`). All setup routes through a small set of
-//! harness types — [`NoopClient`] / [`MockFeatureProvider`] for the
-//! feature-dispatch tests, and [`CapturingClient`] / [`open_in_tempdir`]
-//! for the include-resolution integration tests that exercise the
-//! `FsLoader` end-to-end against a real `TempDir`.
+//! harness types — [`NoopClient`] for the lightweight router/smoke tests,
+//! and [`CapturingClient`] / [`open_in_tempdir`] for the include-resolution
+//! integration tests that exercise the `FsLoader` end-to-end against a real
+//! `TempDir`.
 
 use super::*;
-use crate::features::semantic_tokens::LexSemanticTokenKind;
+use crate::features::semantic_tokens::{LexSemanticToken, LexSemanticTokenKind};
 use lex_analysis::test_support::sample_source;
-use lex_core::lex::ast::links::LinkType;
+use lex_core::lex::ast::{Position as AstPosition, Range as AstRange};
 use serde::Deserialize;
 use std::fs;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 use tempfile::tempdir;
 use tower_lsp::lsp_types::{
-    CompletionItemKind, DidOpenTextDocumentParams, DocumentFormattingParams, DocumentLinkParams,
-    DocumentRangeFormattingParams, DocumentSymbolParams, FoldingRangeKind, FoldingRangeParams,
-    FormattingOptions, FormattingProperty, GotoDefinitionParams, HoverParams, Position, Range,
-    ReferenceContext, ReferenceParams, SemanticTokensParams, SymbolKind, TextDocumentIdentifier,
-    TextDocumentItem, TextDocumentPositionParams,
+    DidOpenTextDocumentParams, DocumentSymbolParams, FormattingOptions, FormattingProperty,
+    GotoDefinitionParams, HoverParams, Position, Range, SemanticTokensParams,
+    TextDocumentIdentifier, TextDocumentItem, TextDocumentPositionParams,
 };
 use tower_lsp::LanguageServer;
 
@@ -45,148 +42,6 @@ impl crate::trust_prompt::LspTrustRequester for NoopClient {
             decision: "denied".into(),
             reason: Some("test client".into()),
         })
-    }
-}
-
-#[derive(Default)]
-struct MockFeatureProvider {
-    semantic_tokens_called: AtomicUsize,
-    document_symbols_called: AtomicUsize,
-    hover_called: AtomicUsize,
-    folding_called: AtomicUsize,
-    last_hover_position: Mutex<Option<AstPosition>>,
-    definition_called: AtomicUsize,
-    references_called: AtomicUsize,
-    document_links_called: AtomicUsize,
-    last_references_include: Mutex<Option<bool>>,
-    formatting_called: AtomicUsize,
-    range_formatting_called: AtomicUsize,
-    completion_called: AtomicUsize,
-    execute_command_called: AtomicUsize,
-}
-
-impl FeatureProvider for MockFeatureProvider {
-    fn semantic_tokens(&self, _: &Document) -> Vec<LexSemanticToken> {
-        self.semantic_tokens_called.fetch_add(1, Ordering::SeqCst);
-        vec![LexSemanticToken {
-            kind: LexSemanticTokenKind::DocumentTitle,
-            range: AstRange::new(0..5, AstPosition::new(0, 0), AstPosition::new(0, 5)),
-        }]
-    }
-
-    fn document_symbols(&self, _: &Document) -> Vec<LexDocumentSymbol> {
-        self.document_symbols_called.fetch_add(1, Ordering::SeqCst);
-        vec![LexDocumentSymbol {
-            name: "symbol".into(),
-            detail: None,
-            kind: SymbolKind::FILE,
-            range: AstRange::new(0..5, AstPosition::new(0, 0), AstPosition::new(0, 5)),
-            selection_range: AstRange::new(0..5, AstPosition::new(0, 0), AstPosition::new(0, 5)),
-            children: Vec::new(),
-        }]
-    }
-
-    fn folding_ranges(&self, _: &Document) -> Vec<LexFoldingRange> {
-        self.folding_called.fetch_add(1, Ordering::SeqCst);
-        vec![LexFoldingRange {
-            start_line: 0,
-            start_character: Some(0),
-            end_line: 1,
-            end_character: Some(0),
-            kind: Some(FoldingRangeKind::Region),
-        }]
-    }
-
-    fn hover(&self, _: &Document, position: AstPosition) -> Option<HoverResult> {
-        self.hover_called.fetch_add(1, Ordering::SeqCst);
-        *self.last_hover_position.lock().unwrap() = Some(position);
-        Some(HoverResult {
-            range: AstRange::new(0..5, AstPosition::new(0, 0), AstPosition::new(0, 5)),
-            contents: "hover".into(),
-        })
-    }
-
-    fn goto_definition(&self, _: &Document, _: AstPosition) -> Vec<AstRange> {
-        self.definition_called.fetch_add(1, Ordering::SeqCst);
-        vec![AstRange::new(
-            0..5,
-            AstPosition::new(0, 0),
-            AstPosition::new(0, 5),
-        )]
-    }
-
-    fn references(&self, _: &Document, _: AstPosition, include_declaration: bool) -> Vec<AstRange> {
-        self.references_called.fetch_add(1, Ordering::SeqCst);
-        *self.last_references_include.lock().unwrap() = Some(include_declaration);
-        vec![AstRange::new(
-            0..5,
-            AstPosition::new(0, 0),
-            AstPosition::new(0, 5),
-        )]
-    }
-
-    fn document_links(&self, _: &Document) -> Vec<AstDocumentLink> {
-        self.document_links_called.fetch_add(1, Ordering::SeqCst);
-        vec![AstDocumentLink::new(
-            AstRange::new(0..5, AstPosition::new(0, 0), AstPosition::new(0, 5)),
-            "https://example.com".to_string(),
-            LinkType::Url,
-        )]
-    }
-
-    fn format_document(
-        &self,
-        _: &Document,
-        _: &str,
-        _: Option<FormattingRules>,
-    ) -> Vec<TextEditSpan> {
-        self.formatting_called.fetch_add(1, Ordering::SeqCst);
-        vec![TextEditSpan {
-            start: 0,
-            end: 0,
-            new_text: "formatted".into(),
-        }]
-    }
-
-    fn format_range(
-        &self,
-        _: &Document,
-        _: &str,
-        _: FormattingLineRange,
-        _: Option<FormattingRules>,
-    ) -> Vec<TextEditSpan> {
-        self.range_formatting_called.fetch_add(1, Ordering::SeqCst);
-        vec![TextEditSpan {
-            start: 0,
-            end: 0,
-            new_text: "range".into(),
-        }]
-    }
-
-    fn completion(
-        &self,
-        _: &Document,
-        _: AstPosition,
-        _: Option<&str>,
-        _: Option<&CompletionWorkspace>,
-        _: Option<&str>,
-    ) -> Vec<CompletionCandidate> {
-        self.completion_called.fetch_add(1, Ordering::SeqCst);
-        vec![CompletionCandidate {
-            label: "completion".into(),
-            detail: None,
-            kind: CompletionItemKind::TEXT,
-            insert_text: None,
-        }]
-    }
-
-    fn execute_command(&self, command: &str, _: &[Value]) -> Result<Option<Value>> {
-        self.execute_command_called.fetch_add(1, Ordering::SeqCst);
-        if command == "test.command" {
-            Ok(Some(Value::String("executed".into())))
-        } else {
-            Ok(None)
-        }
     }
 }
 
@@ -224,7 +79,7 @@ fn range_for_snippet(snippet: &str) -> AstRange {
     AstRange::new(start..end, start_pos, end_pos)
 }
 
-async fn open_sample_document(server: &LexLanguageServer<NoopClient, MockFeatureProvider>) {
+async fn open_sample_document(server: &LexLanguageServer<NoopClient>) {
     let uri = sample_uri();
     server
         .did_open(DidOpenTextDocumentParams {
@@ -236,6 +91,73 @@ async fn open_sample_document(server: &LexLanguageServer<NoopClient, MockFeature
             },
         })
         .await;
+}
+
+// The router methods are thin: look up the document, call the feature
+// free-function (densely tested in `lex-analysis` / `lex-lsp-core`), convert,
+// return. These smoke tests exercise the wiring + conversion over a real parse
+// of the sample document; per-feature behavior lives in the feature crates.
+
+#[tokio::test]
+async fn semantic_tokens_full_over_sample_returns_tokens() {
+    let server = LexLanguageServer::new(NoopClient);
+    open_sample_document(&server).await;
+
+    let result = server
+        .semantic_tokens_full(SemanticTokensParams {
+            text_document: TextDocumentIdentifier { uri: sample_uri() },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+        })
+        .await
+        .unwrap()
+        .unwrap();
+
+    let data_len = match result {
+        SemanticTokensResult::Tokens(tokens) => tokens.data.len(),
+        SemanticTokensResult::Partial(partial) => partial.data.len(),
+    };
+    assert!(data_len > 0, "sample document should yield semantic tokens");
+}
+
+#[tokio::test]
+async fn document_symbol_over_sample_returns_outline() {
+    let server = LexLanguageServer::new(NoopClient);
+    open_sample_document(&server).await;
+
+    let response = server
+        .document_symbol(DocumentSymbolParams {
+            text_document: TextDocumentIdentifier { uri: sample_uri() },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+        })
+        .await
+        .unwrap()
+        .unwrap();
+
+    match response {
+        DocumentSymbolResponse::Nested(symbols) => assert!(!symbols.is_empty()),
+        _ => panic!("unexpected symbol response"),
+    }
+}
+
+#[tokio::test]
+async fn execute_command_unknown_is_invalid_request() {
+    let server = LexLanguageServer::new(NoopClient);
+
+    // Commands not matched by the router fall through to
+    // `features::commands::execute_command`, whose default arm rejects
+    // unknown commands with `invalid_request`.
+    let err = server
+        .execute_command(ExecuteCommandParams {
+            command: "does.not.exist".into(),
+            arguments: vec![],
+            work_done_progress_params: Default::default(),
+        })
+        .await
+        .unwrap_err();
+
+    assert_eq!(err.code, tower_lsp::jsonrpc::ErrorCode::InvalidRequest);
 }
 
 #[test]
@@ -285,124 +207,6 @@ fn encode_semantic_tokens_splits_multi_line_ranges() {
     assert_eq!(actual_len, expected_len);
 }
 
-#[tokio::test]
-async fn semantic_tokens_call_feature_layer() {
-    let provider = Arc::new(MockFeatureProvider::default());
-    let server = LexLanguageServer::with_features(NoopClient, provider.clone());
-    open_sample_document(&server).await;
-
-    let result = server
-        .semantic_tokens_full(SemanticTokensParams {
-            text_document: TextDocumentIdentifier { uri: sample_uri() },
-            work_done_progress_params: Default::default(),
-            partial_result_params: Default::default(),
-        })
-        .await
-        .unwrap()
-        .unwrap();
-
-    assert_eq!(provider.semantic_tokens_called.load(Ordering::SeqCst), 1);
-    let data_len = match result {
-        SemanticTokensResult::Tokens(tokens) => tokens.data.len(),
-        SemanticTokensResult::Partial(partial) => partial.data.len(),
-    };
-    assert!(data_len > 0);
-}
-
-#[tokio::test]
-async fn document_symbols_call_feature_layer() {
-    let provider = Arc::new(MockFeatureProvider::default());
-    let server = LexLanguageServer::with_features(NoopClient, provider.clone());
-    open_sample_document(&server).await;
-
-    let response = server
-        .document_symbol(DocumentSymbolParams {
-            text_document: TextDocumentIdentifier { uri: sample_uri() },
-            work_done_progress_params: Default::default(),
-            partial_result_params: Default::default(),
-        })
-        .await
-        .unwrap()
-        .unwrap();
-
-    match response {
-        DocumentSymbolResponse::Nested(symbols) => assert!(!symbols.is_empty()),
-        _ => panic!("unexpected symbol response"),
-    }
-    assert_eq!(provider.document_symbols_called.load(Ordering::SeqCst), 1);
-}
-
-#[tokio::test]
-async fn hover_uses_feature_provider_position() {
-    let provider = Arc::new(MockFeatureProvider::default());
-    let server = LexLanguageServer::with_features(NoopClient, provider.clone());
-    open_sample_document(&server).await;
-
-    let hover = server
-        .hover(HoverParams {
-            text_document_position_params: TextDocumentPositionParams {
-                text_document: TextDocumentIdentifier { uri: sample_uri() },
-                position: Position::new(0, 0),
-            },
-            work_done_progress_params: Default::default(),
-        })
-        .await
-        .unwrap()
-        .unwrap();
-
-    assert!(matches!(hover.contents, HoverContents::Markup(_)));
-    assert_eq!(provider.hover_called.load(Ordering::SeqCst), 1);
-    let stored = provider.last_hover_position.lock().unwrap().unwrap();
-    assert_eq!(stored.line, 0);
-    assert_eq!(stored.column, 0);
-}
-
-#[tokio::test]
-async fn folding_range_uses_feature_provider() {
-    let provider = Arc::new(MockFeatureProvider::default());
-    let server = LexLanguageServer::with_features(NoopClient, provider.clone());
-    open_sample_document(&server).await;
-
-    let ranges = server
-        .folding_range(FoldingRangeParams {
-            text_document: TextDocumentIdentifier { uri: sample_uri() },
-            work_done_progress_params: Default::default(),
-            partial_result_params: Default::default(),
-        })
-        .await
-        .unwrap()
-        .unwrap();
-
-    assert_eq!(provider.folding_called.load(Ordering::SeqCst), 1);
-    assert_eq!(ranges.len(), 1);
-}
-
-#[tokio::test]
-async fn goto_definition_uses_feature_provider() {
-    let provider = Arc::new(MockFeatureProvider::default());
-    let server = LexLanguageServer::with_features(NoopClient, provider.clone());
-    open_sample_document(&server).await;
-
-    let response = server
-        .goto_definition(GotoDefinitionParams {
-            text_document_position_params: TextDocumentPositionParams {
-                text_document: TextDocumentIdentifier { uri: sample_uri() },
-                position: Position::new(0, 0),
-            },
-            work_done_progress_params: Default::default(),
-            partial_result_params: Default::default(),
-        })
-        .await
-        .unwrap()
-        .unwrap();
-
-    assert_eq!(provider.definition_called.load(Ordering::SeqCst), 1);
-    match response {
-        GotoDefinitionResponse::Array(locations) => assert_eq!(locations.len(), 1),
-        _ => panic!("unexpected goto definition response"),
-    }
-}
-
 #[derive(Deserialize)]
 struct SnippetResponse {
     text: String,
@@ -412,8 +216,7 @@ struct SnippetResponse {
 
 #[tokio::test]
 async fn execute_insert_commands() {
-    let provider = Arc::new(MockFeatureProvider::default());
-    let server = LexLanguageServer::with_features(NoopClient, provider.clone());
+    let server = LexLanguageServer::new(NoopClient);
     open_sample_document(&server).await;
 
     let temp_dir = tempdir().unwrap();
@@ -455,8 +258,7 @@ async fn execute_insert_commands() {
 
 #[tokio::test]
 async fn execute_annotation_navigation_commands() {
-    let provider = Arc::new(MockFeatureProvider::default());
-    let server = LexLanguageServer::with_features(NoopClient, provider.clone());
+    let server = LexLanguageServer::new(NoopClient);
     let uri = Url::parse("file:///annotations.lex").unwrap();
     let text = ":: note ::\n    First\n::\n\n:: note ::\n    Second\n::\n";
     server
@@ -522,109 +324,8 @@ async fn execute_annotation_navigation_commands() {
 }
 
 #[tokio::test]
-async fn references_use_feature_provider() {
-    let provider = Arc::new(MockFeatureProvider::default());
-    let server = LexLanguageServer::with_features(NoopClient, provider.clone());
-    open_sample_document(&server).await;
-
-    let result = server
-        .references(ReferenceParams {
-            text_document_position: TextDocumentPositionParams {
-                text_document: TextDocumentIdentifier { uri: sample_uri() },
-                position: Position::new(0, 0),
-            },
-            context: ReferenceContext {
-                include_declaration: true,
-            },
-            work_done_progress_params: Default::default(),
-            partial_result_params: Default::default(),
-        })
-        .await
-        .unwrap()
-        .unwrap();
-
-    assert_eq!(provider.references_called.load(Ordering::SeqCst), 1);
-    assert_eq!(result.len(), 1);
-    assert_eq!(
-        *provider.last_references_include.lock().unwrap(),
-        Some(true)
-    );
-}
-
-#[tokio::test]
-async fn document_links_use_feature_provider() {
-    let provider = Arc::new(MockFeatureProvider::default());
-    let server = LexLanguageServer::with_features(NoopClient, provider.clone());
-    open_sample_document(&server).await;
-
-    let links = server
-        .document_link(DocumentLinkParams {
-            text_document: TextDocumentIdentifier { uri: sample_uri() },
-            work_done_progress_params: Default::default(),
-            partial_result_params: Default::default(),
-        })
-        .await
-        .unwrap()
-        .unwrap();
-
-    assert_eq!(provider.document_links_called.load(Ordering::SeqCst), 1);
-    assert_eq!(links.len(), 1);
-    assert_eq!(
-        links[0].target.as_ref().map(|url| url.as_str()),
-        Some("https://example.com/")
-    );
-}
-
-#[tokio::test]
-async fn formatting_uses_feature_provider() {
-    let provider = Arc::new(MockFeatureProvider::default());
-    let server = LexLanguageServer::with_features(NoopClient, provider.clone());
-    open_sample_document(&server).await;
-
-    let edits = server
-        .formatting(DocumentFormattingParams {
-            text_document: TextDocumentIdentifier { uri: sample_uri() },
-            options: FormattingOptions::default(),
-            work_done_progress_params: Default::default(),
-        })
-        .await
-        .unwrap()
-        .unwrap();
-
-    assert_eq!(provider.formatting_called.load(Ordering::SeqCst), 1);
-    assert_eq!(edits.len(), 1);
-    assert_eq!(edits[0].new_text, "formatted");
-}
-
-#[tokio::test]
-async fn range_formatting_uses_feature_provider() {
-    let provider = Arc::new(MockFeatureProvider::default());
-    let server = LexLanguageServer::with_features(NoopClient, provider.clone());
-    open_sample_document(&server).await;
-
-    let edits = server
-        .range_formatting(DocumentRangeFormattingParams {
-            text_document: TextDocumentIdentifier { uri: sample_uri() },
-            range: Range {
-                start: Position::new(0, 0),
-                end: Position::new(0, 0),
-            },
-            options: FormattingOptions::default(),
-            work_done_progress_params: Default::default(),
-        })
-        .await
-        .unwrap()
-        .unwrap();
-
-    assert_eq!(provider.range_formatting_called.load(Ordering::SeqCst), 1);
-    assert_eq!(edits.len(), 1);
-    assert_eq!(edits[0].new_text, "range");
-}
-
-#[tokio::test]
 async fn semantic_tokens_returns_none_when_document_missing() {
-    let provider = Arc::new(MockFeatureProvider::default());
-    let server = LexLanguageServer::with_features(NoopClient, provider);
+    let server = LexLanguageServer::new(NoopClient);
 
     let result = server
         .semantic_tokens_full(SemanticTokensParams {
@@ -639,28 +340,8 @@ async fn semantic_tokens_returns_none_when_document_missing() {
 }
 
 #[tokio::test]
-async fn execute_command_uses_feature_provider() {
-    let provider = Arc::new(MockFeatureProvider::default());
-    let server = LexLanguageServer::with_features(NoopClient, provider.clone());
-
-    let result = server
-        .execute_command(ExecuteCommandParams {
-            command: "test.command".into(),
-            arguments: vec![],
-            work_done_progress_params: Default::default(),
-        })
-        .await
-        .unwrap()
-        .unwrap();
-
-    assert_eq!(provider.execute_command_called.load(Ordering::SeqCst), 1);
-    assert_eq!(result, Value::String("executed".into()));
-}
-
-#[tokio::test]
 async fn hover_returns_none_without_document_entry() {
-    let provider = Arc::new(MockFeatureProvider::default());
-    let server = LexLanguageServer::with_features(NoopClient, provider);
+    let server = LexLanguageServer::new(NoopClient);
 
     let hover = server
         .hover(HoverParams {
@@ -734,8 +415,7 @@ fn apply_formatting_overrides_applies_lex_properties() {
 
 #[tokio::test]
 async fn did_change_workspace_folders_adds_roots() {
-    let provider = Arc::new(MockFeatureProvider::default());
-    let server = LexLanguageServer::with_features(NoopClient, provider);
+    let server = LexLanguageServer::new(NoopClient);
 
     // Start with one root via initialize
     server
@@ -768,8 +448,7 @@ async fn did_change_workspace_folders_adds_roots() {
 
 #[tokio::test]
 async fn did_change_workspace_folders_removes_roots() {
-    let provider = Arc::new(MockFeatureProvider::default());
-    let server = LexLanguageServer::with_features(NoopClient, provider);
+    let server = LexLanguageServer::new(NoopClient);
 
     server
         .initialize(InitializeParams {
@@ -802,8 +481,7 @@ async fn did_change_workspace_folders_removes_roots() {
 
 #[tokio::test]
 async fn did_change_workspace_folders_does_not_duplicate() {
-    let provider = Arc::new(MockFeatureProvider::default());
-    let server = LexLanguageServer::with_features(NoopClient, provider);
+    let server = LexLanguageServer::new(NoopClient);
 
     server
         .initialize(InitializeParams {
@@ -831,8 +509,7 @@ async fn did_change_workspace_folders_does_not_duplicate() {
 
 #[tokio::test]
 async fn initialize_advertises_workspace_folder_support() {
-    let provider = Arc::new(MockFeatureProvider::default());
-    let server = LexLanguageServer::with_features(NoopClient, provider);
+    let server = LexLanguageServer::new(NoopClient);
 
     let result = server
         .initialize(InitializeParams::default())
@@ -909,7 +586,7 @@ async fn open_in_tempdir(
     files: &[(&str, &str)],
     entry: &str,
 ) -> (
-    LexLanguageServer<CapturingClient, DefaultFeatureProvider>,
+    LexLanguageServer<CapturingClient>,
     CapturingClient,
     Url,
     tempfile::TempDir,
@@ -927,8 +604,7 @@ async fn open_in_tempdir(
     let uri = Url::from_file_path(&entry_path).expect("file uri");
 
     let client = CapturingClient::default();
-    let server =
-        LexLanguageServer::with_features(client.clone(), Arc::new(DefaultFeatureProvider::new()));
+    let server = LexLanguageServer::new(client.clone());
 
     server
         .did_open(DidOpenTextDocumentParams {
@@ -1367,8 +1043,7 @@ async fn extract_to_include_surfaces_validation_errors_as_invalid_params() {
 
 #[tokio::test]
 async fn extract_to_include_capability_advertises_command() {
-    let provider = Arc::new(MockFeatureProvider::default());
-    let server = LexLanguageServer::with_features(NoopClient, provider);
+    let server = LexLanguageServer::new(NoopClient);
     let init = server
         .initialize(InitializeParams::default())
         .await
@@ -1415,8 +1090,7 @@ async fn includes_untitled_uri_skips_resolution_without_error() {
     // resolution. The server must handle these gracefully — no
     // panics, no spurious include diagnostics.
     let client = CapturingClient::default();
-    let server =
-        LexLanguageServer::with_features(client.clone(), Arc::new(DefaultFeatureProvider::new()));
+    let server = LexLanguageServer::new(client.clone());
     let uri: Url = "untitled:Untitled-1".parse().unwrap();
     server
         .did_open(DidOpenTextDocumentParams {
@@ -1450,8 +1124,7 @@ async fn includes_untitled_uri_skips_resolution_without_error() {
 
 #[tokio::test]
 async fn initialize_advertises_prepare_paste_capability() {
-    let provider = Arc::new(MockFeatureProvider::default());
-    let server = LexLanguageServer::with_features(NoopClient, provider);
+    let server = LexLanguageServer::new(NoopClient);
 
     let result = server
         .initialize(InitializeParams::default())
@@ -1467,8 +1140,7 @@ async fn initialize_advertises_prepare_paste_capability() {
 
 #[tokio::test]
 async fn prepare_paste_reanchors_against_open_buffer() {
-    let provider = Arc::new(MockFeatureProvider::default());
-    let server = LexLanguageServer::with_features(NoopClient, provider);
+    let server = LexLanguageServer::new(NoopClient);
     let uri = Url::from_file_path("/tmp/paste.lex").unwrap();
 
     server
@@ -1502,8 +1174,7 @@ async fn prepare_paste_reanchors_against_open_buffer() {
 
 #[tokio::test]
 async fn prepare_paste_passes_through_verbatim() {
-    let provider = Arc::new(MockFeatureProvider::default());
-    let server = LexLanguageServer::with_features(NoopClient, provider);
+    let server = LexLanguageServer::new(NoopClient);
     let uri = Url::from_file_path("/tmp/verb.lex").unwrap();
 
     server
@@ -1536,8 +1207,7 @@ async fn prepare_paste_passes_through_verbatim() {
 
 #[tokio::test]
 async fn prepare_paste_unopened_buffer_echoes_clipboard() {
-    let provider = Arc::new(MockFeatureProvider::default());
-    let server = LexLanguageServer::with_features(NoopClient, provider);
+    let server = LexLanguageServer::new(NoopClient);
     let uri = Url::from_file_path("/tmp/never-opened.lex").unwrap();
 
     let pasted = "anything\n    here\n".to_string();

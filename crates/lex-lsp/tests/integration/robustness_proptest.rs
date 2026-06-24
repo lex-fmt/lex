@@ -1,8 +1,7 @@
-use lexd_lsp::server::{DefaultFeatureProvider, LspClient};
+use lexd_lsp::server::LspClient;
 use lexd_lsp::trust_prompt::{LspTrustRequester, TrustRequestParams, TrustResponse};
 use lexd_lsp::LexLanguageServer;
 use proptest::prelude::*;
-use std::sync::Arc;
 use tower_lsp::lsp_types::{
     DidOpenTextDocumentParams, ExecuteCommandParams, TextDocumentItem, Url,
 };
@@ -46,8 +45,7 @@ proptest! {
         let runtime = tokio::runtime::Runtime::new().unwrap();
         runtime.block_on(async {
             let client = MockClient;
-            let features = Arc::new(DefaultFeatureProvider::new());
-            let server = LexLanguageServer::with_features(client, features);
+            let server = LexLanguageServer::new(client);
 
             // Try to parse args as JSON, if valid, use them, otherwise use empty array
             let arguments = serde_json::from_str(&args_json).unwrap_or_else(|_| vec![]);
@@ -71,8 +69,7 @@ proptest! {
         let runtime = tokio::runtime::Runtime::new().unwrap();
         runtime.block_on(async {
             let client = MockClient;
-            let features = Arc::new(DefaultFeatureProvider::new());
-            let server = LexLanguageServer::with_features(client, features);
+            let server = LexLanguageServer::new(client);
             let uri = Url::parse("file:///test.lex").unwrap();
 
             let params = DidOpenTextDocumentParams {
