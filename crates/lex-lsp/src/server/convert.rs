@@ -394,22 +394,14 @@ pub(crate) fn slice_text_by_range(text: &str, range: Range) -> Option<String> {
         if i < start_line || i > end_line {
             continue;
         }
-        let line_bytes = line.as_bytes();
         let from = if i == start_line { start_col } else { 0 };
-        let to = if i == end_line {
-            end_col
-        } else {
-            line_bytes.len()
-        };
-        if from > line_bytes.len() || to > line_bytes.len() {
-            return None;
-        }
-        // Reject ranges that cut a UTF-8 character in half rather than
-        // returning a string with replacement characters.
-        if !line.is_char_boundary(from) || !line.is_char_boundary(to) {
-            return None;
-        }
-        out.push_str(&line[from..to]);
+        let to = if i == end_line { end_col } else { line.len() };
+        // `str::get` returns `None` for out-of-bounds indices *and* for
+        // offsets that fall inside a multi-byte char, so it folds the
+        // bounds check and the UTF-8-boundary check into one — and never
+        // panics (unlike `&line[from..to]`).
+        let slice = line.get(from..to)?;
+        out.push_str(slice);
     }
     Some(out)
 }
