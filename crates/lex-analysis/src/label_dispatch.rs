@@ -806,4 +806,46 @@ mod tests {
             "document-level annotation should match attaches_to: [document], got: {diags:?}"
         );
     }
+
+    /// Regression for lex#777: a native `Table` carrying the
+    /// organizational-hint annotation `:: table align=… header=… ::`
+    /// must NOT produce a `schema.bad-attachment` diagnostic. There is
+    /// one table type (the native `Table` AST node); the parser always
+    /// attaches this annotation to it (`HostNodeKind::Table`). The
+    /// `lex.tabular.table` schema now declares `attaches_to:
+    /// ["table", "verbatim"]`, so the native form validates.
+    #[test]
+    fn native_table_hint_does_not_bad_attach() {
+        use lex_core::lex::builtins::tabular::lex_tabular_table_schema;
+
+        // No-op handler — we only exercise schema pre-validation
+        // (attachment + param types), not handler dispatch.
+        struct NoopHandler;
+        impl LexHandler for NoopHandler {}
+
+        let registry = Registry::new();
+        registry
+            .register_namespace(
+                "lex",
+                vec![lex_tabular_table_schema()],
+                Box::new(NoopHandler),
+            )
+            .unwrap();
+
+        // Native table: subject + indented pipe rows. The hint
+        // annotation lives in the table's block and attaches to the
+        // native `Table` node.
+        let doc = parse(
+            "Scores:\n    | Name | Score |\n    | Alice | 95 |\n\n    :: table align=lr header=1 ::\n",
+        );
+        let mut diags = Vec::new();
+        dispatch_labels(&doc, &registry, &mut diags);
+        assert!(
+            !diags.iter().any(|d| matches!(
+                d.kind,
+                DiagnosticKind::SchemaValidation(SchemaValidationKind::BadAttachment)
+            )),
+            "native-table hint must not bad-attach (lex#777), got: {diags:?}"
+        );
+    }
 }

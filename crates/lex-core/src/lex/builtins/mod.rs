@@ -678,7 +678,10 @@ mod tests {
             .schema_for(tabular::LEX_TABULAR_TABLE)
             .expect("lex.tabular.table schema must be registered");
         assert!(schema.verbatim_label);
-        assert_eq!(schema.attaches_to, vec!["verbatim".to_string()]);
+        // Native organizational-hint form attaches to `table`; the
+        // historical verbatim form attaches to `verbatim`. Both valid.
+        assert!(schema.attaches_to.contains(&"table".to_string()));
+        assert!(schema.attaches_to.contains(&"verbatim".to_string()));
     }
 
     #[test]
