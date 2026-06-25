@@ -11,7 +11,9 @@
 //! "verbatim hydration" responsibility doesn't share its hook with
 //! AST-substitution (the `lex.include` lifecycle).
 
-use lex_extension::schema::{BodyKind, BodyPresence, BodyShape, Capabilities, HookSet, Schema};
+use lex_extension::schema::{
+    BodyKind, BodyPresence, BodyShape, Capabilities, HookSet, ParamSpec, ParamType, Schema,
+};
 use lex_extension::wire::{Position, Range, WireInline, WireNode, WireRow, WireTableCell};
 use std::collections::BTreeMap;
 
@@ -144,13 +146,45 @@ pub fn lex_tabular_table_schema() -> Schema {
              (#615 unified registry surface)."
                 .into(),
         ),
-        params: BTreeMap::new(),
-        attaches_to: vec!["verbatim".into()],
+        // Organizational-hint params carried by the native-table marker
+        // form (`:: table align=lr header=1 ::`). Optional — a bare
+        // `:: table ::` (or the historical verbatim form) is still valid.
+        // Declaring them gives type-checking + completion instead of
+        // silent pass-through.
+        params: BTreeMap::from([
+            (
+                "align".to_string(),
+                ParamSpec {
+                    ty: ParamType::String,
+                    required: false,
+                    default: None,
+                    description: Some(
+                        "Per-column alignment hint, one char per column (`l`/`c`/`r`).".into(),
+                    ),
+                    pattern: None,
+                    values: Vec::new(),
+                },
+            ),
+            (
+                "header".to_string(),
+                ParamSpec {
+                    ty: ParamType::Int,
+                    required: false,
+                    default: None,
+                    description: Some("Number of leading header rows.".into()),
+                    pattern: None,
+                    values: Vec::new(),
+                },
+            ),
+        ]),
+        attaches_to: vec!["table".into(), "verbatim".into()],
         body: BodyShape {
             kind: BodyKind::Text,
-            presence: BodyPresence::Required,
+            presence: BodyPresence::Optional,
             description: Some(
-                "Pipe-table source: header row, alignment row, then one row per body line.".into(),
+                "Pipe-table source: header row, alignment row, then one row per body line. \
+                 Absent for the native-table marker form (`:: table align=… ::`)."
+                    .into(),
             ),
         },
         verbatim_label: true,
@@ -181,9 +215,15 @@ mod tests {
             schema.verbatim_label,
             "tabular.table must be a verbatim label"
         );
-        assert_eq!(schema.attaches_to, vec!["verbatim".to_string()]);
+        // The native organizational-hint form attaches to a `table`;
+        // the historical verbatim form (still emitted by babel's
+        // `to_lex`) attaches to a `verbatim`. Assert the exact set so an
+        // accidental extra attachment target is caught as a regression.
+        assert_eq!(schema.attaches_to, ["table", "verbatim"].map(String::from));
         assert_eq!(schema.body.kind, BodyKind::Text);
-        assert_eq!(schema.body.presence, BodyPresence::Required);
+        // The native marker form (`:: table align=… ::`) has no body,
+        // so presence is optional.
+        assert_eq!(schema.body.presence, BodyPresence::Optional);
     }
 
     #[test]

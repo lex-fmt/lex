@@ -1,0 +1,1 @@
+- Fix lexd check false-positive schema.bad-attachment on the native table ':: table align=… header=… ::' hint — lex.tabular.table now attaches to table (plus the historical verbatim form), body is optional, and align/header are type-checked params (lex#777)
