@@ -1,6 +1,6 @@
 [package]
 name = "lexd"
-version = "0.18.3"
+version = "0.18.4"
 edition = "2021"
 authors = ["lex contributors"]
 description = "Command-line interface for the lex format"

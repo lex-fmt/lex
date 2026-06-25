@@ -1,1 +1,0 @@
-- Notify editor extensions on release so the lex->editors cascade leg fires (release#804)

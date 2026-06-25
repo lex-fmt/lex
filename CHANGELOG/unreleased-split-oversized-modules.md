@@ -1,1 +1,0 @@
-- Split 12 oversized source files (server.rs, main.rs, includes.rs, diagnostics.rs, serializers, escape, anchoring, etc.) into cohesive submodules — internal refactor, no behavior change

@@ -4,6 +4,13 @@
 
 ## Unreleased
 
+## 0.18.4 - 2026-06-25
+
+- Migrate the editor cascade fan-out to rust-cli.yml's notify-downstreams input (drop the hand-rolled job; needs release@v3.8.0+)
+- Notify editor extensions on release so the lex->editors cascade leg fires (release#804)
+- Split 12 oversized source files (server.rs, main.rs, includes.rs, diagnostics.rs, serializers, escape, anchoring, etc.) into cohesive submodules — internal refactor, no behavior change
+- Fix lexd check false-positive schema.bad-attachment on the native table ':: table align=… header=… ::' hint — lex.tabular.table now attaches to table (plus the historical verbatim form), body is optional, and align/header are type-checked params (lex#777)
+
 ## 0.18.3 - 2026-06-20
 
 - smart paste: compensate for editor auto-indent on fresh-line pastes so the anchor is not duplicated
