@@ -146,14 +146,13 @@ pub fn lex_tabular_table_schema() -> Schema {
              (#615 unified registry surface)."
                 .into(),
         ),
-        params: {
-            // Organizational-hint params carried by the native-table
-            // marker form (`:: table align=lr header=1 ::`). Optional —
-            // a bare `:: table ::` (or the historical verbatim form) is
-            // still valid. Declaring them gives type-checking +
-            // completion instead of silent pass-through.
-            let mut params = BTreeMap::new();
-            params.insert(
+        // Organizational-hint params carried by the native-table marker
+        // form (`:: table align=lr header=1 ::`). Optional — a bare
+        // `:: table ::` (or the historical verbatim form) is still valid.
+        // Declaring them gives type-checking + completion instead of
+        // silent pass-through.
+        params: BTreeMap::from([
+            (
                 "align".to_string(),
                 ParamSpec {
                     ty: ParamType::String,
@@ -165,8 +164,8 @@ pub fn lex_tabular_table_schema() -> Schema {
                     pattern: None,
                     values: Vec::new(),
                 },
-            );
-            params.insert(
+            ),
+            (
                 "header".to_string(),
                 ParamSpec {
                     ty: ParamType::Int,
@@ -176,9 +175,8 @@ pub fn lex_tabular_table_schema() -> Schema {
                     pattern: None,
                     values: Vec::new(),
                 },
-            );
-            params
-        },
+            ),
+        ]),
         attaches_to: vec!["table".into(), "verbatim".into()],
         body: BodyShape {
             kind: BodyKind::Text,
@@ -219,9 +217,9 @@ mod tests {
         );
         // The native organizational-hint form attaches to a `table`;
         // the historical verbatim form (still emitted by babel's
-        // `to_lex`) attaches to a `verbatim`. Both must be accepted.
-        assert!(schema.attaches_to.contains(&"table".to_string()));
-        assert!(schema.attaches_to.contains(&"verbatim".to_string()));
+        // `to_lex`) attaches to a `verbatim`. Assert the exact set so an
+        // accidental extra attachment target is caught as a regression.
+        assert_eq!(schema.attaches_to, ["table", "verbatim"].map(String::from));
         assert_eq!(schema.body.kind, BodyKind::Text);
         // The native marker form (`:: table align=… ::`) has no body,
         // so presence is optional.

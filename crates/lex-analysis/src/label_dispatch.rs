@@ -840,12 +840,18 @@ mod tests {
         );
         let mut diags = Vec::new();
         dispatch_labels(&doc, &registry, &mut diags);
+        // Assert NO schema-validation diagnostic of any kind: the fix
+        // covers attachment (BadAttachment), the now-Optional body
+        // (BodyShapeMismatch), and the declared `align`/`header` params
+        // (MissingParam / ParamTypeMismatch). A narrower BadAttachment-only
+        // check would pass even if the body/param expectations regressed.
+        let schema_diags: Vec<_> = diags
+            .iter()
+            .filter(|d| matches!(d.kind, DiagnosticKind::SchemaValidation(_)))
+            .collect();
         assert!(
-            !diags.iter().any(|d| matches!(
-                d.kind,
-                DiagnosticKind::SchemaValidation(SchemaValidationKind::BadAttachment)
-            )),
-            "native-table hint must not bad-attach (lex#777), got: {diags:?}"
+            schema_diags.is_empty(),
+            "native-table hint must not raise any schema-validation diagnostic (lex#777), got: {schema_diags:?}"
         );
     }
 }
