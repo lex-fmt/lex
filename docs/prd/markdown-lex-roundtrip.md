@@ -44,10 +44,10 @@ Set), and within that vocabulary it is exact.
 3. As an author, I want that title to survive re-parsing (a blank line follows
    it), so that converting and re-opening does not silently merge the title into
    the first paragraph.
-4. As an author of a Markdown document with no leading heading, I want my first
-   paragraph to stay a body paragraph and not be promoted into the document
-   title, so that a paragraph is never turned into a heading on the way back to
-   Markdown.
+4. As an author of a Markdown document with no leading heading, I want the
+   converted Lex to record that the document has no title (via `:: doc.untitled ::`),
+   so that my first paragraph stays a body paragraph and is never turned into a
+   heading on the way back to Markdown.
 5. As an author, I want an unordered list to convert to a valid Lex list whose
    items round-trip, so that my list is not flattened into a bare marker plus
    orphaned text.
@@ -120,25 +120,32 @@ Set), and within that vocabulary it is exact.
   separator (the title→first-block cell of the matrix), so an `# H1`-led
   Markdown document round-trips with its title intact.
 
-- **Title escape for title-less documents.** When the document has no title and
-  its first block is a title-steal-able single-line paragraph, the serializer
-  emits a leading blank line. This suppresses the grammar's `<document-title>`
-  rule (which requires the *first* non-annotation line), keeping the paragraph in
-  the body. This is spec-valid Lex and changes **no grammar or lexer rule**; the
-  title-steal rule in `grammar-core.lex` is intentional and untouched.
+- **Document title model (ADR-0002).** The title is the first content element
+  when it is a paragraph (one line, or two lines when the first ends with a colon
+  — title + subtitle); leading blank lines are irrelevant. A titled-format source
+  (Markdown) that has **no** title round-trips via an explicit **no-title marker**
+  `:: doc.untitled ::` — a registered `doc.*` builtin the **parser** honors to
+  suppress title promotion. The Markdown Reader emits it for a heading-less
+  source; the parser and serializer both respect it. This replaces the earlier
+  "leading-blank title escape" idea (a whitespace trick that `lexd format` would
+  strip). See ADR-0002.
 
 - **Delete the band-aids.** The verbatim (lex#505) and annotation (lex#682)
   special-case blank emitters are removed; the general separation rule subsumes
   them.
 
-- **No change to lex-core.** The parser, lexer, and grammar spec are unchanged.
-  The fix lives entirely in the babel Lex serializer.
+- **Scope note on lex-core.** The block-separation fix lives entirely in the babel
+  Lex serializer (no lex-core change). The title model (ADR-0002) *does* change
+  lex-core — the parser drops leading-blank title suppression and honors the new
+  `doc.untitled` builtin — and is tracked as its own slice.
 
-- **Out-of-band formatter follow-up.** `lexd format` currently strips a leading
-  blank and re-promotes a title-less document's first line to a title. That is a
-  formatter-normalization concern in a different layer; it is filed as a separate
-  follow-up and is **not** part of this work. `convert` faithfulness does not
-  depend on it.
+- **Formatter soundness (resolved by ADR-0002).** An earlier plan carried a
+  concern that `lexd format` strips a leading blank and re-promotes a title-less
+  document's first line to a title. Under the settled title model that concern
+  dissolves: leading blanks no longer carry title meaning (so stripping them is
+  meaning-preserving), and "no title" is expressed by `:: doc.untitled ::`, which
+  the formatter preserves as real content. No separate formatter follow-up is
+  needed.
 
 ## Testing Decisions
 
@@ -193,9 +200,11 @@ Set), and within that vocabulary it is exact.
 
 ## Out of Scope
 
-- Any change to the lex-core parser, lexer, or grammar specification.
-- The `lexd format` leading-blank / title re-promotion behavior (separate
-  formatter-layer follow-up).
+- Any lex-core change *beyond* the title model (ADR-0002): the block-separation
+  fix touches only the babel serializer. The only sanctioned lex-core changes here
+  are the title-rule simplification and the `doc.untitled` builtin from ADR-0002.
+- Session-title hoisting (the `document-05` fixture's aspiration) — tracked
+  separately, not part of this work.
 - Perfect preservation of blank-line *counts* — collapsing a run of blank lines
   to a single structural separator is Declared Lossy and accepted.
 - Round-tripping Lex-only constructs that Markdown cannot represent: annotations
@@ -218,8 +227,9 @@ Set), and within that vocabulary it is exact.
   annotation lex#682, and the title-boundary lex#687) were the same bug patched
   one block/boundary at a time.
 - The vocabulary for this area (Faithfulness, Skeleton, Block Separation,
-  BlankLineGroup, Document Title, Title escape, Equivalence Set, Declared Lossy)
-  is defined in `CONTEXT.md`.
+  BlankLineGroup, Document Title, No-title marker, Equivalence Set, Declared
+  Lossy) is defined in `CONTEXT.md`.
 - The architectural choice (structural separation in the serializer vs. readers
   synthesizing `BlankLineGroup`s) and its rejected alternative are recorded in
-  ADR-0001.
+  ADR-0001. The document title model (first content line is the title;
+  `:: doc.untitled ::` opts out) is recorded in ADR-0002.

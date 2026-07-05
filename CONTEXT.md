@@ -71,27 +71,27 @@ wrong. (This is the systemic defect under investigation.)
 
 **Document Title**:
 The optional title of a Lex document, stored in `Document.title`
-(`Option<DocumentTitle>`; absent = `None`), not a body Block. Per
-`grammar-core.lex`: `<document-title> = <title-line> <subtitle-line>? <blank-line>`
-— the **first non-annotation line** at document start (after any document-level
-metadata/annotations, anchored on the synthetic `DocumentStart`), optionally
-followed by a subtitle line (when the title line ends with a colon and a
-non-indented second line precedes the blank), then a blank line, with **no
-indented content** after the blank (indented content would make it a Session
-instead). Anything that breaks this shape — a leading blank line, a multi-line
-first block, indented following content — means no title, and the first block
-stays in the body. Markdown has no distinct title concept; the Markdown Reader
-promotes a leading `# H1` to the Document Title.
+(`Option<DocumentTitle>`; absent = `None`), not a body Block. Settled model
+(ADR-0002): the title is the **first content element when it is a paragraph** —
+one line, or two lines when the first line ends with a colon (title + subtitle;
+the colon is structural and stripped). Leading blank lines are irrelevant. If the
+first content element is anything else (Session, List, Definition, Verbatim,
+Table, Annotation), there is **no title** and the document starts with that
+element. A
+multi-line first paragraph _without_ a leading-line colon is a paragraph, not a
+title — the colon is the explicit signal that distinguishes a two-line title from
+a two-line paragraph. Markdown has no distinct title concept; the Markdown Reader
+maps a leading `# H1` to the Document Title.
 
-**Title escape**:
-A leading blank line the Lex Serializer emits when the document has no title
-(`Document.title` is `None` — the field is `Option<DocumentTitle>`) and the first
-Block would otherwise satisfy the **Document Title** shape (a first non-annotation
-line the parser would read as the title). The leading blank breaks that shape, so
-the grammar's title rule can't match, keeping the Block in the body. Spec-sanctioned — it changes no grammar; it produces
-valid Lex the existing parser reads as title-less. Note: `lexd format`'s blank
-normalization currently strips it and re-promotes the title (a formatter-layer
-concern, tracked separately, not this work).
+**No-title marker** (`:: doc.untitled ::`):
+A registered `doc.*` builtin annotation that explicitly declares a document has
+no title. Honored by the **parser** (not just babel): when present among the
+leading document-level annotations, it suppresses title promotion so the first
+paragraph stays in the body. It is how a Reader represents a titled-format source
+(e.g. Markdown with no leading heading) whose missing title must round-trip
+faithfully. Replaces the rejected "leading-blank title escape" — it survives
+`lexd format` (it is real content, not strippable whitespace) and is
+discoverable. See ADR-0002.
 
 ## Flagged ambiguities
 
@@ -122,9 +122,10 @@ foreign round-trip additionally depends on the Reader.
 > **Dev:** And the lost title on `# H1` docs?
 >
 > **Expert:** Same rule at the title boundary — a **Document Title** needs a blank
-> after it. The only subtlety is a **title-less** doc: Lex's title rule steals a
-> lone first line, so the serializer emits a **Title escape** (a leading blank).
-> That's spec-valid — it changes no grammar.
+> after it. And the model is settled now (ADR-0002): the first content line _is_
+> the title if it's a paragraph. A Markdown doc with no heading genuinely has no
+> title, so the Reader writes an explicit **No-title marker** (`:: doc.untitled ::`)
+> that the parser honors — no whitespace tricks.
 >
 > **Dev:** Is any of this "lossy"?
 >
