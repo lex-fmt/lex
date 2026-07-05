@@ -418,10 +418,12 @@ fn test_document_untitled_marker_rejected_today() {
         "../../comms/specs/elements/document.docs/document-06-title-untitled.lex",
     )
     .expect("document-06 spec file should exist");
-    let result = STRING_TO_AST.run(lex_src.to_string());
+    let err = STRING_TO_AST
+        .run(lex_src.to_string())
+        .expect_err("doc.untitled is rejected by NormalizeLabels until slice #783");
     assert!(
-        result.is_err(),
-        "doc.untitled is rejected by NormalizeLabels until slice #783"
+        err.to_string().contains("uses the reserved `doc.*` prefix"),
+        "expected the NormalizeLabels reserved doc.* rejection, got: {err}"
     );
 }
 

@@ -173,7 +173,11 @@ impl LexSerializer {
 
     /// Close the current sibling scope. Must pair with `enter_sibling_scope`.
     fn leave_sibling_scope(&mut self) {
-        self.sibling_levels.pop();
+        let popped = self.sibling_levels.pop();
+        debug_assert!(
+            popped.is_some(),
+            "leave_sibling_scope without a matching enter_sibling_scope"
+        );
     }
 
     /// Emit the structural separation the grammar requires before a sibling
