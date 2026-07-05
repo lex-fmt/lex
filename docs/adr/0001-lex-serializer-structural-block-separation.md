@@ -6,7 +6,7 @@ accepted
 
 ## Context
 
-The Lex Serializer (`lex-babel/src/formats/lex/serializer.rs`) turns a Lex AST
+The Lex Serializer (`crates/lex-babel/src/formats/lex/serializer.rs`) turns a Lex AST
 into Lex text. Blank lines between sibling blocks are load-bearing in Lex: two
 adjacent text lines with no blank between them parse as **one** two-line
 Paragraph, while the same lines with a blank between them parse as **two**
@@ -40,7 +40,8 @@ byte-identical to before** — zero regression — while Reader-built ASTs final
 get their separators.
 
 The document-title blank (a title must be followed by a blank or it merges into
-the first body block) and the title-escape for title-less documents (a leading
+the first body block — the same boundary a prior lex#687 patch addressed
+point-wise) and the title-escape for title-less documents (a leading
 blank suppresses Lex's title-steal rule — `<document-title>` requires the *first*
 line) are the same structural rule applied to the title boundary. **No grammar
 or lexer change:** the title-steal rule in `grammar-core.lex` is intentional and

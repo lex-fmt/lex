@@ -70,8 +70,8 @@ ASTs produced by non-Lex Readers serialize with no separation and re-parse
 wrong. (This is the systemic defect under investigation.)
 
 **Document Title**:
-The optional first line of a Lex document, stored in `Document.title` (not a
-body Block). lex-core's parser assigns it by a purely syntactic rule: the title
+The optional first line of a Lex document, stored in `Document.title`
+(`Option<DocumentTitle>`; absent = `None`), not a body Block. lex-core's parser assigns it by a purely syntactic rule: the title
 is the first block **iff** it is a single-line Paragraph at the very start of
 the document immediately followed by a blank line. A leading blank line
 suppresses the rule (the first Paragraph then stays in the body). Markdown has
@@ -79,7 +79,8 @@ no distinct title concept; the Markdown Reader promotes a leading `# H1` to the
 Document Title.
 
 **Title escape**:
-A leading blank line the Lex Serializer emits when `Document.title == ""` and the
+A leading blank line the Lex Serializer emits when the document has no title
+(`Document.title` is `None` — the field is `Option<DocumentTitle>`) and the
 first Block is a steal-able single-line Paragraph. It suppresses the grammar's
 title rule (`<document-title>` requires the _first_ non-annotation line), keeping
 the Paragraph in the body. Spec-sanctioned — it changes no grammar; it produces

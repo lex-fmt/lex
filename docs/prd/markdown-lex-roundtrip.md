@@ -164,11 +164,12 @@ Set), and within that vocabulary it is exact.
 - **Reader-shaped property test.** Extend the round-trip proptest to generate
   **reader-shaped** documents — sibling blocks with *no* pre-inserted
   `BlankLineGroup` separators — then assert Skeleton equality after
-  serialize→parse. The current `session_strategy` pre-inserts `BlankLineGroup`s
-  between blocks (with the comment "Paragraphs merge without blank lines — always
-  separate them"), which encodes the serializer's weakness into the test inputs
-  and masks the bug; that pre-insertion is removed, making reader-shaped ASTs
-  first-class inputs.
+  serialize→parse. Every generator strategy that currently pre-inserts
+  `BlankLineGroup`s between blocks — `session_strategy`, `definition_strategy`,
+  and `nested_session_strategy`, each carrying the same comment "Paragraphs merge
+  without blank lines — always separate them" — encodes the serializer's weakness
+  into the test inputs and masks the bug; that pre-insertion is removed from all
+  of them, making reader-shaped ASTs first-class inputs.
 
 - **Fixture / corpus tests.** Drive the real Markdown reader over the existing
   fixtures (`kitchensink.md`, `comrak-readme.md`, `markdown-reference-commonmark.md`)
@@ -210,8 +211,9 @@ Set), and within that vocabulary it is exact.
   separation as *data* (present only when a `BlankLineGroup` node existed) rather
   than as a *structural property of the grammar*. Every non-Lex reader produces
   ASTs without those nodes, so all of them were latently broken; Markdown is
-  simply where it was noticed. The two prior fixes (lex#505, lex#506… lex#682)
-  were the same bug patched one block type at a time.
+  simply where it was noticed. The prior point fixes (verbatim lex#505,
+  annotation lex#682, and the title-boundary lex#687) were the same bug patched
+  one block/boundary at a time.
 - The vocabulary for this area (Faithfulness, Skeleton, Block Separation,
   BlankLineGroup, Document Title, Title escape, Equivalence Set, Declared Lossy)
   is defined in `CONTEXT.md`.
