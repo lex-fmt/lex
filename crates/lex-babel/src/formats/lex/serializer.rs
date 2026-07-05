@@ -254,6 +254,17 @@ impl Visitor for LexSerializer {
     }
 
     fn visit_list(&mut self, list: &List) {
+        // A table's footnote list is emitted once inside its block by
+        // `visit_table`; its second, accept-driven walk must be muted (lex#684).
+        // Enter suppression here (and stay in it for any nested lists) but still
+        // push the context so `leave_list` stays balanced. This must happen
+        // *before* `separate_before`, so the muted walk neither records itself
+        // as the previous sibling nor emits structural blanks.
+        if self.suppress_output > 0 || self.emitted_footnote_lists.contains(&(list as *const List))
+        {
+            self.suppress_output += 1;
+        }
+
         self.separate_before(BlockKind::List);
         let (style, upper_case) = if let Some(marker) = &list.marker {
             let upper = marker.style == DecorationStyle::Alphabetical
@@ -268,15 +279,6 @@ impl Visitor for LexSerializer {
         };
 
         let marker_form = list.marker.as_ref().map(|marker| marker.form);
-
-        // A table's footnote list is emitted once inside its block by
-        // `visit_table`; its second, accept-driven walk must be muted (lex#684).
-        // Enter suppression here (and stay in it for any nested lists) but still
-        // push the context so `leave_list` stays balanced.
-        if self.suppress_output > 0 || self.emitted_footnote_lists.contains(&(list as *const List))
-        {
-            self.suppress_output += 1;
-        }
 
         self.list_stack.push(ListContext {
             style,
@@ -466,6 +468,16 @@ impl Visitor for LexSerializer {
             self.ensure_blank_lines(1);
         }
 
+        // Everything walked between here and `leave_table` — the footnote list
+        // below, and the cell children / closer annotations / muted second
+        // footnote walk that `Table::accept` drives after `visit_table`
+        // returns — is the table block's *interior*, not a sibling of the
+        // table. Open a scope so their `separate_before` calls can't overwrite
+        // the outer scope's `Table` record (the block after the table must
+        // separate against `Table`, not against whatever was walked last
+        // inside it).
+        self.enter_sibling_scope();
+
         let subject = table.subject.as_string();
         if !subject.is_empty() {
             self.write_line(&format!("{subject}:"));
@@ -497,6 +509,8 @@ impl Visitor for LexSerializer {
     }
 
     fn leave_table(&mut self, _table: &Table) {
-        // No-op; annotations carry the closer.
+        // Close the table-interior sibling scope opened in `visit_table`.
+        // (Annotations carry the closer; nothing to emit here.)
+        self.leave_sibling_scope();
     }
 }
