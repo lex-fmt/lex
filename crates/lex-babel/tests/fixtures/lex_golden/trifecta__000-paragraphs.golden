@@ -1,0 +1,15 @@
+Simple Paragraphs Test {{paragraph}}
+
+This is a simple paragraph with just one line. {{paragraph}}
+
+This is a multi-line paragraph.
+It continues on the second line.
+And even has a third line. {{paragraph}}
+
+Another paragraph follows after a blank line. {{paragraph}}
+
+This paragraph has some special characters: !@#$%^&*()_+-=[]{}|;':",./<>? {{paragraph}}
+
+Paragraphs can contain numbers: 123, 456, 789 {{paragraph}}
+
+And they can have mixed content: The quick brown fox jumps over the lazy dog. 123 ABC def! {{paragraph}}

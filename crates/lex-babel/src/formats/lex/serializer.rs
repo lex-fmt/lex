@@ -372,7 +372,17 @@ impl Visitor for LexSerializer {
     }
 
     fn visit_annotation(&mut self, annotation: &Annotation) {
-        self.separate_before(BlockKind::Annotation);
+        // The trailing-blank requirement (lex#682) applies only to a block
+        // annotation *with a body* — its indented body would otherwise pull the
+        // next sibling in. A marker-form annotation ends with a closed
+        // `:: label ::` and separates like a Verbatim closer. Distinguish the two
+        // so the separation matrix picks the right row/column.
+        let kind = if annotation.children.is_empty() {
+            BlockKind::Annotation
+        } else {
+            BlockKind::AnnotationBody
+        };
+        self.separate_before(kind);
         let label = source_spelling(&annotation.data.label);
         let params = &annotation.data.parameters;
 
@@ -405,33 +415,19 @@ impl Visitor for LexSerializer {
         if !annotation.children.is_empty() {
             self.leave_sibling_scope();
             self.indent_level -= 1;
-            // A block annotation's body is closed by a dedent; the parser
-            // consumes the following blank line as part of that close (it is not
-            // a `BlankLineGroup` in the AST, like the pre-verbatim blank in
-            // lex#505), so without re-emitting it a following sibling is parsed
-            // as part of the body. Emit it so the block round-trips (lex#682).
-            self.ensure_blank_lines(1);
         }
+        // The trailing blank a block annotation needs before its next sibling is
+        // now emitted by the separation matrix (`Annotation → *` = 1), not here
+        // (formerly the lex#682 band-aid).
     }
 
     fn visit_verbatim_block(&mut self, _verbatim: &Verbatim) {
-        // Lex requires a blank line between a preceding paragraph and the
-        // subject line that opens a verbatim block — without one, the
-        // re-parser merges the subject into the preceding paragraph and
-        // the verbatim is lost. The parser consumes that blank line as
-        // part of the verbatim's preamble, so it isn't represented as a
-        // `BlankLineGroup` in the AST and no other visitor emits it. See
-        // lex#505.
-        //
-        // Suppress when the verbatim is the first child of a container
-        // whose opener ends with `:` (Definition, list-item with colon
-        // subject, etc.). A blank line at column 0 between a Definition
-        // subject and its body would terminate the Definition, so the
-        // body's first verbatim must follow immediately.
+        // The blank a verbatim's subject line needs before it (so its subject is
+        // not merged into a preceding paragraph) is now emitted by the separation
+        // matrix (`* → Verbatim` cells), not here (formerly the lex#505 band-aid).
+        // A verbatim that is the first child of a container never gets a leading
+        // blank because `separate_before` is a no-op before the first sibling.
         self.separate_before(BlockKind::Verbatim);
-        if !self.last_emission_ended_with_container_opener_colon() {
-            self.ensure_blank_lines(1);
-        }
     }
 
     fn visit_verbatim_group(&mut self, group: &VerbatimGroupItemRef) {

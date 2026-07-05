@@ -20,15 +20,86 @@
 //! `BlankLineGroup` ≥ the structural minimum between blocks, `lex → lex` output
 //! is byte-identical — the matrix only ever adds separation a reader omitted.
 //!
-//! Slice #781 is the walking skeleton: it wires ONLY the paragraph→paragraph
-//! cell. Every other pair returns 0 ("no structural minimum" — that pair's
-//! behavior is exactly as today) and is filled in by slice #782, which also
-//! deletes the per-block band-aids (lex#505 verbatim, lex#682 annotation) the
-//! general rule subsumes. Filling the matrix is a one-function edit here; no
-//! serializer restructuring is needed.
+//! # How the matrix was derived (lex#782)
+//!
+//! Every cell was derived from — and is verified against — the lex-core parser's
+//! actual behavior, not the prose grammar (where the two disagree, the parser
+//! wins; the disagreements are called out below). The verification lives in
+//! `tests/lex_separation/mod.rs::every_ordered_pair_reparses_as_two_blocks`,
+//! which builds a minimal reader-shaped document for each ordered pair, serializes
+//! it, re-parses, and asserts both blocks survive with the right types.
+//!
+//! The requirement is governed by two independent parser mechanisms:
+//!
+//! 1. **Forward absorption** — does `next`'s opening line merge into `prev`?
+//!    `prev` is *absorbing* only when it ends with an open line at the sibling
+//!    indent: a Paragraph (a bare text line) or a List (an item line). Blocks that
+//!    end with a dedent (Session, Definition body) or a `:: label ::` closer
+//!    (Verbatim, Table) present a hard boundary and absorb nothing. `next` is
+//!    *absorbable* when it opens with a plain line the paragraph look-ahead does
+//!    NOT yield before: a Paragraph (text), a Session (title line), or a
+//!    **marker-form Verbatim** (`subject:` with no indented body — the look-ahead
+//!    only yields before `subject:` *followed by an indent*). A List, a Definition,
+//!    a Table, and a block-form Verbatim all open with a construct the look-ahead
+//!    detects structurally, so they are NOT absorbed and need no blank.
+//!
+//! 2. **Closer re-anchoring (a parser hijack, NOT separation-fixable)** — the
+//!    verbatim/table matcher runs at the highest precedence and greedily pairs the
+//!    *first* `subject:` line it sees with the *next* `:: label ::` closer,
+//!    spanning blanks (multi-group verbatim) and dedents. A **Definition**
+//!    (`subject:` + indented body, no closer of its own) placed immediately before
+//!    any block that presents a `:: label ::` line — a Verbatim, a Table, or even
+//!    an Annotation (`:: label ::` is a valid verbatim closer) — is therefore
+//!    swallowed: its subject becomes the verbatim subject and everything down to
+//!    that closer is absorbed. No blank count prevents this — it is a grammar-level
+//!    ambiguity between Definition and `subject:`-plus-indent blocks. The three
+//!    cells (`Definition → Verbatim`, `Definition → Table`, `Definition →
+//!    Annotation`) are marked below; their value is the structural boundary
+//!    minimum (0, the definition's dedent), but the pair does not round-trip until
+//!    the parser bug is fixed. Tracked as a flagged finding in the PR; the
+//!    verification test characterizes the hijack rather than asserting faithfulness
+//!    for those cells.
+//!
+//! ## Spec/parser disagreements found
+//!
+//! - `grammar-core.lex` says a blank before a list is *optional* (0). The parser
+//!   agrees: every `* → List` cell is 0 **except `List → List`**, where two
+//!   list blocks with no blank between them merge into one list (a blank
+//!   terminates the first list, per the grammar's own "blank between items
+//!   terminates the list" rule), so `List → List` = 1.
+//! - `grammar-core.lex` frames the session title→body blank as the session's
+//!   internal separator. Independently, the parser needs a blank *before* a
+//!   session title when the preceding sibling ends with a `:: label ::` closer
+//!   (Verbatim, Table) or is an open Paragraph — otherwise the title line is not
+//!   recognized as a session start (it degrades to a paragraph). Hence
+//!   `Paragraph → Session`, `Verbatim → Session`, and `Table → Session` = 1,
+//!   while `List/Session/Definition → Session` = 0 (a dedent or item-line boundary
+//!   is enough).
+//!
+//! ## Annotations (two kinds by shape)
+//!
+//! Standalone block Annotations are a special case the matrix cannot fully own:
+//! the parser attaches a floating annotation to a neighboring element (or, at the
+//! document head, promotes it to a document-level annotation), so an Annotation
+//! placed as a bare body sibling does not round-trip as a sibling regardless of
+//! separation. What the matrix *does* own is the boundary the lex#682 band-aid
+//! used to patch — but only for the shape that has it: an annotation with an
+//! indented body needs a trailing blank so the following sibling is not pulled
+//! into that body. A **marker-form** annotation (no body) ends with a closed
+//! `:: label ::` and separates exactly like a Verbatim/Table closer. The two
+//! shapes are therefore distinct `BlockKind`s: `AnnotationBody → *` = 1 (the
+//! lex#682 boundary), while marker `Annotation → *` mirrors the Verbatim row
+//! (only a following Session needs a blank). Getting this split right is what
+//! keeps `lex → lex` byte-identical for documents that list several marker
+//! annotations back-to-back (e.g. `elements/annotation.lex`, where the old
+//! band-aid never fired because those annotations have no body).
 
 /// A sibling Block that can appear in a Lex container body — the units that must
 /// be *separated* from one another in surface syntax (CONTEXT.md, "Block").
+///
+/// Annotations split by shape — `Annotation` is the marker form (`:: label ::`,
+/// no body) and `AnnotationBody` is the block form with an indented body —
+/// because their *trailing* separation requirement differs (see the module docs).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum BlockKind {
     Paragraph,
@@ -37,22 +108,78 @@ pub(super) enum BlockKind {
     Verbatim,
     Definition,
     Annotation,
+    AnnotationBody,
     Table,
 }
 
 /// Minimum blank lines the grammar requires between an ordered pair of adjacent
-/// sibling blocks `(prev, next)`.
-///
-/// This is the separation matrix. Slice #781 wires only `(Paragraph, Paragraph)`
-/// = 1; every other pair returns 0. Slice #782 fills the remaining cells.
+/// sibling blocks `(prev, next)`, derived from and verified against the lex-core
+/// parser (see the module docs for the derivation and the two governing
+/// mechanisms). This is the separation matrix; every ordered pair of the eight
+/// `BlockKind`s has an explicit, tested entry.
 pub(super) fn min_blank_lines(prev: BlockKind, next: BlockKind) -> usize {
     use BlockKind::*;
     match (prev, next) {
+        // ── Paragraph → * ────────────────────────────────────────────────────
+        // A Paragraph ends with an open text line, so any absorbable `next`
+        // merges into it: another Paragraph (→ one 2-line paragraph), a Session
+        // title, or a marker-form Verbatim subject.
         (Paragraph, Paragraph) => 1,
-        // TODO(#782): fill in the remaining cells (paragraph→list, list→paragraph,
-        // session→body, paragraph→verbatim, paragraph→definition, …) and delete
-        // the per-block blank emitters (lex#505 verbatim, lex#682 annotation)
-        // this rule subsumes.
-        _ => 0,
+        (Paragraph, Session) => 1,
+        (Paragraph, Verbatim) => 1,
+        (Paragraph, List) => 0,
+        (Paragraph, Definition) => 0,
+        (Paragraph, Annotation) => 0,
+        (Paragraph, AnnotationBody) => 0,
+        (Paragraph, Table) => 0,
+
+        // ── List → * ─────────────────────────────────────────────────────────
+        // A List ends with an item line. Only a following List merges (its items
+        // append to the first); every other `next` starts its own block.
+        (List, List) => 1,
+        (List, _) => 0,
+
+        // ── Session → * ──────────────────────────────────────────────────────
+        // A Session ends with a dedent — a hard boundary that absorbs nothing.
+        (Session, _) => 0,
+
+        // ── Verbatim → * ─────────────────────────────────────────────────────
+        // A Verbatim ends with a `:: label ::` closer. That closes the block, but
+        // the parser does not treat the post-closer position as a session-start
+        // boundary, so a following Session title still needs a blank.
+        (Verbatim, Session) => 1,
+        (Verbatim, _) => 0,
+
+        // ── Definition → * ───────────────────────────────────────────────────
+        // A Definition ends with a dedent (boundary minimum 0). BUT its bare
+        // `subject:` line is re-anchored by the next `:: label ::` closer (the
+        // hijack — see module docs), so Definition → Verbatim / Table / Annotation
+        // do NOT round-trip and no blank count fixes it. Value stays the boundary
+        // minimum; the hijack is a flagged parser bug, not a separation gap.
+        (Definition, Verbatim) => 0, // HIJACK: merges into a multi-group verbatim
+        (Definition, Table) => 0,    // HIJACK: merges into the table
+        (Definition, Annotation) => 0, // HIJACK: `:: label ::` re-anchors as a verbatim closer
+        (Definition, _) => 0,
+
+        // ── Annotation (marker form) → * ─────────────────────────────────────
+        // A marker annotation ends with a closed `:: label ::`, the same boundary
+        // shape as a Verbatim/Table closer: only a following Session needs a
+        // blank. (The old lex#682 band-aid never fired for this shape — it has no
+        // body — so keeping this row at the Verbatim values preserves the
+        // byte-for-byte output for back-to-back marker annotations.)
+        (Annotation, Session) => 1,
+        (Annotation, _) => 0,
+
+        // ── AnnotationBody (block form) → * ──────────────────────────────────
+        // A block annotation's indented body would pull the next sibling in
+        // without a trailing blank (subsumes the lex#682 band-aid, which fired
+        // exactly for this shape).
+        (AnnotationBody, _) => 1,
+
+        // ── Table → * ────────────────────────────────────────────────────────
+        // A Table ends with a `:: label ::` closer, same boundary shape as a
+        // Verbatim: only a following Session title needs a blank.
+        (Table, Session) => 1,
+        (Table, _) => 0,
     }
 }

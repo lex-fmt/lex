@@ -1,0 +1,1 @@
+- Complete the Lex serializer block-separation matrix for every sibling block pair and remove the lex#505/lex#682 per-block blank-line band-aids
