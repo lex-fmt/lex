@@ -12,6 +12,7 @@ use lex_core::lex::transforms::standard::STRING_TO_AST;
 mod annotation_inline;
 mod blank_coalesce;
 pub mod formatting_rules;
+mod separation;
 pub mod serializer;
 
 use annotation_inline::inline_attached_annotations;

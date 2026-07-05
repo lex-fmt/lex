@@ -14,6 +14,7 @@ use lex_core::lex::ast::elements::sequence_marker::DecorationStyle;
 mod numbering;
 mod tables;
 
+use super::separation::{min_blank_lines, BlockKind};
 use numbering::format_marker_index;
 use tables::emit_pipe_table;
 
@@ -40,6 +41,12 @@ pub struct LexSerializer {
     /// the redundant accept-driven walk of a table's footnote list without
     /// unbalancing the list stack — the visit still runs, only output is muted.
     suppress_output: usize,
+    /// Structural block separation state (ADR-0001): one entry per open sibling
+    /// scope (document body, session body, list-item body, …), holding the kind
+    /// of the last sibling Block emitted at that level, or `None` before the
+    /// first. `separate_before` consults the separation matrix against it to emit
+    /// the grammar-mandated blank lines between adjacent blocks.
+    sibling_levels: Vec<Option<BlockKind>>,
 }
 
 impl LexSerializer {
@@ -52,6 +59,7 @@ impl LexSerializer {
             list_stack: Vec::new(),
             emitted_footnote_lists: Vec::new(),
             suppress_output: 0,
+            sibling_levels: Vec::new(),
         }
     }
 
@@ -155,10 +163,49 @@ impl LexSerializer {
             self.consecutive_newlines += 1;
         }
     }
+
+    /// Open a fresh sibling scope for a container's body (document root, session
+    /// body, list-item body, definition body, block-annotation body). Each block
+    /// visited inside consults — and updates — the top scope via `separate_before`.
+    fn enter_sibling_scope(&mut self) {
+        self.sibling_levels.push(None);
+    }
+
+    /// Close the current sibling scope. Must pair with `enter_sibling_scope`.
+    fn leave_sibling_scope(&mut self) {
+        self.sibling_levels.pop();
+    }
+
+    /// Emit the structural separation the grammar requires before a sibling
+    /// block of kind `next`, then record `next` as the current scope's last
+    /// block. The blank count comes from the separation matrix
+    /// (`min_blank_lines(prev, next)`) and is applied max-composing via
+    /// `ensure_blank_lines`, so it never adds to a `BlankLineGroup` already
+    /// emitted — it only tops it up to the structural minimum.
+    ///
+    /// No-op before the first block in a scope (`prev == None`), so a block at a
+    /// container's start gets no leading blank, and outside any scope (the root
+    /// session itself, whose own body scope is not yet open).
+    fn separate_before(&mut self, next: BlockKind) {
+        if self.suppress_output > 0 {
+            return;
+        }
+        let prev = match self.sibling_levels.last_mut() {
+            Some(slot) => slot.replace(next),
+            None => return,
+        };
+        if let Some(prev) = prev {
+            let min = min_blank_lines(prev, next);
+            if min > 0 {
+                self.ensure_blank_lines(min);
+            }
+        }
+    }
 }
 
 impl Visitor for LexSerializer {
     fn visit_session(&mut self, session: &Session) {
+        self.separate_before(BlockKind::Session);
         let title = session.title.as_string();
         if !title.is_empty() {
             self.ensure_blank_lines(self.rules.session_blank_lines_before);
@@ -166,16 +213,24 @@ impl Visitor for LexSerializer {
             self.ensure_blank_lines(self.rules.session_blank_lines_after);
             self.indent_level += 1;
         }
+        // The session's body is a fresh sibling scope. Opened for the root
+        // session too (empty title), so document-level blocks are separated.
+        self.enter_sibling_scope();
     }
 
     fn leave_session(&mut self, session: &Session) {
+        self.leave_sibling_scope();
         if !session.title.as_string().is_empty() {
             self.indent_level -= 1;
         }
     }
 
     fn visit_paragraph(&mut self, _paragraph: &Paragraph) {
-        // Paragraphs are handled by visiting TextLines
+        // Paragraphs are handled by visiting TextLines; this hook only registers
+        // the paragraph as a sibling block so the separation matrix can emit the
+        // grammar-mandated blank before it (a reader-built AST has no
+        // BlankLineGroup to lean on).
+        self.separate_before(BlockKind::Paragraph);
         // TODO: Investigate why some paragraphs are skipped during traversal when indentation is mixed.
         // See: https://github.com/lex-project/lex/issues/new?title=Parser+drops+paragraphs+with+mixed+indentation
     }
@@ -199,6 +254,7 @@ impl Visitor for LexSerializer {
     }
 
     fn visit_list(&mut self, list: &List) {
+        self.separate_before(BlockKind::List);
         let (style, upper_case) = if let Some(marker) = &list.marker {
             let upper = marker.style == DecorationStyle::Alphabetical
                 && marker
@@ -286,23 +342,31 @@ impl Visitor for LexSerializer {
 
         self.write_line(&line);
         self.indent_level += 1;
+        // A list item's body holds its own sibling blocks (nested paragraphs,
+        // lists); give them a fresh separation scope.
+        self.enter_sibling_scope();
     }
 
     fn leave_list_item(&mut self, _list_item: &ListItem) {
+        self.leave_sibling_scope();
         self.indent_level -= 1;
     }
 
     fn visit_definition(&mut self, definition: &Definition) {
+        self.separate_before(BlockKind::Definition);
         let subject = definition.subject.as_string();
         self.write_line(&format!("{subject}:"));
         self.indent_level += 1;
+        self.enter_sibling_scope();
     }
 
     fn leave_definition(&mut self, _definition: &Definition) {
+        self.leave_sibling_scope();
         self.indent_level -= 1;
     }
 
     fn visit_annotation(&mut self, annotation: &Annotation) {
+        self.separate_before(BlockKind::Annotation);
         let label = source_spelling(&annotation.data.label);
         let params = &annotation.data.parameters;
 
@@ -327,11 +391,13 @@ impl Visitor for LexSerializer {
 
         if !annotation.children.is_empty() {
             self.indent_level += 1;
+            self.enter_sibling_scope();
         }
     }
 
     fn leave_annotation(&mut self, annotation: &Annotation) {
         if !annotation.children.is_empty() {
+            self.leave_sibling_scope();
             self.indent_level -= 1;
             // A block annotation's body is closed by a dedent; the parser
             // consumes the following blank line as part of that close (it is not
@@ -356,6 +422,7 @@ impl Visitor for LexSerializer {
         // subject, etc.). A blank line at column 0 between a Definition
         // subject and its body would terminate the Definition, so the
         // body's first verbatim must follow immediately.
+        self.separate_before(BlockKind::Verbatim);
         if !self.last_emission_ended_with_container_opener_colon() {
             self.ensure_blank_lines(1);
         }
@@ -394,6 +461,7 @@ impl Visitor for LexSerializer {
         // Tables share the outer verbatim shape: leading blank line,
         // subject line ending in `:`, indented body of pipe rows,
         // dedented `:: table ::` closer.
+        self.separate_before(BlockKind::Table);
         if !self.last_emission_ended_with_container_opener_colon() {
             self.ensure_blank_lines(1);
         }
