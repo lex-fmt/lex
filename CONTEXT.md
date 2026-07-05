@@ -70,20 +70,25 @@ ASTs produced by non-Lex Readers serialize with no separation and re-parse
 wrong. (This is the systemic defect under investigation.)
 
 **Document Title**:
-The optional first line of a Lex document, stored in `Document.title`
-(`Option<DocumentTitle>`; absent = `None`), not a body Block. lex-core's parser assigns it by a purely syntactic rule: the title
-is the first block **iff** it is a single-line Paragraph at the very start of
-the document immediately followed by a blank line. A leading blank line
-suppresses the rule (the first Paragraph then stays in the body). Markdown has
-no distinct title concept; the Markdown Reader promotes a leading `# H1` to the
-Document Title.
+The optional title of a Lex document, stored in `Document.title`
+(`Option<DocumentTitle>`; absent = `None`), not a body Block. Per
+`grammar-core.lex`: `<document-title> = <title-line> <subtitle-line>? <blank-line>`
+— the **first non-annotation line** at document start (after any document-level
+metadata/annotations, anchored on the synthetic `DocumentStart`), optionally
+followed by a subtitle line (when the title line ends with a colon and a
+non-indented second line precedes the blank), then a blank line, with **no
+indented content** after the blank (indented content would make it a Session
+instead). Anything that breaks this shape — a leading blank line, a multi-line
+first block, indented following content — means no title, and the first block
+stays in the body. Markdown has no distinct title concept; the Markdown Reader
+promotes a leading `# H1` to the Document Title.
 
 **Title escape**:
 A leading blank line the Lex Serializer emits when the document has no title
-(`Document.title` is `None` — the field is `Option<DocumentTitle>`) and the
-first Block is a steal-able single-line Paragraph. It suppresses the grammar's
-title rule (`<document-title>` requires the _first_ non-annotation line), keeping
-the Paragraph in the body. Spec-sanctioned — it changes no grammar; it produces
+(`Document.title` is `None` — the field is `Option<DocumentTitle>`) and the first
+Block would otherwise satisfy the **Document Title** shape (a first non-annotation
+line the parser would read as the title). The leading blank breaks that shape, so
+the grammar's title rule can't match, keeping the Block in the body. Spec-sanctioned — it changes no grammar; it produces
 valid Lex the existing parser reads as title-less. Note: `lexd format`'s blank
 normalization currently strips it and re-promotes the title (a formatter-layer
 concern, tracked separately, not this work).

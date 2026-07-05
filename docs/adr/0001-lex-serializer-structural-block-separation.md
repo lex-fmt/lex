@@ -15,7 +15,9 @@ Paragraphs. Separation is a grammar requirement, not decoration.
 The serializer emitted that separation **only** when it visited a
 `BlankLineGroup` node. lex-core's parser produces those nodes, so `lex → lex`
 round-tripped fine. But every other Reader (Markdown — the format
-`interop-scope.lex` calls "Lex's lingua franca", where round-trip is the
+[`interop-scope.lex`](https://github.com/lex-fmt/comms/blob/main/docs/interop-scope.lex)
+(in the `lex-fmt/comms` repo, vendored here as the `comms/` submodule) calls
+"Lex's lingua franca", where round-trip is the
 release bar — and RFC-XML) builds an AST with **no** `BlankLineGroup` nodes. Its
 output therefore serialized with blocks jammed together and re-parsed as merged
 paragraphs, lost document titles, and invalid lists.

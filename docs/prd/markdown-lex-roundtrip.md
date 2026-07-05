@@ -1,7 +1,7 @@
 # PRD: Markdown ↔ Lex lossless round-trip for equivalent constructs
 
 > Status: ready-for-agent (unpublished — file only)
-> Related: `docs/adr/0001-lex-serializer-structural-block-separation.md`, `CONTEXT.md`, `comms/docs/interop-scope.lex`
+> Related: `docs/adr/0001-lex-serializer-structural-block-separation.md`, `CONTEXT.md`, [interop-scope.lex](https://github.com/lex-fmt/comms/blob/main/docs/interop-scope.lex) (`lex-fmt/comms` repo)
 
 ## Problem Statement
 
@@ -12,7 +12,9 @@ as a bare `-` line with the item text stranded on the next line. When I convert
 that generated Lex back to Markdown, or just re-open it, it is not the document I
 started with.
 
-`comms/docs/interop-scope.lex` states that Markdown is Lex's lingua franca and
+[`interop-scope.lex`](https://github.com/lex-fmt/comms/blob/main/docs/interop-scope.lex)
+(in the `lex-fmt/comms` repo, mounted here as the `comms/` submodule) states that
+Markdown is Lex's lingua franca and
 that "round-trip discipline is the bar, and is what we measure regressions
 against." Today that bar is not met: a Markdown document built from ordinary,
 Lex-representable constructs does not survive the trip through Lex.
@@ -203,7 +205,8 @@ Set), and within that vocabulary it is exact.
 - Representing a backtick *inside* inline code: Lex code spans are literal and
   cannot contain their own delimiter. In scope is only that this case degrades
   predictably (no corrupted re-parse), not that it round-trips.
-- New foreign formats (Pandoc, LaTeX, HTML import) — see `interop-scope.lex`.
+- New foreign formats (Pandoc, LaTeX, HTML import) — see
+  [interop-scope.lex](https://github.com/lex-fmt/comms/blob/main/docs/interop-scope.lex).
 
 ## Further Notes
 
