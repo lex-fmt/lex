@@ -30,13 +30,13 @@ Markdown round-trip work forced it into the open. Three things collided:
 Leading blank lines are irrelevant — they no longer suppress the title. A title
 is one line, or two lines when the first line ends with a colon (title +
 subtitle; the colon is structural and stripped, per the existing
-`<subtitle-line>` rule). A first line without a trailing colon that spans
-multiple lines is a paragraph, not a title — the colon is the explicit signal
-that disambiguates a two-line title from a two-line paragraph.
+`<subtitle-line>` rule). A first paragraph whose first line has no trailing
+colon and spans multiple lines is a paragraph, not a title — the colon is the
+explicit signal that disambiguates a two-line title from a two-line paragraph.
 
 **2. If the first content element is anything other than a paragraph** — session,
-list, definition, verbatim, annotation — there is **no title**; the document
-starts with that element. (Already the parser's behavior.)
+list, definition, verbatim, table, annotation — there is **no title**; the
+document starts with that element. (Already the parser's behavior.)
 
 **3. A document may explicitly declare no title with `:: doc.untitled ::`.** This
 is a registered `doc.*` builtin, honored by the **parser** (not just babel): when
@@ -56,10 +56,9 @@ because leading blanks no longer carry title semantics.
   corpus doc uses it), and `lexd format` strips it. Replaced by the explicit
   `:: doc.untitled ::` annotation, which survives formatting and is discoverable.
 - **Any number of lines can be a title (no colon required).** Rejected: it can't
-  be distinguished from a multi-line paragraph. The colon-introduced subtitle
-  (option b) is the principled disambiguator and matches how publishers and
-  library cataloging separate a main title from its subtitle into distinct
-  fields.
+  be distinguished from a multi-line paragraph. The colon-introduced subtitle is
+  the principled disambiguator and matches how publishers and library cataloging
+  separate a main title from its subtitle into distinct fields.
 - **Empty-valued `:: doc.title: ::` to mean "no title".** Rejected in favor of a
   dedicated `doc.untitled` flag: "empty title" vs "no title" reads ambiguously; a
   boolean opt-out states intent clearly.
@@ -69,8 +68,8 @@ because leading blanks no longer carry title semantics.
 - lex-core parser change (title rule) + a new registered `doc.untitled` builtin
   label. Blast radius on the tracked corpus is ~zero (no doc starts with a
   leading blank). `document-06-title-empty` is renamed/repurposed to match the
-  settled behavior; `document-05-session-hoist`'s hoisting question is tracked
-  separately.
+  settled behavior; `document-05-title-session-hoist`'s hoisting question is
+  tracked separately.
 - The Markdown Reader emits `:: doc.untitled ::` for a heading-less source; the
   Markdown Serializer maps a Lex title to `# H1`. A leading `# H1` maps to the
   title. This replaces the "leading-blank title escape" that an earlier plan

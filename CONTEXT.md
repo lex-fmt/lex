@@ -76,7 +76,8 @@ The optional title of a Lex document, stored in `Document.title`
 one line, or two lines when the first line ends with a colon (title + subtitle;
 the colon is structural and stripped). Leading blank lines are irrelevant. If the
 first content element is anything else (Session, List, Definition, Verbatim,
-Annotation), there is **no title** and the document starts with that element. A
+Table, Annotation), there is **no title** and the document starts with that
+element. A
 multi-line first paragraph _without_ a leading-line colon is a paragraph, not a
 title — the colon is the explicit signal that distinguishes a two-line title from
 a two-line paragraph. Markdown has no distinct title concept; the Markdown Reader
