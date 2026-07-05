@@ -695,3 +695,115 @@ fn test_lex_validity_kitchensink() {
     let md = MarkdownFormat.serialize(&lex_doc).unwrap();
     assert_lex_output_valid(&md, "kitchensink");
 }
+
+// ============================================================================
+// CONVERSION FAITHFULNESS (lex#781)
+//
+// Faithfulness (CONTEXT.md): a Markdown document read by the reader, serialized
+// to Lex, and re-parsed is the *same* document (Skeleton-equal). This is the
+// conversion sibling of `format_invariants::check_semantic_preserved`; the
+// comparator (`check_faithful`) and Skeleton reducer (`canon`) live in the
+// shared `crate::skeleton` module.
+//
+// Slice #781 wires only the paragraph→paragraph separation cell, so these cases
+// stay within paragraph adjacency. Other block-adjacency pairs (paragraph→list,
+// heading→body, …) arrive with #782 and are NOT asserted faithful here yet.
+//
+// A note on the leading `## Heading`: lex-core's title-steal rule promotes a
+// *single-line* first paragraph, at the document's top, to the Document Title on
+// re-parse. The Markdown reader does not populate `Document.title`, so a
+// heading-less two-paragraph source is NOT faithful yet — the first paragraph is
+// body on read but title on re-parse. Reconciling that is the ADR-0002 title
+// model, honored via `:: doc.untitled ::`, which lands in slice #783. To grade
+// paragraph→paragraph separation *in isolation* here, the multi-paragraph cases
+// nest their paragraphs under a `## Heading` (a Lex Session): the session body is
+// past the document-title boundary, so its adjacent paragraphs are separated
+// purely by the matrix. Without the fix, they merge into one paragraph on
+// re-parse.
+// ============================================================================
+
+/// Count `Paragraph` children directly under a reparsed session (the Markdown
+/// `## Heading` becomes a Lex Session wrapping the body paragraphs).
+fn body_paragraphs_under_first_session(doc: &lex_core::lex::ast::Document) -> usize {
+    doc.root
+        .children
+        .iter()
+        .find_map(|c| match c {
+            ContentItem::Session(s) => Some(s),
+            _ => None,
+        })
+        .map(|s| {
+            s.children
+                .iter()
+                .filter(|c| matches!(c, ContentItem::Paragraph(_)))
+                .count()
+        })
+        .expect("reparsed document should contain a session")
+}
+
+/// The headline demo: blank-separated Markdown body paragraphs must survive as
+/// separate paragraphs. Before the structural-separation fix the serialized Lex
+/// jammed them together and re-parsed as a single merged paragraph.
+#[test]
+fn test_faithful_two_paragraphs() {
+    let md = "## Section\n\nFirst body paragraph.\n\nSecond body paragraph.\n";
+    crate::skeleton::check_faithful(&MarkdownFormat, md).unwrap();
+
+    // Spell the structural claim out independently of `canon`: the re-parsed Lex
+    // session body has exactly two Paragraph blocks, not one merged block.
+    let doc = md_to_lex(md);
+    let lex_text = LexFormat::default().serialize(&doc).unwrap();
+    let reparsed = LexFormat::default().parse(&lex_text).unwrap();
+    assert_eq!(
+        body_paragraphs_under_first_session(&reparsed),
+        2,
+        "two Markdown paragraphs must re-parse as two Lex paragraphs; Lex was:\n{lex_text}"
+    );
+}
+
+/// Three body paragraphs — separation must hold at every adjacency, not just
+/// the first pair.
+#[test]
+fn test_faithful_three_paragraphs() {
+    let md = "## Section\n\nOne.\n\nTwo.\n\nThree.\n";
+    crate::skeleton::check_faithful(&MarkdownFormat, md).unwrap();
+
+    let doc = md_to_lex(md);
+    let lex_text = LexFormat::default().serialize(&doc).unwrap();
+    let reparsed = LexFormat::default().parse(&lex_text).unwrap();
+    assert_eq!(
+        body_paragraphs_under_first_session(&reparsed),
+        3,
+        "three Markdown paragraphs must re-parse as three Lex paragraphs; Lex was:\n{lex_text}"
+    );
+}
+
+/// A lone single paragraph (no following block, so no title-steal) is trivially
+/// faithful, and (the flip side of the fix) must not gain a spurious blank line.
+#[test]
+fn test_faithful_single_paragraph() {
+    let md = "Only one paragraph here.\n";
+    crate::skeleton::check_faithful(&MarkdownFormat, md).unwrap();
+}
+
+/// A multi-line Markdown paragraph (soft-wrapped) stays ONE paragraph — the
+/// separation rule must not split lines within a paragraph.
+#[test]
+fn test_faithful_multiline_paragraph_not_split() {
+    let md = "line one\nline two\nline three\n";
+    crate::skeleton::check_faithful(&MarkdownFormat, md).unwrap();
+
+    let doc = md_to_lex(md);
+    let lex_text = LexFormat::default().serialize(&doc).unwrap();
+    let reparsed = LexFormat::default().parse(&lex_text).unwrap();
+    let paragraphs = reparsed
+        .root
+        .children
+        .iter()
+        .filter(|c| matches!(c, ContentItem::Paragraph(_)))
+        .count();
+    assert_eq!(
+        paragraphs, 1,
+        "a soft-wrapped Markdown paragraph must stay one Lex paragraph; Lex was:\n{lex_text}"
+    );
+}

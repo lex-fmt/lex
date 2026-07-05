@@ -407,23 +407,31 @@ fn test_document_title_from_lex_document() {
 }
 
 #[test]
-fn test_document_title_first_paragraph() {
-    // Use spec file: first paragraph followed by blank line becomes document title
+fn test_document_untitled_marker_rejected_today() {
+    // document-06 now leads with `:: doc.untitled ::`, the ADR-0002 no-title
+    // marker. TODO(#783): doc.untitled lands in slice 3 — update to title-less
+    // expectations (default <title>, first paragraph stays body). Until the
+    // parser honors the doc.* builtin, NormalizeLabels rejects the reserved
+    // prefix, so parsing this fixture errors. Assert today's actual behavior
+    // rather than silently dropping the coverage.
     let lex_src = std::fs::read_to_string(
-        "../../comms/specs/elements/document.docs/document-06-title-empty.lex",
+        "../../comms/specs/elements/document.docs/document-06-title-untitled.lex",
     )
     .expect("document-06 spec file should exist");
-    let html = lex_to_html(&lex_src, HtmlTheme::Modern);
-
-    // First paragraph "Just a paragraph with no title." becomes the document title
-    assert!(html.contains("<title>Just a paragraph with no title.</title>"));
+    let err = STRING_TO_AST
+        .run(lex_src.to_string())
+        .expect_err("doc.untitled is rejected by NormalizeLabels until slice #783");
+    assert!(
+        err.to_string().contains("uses the reserved `doc.*` prefix"),
+        "expected the NormalizeLabels reserved doc.* rejection, got: {err}"
+    );
 }
 
 #[test]
 fn test_document_title_session_without_title() {
     // Use spec file: document starts with session (no explicit document title)
     let lex_src = std::fs::read_to_string(
-        "../../comms/specs/elements/document.docs/document-05-title-session-hoist.lex",
+        "../../comms/specs/elements/document.docs/document-05-title-session-none.lex",
     )
     .expect("document-05 spec file should exist");
     let html = lex_to_html(&lex_src, HtmlTheme::Modern);
@@ -456,7 +464,7 @@ fn test_document_title_rendered_in_body() {
 fn test_document_title_no_body_header_when_no_title() {
     // Documents without a title shouldn't emit an empty <header>.
     let lex_src = std::fs::read_to_string(
-        "../../comms/specs/elements/document.docs/document-05-title-session-hoist.lex",
+        "../../comms/specs/elements/document.docs/document-05-title-session-none.lex",
     )
     .expect("document-05 spec file should exist");
     let html = lex_to_html(&lex_src, HtmlTheme::Modern);

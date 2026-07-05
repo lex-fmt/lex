@@ -5,6 +5,11 @@
 #[cfg(test)]
 mod common;
 
+// Shared Skeleton reducer (`canon`) + Faithfulness comparator, used by both
+// `format_invariants` and the markdown conversion-faithfulness tests.
+#[cfg(test)]
+mod skeleton;
+
 #[cfg(test)]
 mod html;
 
@@ -25,3 +30,6 @@ mod ir_round_trip_proptest;
 
 #[cfg(test)]
 mod format_invariants;
+
+#[cfg(test)]
+mod lex_separation;

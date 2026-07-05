@@ -767,19 +767,23 @@ fn test_document_title_exported_as_h1() {
 }
 
 #[test]
-fn test_document_first_paragraph_as_title() {
-    // Use spec file: first paragraph followed by blank line becomes document title
+fn test_document_untitled_marker_rejected_today() {
+    // document-06 now leads with `:: doc.untitled ::`, the ADR-0002 no-title
+    // marker. TODO(#783): doc.untitled lands in slice 3 — update to title-less
+    // expectations (the first paragraph stays body, no H1 title is emitted).
+    // Until the parser honors the doc.* builtin, NormalizeLabels rejects the
+    // reserved prefix, so parsing this fixture errors. Assert that today's
+    // actual behavior rather than silently dropping the coverage.
     let lex_src = std::fs::read_to_string(
-        "../../comms/specs/elements/document.docs/document-06-title-empty.lex",
+        "../../comms/specs/elements/document.docs/document-06-title-untitled.lex",
     )
     .expect("document-06 spec file should exist");
-    let lex_doc = STRING_TO_AST.run(lex_src).unwrap();
-    let md = MarkdownFormat.serialize(&lex_doc).unwrap();
-
-    // First paragraph "Just a paragraph with no title." becomes the H1 title
+    let err = STRING_TO_AST
+        .run(lex_src)
+        .expect_err("doc.untitled is rejected by NormalizeLabels until slice #783");
     assert!(
-        md.starts_with("# Just a paragraph with no title.\n"),
-        "First paragraph should become H1 title"
+        err.to_string().contains("uses the reserved `doc.*` prefix"),
+        "expected the NormalizeLabels reserved doc.* rejection, got: {err}"
     );
 }
 
@@ -787,7 +791,7 @@ fn test_document_first_paragraph_as_title() {
 fn test_document_session_only_no_h1_title() {
     // Use spec file: document starts with session (no explicit document title)
     let lex_src = std::fs::read_to_string(
-        "../../comms/specs/elements/document.docs/document-05-title-session-hoist.lex",
+        "../../comms/specs/elements/document.docs/document-05-title-session-none.lex",
     )
     .expect("document-05 spec file should exist");
     let lex_doc = STRING_TO_AST.run(lex_src).unwrap();
