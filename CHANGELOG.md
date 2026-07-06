@@ -4,6 +4,18 @@
 
 ## Unreleased
 
+## 0.19.0 - 2026-07-06
+
+- The Lex serializer now emits block separation structurally, from a named separation matrix, rather than only when it visits a `BlankLineGroup`. Slice one wires the paragraph→paragraph cell (minimum one blank), composed max (never additive) with any `BlankLineGroup`, so two blank-separated Markdown paragraphs no longer merge into one on the round-trip through Lex while `lex → lex` output stays byte-identical. Adds a shared Skeleton reducer (`canon`) and a Markdown→Lex Faithfulness test harness.
+- Complete the Lex serializer block-separation matrix for every sibling block pair and remove the lex#505/lex#682 per-block blank-line band-aids
+- Guard the change with properties over the curated comms corpus instead of a committed snapshot: the `format_invariants` sweep now runs idempotence + canon-faithfulness over every `specs/elements/**` (incl. `.docs/`), `specs/trifecta`, and `specs/benchmark` fixture, with the sibling-adjacency AST matrix as its in-code complement (no generated `.golden` text committed)
+- Document title model (ADR-0002): first paragraph is the title regardless of leading blanks; :: doc.untitled :: builtin suppresses title promotion; Markdown reader/serializer map H1 ↔ title and heading-less ↔ doc.untitled
+- Reader-shaped round-trip proptest: generate sibling blocks with no pre-inserted BlankLineGroups and assert Skeleton (canon) faithfulness after serialize→parse
+- faithfulness: real Markdown reader over fixture corpus + adjacency/degrade cases (lex#785)
+- Serializer escapes style-less session titles that begin with a marker-like token (1., a), IV., (1), 1.2.3) so they no longer re-parse with a spurious sequence-marker style (lex#795)
+- faithfulness: reader-built Markdown lists (unordered, ordered, nested, multi-block) round-trip through Lex — the serializer hoists a foreign-reader item's leading paragraph onto the tight `- text` marker line instead of the loose form that collapsed the list to a paragraph (lex#798)
+- Document title model, faithfulness status, and ADR implementation notes
+
 ## 0.18.4 - 2026-06-25
 
 - Migrate the editor cascade fan-out to rust-cli.yml's notify-downstreams input (drop the hand-rolled job; needs release@v3.8.0+)

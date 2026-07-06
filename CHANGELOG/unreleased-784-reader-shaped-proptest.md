@@ -1,1 +1,0 @@
-- Reader-shaped round-trip proptest: generate sibling blocks with no pre-inserted BlankLineGroups and assert Skeleton (canon) faithfulness after serialize→parse

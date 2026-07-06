@@ -1,1 +1,0 @@
-- Document title model (ADR-0002): first paragraph is the title regardless of leading blanks; :: doc.untitled :: builtin suppresses title promotion; Markdown reader/serializer map H1 ↔ title and heading-less ↔ doc.untitled
