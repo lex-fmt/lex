@@ -1,1 +1,3 @@
-- Bump comms to the multi-group verbatim grammar; document the Definition→Verbatim separation as intended group semantics (lex#814 §4)
+- Bump comms to the multi-group verbatim grammar; document the Definition→Verbatim and Definition→Annotation separations as intended group semantics (lex#814 §4), with full positive-shape regression guards in the separation matrix
+- Characterize the Definition→Table adjacency as a known content-loss bug (lex#819, deferred): a single-group table cannot hold the definition as a group, so the merge drops the definition body and the table rows
+- Retag the `20-ideas-naked` known-failure to its own issue lex#817 (deferred): the single-line→block annotation rewrite alters annotation content across a round-trip

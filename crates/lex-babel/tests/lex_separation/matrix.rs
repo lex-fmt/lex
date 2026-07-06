@@ -12,20 +12,30 @@
 //! through the real matrix-driven serializer, re-parses, and asserts both blocks
 //! survive with the correct types.
 //!
-//! Intended group semantics are characterized rather than asserted faithful
-//! (see `separation.rs` module docs and `definition_before_closer_led_block_is_a_
+//! Group semantics are characterized rather than asserted faithful (see
+//! `separation.rs` module docs and `definition_before_closer_led_block_is_a_
 //! known_hijack`): per `comms/specs/grammar-core.lex` §4.5c, a Definition
-//! immediately before a closer-terminated Verbatim (or a Table/Annotation whose
+//! immediately before a closer-terminated Verbatim (or before an Annotation whose
 //! `:: label ::` marker doubles as a verbatim closer) is that block's FIRST group.
 //! A definition's `subject:` + indented body is structurally identical to a
 //! `<verbatim-group-with-content>`, and verbatim is tried before definition (§4.7),
 //! so the two cannot be authored as separate adjacent blocks — blank lines do not
-//! separate groups. This is the multi-group verbatim feature working as designed
-//! (lex#814 §4, resolved as intended), not a bug. Bare Annotation siblings are also not
-//! round-trippable as siblings (the parser attaches a floating annotation to a
-//! neighbor or the document head), so they are excluded from the sibling-sequence
-//! properties; the matrix still owns the lex#682 trailing-blank boundary, tested
-//! directly.
+//! separate groups. That is the multi-group verbatim feature working as designed
+//! (lex#814 §4, resolved as intended), not a bug: the definition's subject AND body
+//! survive as the verbatim's first group.
+//!
+//! Definition → Table is the ONE exception and is NOT intended: a table is
+//! single-group, so the definition cannot become a group. The merge instead
+//! collapses to a degenerate table that keeps only the definition's subject and
+//! DROPS the definition body and the table's own rows — a real, pre-existing
+//! content-loss bug tracked in lex#819 (deferred, not fixed here). Its tripwire
+//! CHARACTERIZES the known-bad shape; when #819 is fixed the pair should separate
+//! and Table drops out of `is_known_hijack`.
+//!
+//! Bare Annotation siblings are also not round-trippable as siblings (the parser
+//! attaches a floating annotation to a neighbor or the document head), so they are
+//! excluded from the sibling-sequence properties; the matrix still owns the lex#682
+//! trailing-blank boundary, tested directly.
 
 use lex_babel::formats::lex::export;
 use lex_core::lex::ast::elements::container::SessionContainer;
@@ -210,9 +220,20 @@ fn body_kinds(doc: &Document) -> Vec<Kind> {
     doc.root.children.iter().filter_map(kind_of).collect()
 }
 
+/// The non-blank block *items* directly under the document root (parallel to
+/// `body_kinds`, but keeping the nodes so a merged shape can be asserted).
+fn body_items(doc: &Document) -> Vec<&ContentItem> {
+    doc.root
+        .children
+        .iter()
+        .filter(|item| kind_of(item).is_some())
+        .collect()
+}
+
 // ─── The matrix, made executable ────────────────────────────────────────────
 
-/// The ordered pairs that merge by design, not by a separation gap. Per
+/// The ordered pairs where the Definition does not survive as a sibling but is
+/// absorbed into the following closer-terminated block. Per
 /// `comms/specs/grammar-core.lex` §4.5c, a verbatim block is
 /// `<verbatim-group-with-content>+` sharing ONE closing annotation (multi-group
 /// verbatim). A `<definition>` (`<subject-line> <indent> content`) authored as a
@@ -220,11 +241,17 @@ fn body_kinds(doc: &Document) -> Vec<Kind> {
 /// identical to a `<verbatim-group-with-content>` and is therefore that verbatim's
 /// FIRST group — verbatim is tried before definition (parse order §4.7), and blank
 /// lines do not separate groups, so the two cannot be authored as separate adjacent
-/// blocks. The same closer re-anchoring absorbs the Definition ahead of a Table or
-/// an Annotation closer (`:: label ::` is a valid verbatim closer), so all three
-/// `Definition → …` pairs merge. This is the multi-group verbatim feature working
-/// AS DESIGNED (lex#814 §4, resolved as intended), NOT a bug to fix. Documented in
-/// `separation.rs`.
+/// blocks. This holds for `Definition → Verbatim` and, because `:: label ::` also
+/// closes a verbatim, for `Definition → Annotation`; both are the multi-group
+/// verbatim feature working AS DESIGNED (lex#814 §4, resolved as intended) and lose
+/// no content.
+///
+/// `Definition → Table` is included too but for the OPPOSITE reason: it is a KNOWN
+/// CONTENT-LOSS BUG (lex#819, deferred), NOT intended. A table is single-group, so
+/// the definition cannot become a group; the merge collapses to a degenerate table
+/// that drops the definition body and the table rows. It stays in this set only
+/// because the pair does currently merge (not separate); when lex#819 is fixed the
+/// pair should separate and this arm must be removed. Documented in `separation.rs`.
 fn is_known_hijack(prev: Kind, next: Kind) -> bool {
     matches!(
         (prev, next),
@@ -232,6 +259,149 @@ fn is_known_hijack(prev: Kind, next: Kind) -> bool {
             | (Kind::Definition, Kind::Table)
             | (Kind::Definition, Kind::Annotation)
     )
+}
+
+/// Content strings of a verbatim group's `VerbatimLine` children, in order.
+fn verbatim_group_text<'a>(children: impl IntoIterator<Item = &'a ContentItem>) -> Vec<&'a str> {
+    children
+        .into_iter()
+        .filter_map(|c| match c {
+            ContentItem::VerbatimLine(line) => Some(line.content.as_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Assert the exact intended merged shape for a `Definition -> next` hijack.
+///
+/// The definition never survives as a sibling; per grammar §4.5c it is absorbed
+/// into the following closer-terminated block. Pinning the *positive* shape makes
+/// the guard fail not only when the pair SEPARATES into two siblings, but also
+/// when the parser drops content, produces the wrong merged kind, or absorbs the
+/// wrong neighbor — the weakness codex flagged in the old negative assertions.
+fn assert_definition_hijack_shape(next: Kind, reparsed: &Document, out: &str) {
+    let items = body_items(reparsed);
+    match next {
+        Kind::Verbatim => {
+            // The definition and the following marker-verbatim collapse into ONE
+            // two-group verbatim sharing the following verbatim's `:: verbatim ::`
+            // closer: group 0 IS the definition (subject "Term" / content
+            // "Def body."), group 1 is the following verbatim's subject ("Code2").
+            assert_eq!(
+                body_kinds(reparsed),
+                vec![Kind::Paragraph, Kind::Verbatim],
+                "(Definition -> Verbatim) must merge into lead + one verbatim; got {:?}\n{out}",
+                body_kinds(reparsed),
+            );
+            let v = match items[1] {
+                ContentItem::VerbatimBlock(v) => v.as_ref(),
+                other => panic!("expected a VerbatimBlock; got {other:?}\n{out}"),
+            };
+            let groups: Vec<_> = v.group().collect();
+            assert_eq!(
+                v.group_len(),
+                2,
+                "(Definition -> Verbatim) the definition must be the verbatim's FIRST of two \
+                 groups (§4.5c); got {} group(s)\n{out}",
+                v.group_len(),
+            );
+            assert_eq!(
+                groups[0].subject.as_string(),
+                "Term",
+                "(Definition -> Verbatim) group 0 subject must be the definition subject\n{out}",
+            );
+            assert_eq!(
+                verbatim_group_text(groups[0].children.iter()),
+                vec!["Def body."],
+                "(Definition -> Verbatim) group 0 content must be the definition body — a drop \
+                 here is exactly the content loss the positive assertion guards\n{out}",
+            );
+            assert_eq!(
+                groups[1].subject.as_string(),
+                "Code2",
+                "(Definition -> Verbatim) group 1 subject must be the following verbatim\n{out}",
+            );
+            assert_eq!(
+                v.closing_data.label.value, "verbatim",
+                "(Definition -> Verbatim) the shared closer must be the following verbatim's\n{out}",
+            );
+        }
+        Kind::Annotation => {
+            // The following annotation's `:: note ::` marker doubles as a verbatim
+            // closer, so the definition becomes a single-group verbatim closed by
+            // `:: note ::`; the annotation's own indented body is left behind as a
+            // trailing paragraph sibling. Nothing is lost — content is re-homed.
+            assert_eq!(
+                body_kinds(reparsed),
+                vec![Kind::Paragraph, Kind::Verbatim, Kind::Paragraph],
+                "(Definition -> Annotation) must merge into lead + verbatim (the definition, \
+                 closed by `:: note ::`) + the annotation body as a trailing paragraph; got \
+                 {:?}\n{out}",
+                body_kinds(reparsed),
+            );
+            let v = match items[1] {
+                ContentItem::VerbatimBlock(v) => v.as_ref(),
+                other => panic!("expected a VerbatimBlock; got {other:?}\n{out}"),
+            };
+            assert_eq!(
+                v.group_len(),
+                1,
+                "(Definition -> Annotation) the definition is the verbatim's only group\n{out}",
+            );
+            assert_eq!(
+                v.subject.as_string(),
+                "Term",
+                "(Definition -> Annotation) the verbatim subject must be the definition subject\n{out}",
+            );
+            assert_eq!(
+                verbatim_group_text(v.children.iter()),
+                vec!["Def body."],
+                "(Definition -> Annotation) the verbatim content must be the definition body\n{out}",
+            );
+            assert_eq!(
+                v.closing_data.label.value, "note",
+                "(Definition -> Annotation) the shared closer must be the annotation's `:: note ::`\n{out}",
+            );
+        }
+        Kind::Table => {
+            // KNOWN CONTENT-LOSS BUG (lex#819), NOT intended group semantics.
+            // Unlike verbatim, a table is single-group, so the definition cannot
+            // become a group; instead the merge collapses to a degenerate table
+            // that keeps ONLY the definition's subject and DROPS everything else —
+            // both the definition body AND the table's own rows. This is a real,
+            // pre-existing bug (deferred, tracked in lex#819), not faithful and not
+            // "intended." The assertion CHARACTERIZES the current known-bad shape so
+            // the loss is pinned and visible; when lex#819 is fixed the pair should
+            // SEPARATE (Table drops out of `is_known_hijack`) and this arm must be
+            // updated to expect two siblings.
+            assert_eq!(
+                body_kinds(reparsed),
+                vec![Kind::Paragraph, Kind::Table],
+                "(Definition -> Table) known bug lex#819: currently merges into lead + one \
+                 degenerate table; got {:?}\n{out}",
+                body_kinds(reparsed),
+            );
+            let table = match items[1] {
+                ContentItem::Table(t) => t.as_ref(),
+                other => panic!("expected a Table; got {other:?}\n{out}"),
+            };
+            assert_eq!(
+                table.subject.as_string(),
+                "Term",
+                "(Definition -> Table) known bug lex#819: the merged table keeps only the \
+                 definition subject\n{out}",
+            );
+            assert!(
+                table.header_rows.is_empty() && table.body_rows.is_empty(),
+                "(Definition -> Table) known bug lex#819: the merge DROPS all rows (content \
+                 loss); when #819 is fixed the pair should separate and this tripwire must be \
+                 updated; got {} header + {} body row(s)\n{out}",
+                table.header_rows.len(),
+                table.body_rows.len(),
+            );
+        }
+        other => panic!("assert_definition_hijack_shape called with non-hijack next {other:?}"),
+    }
 }
 
 #[test]
@@ -248,18 +418,15 @@ fn every_ordered_pair_reparses_as_two_blocks() {
             let kinds = body_kinds(&reparsed);
 
             if is_known_hijack(a, b) {
-                // Regression guard for the multi-group verbatim feature: the pair
-                // MUST still merge (the Definition is the verbatim's first group per
-                // grammar §4.5c). If it ever separates, multi-group verbatim has
-                // regressed — the opposite of a fix.
-                assert_ne!(
-                    kinds,
-                    vec![Kind::Paragraph, a, b],
-                    "({a:?} -> {b:?}) must still merge — a definition adjacent to a \
-                     closer-terminated verbatim is that verbatim's first group per the \
-                     multi-group grammar (§4.5c); if this separates, multi-group verbatim \
-                     has regressed.\n{out}"
-                );
+                // Regression guard for the Definition-absorbing adjacencies. Rather
+                // than the weak "does not equal the separated shape" check (which
+                // codex flagged — it would pass even if the parser dropped content
+                // or produced the wrong merged block), assert the POSITIVE merged
+                // shape. `assert_definition_hijack_shape` pins each pair: the
+                // lossless §4.5c merges (Verbatim/Annotation) AND the lex#819
+                // Table content-loss bug. If it separates OR the merged shape is
+                // wrong, the guard fails.
+                assert_definition_hijack_shape(b, &reparsed, &out);
                 continue;
             }
 
@@ -288,14 +455,17 @@ fn every_ordered_pair_reparses_as_two_blocks() {
 
 #[test]
 fn definition_before_closer_led_block_is_a_known_hijack() {
-    // Explicit regression guard for the intended group semantics (grammar §4.5c):
-    // a Definition immediately above a closer-terminated block is that block's
-    // first verbatim group. A Verbatim and a Table supply the shared `:: label ::`
-    // closer directly; an Annotation's `:: label ::` marker is *also* a valid
-    // verbatim closer, so it absorbs the definition too. This is multi-group
-    // verbatim working as designed — no blank count in the matrix changes it, and
-    // the pair MUST stay merged. If it ever separates, multi-group verbatim has
-    // regressed and the matrix docs must be revisited.
+    // Explicit regression guard that a Definition immediately above a
+    // closer-terminated block is absorbed rather than kept as a sibling. Two of
+    // these are the intended multi-group behavior (grammar §4.5c): Definition →
+    // Verbatim (the definition is the verbatim's first group under the shared
+    // closer) and Definition → Annotation (the `:: label ::` marker doubles as a
+    // verbatim closer, so the definition becomes a verbatim closed by it and the
+    // annotation body spills out as a trailing paragraph) — both lossless. The
+    // third, Definition → Table, is the lex#819 content-loss bug (deferred): a
+    // single-group table cannot hold the definition as a group, so the merge drops
+    // content. `assert_definition_hijack_shape` pins each shape positively — merge
+    // vs separate AND the exact merged block — so it fails on regression either way.
     for next in [Kind::Verbatim, Kind::Table, Kind::Annotation] {
         let doc = doc_with(vec![
             lead(),
@@ -304,15 +474,7 @@ fn definition_before_closer_led_block_is_a_known_hijack() {
         ]);
         let out = serialize(&doc);
         let reparsed = parse_document(&out).expect("reparse");
-        let kinds = body_kinds(&reparsed);
-        // The Definition never survives: its subject is consumed as the subject of
-        // the verbatim the matcher synthesizes around the re-anchored closer.
-        assert!(
-            !kinds.contains(&Kind::Definition),
-            "Definition -> {next:?} must stay merged — the definition subject is the \
-             verbatim's first group per grammar §4.5c; if it survives as a sibling, \
-             multi-group verbatim has regressed; got {kinds:?}\n{out}"
-        );
+        assert_definition_hijack_shape(next, &reparsed, &out);
     }
 }
 
@@ -583,9 +745,10 @@ proptest::proptest! {
     /// An arbitrary sequence of reader-shaped sibling blocks (NO BlankLineGroups)
     /// serializes and re-parses with the same block-type sequence. Drawn from the
     /// six kinds that round-trip as bare siblings (Annotation is excluded — bare
-    /// annotation siblings re-attach, an orthogonal parser behavior), and the
-    /// intended Definition→Verbatim / Definition→Table merge adjacencies (grammar
-    /// §4.5c) are skipped. #784 will grow this into the full reader-content proptest.
+    /// annotation siblings re-attach, an orthogonal parser behavior). The
+    /// `is_known_hijack` merge adjacencies are skipped: Definition→Verbatim (the
+    /// intended multi-group behavior, §4.5c) and Definition→Table (the lex#819
+    /// content-loss bug). #784 will grow this into the full reader-content proptest.
     #[test]
     fn reader_shaped_sibling_sequence_preserves_block_types(
         indices in proptest::collection::vec(0usize..6, 1..7),
@@ -602,11 +765,11 @@ proptest::proptest! {
             ][i])
             .collect();
 
-        // Skip the intended merge adjacencies (multi-group verbatim, grammar §4.5c).
+        // Skip the intended merge adjacencies (multi-group verbatim, grammar §4.5c)
+        // via prop_assume! rather than a silent early return, so a rejected draw is
+        // recorded as a proptest rejection instead of counting as a passing case.
         for pair in kinds.windows(2) {
-            if is_known_hijack(pair[0], pair[1]) {
-                return Ok(());
-            }
+            proptest::prop_assume!(!is_known_hijack(pair[0], pair[1]));
         }
 
         // Lead paragraph neutralizes the document-title boundary (slice #783).
