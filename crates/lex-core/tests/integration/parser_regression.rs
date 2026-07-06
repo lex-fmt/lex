@@ -299,3 +299,81 @@ fn regression_complex_session_with_all_elements() {
             });
     });
 }
+
+// ==================== #795: session-title marker-guard escaping ====================
+// A style-less session whose title text begins with a marker-like token is
+// serialized with an escaping backslash before the marker's structural separator
+// (`1\. Primary`), so it must NOT re-parse WITH a sequence-marker style, and the
+// escaping backslash must be stripped from the stored title text (escaping.lex
+// §3.4). A genuinely-marked session must keep its real marker.
+
+use lex_core::lex::ast::elements::sequence_marker::DecorationStyle;
+use lex_core::lex::ast::ContentItem;
+
+fn only_session(source: &str) -> lex_core::lex::ast::Session {
+    let doc = parse_document(source).unwrap();
+    match doc.root.children.iter().next().cloned() {
+        Some(ContentItem::Session(s)) => s,
+        other => panic!("expected a single Session, got {other:?}"),
+    }
+}
+
+#[test]
+fn regression_795_escaped_marker_title_has_no_marker_style() {
+    // `1\. Primary` — the serializer's guard form. Re-parses style-less with the
+    // backslash stripped from the title text.
+    let session = only_session("1\\. Primary\n\n    body\n");
+    assert!(
+        session.marker.is_none(),
+        "escaped marker-like title must not acquire a sequence-marker style, got {:?}",
+        session.marker
+    );
+    assert_eq!(
+        session.title.as_string(),
+        "1. Primary",
+        "the escaping backslash must be stripped from the stored title text"
+    );
+}
+
+#[test]
+fn regression_795_escaped_forms_roman_alpha_paren_extended() {
+    for (source, title) in [
+        ("IV\\. Historical\n\n    b\n", "IV. Historical"),
+        ("a\\) Second\n\n    b\n", "a) Second"),
+        ("\\(1) Appendix\n\n    b\n", "(1) Appendix"),
+        ("1\\.2.3 Deep\n\n    b\n", "1.2.3 Deep"),
+    ] {
+        let session = only_session(source);
+        assert!(
+            session.marker.is_none(),
+            "{source:?} must re-parse without a marker, got {:?}",
+            session.marker
+        );
+        assert_eq!(
+            session.title.as_string(),
+            title,
+            "title text for {source:?}"
+        );
+    }
+}
+
+#[test]
+fn regression_795_genuine_numbered_session_keeps_its_marker() {
+    // A real, unescaped marker must still classify with its style.
+    let session = only_session("1. Primary\n\n    body\n");
+    let marker = session
+        .marker
+        .as_ref()
+        .expect("a genuine `1.` title must carry a sequence marker");
+    assert_eq!(marker.style, DecorationStyle::Numerical);
+    assert_eq!(session.title.as_string(), "1. Primary");
+}
+
+#[test]
+fn regression_795_backslash_before_alnum_is_literal_not_a_guard() {
+    // `\1. Primary` — a backslash before an alphanumeric is literal text (§1),
+    // never a marker guard, so it is left intact and stays style-less.
+    let session = only_session("\\1. Primary\n\n    body\n");
+    assert!(session.marker.is_none());
+    assert_eq!(session.title.as_string(), "\\1. Primary");
+}

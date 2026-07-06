@@ -27,13 +27,24 @@
 //!     paragraph before a verbatim is absorbed as the verbatim subject / turned into
 //!     a Definition, and the body de-indents. This is what now blocks the CommonMark
 //!     reference, comrak-readme, and comrak-reference (each has such a colon-para →
-//!     fenced-code adjacency, some inside a list item).
-//!   - **lex#795 (session-marker inference)** — a heading whose text begins with a
-//!     marker-like token (`## 1\. Primary Session` in kitchensink) serializes to
-//!     `1. Primary Session`, which re-parses with a Numerical session marker where
-//!     the reader had `style: None`. What now blocks kitchensink.
+//!     fenced-code adjacency, some inside a list item). It also blocks kitchensink:
+//!     its empty ```` ``` image ```` fence becomes an empty-subject verbatim whose
+//!     colon line is re-anchored by the closer hijack and swallows the preceding
+//!     `:: todo ::` block-annotation body.
+//!   - **lex#795 (session-marker inference) — FIXED.** A style-less session whose
+//!     title text begins with a marker-like token (`## 1\. Primary Session` in
+//!     kitchensink) used to serialize to a bare `1. Primary Session`, which
+//!     re-parsed WITH a Numerical session marker where the reader had `style: None`.
+//!     The Lex serializer now escapes the marker's structural separator
+//!     (`1\. Primary Session`, escaping.lex §3.4) when — and only when — the session
+//!     carries no explicit marker, and lex-core strips that guard backslash on
+//!     re-parse, so the session round-trips with `style: None` and its title text
+//!     unchanged. Sessions are no longer a blocker for any fixture.
 //!   - **lex#791 (leading-annotation reorder)** — `20-ideas-naked.md`'s leading
-//!     document-level annotations reorder around the title on serialize.
+//!     document-level annotations reorder around the title on serialize. A related
+//!     annotation-attachment limitation (a floating block annotation attaches to
+//!     its neighbor rather than round-tripping as a sibling) is a second residual
+//!     blocker for kitchensink.
 //!
 //! ## How this suite stays honest (no forced green, no weakened canon)
 //!
@@ -103,14 +114,26 @@ const FIXTURES: &[(&str, &str)] = &[
 /// unlisted one starts failing (a new regression).
 const FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[
     // #798 (reader-built loose lists) is FIXED — reader-built lists now round-trip.
-    // Each fixture below was verified (recursive Skeleton diff) to have no
-    // remaining list-structure divergence; the entry names the OTHER bug it still
-    // trips. kitchensink → #795 (its `## 1. Primary Session` numbered heading
-    // re-parses as a Numerical session marker). commonmark-reference /
-    // comrak-readme / comrak-reference → #790 (a colon-terminated paragraph before
-    // a fenced code block is absorbed as the verbatim subject / becomes a
-    // Definition, some inside a list item). See the module docs for the analysis.
-    ("kitchensink", "lex#795"),
+    // #795 (session-marker inference) is FIXED — a style-less marker-like heading
+    // (`## 1\. Primary Session`) now serializes with an escaped guard (`1\.`) and
+    // re-parses with `style: None`. Each fixture below was re-verified (recursive
+    // Skeleton diff) to have no remaining list- or session-marker divergence; the
+    // entry names the OTHER bug it still trips.
+    //
+    // commonmark-reference / comrak-readme / comrak-reference → #790 (a
+    // colon-terminated paragraph before a fenced code block is absorbed as the
+    // verbatim subject / becomes a Definition, some inside a list item).
+    //
+    // kitchensink → #790 as well: with #795 fixed, its residual divergence is the
+    // empty ```` ``` image ```` fence, which serializes to an empty-subject
+    // verbatim (`:` + `:: image ::`) whose colon line is re-anchored by the
+    // closer hijack (separation.rs "Closer re-anchoring") and swallows the
+    // preceding `:: todo ::` block-annotation body. It ALSO trips the standalone
+    // block-annotation limitation (a floating annotation attaches to its
+    // neighboring paragraph rather than round-tripping as a sibling — documented
+    // in separation.rs §"Annotations", the #791 class), so kitchensink stays
+    // blocked until both land. Tagged against #790, the first tracked cause.
+    ("kitchensink", "lex#790"),
     ("comrak-readme", "lex#790"),
     ("commonmark-reference", "lex#790"),
     ("comrak-reference", "lex#790"),
@@ -468,5 +491,107 @@ fn nested_single_item_degrades_but_outer_list_survives() {
             assert!(has_only, "nested single-item content lost:\n{lex}");
         }
         other => panic!("expected a ListItem, got {other:?}"),
+    }
+}
+
+// ============================================================================
+// #795 — MARKER-LIKE SESSION TITLES
+//
+// A style-less session whose title text begins with a marker-like token
+// (`1.`, `a)`, `IV.`, `(1)`, `1.2.3`) must survive serialize→re-parse with
+// `style: None`. The serializer escapes the marker's structural separator
+// (escaping.lex §3.4) only when the session carries no explicit marker, and
+// lex-core strips that guard on re-parse. Genuine markers are untouched.
+// ============================================================================
+
+/// Every marker-like Markdown heading round-trips faithfully — the reader builds
+/// a `style: None` session, and the escaped Lex re-parses to the same skeleton
+/// (checked directly by `check_faithful`). Markdown headings carry no decoration
+/// style, so each of these reads as `style: None`.
+#[test]
+fn marker_like_headings_round_trip() {
+    for heading in [
+        "## 1\\. Numbered",
+        "## IV\\. Roman",
+        "## a\\. Alpha",
+        "## 1\\)  Paren",
+        "## \\(1) Double paren",
+        "## 1\\.2.3 Extended",
+        // A dash-leading heading is never a session marker (sessions reject dash
+        // markers), so it round-trips without needing a guard.
+        "## - Dash leading",
+        // A heading with no marker-like token must be unaffected.
+        "## Plain Heading",
+    ] {
+        let src = format!("# Doc\n\n{heading}\n\nBody text.\n");
+        check_faithful(&MarkdownFormat, &src)
+            .unwrap_or_else(|e| panic!("heading {heading:?} not faithful:\n{e}"));
+    }
+}
+
+/// The reader shape built directly: a `Session { marker: None, title: "1. X" }`
+/// (exactly what the Markdown reader produces for `## 1. X`). It must serialize
+/// to an escaped form and re-parse with `style: None` and its title text intact.
+#[test]
+fn reader_shaped_marker_title_reparses_style_none() {
+    use lex_core::lex::ast::elements::container::SessionContainer;
+    use lex_core::lex::ast::elements::typed_content::{ContentElement, SessionContent};
+    use lex_core::lex::ast::{Document, Paragraph, Session, TextContent};
+
+    let session = Session::new(
+        TextContent::from_string("1. Primary".to_string(), None),
+        vec![SessionContent::Element(ContentElement::Paragraph(
+            Paragraph::from_line("Body.".to_string()),
+        ))],
+    );
+    assert!(
+        session.marker.is_none(),
+        "reader builds a style-less session"
+    );
+
+    let mut doc = Document::new();
+    doc.root.children = SessionContainer::from_typed(vec![SessionContent::Session(session)]);
+
+    let lex = LexFormat::default();
+    let out = lex.serialize(&doc).expect("serialize");
+    assert!(
+        out.contains("1\\. Primary"),
+        "the style-less marker-like title must be escaped:\n{out}"
+    );
+
+    let reparsed = lex.parse(&out).expect("reparse");
+    let Some(ContentItem::Session(s)) = reparsed.root.children.iter().next() else {
+        panic!("expected a Session, got:\n{out}");
+    };
+    assert!(
+        s.marker.is_none(),
+        "re-parsed session must stay style-less, got {:?}\n{out}",
+        s.marker
+    );
+    assert_eq!(s.title.as_string(), "1. Primary", "title text preserved");
+
+    // And the whole document is Skeleton-faithful.
+    assert_eq!(canon(&doc), canon(&reparsed));
+}
+
+/// lex → lex byte-identity: a genuinely numbered session keeps its real marker
+/// (no spurious escape), and a hand-written escaped title round-trips verbatim.
+#[test]
+fn lex_sourced_sessions_are_byte_identical() {
+    let lex = LexFormat::default();
+    for source in [
+        // Genuine numbered session — the marker is real, must not be escaped.
+        "1. Real Session\n\n    Body.\n",
+        // Genuine alphabetical/roman/parenthetical.
+        "a. Alpha Session\n\n    Body.\n",
+        "IV. Roman Session\n\n    Body.\n",
+        // Style-less plain title — unaffected.
+        "Introduction\n\n    Body.\n",
+        // Hand-written escaped marker-like title — re-escaped identically.
+        "1\\. Primary\n\n    Body.\n",
+    ] {
+        let doc = lex.parse(source).expect("parse");
+        let out = lex.serialize(&doc).expect("serialize");
+        assert_eq!(out, source, "lex → lex must be byte-identical");
     }
 }

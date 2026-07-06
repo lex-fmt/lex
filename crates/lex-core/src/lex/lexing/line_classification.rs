@@ -33,7 +33,9 @@
 use crate::lex::annotation::analyze_annotation_header_tokens;
 use crate::lex::ast::elements::sequence_marker::{DecorationStyle, Form, Separator};
 use crate::lex::escape::find_structural_lex_markers;
+use crate::lex::lexing::base_tokenization::tokenize;
 use crate::lex::token::{LineType, Token};
+use std::borrow::Cow;
 
 /// Parsed details about a list marker at the start of a line.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -278,6 +280,86 @@ pub fn parse_seq_marker(tokens: &[Token]) -> Option<ParsedListMarker> {
 /// Check if line starts with a list marker (after optional indentation)
 pub fn has_seq_marker(tokens: &[Token]) -> bool {
     parse_seq_marker(tokens).is_some()
+}
+
+/// Whether `title`, read as a would-be session-title line, leads with a token
+/// sequence that [`parse_seq_marker`] classifies as a *non-Plain* session
+/// sequence marker (Numerical / Alphabetical / Roman, in any separator or form).
+/// Sessions reject Plain (dash) markers, so a leading dash is never a session
+/// marker and reports `false`.
+fn leads_with_session_marker(title: &str) -> bool {
+    let tokens: Vec<Token> = tokenize(title).into_iter().map(|(t, _)| t).collect();
+    matches!(parse_seq_marker(&tokens), Some(pm) if pm.style != DecorationStyle::Plain)
+}
+
+/// Serializer guard (escaping.lex §3.4, lex#795): a style-less session whose
+/// title text begins with a marker-like token (`1.`, `a)`, `IV.`, `(1)`,
+/// `1.2.3`, …) would, if serialized verbatim, re-parse as a session *with* that
+/// sequence-marker style — a Faithfulness violation, since the source AST had no
+/// marker. Insert a single escaping backslash before the marker's first
+/// structural (non-alphanumeric) character so the leading token no longer reads
+/// as a marker. The backslash is stripped again on re-parse
+/// ([`unescape_session_title_marker_guard`]) and at render time (inline
+/// escaping, §1), so the title *text* is unchanged. Titles that do not lead with
+/// a session marker are returned untouched.
+///
+/// Callers must apply this only when the session carries no explicit marker: a
+/// genuinely numbered session keeps its real marker and must never be escaped.
+pub fn escape_session_title_marker_guard(title: &str) -> Cow<'_, str> {
+    if !leads_with_session_marker(title) {
+        return Cow::Borrowed(title);
+    }
+    // The marker's first structural character — the byte the guard backslash
+    // must precede — is the first non-alphanumeric byte of the title. For `1.`,
+    // `IV.`, or `a)` that byte follows an ASCII-alphanumeric run (digits, a
+    // single letter, or Roman numerals); for a parenthetical marker like `(1)`
+    // it is the leading `(` at position 0.
+    match title.bytes().position(|b| !b.is_ascii_alphanumeric()) {
+        Some(sep) => {
+            let mut escaped = String::with_capacity(title.len() + 1);
+            escaped.push_str(&title[..sep]);
+            escaped.push('\\');
+            escaped.push_str(&title[sep..]);
+            Cow::Owned(escaped)
+        }
+        // Unreachable in practice: a matched marker always has a separator, so a
+        // non-alphanumeric byte exists. Fall back to the unescaped title.
+        None => Cow::Borrowed(title),
+    }
+}
+
+/// Parser counterpart to [`escape_session_title_marker_guard`] (escaping.lex
+/// §3.4: the structural layer that consumes a delimiter must strip its own
+/// escaping backslash). If `title` is an *escaped* session marker — a single
+/// backslash guarding the marker's first structural character whose removal
+/// yields a non-Plain session marker — return the title with that backslash
+/// removed (the marker stays suppressed, the text is restored). Returns `None`
+/// when `title` is not an escaped marker, so genuine content is left untouched,
+/// including `\<alnum>` sequences like `C:\Users` that §1 keeps literal.
+pub fn unescape_session_title_marker_guard(title: &str) -> Option<String> {
+    let bytes = title.as_bytes();
+    for (i, &b) in bytes.iter().enumerate() {
+        if b == b' ' {
+            // The marker region ends at the first space; a guard backslash is
+            // always inside the marker, so stop looking.
+            break;
+        }
+        if b != b'\\' {
+            continue;
+        }
+        // §1: a backslash before an alphanumeric character is literal text, never
+        // a marker guard (the serializer only ever escapes the marker's
+        // non-alphanumeric separator). Anything else is not our escape.
+        match bytes.get(i + 1) {
+            Some(next) if !next.is_ascii_alphanumeric() => {}
+            _ => return None,
+        }
+        let mut candidate = String::with_capacity(title.len() - 1);
+        candidate.push_str(&title[..i]);
+        candidate.push_str(&title[i + 1..]);
+        return leads_with_session_marker(&candidate).then_some(candidate);
+    }
+    None
 }
 
 /// Check if a string is a single letter (a-z, A-Z)
@@ -581,5 +663,121 @@ mod tests {
             Token::BlankLine(Some("\n".to_string())),
         ];
         assert_eq!(classify_line_tokens(&tokens), LineType::ParagraphLine);
+    }
+
+    // ── lex#795: session-title marker-guard escaping (escaping.lex §3.4) ──────
+
+    #[test]
+    fn escape_guards_every_session_marker_form() {
+        // A style-less title whose text begins with a marker-like token gets a
+        // backslash before the marker's first structural character.
+        assert_eq!(
+            escape_session_title_marker_guard("1. Primary"),
+            "1\\. Primary"
+        );
+        assert_eq!(escape_session_title_marker_guard("a. Alpha"), "a\\. Alpha");
+        assert_eq!(
+            escape_session_title_marker_guard("IV. Roman"),
+            "IV\\. Roman"
+        );
+        assert_eq!(escape_session_title_marker_guard("1) Paren"), "1\\) Paren");
+        assert_eq!(
+            escape_session_title_marker_guard("(a) Double"),
+            "\\(a) Double"
+        );
+        assert_eq!(
+            escape_session_title_marker_guard("1.2.3 Extended"),
+            "1\\.2.3 Extended"
+        );
+    }
+
+    #[test]
+    fn escape_leaves_non_marker_titles_untouched() {
+        // No leading marker token → no guard. Plain (dash) markers are not valid
+        // session markers, so a leading dash is left alone too.
+        assert_eq!(
+            escape_session_title_marker_guard("Introduction"),
+            "Introduction"
+        );
+        assert_eq!(
+            escape_session_title_marker_guard("Version 2.0 notes"),
+            "Version 2.0 notes"
+        );
+        assert_eq!(
+            escape_session_title_marker_guard("- Not a session marker"),
+            "- Not a session marker"
+        );
+        // `1.Primary` (no space after the separator) is not a marker.
+        assert_eq!(escape_session_title_marker_guard("1.Primary"), "1.Primary");
+    }
+
+    #[test]
+    fn unescape_reverses_the_guard_for_every_form() {
+        assert_eq!(
+            unescape_session_title_marker_guard("1\\. Primary").as_deref(),
+            Some("1. Primary")
+        );
+        assert_eq!(
+            unescape_session_title_marker_guard("a\\. Alpha").as_deref(),
+            Some("a. Alpha")
+        );
+        assert_eq!(
+            unescape_session_title_marker_guard("IV\\. Roman").as_deref(),
+            Some("IV. Roman")
+        );
+        assert_eq!(
+            unescape_session_title_marker_guard("1\\) Paren").as_deref(),
+            Some("1) Paren")
+        );
+        assert_eq!(
+            unescape_session_title_marker_guard("\\(a) Double").as_deref(),
+            Some("(a) Double")
+        );
+        assert_eq!(
+            unescape_session_title_marker_guard("1\\.2.3 Extended").as_deref(),
+            Some("1.2.3 Extended")
+        );
+    }
+
+    #[test]
+    fn unescape_ignores_backslashes_that_are_not_marker_guards() {
+        // `\` before an alphanumeric is literal (escaping.lex §1, e.g. a path);
+        // removing it would not create a marker anyway.
+        assert_eq!(unescape_session_title_marker_guard("C:\\Users"), None);
+        assert_eq!(
+            unescape_session_title_marker_guard("\\1. literal-backslash-title"),
+            None
+        );
+        // A backslash before a non-marker separator is left alone.
+        assert_eq!(
+            unescape_session_title_marker_guard("Version 2\\.0 notes"),
+            None
+        );
+        // No backslash at all.
+        assert_eq!(unescape_session_title_marker_guard("1. Primary"), None);
+        assert_eq!(unescape_session_title_marker_guard("Introduction"), None);
+    }
+
+    #[test]
+    fn escape_then_unescape_is_identity() {
+        for title in [
+            "1. Primary",
+            "a) Second",
+            "IV. Historical",
+            "(1) Appendix",
+            "1.2.3 Deep",
+        ] {
+            let escaped = escape_session_title_marker_guard(title);
+            assert_ne!(
+                escaped.as_ref(),
+                title,
+                "guard must change a marker-like title"
+            );
+            assert_eq!(
+                unescape_session_title_marker_guard(&escaped).as_deref(),
+                Some(title),
+                "unescape must restore the original title text for {title:?}",
+            );
+        }
     }
 }
