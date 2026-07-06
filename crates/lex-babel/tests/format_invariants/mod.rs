@@ -199,11 +199,15 @@ fn targeted_cases() -> Vec<(&'static str, &'static str)> {
 //          on serialize. The serializer used to emit the first-class title node
 //          before the body stream, hoisting it ahead of any annotation authored
 //          above it; it now emits the title at its own source position, so the two
-//          named repros (document-09, annotation-27) pass. A DEEPER case remains:
-//          annotations that in the source attach to the first *session* re-attach
-//          to the document *root* on round-trip (they serialize at the document
-//          head and re-parse as root-owned) — the inlines-spec fixtures and
-//          20-ideas-naked still fail Tier-2 on that attachment change.
+//          named repros (document-09, annotation-27) pass. The DEEPER case — a
+//          leading annotation that in the source attaches to the first *session*
+//          re-attaching to the document *root* on round-trip — is now FIXED by
+//          lex#814 §2 (`decide_attachment` routes a leading annotation to the root
+//          when the next content is a session, so parse(D) and parse(format(D))
+//          converge). The four inlines-spec fixtures round-trip again;
+//          20-ideas-naked still fails, but on a serializer residual (single-line→
+//          block annotation rewrite alters content) tracked as lex#817 (deferred),
+//          not attachment — see the TIER2_FIXTURE_KNOWN_FAIL note below.
 //   #792 — FIXED. Ragged/mismatched-row tables used to get padded + a separator
 //          row injected, adding cells to short rows (Tier-2). The serializer no
 //          longer pads short rows, so table-13 round-trips faithfully.
@@ -217,38 +221,38 @@ const TIER1_TARGETED_KNOWN_FAIL: &[(&str, &str)] = &[];
 const TIER2_TARGETED_KNOWN_FAIL: &[(&str, &str)] = &[];
 
 const TIER1_FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[
-    // #790 (residual) — a table nested inside definitions emits its closing
-    // `:: table ::` annotation one indent level too shallow, escaping the
-    // innermost container. The cell-block-content de-indent that used to list
-    // table-19/21/22/23 here is fixed (the serializer no longer re-walks cell
-    // children); this remaining case is the nested-closer indent.
+    // #790 (serializer residual) — a table nested inside definitions emits its
+    // closing `:: table ::` annotation one indent level too shallow (at the
+    // definition-body indent instead of the table-subject indent), escaping the
+    // innermost container. This is a SERIALIZER bug and remains open: the
+    // lex#814 §1/§3 parser fix repaired the semantic round-trip (Tier-2, below,
+    // no longer fails), but idempotence still breaks — re-formatting the
+    // shallow-closer output re-parses the table out of its container and drops
+    // it. The cell-block-content de-indent that used to list table-19/21/22/23
+    // here is a separate, already-fixed class.
     ("table.docs/table-08-nested-in-definition.lex", "lex#790"),
 ];
 
 const TIER2_FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[
-    // #790 (residual) — a table nested inside definitions emits its closing
-    // `:: table ::` annotation one indent level too shallow, so on re-parse the
-    // closer (and the table) detach from the innermost container. The cell-block-
-    // content class (table-19/20/21/22/23) is fixed; this nested-closer case
-    // remains.
-    ("table.docs/table-08-nested-in-definition.lex", "lex#790"),
-    // #791 (deeper case) — leading/document-level annotations that in the source
-    // are attached to the first *session* re-attach to the document *root* across
-    // a round-trip: the annotations serialize at the document head and re-parse as
-    // root-owned rather than session-owned. #791's serializer-ordering fix keeps a
-    // leading annotation above the title (document-09, annotation-27 pass) but does
-    // not change this attachment target, so these fixtures still fail Tier-2.
-    ("benchmark/20-ideas-naked.lex", "lex#791"),
-    ("inlines.docs/specs/formatting/formatting.lex", "lex#791"),
-    (
-        "inlines.docs/specs/formatting/inlines-general.lex",
-        "lex#791",
-    ),
-    ("inlines.docs/specs/references/citations.lex", "lex#791"),
-    (
-        "inlines.docs/specs/references/references-general.lex",
-        "lex#791",
-    ),
+    // lex#814 §2 — FIXED the attachment inconsistency that this #791 "deeper case"
+    // described: leading document-level annotations authored above the first
+    // *session* used to bind to that session in parse(D) but re-attach to the
+    // document *root* in parse(format(D)) (the serializer emits them at the head
+    // in block form). `decide_attachment` now routes a leading annotation to the
+    // root whenever the next content is a session, so both directions converge on
+    // root. The four inlines-spec fixtures (formatting, inlines-general, citations,
+    // references-general) round-trip again and have been removed from this list.
+    //
+    // 20-ideas-naked STILL fails Tier-2, but on a SEPARATE serializer residual,
+    // not attachment: its leading annotations are single-line with trailing
+    // whitespace (`:: author :: Arthur Debert  `). The serializer rewrites them to
+    // block form, which trims the trailing spaces AND folds a trailing blank into
+    // the annotation as a `BlankLineGroup` child — so the annotation's *content*
+    // (not its target) differs across the round-trip. That is a serializer
+    // faithfulness bug for single-line→block annotation rewriting, tracked as its
+    // own issue lex#817 (deferred, not fixed here); the lex#814 §2 attachment fix
+    // does not address it.
+    ("benchmark/20-ideas-naked.lex", "lex#817"),
 ];
 
 #[cfg(test)]

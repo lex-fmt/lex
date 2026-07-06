@@ -40,11 +40,16 @@
 //!     carries no explicit marker, and lex-core strips that guard backslash on
 //!     re-parse, so the session round-trips with `style: None` and its title text
 //!     unchanged. Sessions are no longer a blocker for any fixture.
-//!   - **lex#791 (leading-annotation reorder)** — `20-ideas-naked.md`'s leading
-//!     document-level annotations reorder around the title on serialize. A related
-//!     annotation-attachment limitation (a floating block annotation attaches to
-//!     its neighbor rather than round-tripping as a sibling) is a second residual
-//!     blocker for kitchensink.
+//!   - **lex#814 §2 (leading-annotation attachment)** — `20-ideas-naked.md`'s
+//!     leading document-level annotations used to reorder around the title / bind
+//!     inconsistently across a round-trip; the attachment inconsistency is now
+//!     fixed (a leading annotation above the first session attaches to the root in
+//!     both parse directions). ideas-naked stays blocked on a serializer residual
+//!     tracked as its own issue lex#817 (deferred): single-line→block annotation
+//!     rewrite trims trailing whitespace and folds a trailing blank into the body.
+//!     A related annotation-attachment limitation (a
+//!     floating block annotation attaches to its neighbor rather than round-tripping
+//!     as a sibling) is a second residual blocker for kitchensink.
 //!
 //! ## How this suite stays honest (no forced green, no weakened canon)
 //!
@@ -120,25 +125,38 @@ const FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[
     // Skeleton diff) to have no remaining list- or session-marker divergence; the
     // entry names the OTHER bug it still trips.
     //
-    // commonmark-reference / comrak-readme / comrak-reference → #790 (a
-    // colon-terminated paragraph before a fenced code block is absorbed as the
-    // verbatim subject / becomes a Definition, some inside a list item).
+    // commonmark-reference / comrak-readme / comrak-reference → the colon-para-
+    // before-fenced-code *absorption* named in #790 is now FIXED at the parser
+    // (lex#814 §1/§3: a colon-terminated paragraph is no longer swallowed as the
+    // following verbatim's subject). These three big real-world READMEs, however,
+    // still diverge on OTHER residuals — nested block/standalone annotations that
+    // re-attach across the round-trip (the #791 class) and empty-image fences —
+    // so they stay blocked. Retagged to the lex#814 umbrella (§2/§4 + empty-fence
+    // residuals own what remains); do NOT re-attribute to the absorbed-subject
+    // cause, which no longer fires.
     //
-    // kitchensink → #790 as well: with #795 fixed, its residual divergence is the
-    // empty ```` ``` image ```` fence, which serializes to an empty-subject
-    // verbatim (`:` + `:: image ::`) whose colon line is re-anchored by the
-    // closer hijack (separation.rs "Closer re-anchoring") and swallows the
-    // preceding `:: todo ::` block-annotation body. It ALSO trips the standalone
-    // block-annotation limitation (a floating annotation attaches to its
-    // neighboring paragraph rather than round-tripping as a sibling — documented
-    // in separation.rs §"Annotations", the #791 class), so kitchensink stays
-    // blocked until both land. Tagged against #790, the first tracked cause.
-    ("kitchensink", "lex#790"),
-    ("comrak-readme", "lex#790"),
-    ("commonmark-reference", "lex#790"),
-    ("comrak-reference", "lex#790"),
-    // #791 — leading document-level annotations reorder around the title.
-    ("ideas-naked", "lex#791"),
+    // kitchensink → same story plus the empty ```` ``` image ```` fence, which
+    // serializes to an empty-subject verbatim (`:` + `:: image ::`) whose colon
+    // line is re-anchored by the closer hijack (separation.rs "Closer
+    // re-anchoring") and swallows the preceding `:: todo ::` block-annotation
+    // body. It ALSO trips the standalone block-annotation limitation (a floating
+    // annotation attaches to its neighboring paragraph rather than round-tripping
+    // as a sibling — separation.rs §"Annotations", the #791 class), so
+    // kitchensink stays blocked until those land.
+    ("kitchensink", "lex#814"),
+    ("comrak-readme", "lex#814"),
+    ("commonmark-reference", "lex#814"),
+    ("comrak-reference", "lex#814"),
+    // #791 — leading document-level annotations reorder around the title. The
+    // attachment-inconsistency half of this (a leading annotation binding to the
+    // first session in parse(D) but to the root in parse(format(D))) is now FIXED
+    // by lex#814 §2. ideas-naked STILL fails faithfulness on a separate serializer
+    // residual: its single-line leading annotations (`:: author :: Arthur Debert  `)
+    // are rewritten to block form, which trims trailing whitespace and folds a
+    // trailing blank into the annotation body — altering content, not target.
+    // Tracked as its own issue lex#817 (deferred, not fixed here) for that
+    // single-line→block serializer residual.
+    ("ideas-naked", "lex#817"),
 ];
 
 /// Drive the real reader over every fixture and grade Faithfulness against the
