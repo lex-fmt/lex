@@ -861,13 +861,14 @@ proptest! {
 // The generator draws only the block kinds that round-trip faithfully as bare
 // siblings and excludes the adjacencies the parser provably cannot separate yet
 // — mirrored exactly from `tests/lex_separation/matrix.rs`:
-//   - A Definition immediately before a closer-led block (Verbatim/Table/
-//     Annotation) is hijacked: the verbatim/table matcher re-anchors the next
-//     `:: label ::` closer onto the definition's `subject:` line, swallowing the
-//     pair. No blank count fixes it (matrix.rs::is_known_hijack). We generate
-//     Verbatim (not Table/Annotation) as a closer-led sibling, so the only such
-//     adjacency reachable here is Definition→Verbatim, which the generator
-//     rejects.
+//   - A Definition immediately before a closer-led Verbatim/Annotation is
+//     hijacked: the verbatim matcher re-anchors the next `:: label ::` closer
+//     onto the definition's `subject:` line, swallowing the pair. No blank count
+//     fixes it (matrix.rs::is_known_hijack). We generate Verbatim (not
+//     Annotation) as a closer-led sibling, so the only such adjacency reachable
+//     here is Definition→Verbatim, which the generator rejects. Definition→Table
+//     used to be a lossy member of this family, but tables are single-group and
+//     now separate (lex#819).
 //   - Bare Annotation siblings do not round-trip as siblings (the parser
 //     re-attaches or hoists a floating annotation), so Annotation is never
 //     generated as a top-level block.
