@@ -12,6 +12,13 @@ logs = "./bin/shipit logs"
 provision-lexd = "./bin/shipit provision lexd"
 # <<< shipit-managed tasks <<<
 
+# Consumer-owned tasks (outside the shipit-managed block above).
+# `test` runs the workspace suite via cargo-nextest — the runner lex's CI uses
+# (.github/workflows test-rust.yml / sandbox-tests.yml). Without this, `pixi run
+# test` falls through to the POSIX `test` builtin (silent exit 1, no suite run) —
+# the #444 trap.
+test = "cargo nextest run --workspace"
+
 [feature.lint.dependencies]
 # >>> shipit-managed lint deps (do not edit; regenerate via `shipit install`) >>>
 # The fleet-pinned lint toolchain (docs/prd/adoption.md: the managed set owns
@@ -31,3 +38,11 @@ lefthook = "2.1.*"
 # >>> shipit-managed environments (do not edit; regenerate via `shipit install`) >>>
 lint = ["lint"]
 # <<< shipit-managed environments <<<
+
+# Consumer-owned dependencies (outside the shipit-managed blocks above).
+# cargo-nextest provisions the `test` task's runner FROM pixi, so `pixi run test`
+# works in a clean pixi env — not only where nextest already happens to be on
+# PATH. The Rust toolchain itself (cargo/rustc) comes from the host, matching
+# lex's CI (setup-rust), which is why only the nextest runner is pinned here.
+[dependencies]
+cargo-nextest = ">=0.9.138,<0.10"

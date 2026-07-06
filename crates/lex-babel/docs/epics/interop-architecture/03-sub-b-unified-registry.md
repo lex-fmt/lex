@@ -13,7 +13,7 @@ Part of the interop architecture work-stream — see umbrella #613.
 Two parallel label-dispatch surfaces exist today:
 
 | Surface | Runs when | Operates on | Produces |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | **Verbatim/IR-build dispatch** | `from_lex` (IR construction) | lex-core AST `VerbatimBlock` via `from_lex_verbatim` (`crates/lex-babel/src/ir/from_lex.rs:314-397`) | Typed `DocNode` (`Table`, `Image`, `Video`, `Audio`) |
 | **Render dispatch** | Pre-serialization | lex-core AST via `crates/lex-babel/src/render_dispatch.rs` | Format-specific output spliced into serializer |
 

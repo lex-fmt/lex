@@ -7,7 +7,7 @@ Each `*.md` file in this directory mirrors the corresponding issue body, so revi
 ## Issues
 
 | # | File | Title |
-|---|---|---|
+| --- | --- | --- |
 | #612 | _(forthcoming as part of #612)_ | v1 interop scope — Markdown/HTML/PDF-out as the bar; Pandoc/LaTeX/HTML-import as planned; PDF-import is a category error |
 | #613 | [`01-umbrella.md`](./01-umbrella.md) | Umbrella: symmetrize the IR, unify label dispatch, retire the markdown HACK |
 | #614 | [`02-sub-a-symmetric-ir.md`](./02-sub-a-symmetric-ir.md) | Sub A: complete IR ↔ Lex symmetry |

@@ -15,6 +15,7 @@ Prerequisites:
   - `lexd` on PATH (any v0.10+ release covers `--to markdown`)
   - `comms/` submodule initialised
 """
+
 import subprocess
 import sys
 from pathlib import Path

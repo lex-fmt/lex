@@ -7,6 +7,7 @@ content is plain prose so per-byte parser cost is predictable; a separate
 sanity check during the rig's initial run confirmed the wire codec
 round-trips structurally richer documents (sessions, subsections) too.
 """
+
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -46,19 +47,28 @@ def s1():
 def s2():
     d = ROOT / "s2_one_small"
     write(d / "frag.lex", paragraphs_for_bytes(100))
-    write(d / "host.lex", paragraphs_for_bytes(2_000) + include("frag.lex") + paragraphs_for_bytes(2_000))
+    write(
+        d / "host.lex",
+        paragraphs_for_bytes(2_000) + include("frag.lex") + paragraphs_for_bytes(2_000),
+    )
 
 
 def s3():
     d = ROOT / "s3_one_medium"
     write(d / "frag.lex", paragraphs_for_bytes(10_000))
-    write(d / "host.lex", paragraphs_for_bytes(2_000) + include("frag.lex") + paragraphs_for_bytes(2_000))
+    write(
+        d / "host.lex",
+        paragraphs_for_bytes(2_000) + include("frag.lex") + paragraphs_for_bytes(2_000),
+    )
 
 
 def s4():
     d = ROOT / "s4_one_large"
     write(d / "frag.lex", paragraphs_for_bytes(100_000))
-    write(d / "host.lex", paragraphs_for_bytes(2_000) + include("frag.lex") + paragraphs_for_bytes(2_000))
+    write(
+        d / "host.lex",
+        paragraphs_for_bytes(2_000) + include("frag.lex") + paragraphs_for_bytes(2_000),
+    )
 
 
 def s5():
@@ -75,7 +85,10 @@ def s6():
     d = ROOT / "s6_deep_chain"
     write(d / "level5.lex", paragraphs_for_bytes(1_000))
     for i in range(4, 0, -1):
-        write(d / f"level{i}.lex", paragraphs_for_bytes(1_000) + include(f"level{i+1}.lex"))
+        write(
+            d / f"level{i}.lex",
+            paragraphs_for_bytes(1_000) + include(f"level{i + 1}.lex"),
+        )
     write(d / "host.lex", paragraphs_for_bytes(500) + include("level1.lex"))
 
 

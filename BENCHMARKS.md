@@ -29,7 +29,7 @@ We measure performance across three dimensions:
 Process boot + arg parsing, no actual work:
 
 | Tool | Mean Latency |
-|---|---:|
+| --- | ---: |
 | `cmark --version` | **1.5 ms** |
 | `lexd --version` | **1.7 ms** |
 | `pandoc --version` | **24.8 ms** |
@@ -41,7 +41,7 @@ Process boot + arg parsing, no actual work:
 Time to read a file, parse it, and emit HTML.
 
 | Fixture | Size | `lexd → html` | `cmark md → html` | `pandoc md → html` |
-|---|---:|---:|---:|---:|
+| --- | ---: | ---: | ---: | ---: |
 | `010-kitchensink` (Tier A) | 2.4 KB | 10.6 ms | 1.5 ms | 200 ms |
 | `20-ideas-naked` (Tier A) | 9.8 KB | 23.2 ms | 1.6 ms | 222 ms |
 | `040-on-parsing` (Tier B) | 12.3 KB | 27.7 ms | 1.7 ms | 224 ms |
@@ -62,7 +62,7 @@ The `comrak` configuration matches `lex_babel::formats::markdown::parser::defaul
 Tier C exposes scaling behavior that the realistic-doc tier can't see (same content, controlled size).
 
 | Payload | `lex-core` parse | `comrak` parse | **Multiplier gap** |
-|---|---:|---:|---:|
+| --- | ---: | ---: | ---: |
 | Realistic docs (Tier A/B, 2–24 KB) | ~0.3–0.5 MB/s | ~120–220 MB/s | **~270–380×** |
 | Synthetic 10 KB (Tier C) | 12.79 ms | 47.5 µs | **~269×** |
 | Synthetic 100 KB (Tier C) | 158.2 ms | 498.9 µs | **~317×** |

@@ -35,7 +35,8 @@ jobs:
       # depended on by both lexd-lsp and lexd, so it sits after the
       # leaves and before the binary crates. lex-wasm has publish = false
       # and isn't in the list.
-      crates: lex-extension,lex-extension-host,lex-core,lex-babel,lex-config,lex-analysis,lex-lsp-core,lex-fmt,lexd-lsp,lexd
+      crates: "lex-extension,lex-extension-host,lex-core,lex-babel,lex-config,\
+        lex-analysis,lex-lsp-core,lex-fmt,lexd-lsp,lexd"
       # Brew formula subject. The other binary (lexd-lsp) is built and
       # signed alongside but ships as a tarball-only artifact (editor
       # extensions bundle it themselves).
