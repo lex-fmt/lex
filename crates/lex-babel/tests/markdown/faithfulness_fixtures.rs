@@ -40,11 +40,15 @@
 //!     carries no explicit marker, and lex-core strips that guard backslash on
 //!     re-parse, so the session round-trips with `style: None` and its title text
 //!     unchanged. Sessions are no longer a blocker for any fixture.
-//!   - **lex#791 (leading-annotation reorder)** — `20-ideas-naked.md`'s leading
-//!     document-level annotations reorder around the title on serialize. A related
-//!     annotation-attachment limitation (a floating block annotation attaches to
-//!     its neighbor rather than round-tripping as a sibling) is a second residual
-//!     blocker for kitchensink.
+//!   - **lex#814 §2 (leading-annotation attachment)** — `20-ideas-naked.md`'s
+//!     leading document-level annotations used to reorder around the title / bind
+//!     inconsistently across a round-trip; the attachment inconsistency is now
+//!     fixed (a leading annotation above the first session attaches to the root in
+//!     both parse directions). ideas-naked stays blocked on a serializer residual
+//!     (single-line→block annotation rewrite trims trailing whitespace and folds a
+//!     trailing blank into the body). A related annotation-attachment limitation (a
+//!     floating block annotation attaches to its neighbor rather than round-tripping
+//!     as a sibling) is a second residual blocker for kitchensink.
 //!
 //! ## How this suite stays honest (no forced green, no weakened canon)
 //!
@@ -142,8 +146,15 @@ const FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[
     ("comrak-readme", "lex#814"),
     ("commonmark-reference", "lex#814"),
     ("comrak-reference", "lex#814"),
-    // #791 — leading document-level annotations reorder around the title.
-    ("ideas-naked", "lex#791"),
+    // #791 — leading document-level annotations reorder around the title. The
+    // attachment-inconsistency half of this (a leading annotation binding to the
+    // first session in parse(D) but to the root in parse(format(D))) is now FIXED
+    // by lex#814 §2. ideas-naked STILL fails faithfulness on a separate serializer
+    // residual: its single-line leading annotations (`:: author :: Arthur Debert  `)
+    // are rewritten to block form, which trims trailing whitespace and folds a
+    // trailing blank into the annotation body — altering content, not target.
+    // Retagged to the lex#814 umbrella for that serializer residual.
+    ("ideas-naked", "lex#814"),
 ];
 
 /// Drive the real reader over every fixture and grade Faithfulness against the

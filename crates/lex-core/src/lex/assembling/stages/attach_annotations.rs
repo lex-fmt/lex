@@ -167,6 +167,12 @@ fn attach_annotations_in_container(
         let next = distance::find_next_content(&entries, entry_idx, &container_span);
         let blank_after = distance::blank_gap_after(&entries, entry_idx, &container_span);
 
+        // Whether the next content element is a session. A leading document-level
+        // annotation above the first session is document metadata (lex#814 §2).
+        let next_is_session = next
+            .next
+            .is_some_and(|(_, idx)| matches!(children[idx], ContentItem::Session(_)));
+
         if let Some(target) = distance::decide_attachment(
             previous,
             next.next,
@@ -174,6 +180,7 @@ fn attach_annotations_in_container(
             blank_after,
             &kind,
             annotation_sink.allows_container(),
+            next_is_session,
         ) {
             attachments.push(PendingAttachment {
                 annotation_index: child_index,
@@ -714,6 +721,38 @@ mod tests {
         assert_eq!(paragraphs[1].annotations.len(), 1);
         assert_eq!(paragraphs[1].annotations[0].data.label.value, "test");
     }
+    #[test]
+    fn test_leading_annotation_above_session_attaches_to_root() {
+        // lex#814 §2: single-line leading annotations directly above the first
+        // session (no trailing blank) are document metadata and must attach to
+        // the document root — the same target the block form reaches after a
+        // format() round-trip (which adds a trailing blank). Before the fix
+        // these single-line annotations bound to the first session instead,
+        // making attachment inconsistent across parse/re-parse.
+        let source =
+            ":: author :: Arthur\n:: publishing-date :: today\nFirst Session\n\n    Body.\n";
+        let doc = parse_without_annotation_attachment(source).unwrap();
+
+        let result = AttachAnnotations::new().run(doc).unwrap();
+
+        // Both leading annotations land on the document root...
+        assert_eq!(result.annotations.len(), 2);
+        // ...and none linger as detached content items.
+        assert!(result
+            .root
+            .children
+            .iter()
+            .all(|item| !matches!(item, ContentItem::Annotation(_))));
+        // The first session carries no attached annotations.
+        let session = result
+            .root
+            .children
+            .iter()
+            .find_map(|item| item.as_session())
+            .expect("expected first session");
+        assert!(session.annotations.is_empty());
+    }
+
     #[test]
     fn test_benchmark_50_repro() {
         let source = ":: test.note severity=info :: Document preface.\n\n1. Intro\n";
