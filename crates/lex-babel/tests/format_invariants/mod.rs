@@ -109,6 +109,13 @@ fn targeted_cases() -> Vec<(&'static str, &'static str)> {
             "table_basic_ragged",
             "Stats:\n    |A|B|\n    |1|2|\n:: table ::\n",
         ),
+        // Mismatched row widths (a short middle row) must not be padded out to a
+        // rectangular grid: the short row must keep its own cell count across a
+        // round-trip (lex#792).
+        (
+            "table_mismatched_rows",
+            "Sparse Data:\n    | Name  | Age | City     |\n    | Alice | 30  |\n    | Bob   | 25  | Paris    |\n",
+        ),
         (
             "table_aligned_header",
             "Stats:\n    | Name | Score |\n    |:---|---:|\n    | Alice | 10 |\n:: table ::\n",
@@ -191,8 +198,6 @@ fn targeted_cases() -> Vec<(&'static str, &'static str)> {
 //          (document-09) and the multiple-document-level annotation fixture
 //          (annotation-27, Tier-2), where title/subtitle/annotation ordering is
 //          still not reconciled.
-//   #792 — ragged/mismatched-row tables get padded + a separator row injected,
-//          adding cells (Tier-2 only).
 //   #783 — the `:: doc.untitled ::` title-model sentinel (document-06) now
 //          parses and round-trips under the ADR-0002 title model, so it is no
 //          longer a known failure.
@@ -257,8 +262,6 @@ const TIER2_FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[
         "document.docs/document-09-subtitle-with-annotations.lex",
         "lex#791",
     ),
-    // #792 — ragged table rows padded + separator row injected.
-    ("table.docs/table-13-flat-mismatched-rows.lex", "lex#792"),
 ];
 
 #[cfg(test)]

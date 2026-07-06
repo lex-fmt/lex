@@ -113,7 +113,7 @@ pub(super) fn emit_pipe_table(serializer: &mut LexSerializer, table: &Table) {
 
     let header_count = table.header_rows.len();
     for (idx, slots) in grid.iter().enumerate() {
-        serializer.write_line(&format_grid_row(slots, &widths, col_count));
+        serializer.write_line(&format_grid_row(slots, &widths));
         // Separator row sits between the header rows and the body.
         if header_count > 0 && idx + 1 == header_count {
             serializer.write_line(&format_separator_row(&widths, &aligns));
@@ -175,12 +175,19 @@ fn push_cell(out: &mut String, text: &str, width: usize) {
     out.push('|');
 }
 
-fn format_grid_row(slots: &[Slot], widths: &[usize], col_count: usize) -> String {
+/// Emit a row's cells, one per slot the grid produced for it.
+///
+/// A short (ragged) row emits exactly its own cells — it is *not* padded out to
+/// the table's column count, since a phantom trailing cell would re-parse as a
+/// real empty cell and change the row's cell count (a faithfulness break,
+/// lex#792). `build_grid` has already inserted `Slot::Empty` for the columns a
+/// short row must still render (those sitting before a rowspan-covered column
+/// further right), so the slot list is exactly what should be emitted.
+fn format_grid_row(slots: &[Slot], widths: &[usize]) -> String {
     let mut out = String::from("|");
-    for (col, &width) in widths.iter().enumerate().take(col_count) {
-        // Columns past this (short) row's slots render as empty padding.
-        let text = slots.get(col).map(Slot::text).unwrap_or("");
-        push_cell(&mut out, text, width);
+    for (col, slot) in slots.iter().enumerate() {
+        let width = widths.get(col).copied().unwrap_or(0);
+        push_cell(&mut out, slot.text(), width);
     }
     out
 }
