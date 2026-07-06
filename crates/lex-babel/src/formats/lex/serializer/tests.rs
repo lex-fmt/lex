@@ -394,6 +394,35 @@ fn test_round_trip_list_07_nested() {
 }
 
 #[test]
+fn table_cell_with_block_content_does_not_strand_children() {
+    // lex#790: a table cell carrying block content (a list) stores it both as
+    // flat `content` and as structured `children`. The serializer renders the
+    // flat content stacked across pipe continuation rows; it must NOT also walk
+    // the cell's children, which used to leak out as a dedented stranded list
+    // after the table. The reformat must be idempotent and contain no bare list.
+    let source = "\
+Data:
+    | Name  | Skills   |
+
+    | Alice | - Python |
+    |       | - Rust   |
+
+    | Bob   | Text     |
+";
+    let formatted = format_source(source);
+    // The list markers must stay inside the pipe grid — no bare `- ` line
+    // (a stranded list re-parses as a sibling and breaks faithfulness).
+    for line in formatted.lines() {
+        assert!(
+            !line.trim_start().starts_with("- ") || line.contains('|'),
+            "stranded list line escaped the table:\n{formatted}"
+        );
+    }
+    let formatted_again = format_source(&formatted);
+    assert_text_eq(&formatted, &formatted_again);
+}
+
+#[test]
 fn test_round_trip_definition_01() {
     let source = Lexplore::load(ElementType::Definition, 1).source();
     let formatted = format_source(&source);

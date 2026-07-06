@@ -217,27 +217,21 @@ const TIER1_TARGETED_KNOWN_FAIL: &[(&str, &str)] = &[];
 const TIER2_TARGETED_KNOWN_FAIL: &[(&str, &str)] = &[];
 
 const TIER1_FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[
-    // #790 — table cells that carry *block* content (a list, verbatim, annotation,
-    // or a table nested in a definition inside a cell) still de-indent that inner
-    // structure on serialize, so the reformat is not idempotent. The subject-colon
-    // de-indent and simple multi-line text cells are fixed.
+    // #790 (residual) — a table nested inside definitions emits its closing
+    // `:: table ::` annotation one indent level too shallow, escaping the
+    // innermost container. The cell-block-content de-indent that used to list
+    // table-19/21/22/23 here is fixed (the serializer no longer re-walks cell
+    // children); this remaining case is the nested-closer indent.
     ("table.docs/table-08-nested-in-definition.lex", "lex#790"),
-    ("table.docs/table-19-cell-with-list.lex", "lex#790"),
-    ("table.docs/table-21-cell-with-verbatim.lex", "lex#790"),
-    ("table.docs/table-22-cell-with-mixed-content.lex", "lex#790"),
-    ("table.docs/table-23-cell-with-annotation.lex", "lex#790"),
 ];
 
 const TIER2_FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[
-    // #790 — table cells carrying block content (a list, verbatim, annotation, or a
-    // definition — incl. a table nested inside a definition) still lose or de-indent
-    // that inner structure across a round-trip.
+    // #790 (residual) — a table nested inside definitions emits its closing
+    // `:: table ::` annotation one indent level too shallow, so on re-parse the
+    // closer (and the table) detach from the innermost container. The cell-block-
+    // content class (table-19/20/21/22/23) is fixed; this nested-closer case
+    // remains.
     ("table.docs/table-08-nested-in-definition.lex", "lex#790"),
-    ("table.docs/table-19-cell-with-list.lex", "lex#790"),
-    ("table.docs/table-20-cell-with-definition.lex", "lex#790"),
-    ("table.docs/table-21-cell-with-verbatim.lex", "lex#790"),
-    ("table.docs/table-22-cell-with-mixed-content.lex", "lex#790"),
-    ("table.docs/table-23-cell-with-annotation.lex", "lex#790"),
     // #791 (deeper case) — leading/document-level annotations that in the source
     // are attached to the first *session* re-attach to the document *root* across
     // a round-trip: the annotations serialize at the document head and re-parse as

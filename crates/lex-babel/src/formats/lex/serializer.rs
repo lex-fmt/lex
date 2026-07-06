@@ -295,6 +295,14 @@ impl LexSerializer {
 }
 
 impl Visitor for LexSerializer {
+    // The serializer rebuilds each table cell from its flat `content` (stacked
+    // across pipe continuation rows by `emit_pipe_table`), so it must NOT also
+    // walk the cells' structured `children` — doing so re-emitted that block
+    // content as stranded document-level siblings after the table (lex#790).
+    fn descend_into_table_cells(&mut self) -> bool {
+        false
+    }
+
     fn visit_session(&mut self, session: &Session) {
         self.separate_before(BlockKind::Session);
         let raw_title = session.title.as_string();

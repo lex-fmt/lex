@@ -72,6 +72,17 @@ pub trait Visitor {
         _blank_line_group: &super::elements::blank_line_group::BlankLineGroup,
     ) {
     }
+
+    /// Whether `Table::accept` should descend into the block-level `children` of
+    /// table cells after `visit_table`. A table cell carries its block content
+    /// both as flat `content` (the pipe-row text) and as structured `children`;
+    /// visitors that reconstruct a cell from the pipe rows (the Lex serializer)
+    /// override this to `false` so the redundant children are not walked a second
+    /// time and emitted as stranded document-level blocks (lex#790). Analysis
+    /// visitors keep the default `true` so they see the cells' inner structure.
+    fn descend_into_table_cells(&mut self) -> bool {
+        true
+    }
 }
 
 /// Helper function to visit all children in a ContentItem slice
