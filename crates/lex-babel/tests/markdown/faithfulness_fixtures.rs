@@ -338,7 +338,7 @@ fn backtick_in_code_span_degrades_predictably() {
         1,
         "degrade must yield exactly one body block, got:\n{lex_text}"
     );
-    assert_eq!(paragraphs, vec!["Use `a`b` here.".to_string()]);
+    assert_eq!(paragraphs, vec!["Use `a`b` here."]);
 
     // And it is Skeleton-faithful at the text level: dropping the code-span
     // markup does not change the compared text, so this particular degrade
