@@ -1,0 +1,1 @@
+- Serializer escapes style-less session titles that begin with a marker-like token (1., a), IV., (1), 1.2.3) so they no longer re-parse with a spurious sequence-marker style (lex#795)

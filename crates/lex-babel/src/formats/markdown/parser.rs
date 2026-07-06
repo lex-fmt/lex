@@ -33,13 +33,39 @@ pub fn parse_from_markdown(source: &str) -> Result<Document, FormatError> {
     let options = default_comrak_options();
     let root = parse_document(&arena, source, &options);
 
-    // Step 2: Convert Comrak AST to IR events
-    let events = comrak_ast_to_events(root)?;
+    // Step 2: Convert Comrak AST to IR events. A leading `# H1` is lifted out
+    // as the document title (Markdown's only title concept, ADR-0002).
+    let (events, document_title) = comrak_ast_to_events(root)?;
 
     // Step 3: Convert events to IR tree
-    let ir_doc = events_to_tree(&events).map_err(|e| {
+    let mut ir_doc = events_to_tree(&events).map_err(|e| {
         FormatError::ParseError(format!("Failed to build IR tree from events: {e}"))
     })?;
+
+    // Title model (ADR-0002): record the title on the IR so `to_lex` sets
+    // `Document.title` (surviving the Lex round-trip via the title→body blank).
+    // A heading-less source *with content* genuinely has no title — emit the
+    // explicit `:: doc.untitled ::` no-title marker so the parser does not
+    // promote the first body paragraph into a title on re-parse. A genuinely
+    // empty document has no paragraph to promote, so it needs no marker;
+    // emitting one there would turn an empty Markdown file into a non-empty Lex
+    // document and break empty ↔ empty faithfulness.
+    match document_title {
+        Some(title) => {
+            ir_doc.title = Some(vec![InlineContent::Text(title)]);
+        }
+        None if !ir_doc.children.is_empty() => {
+            ir_doc
+                .document_annotations
+                .push(crate::ir::nodes::Annotation {
+                    label: "doc.untitled".to_string(),
+                    parameters: Vec::new(),
+                    content: Vec::new(),
+                    form: LabelForm::Canonical,
+                });
+        }
+        None => {}
+    }
 
     // Step 4: Convert IR to Lex AST
     let lex_doc = crate::from_ir(&ir_doc);
@@ -64,8 +90,17 @@ fn default_comrak_options() -> ComrakOptions<'static> {
 
 type DefinitionPieces = Option<(Vec<InlineContent>, Vec<InlineContent>)>;
 
-/// Convert Comrak AST to IR events
-fn comrak_ast_to_events<'a>(root: &'a AstNode<'a>) -> Result<Vec<Event>, FormatError> {
+/// Convert Comrak AST to IR events, plus the document title lifted from a
+/// leading `# H1` (if any).
+///
+/// Per ADR-0002, Markdown's only title concept is a leading level-1 heading:
+/// when present it is consumed here and returned as the title (the caller
+/// records it on `Document.title`), *not* emitted as a body paragraph. A
+/// document with no leading H1 returns `None`, and the caller marks it
+/// title-less with `:: doc.untitled ::`.
+fn comrak_ast_to_events<'a>(
+    root: &'a AstNode<'a>,
+) -> Result<(Vec<Event>, Option<String>), FormatError> {
     let mut events = vec![Event::StartDocument];
 
     // Check if first child is an H1 heading - if so, treat it as document title
@@ -86,21 +121,10 @@ fn comrak_ast_to_events<'a>(root: &'a AstNode<'a>) -> Result<Vec<Event>, FormatE
         }
     }
 
-    // If we found a document title, emit it as a special event
-    // For now, we'll emit it as a paragraph that becomes the document title
-    // when converted back to Lex AST
-    if let Some(title) = document_title {
-        // Emit document title as a paragraph followed by an implicit blank
-        // The from_ir conversion will recognize this as the document title
-        events.push(Event::StartParagraph);
-        events.push(Event::Inline(InlineContent::Text(title)));
-        events.push(Event::EndParagraph);
-    }
-
     collect_children_with_definitions(children_iter, &mut events)?;
 
     events.push(Event::EndDocument);
-    Ok(events)
+    Ok((events, document_title))
 }
 
 /// Collect text content from a node (for extracting document title)

@@ -767,19 +767,30 @@ fn test_document_title_exported_as_h1() {
 }
 
 #[test]
-fn test_document_first_paragraph_as_title() {
-    // Use spec file: first paragraph followed by blank line becomes document title
+fn test_document_untitled_marker_is_title_less() {
+    // document-06 leads with `:: doc.untitled ::`, the ADR-0002 no-title marker
+    // (#783): the parser honors it, so the document has no title and the first
+    // paragraph stays body. Exporting to Markdown emits no `# H1` heading — the
+    // no-title marker is dropped (Markdown's absent title *is* the round-trip).
     let lex_src = std::fs::read_to_string(
-        "../../comms/specs/elements/document.docs/document-06-title-empty.lex",
+        "../../comms/specs/elements/document.docs/document-06-title-untitled.lex",
     )
     .expect("document-06 spec file should exist");
-    let lex_doc = STRING_TO_AST.run(lex_src).unwrap();
+    let lex_doc = STRING_TO_AST
+        .run(lex_src)
+        .expect("document-06 parses title-less");
     let md = MarkdownFormat.serialize(&lex_doc).unwrap();
-
-    // First paragraph "Just a paragraph with no title." becomes the H1 title
     assert!(
-        md.starts_with("# Just a paragraph with no title.\n"),
-        "First paragraph should become H1 title"
+        !md.starts_with("# "),
+        "a title-less document must not emit an H1 heading, got: {md}"
+    );
+    assert!(
+        !md.contains("doc.untitled"),
+        "the no-title marker must not leak into Markdown, got: {md}"
+    );
+    assert!(
+        md.starts_with("Just a paragraph with no title."),
+        "the first paragraph must lead the Markdown body, got: {md}"
     );
 }
 
@@ -787,7 +798,7 @@ fn test_document_first_paragraph_as_title() {
 fn test_document_session_only_no_h1_title() {
     // Use spec file: document starts with session (no explicit document title)
     let lex_src = std::fs::read_to_string(
-        "../../comms/specs/elements/document.docs/document-05-title-session-hoist.lex",
+        "../../comms/specs/elements/document.docs/document-05-title-session-none.lex",
     )
     .expect("document-05 spec file should exist");
     let lex_doc = STRING_TO_AST.run(lex_src).unwrap();

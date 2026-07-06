@@ -14,6 +14,8 @@ use lex_core::lex::ast::*;
 use lex_core::lex::parsing::parse_document;
 use proptest::prelude::*;
 
+use crate::skeleton::canon;
+
 // -----------------------------------------------------------------------------
 // AST Node Generators
 // -----------------------------------------------------------------------------
@@ -112,34 +114,15 @@ fn definition_strategy() -> impl Strategy<Value = Definition> {
                 true
             },
         ),
-        prop::collection::vec(any::<bool>(), 0..5),
     )
-        .prop_map(|(subject, children, blank_decisions)| {
-            // Pre-compute element types before moving
-            let is_para: Vec<bool> = children
-                .iter()
-                .map(|c| matches!(c, ContentElement::Paragraph(_)))
-                .collect();
-
-            let mut spaced_children = Vec::new();
-            for (i, child) in children.into_iter().enumerate() {
-                if i > 0 {
-                    // Paragraphs merge without blank lines — always separate them.
-                    // Paragraph↔list transitions: randomly include blank line to
-                    // stress-test the parser's match_paragraph lookahead.
-                    let both_para = is_para[i - 1] && is_para[i];
-                    let want_blank = blank_decisions.get(i - 1).copied().unwrap_or(true);
-                    if both_para || want_blank {
-                        spaced_children.push(ContentElement::BlankLineGroup(BlankLineGroup {
-                            count: 1,
-                            source_tokens: vec![],
-                            location: Default::default(),
-                        }));
-                    }
-                }
-                spaced_children.push(child);
-            }
-            Definition::new(TextContent::from_string(subject, None), spaced_children)
+        // Reader-shaped: no pre-inserted BlankLineGroup separators between body
+        // children. The serializer's separation matrix (lex#782/#783) now supplies
+        // every structural blank, so the old "always separate paragraphs" workaround
+        // is obsolete — the children go in exactly as a foreign reader would build
+        // them. `matrix.rs::faithful_definition_followed_by_each_non_hijack_block`
+        // is the proof this shape round-trips.
+        .prop_map(|(subject, children)| {
+            Definition::new(TextContent::from_string(subject, None), children)
         })
 }
 
@@ -217,51 +200,19 @@ fn session_strategy() -> impl Strategy<Value = Session> {
                 true
             },
         ),
-        prop::collection::vec(any::<bool>(), 0..5),
     )
-        .prop_map(|(title, content, blank_decisions)| {
-            // Pre-compute element types before moving
-            let is_para: Vec<bool> = content
-                .iter()
-                .map(|c| matches!(c, SessionContent::Element(ContentElement::Paragraph(_))))
-                .collect();
-
-            let mut spaced_content = Vec::new();
-            for (i, c) in content.into_iter().enumerate() {
-                if i > 0 {
-                    // Paragraphs merge without blank lines — always separate them.
-                    // Paragraph↔list transitions: randomly include blank line to
-                    // stress-test the parser's match_paragraph lookahead.
-                    let both_para = is_para[i - 1] && is_para[i];
-                    let want_blank = blank_decisions.get(i - 1).copied().unwrap_or(true);
-                    if both_para || want_blank {
-                        spaced_content.push(SessionContent::Element(
-                            ContentElement::BlankLineGroup(BlankLineGroup {
-                                count: 1,
-                                source_tokens: vec![],
-                                location: Default::default(),
-                            }),
-                        ));
-                    }
-                }
-                spaced_content.push(c);
-            }
-            // Trailing blank after last element (preserves session boundary behavior)
-            spaced_content.push(SessionContent::Element(ContentElement::BlankLineGroup(
-                BlankLineGroup {
-                    count: 1,
-                    source_tokens: vec![],
-                    location: Default::default(),
-                },
-            )));
-
-            Session {
-                title: TextContent::from_string(title, None),
-                marker: None,
-                children: SessionContainer::from_typed(spaced_content),
-                annotations: vec![],
-                location: Default::default(),
-            }
+        // Reader-shaped: no pre-inserted BlankLineGroups between body elements and
+        // no trailing separator — the shape a foreign reader produces. The
+        // separation matrix (lex#782/#783) supplies the structural blanks on
+        // serialize, so the old "always separate paragraphs" + trailing-boundary
+        // workarounds are obsolete. `matrix.rs::faithful_blocks_nested_in_a_session_body`
+        // proves a mixed reader-shaped session body round-trips.
+        .prop_map(|(title, content)| Session {
+            title: TextContent::from_string(title, None),
+            marker: None,
+            children: SessionContainer::from_typed(content),
+            annotations: vec![],
+            location: Default::default(),
         })
 }
 
@@ -275,24 +226,17 @@ fn nested_session_strategy() -> impl Strategy<Value = Session> {
         ),
         session_strategy(),
     )
+        // Reader-shaped: the leading paragraph(s) and the nested child session are
+        // adjacent siblings with no BlankLineGroup between them; the matrix supplies
+        // the Paragraph→Session structural blank on serialize.
         .prop_map(|(title, content, child_session)| {
-            let mut spaced_content: Vec<SessionContent> = Vec::new();
-            for c in content {
-                spaced_content.push(c);
-                spaced_content.push(SessionContent::Element(ContentElement::BlankLineGroup(
-                    BlankLineGroup {
-                        count: 1,
-                        source_tokens: vec![],
-                        location: Default::default(),
-                    },
-                )));
-            }
-            spaced_content.push(SessionContent::Session(child_session));
+            let mut children: Vec<SessionContent> = content;
+            children.push(SessionContent::Session(child_session));
 
             Session {
                 title: TextContent::from_string(title, None),
                 marker: None,
-                children: SessionContainer::from_typed(spaced_content),
+                children: SessionContainer::from_typed(children),
                 annotations: vec![],
                 location: Default::default(),
             }
@@ -899,4 +843,311 @@ proptest! {
             "Formatting is not idempotent!\nFirst:\n{formatted_1}\nSecond:\n{formatted_2}"
         );
     }
+}
+
+// -----------------------------------------------------------------------------
+// Reader-shaped faithfulness (lex#784)
+// -----------------------------------------------------------------------------
+//
+// The regression guard for the whole class of "reader's document falls apart on
+// serialize" bugs. A *reader-shaped* document is one a foreign-format Reader
+// (Markdown, RFC-XML, …) actually produces: sibling blocks carrying NO
+// `BlankLineGroup` separators — blank lines are a Lex serialization concern the
+// Reader never emits. With the separation matrix landed (#782/#783) the
+// serializer now supplies every structural blank, so a reader-shaped AST is a
+// valid input and must survive serialize→reparse *Skeleton-equal* (the
+// Faithfulness invariant, `canon`; CONTEXT.md).
+//
+// The generator draws only the block kinds that round-trip faithfully as bare
+// siblings and excludes the adjacencies the parser provably cannot separate yet
+// — mirrored exactly from `tests/lex_separation/matrix.rs`:
+//   - A Definition immediately before a closer-led block (Verbatim/Table/
+//     Annotation) is hijacked: the verbatim/table matcher re-anchors the next
+//     `:: label ::` closer onto the definition's `subject:` line, swallowing the
+//     pair. No blank count fixes it (matrix.rs::is_known_hijack). We generate
+//     Verbatim (not Table/Annotation) as a closer-led sibling, so the only such
+//     adjacency reachable here is Definition→Verbatim, which the generator
+//     rejects.
+//   - Bare Annotation siblings do not round-trip as siblings (the parser
+//     re-attaches or hoists a floating annotation), so Annotation is never
+//     generated as a top-level block.
+//   - Ragged tables normalize on serialize (lex#792) and top-level Tables would
+//     otherwise stress an orthogonal axis; Table is out of the reader-content set
+//     this slice targets (paragraphs, lists, sessions, definitions, verbatim).
+//
+// Each kind we DO generate is backed by a passing `matrix.rs::faithful_*` example
+// proving that shape is faithful; this proptest generalizes them over random
+// content and arbitrary sibling orderings.
+
+/// The block kinds the reader-shaped generator emits, tagged so the proptest can
+/// reject the documented Definition→Verbatim hijack adjacency by kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReaderBlockKind {
+    Paragraph,
+    List,
+    Session,
+    Definition,
+    Verbatim,
+}
+
+/// A reader-shaped nested (unordered) list: a parent item whose body is a nested
+/// sub-list, plus a plain sibling item — NO `BlankLineGroup` anywhere. Mirrors
+/// the shape `matrix.rs::faithful_nested_lists` proves faithful (item text
+/// followed directly by a child list).
+fn nested_list_strategy() -> impl Strategy<Value = List> {
+    (
+        "[a-zA-Z0-9]+( [a-zA-Z0-9]+)*",
+        list_strategy(),
+        "[a-zA-Z0-9]+( [a-zA-Z0-9]+)*",
+    )
+        .prop_map(|(parent_text, inner, sibling_text)| {
+            let parent = ListItem::with_content(
+                "-".to_string(),
+                parent_text,
+                vec![ContentElement::List(inner)],
+            );
+            let sibling = ListItem::new("-".to_string(), format!("{sibling_text}\n"));
+            let mut list = List::new(vec![parent, sibling]);
+            list.marker = Some(SequenceMarker {
+                raw_text: TextContent::from_string("-".to_string(), None),
+                style: DecorationStyle::Plain,
+                separator: Separator::Period,
+                form: Form::Short,
+                location: Default::default(),
+            });
+            list
+        })
+}
+
+/// A single reader-shaped top-level block, paired with its kind tag. Covers the
+/// reader-content set: paragraphs, unordered/ordered/nested lists, sessions,
+/// definitions, and verbatim blocks. No branch inserts a `BlankLineGroup`.
+fn reader_block_strategy() -> impl Strategy<Value = (ReaderBlockKind, SessionContent)> {
+    prop_oneof![
+        paragraph_strategy().prop_map(|p| (
+            ReaderBlockKind::Paragraph,
+            SessionContent::Element(ContentElement::Paragraph(p)),
+        )),
+        list_strategy().prop_map(|l| (
+            ReaderBlockKind::List,
+            SessionContent::Element(ContentElement::List(l)),
+        )),
+        numbered_list_strategy().prop_map(|l| (
+            ReaderBlockKind::List,
+            SessionContent::Element(ContentElement::List(l)),
+        )),
+        nested_list_strategy().prop_map(|l| (
+            ReaderBlockKind::List,
+            SessionContent::Element(ContentElement::List(l)),
+        )),
+        session_strategy().prop_map(|s| (ReaderBlockKind::Session, SessionContent::Session(s),)),
+        definition_strategy().prop_map(|d| (
+            ReaderBlockKind::Definition,
+            SessionContent::Element(ContentElement::Definition(d)),
+        )),
+        verbatim_strategy().prop_map(|v| (
+            ReaderBlockKind::Verbatim,
+            SessionContent::Element(ContentElement::VerbatimBlock(Box::new(v))),
+        )),
+    ]
+}
+
+/// A two-line lead paragraph. The document-title steal (ADR-0002 / #783) promotes
+/// only a *single-line* first paragraph, so a two-line lead is never stolen and
+/// neutralizes the title boundary — the generated blocks are then measured as
+/// plain siblings. Mirrors `matrix.rs::lead`.
+fn reader_lead() -> SessionContent {
+    SessionContent::Element(ContentElement::Paragraph(Paragraph::new(vec![
+        ContentItem::TextLine(TextLine::new(TextContent::from_string(
+            "Lead line one".to_string(),
+            None,
+        ))),
+        ContentItem::TextLine(TextLine::new(TextContent::from_string(
+            "Lead line two".to_string(),
+            None,
+        ))),
+    ])))
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(256))]
+
+    /// FAITHFULNESS over reader-shaped documents (lex#784): an arbitrary sequence
+    /// of sibling blocks built with NO pre-inserted `BlankLineGroup`s serializes to
+    /// Lex and re-parses to the same Skeleton (`canon`). This is the property-level
+    /// statement of the invariant the removed pre-insertion workaround used to hide.
+    ///
+    /// The only unfaithful adjacency the generator can produce — a Definition
+    /// immediately before a Verbatim (matrix.rs::is_known_hijack) — is rejected, so
+    /// the test exercises the real reader-shaped-separation failure mode without
+    /// asserting an adjacency the parser provably cannot round-trip yet.
+    #[test]
+    fn reader_shaped_document_is_faithful(
+        blocks in prop::collection::vec(reader_block_strategy(), 1..7),
+    ) {
+        // Reject the documented Definition → Verbatim hijack (the verbatim closer
+        // re-anchors the definition subject). Mirrors matrix.rs::is_known_hijack;
+        // the other two hijack partners (Table/Annotation) are never generated.
+        // `prop_assume!` discards the sample so proptest regenerates and still runs
+        // the full 256 accepted cases — rejected inputs are not counted as passes.
+        for pair in blocks.windows(2) {
+            prop_assume!(
+                !(pair[0].0 == ReaderBlockKind::Definition
+                    && pair[1].0 == ReaderBlockKind::Verbatim)
+            );
+        }
+
+        // A title-neutralizing lead, then the generated blocks — all reader-shaped,
+        // zero BlankLineGroups.
+        let mut children = vec![reader_lead()];
+        children.extend(blocks.into_iter().map(|(_, sc)| sc));
+
+        let mut doc = Document::new();
+        doc.root.children = SessionContainer::from_typed(children);
+
+        let serialized = export(&doc).expect("Serialization should not fail");
+        let reparsed = parse_document(&serialized)
+            .unwrap_or_else(|e| panic!("serialized Lex did not re-parse: {e}\n{serialized}"));
+
+        let want = canon(&doc);
+        let got = canon(&reparsed);
+        prop_assert_eq!(
+            want, got,
+            "reader-shaped document not faithful (canon mismatch)\n--- serialized Lex ---\n{}",
+            serialized
+        );
+    }
+}
+
+// ============================================================================
+// lex#798 — the exact reader-built list shape, as in-code ASTs (no Markdown).
+//
+// A foreign reader (comrak) builds each item as `ListItem { text: "", children:
+// [Paragraph, …] }` — the item's lead text lives in a wrapping Paragraph, never
+// on the marker line. The Lex serializer must hoist that leading Paragraph onto
+// the tight `- text` form so it re-parses as a list instead of collapsing to a
+// Paragraph. These assert that directly on the built AST, and that genuinely
+// multi-block items keep their indented body.
+// ============================================================================
+
+/// A reader-built list item: empty marker-line text, content in child blocks.
+fn reader_item(children: Vec<ContentItem>) -> ListItem {
+    let mut c = GeneralContainer::empty();
+    for child in children {
+        c.push(child);
+    }
+    ListItem {
+        marker: TextContent::from_string("-".to_string(), None),
+        text: vec![TextContent::from_string(String::new(), None)],
+        children: c,
+        annotations: vec![],
+        location: Default::default(),
+    }
+}
+
+fn para(text: &str) -> ContentItem {
+    ContentItem::Paragraph(Paragraph {
+        lines: vec![ContentItem::TextLine(TextLine::new(
+            TextContent::from_string(text.to_string(), None),
+        ))],
+        annotations: vec![],
+        location: Default::default(),
+    })
+}
+
+fn plain_list(items: Vec<ListItem>) -> List {
+    let mut container = ListContainer::empty();
+    for item in items {
+        container.push(ContentItem::ListItem(item));
+    }
+    let mut list = List::new(vec![]);
+    list.items = container;
+    list.marker = Some(SequenceMarker {
+        raw_text: TextContent::from_string("-".to_string(), None),
+        style: DecorationStyle::Plain,
+        separator: Separator::Period,
+        form: Form::Short,
+        location: Default::default(),
+    });
+    list
+}
+
+fn doc_with_list(list: List) -> Document {
+    let mut doc = Document::new();
+    doc.root.children =
+        SessionContainer::from_typed(vec![SessionContent::Element(ContentElement::List(list))]);
+    doc
+}
+
+#[test]
+fn reader_shaped_list_serializes_to_reparseable_list() {
+    let list = plain_list(vec![
+        reader_item(vec![para("one")]),
+        reader_item(vec![para("two")]),
+    ]);
+    let doc = doc_with_list(list);
+
+    let serialized = export(&doc).expect("serialization should not fail");
+    // Tight form, not the loose `-\n    text` that collapses on reparse.
+    assert!(
+        serialized.contains("- one") && serialized.contains("- two"),
+        "expected tight `- text` items, got:\n{serialized}"
+    );
+
+    let parsed = parse_document(&serialized).expect("serialized Lex must re-parse");
+    let lists = parsed
+        .root
+        .children
+        .iter()
+        .filter(|c| matches!(c, ContentItem::List(_)))
+        .count();
+    assert_eq!(
+        lists, 1,
+        "reader-built list must re-parse as a List:\n{serialized}"
+    );
+    // Skeleton-faithful: the empty-text + leading-Paragraph shape folds to the
+    // same item text the tight form re-parses to.
+    assert_eq!(canon(&doc), canon(&parsed), "not faithful:\n{serialized}");
+}
+
+#[test]
+fn reader_shaped_multi_block_item_keeps_body() {
+    // First item is genuinely multi-block: a lead paragraph plus a sublist. Only
+    // the lead paragraph is hoisted; the sublist stays in the indented body.
+    let sublist = plain_list(vec![
+        reader_item(vec![para("sub a")]),
+        reader_item(vec![para("sub b")]),
+    ]);
+    let list = plain_list(vec![
+        reader_item(vec![para("first"), ContentItem::List(sublist)]),
+        reader_item(vec![para("second")]),
+    ]);
+    let doc = doc_with_list(list);
+
+    let serialized = export(&doc).expect("serialization should not fail");
+    let parsed = parse_document(&serialized).expect("serialized Lex must re-parse");
+    assert_eq!(canon(&doc), canon(&parsed), "not faithful:\n{serialized}");
+
+    // The sublist survived as a nested List under the first item.
+    let outer = parsed
+        .root
+        .children
+        .iter()
+        .find_map(|c| match c {
+            ContentItem::List(l) => Some(l),
+            _ => None,
+        })
+        .expect("outer list");
+    let first = outer.items.iter().next().expect("first item");
+    let has_sublist = match first {
+        ContentItem::ListItem(li) => li
+            .children
+            .iter()
+            .any(|c| matches!(c, ContentItem::List(_))),
+        _ => false,
+    };
+    assert!(
+        has_sublist,
+        "multi-block item lost its sublist:\n{serialized}"
+    );
 }

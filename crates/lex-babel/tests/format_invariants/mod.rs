@@ -12,28 +12,17 @@
 //! normalize. These tests start from *source text*, which is the only way to
 //! feed the normalizers messy input.
 //!
-//! `canon` is a purpose-built lossless projection of the AST. We deliberately
-//! do NOT reuse `AstSnapshot`: its `label` comes from `display_label()`, which
-//! truncates text at 50 chars and omits table cells / footnotes — blind to
-//! exactly the table/footnote/reference content this suite targets.
-//!
-//! What `canon` quotients out (everything the formatter is *allowed* to change):
-//!   - source ranges / offsets            (never represented in Canon)
-//!   - blank-line groups                  (dropped: purely presentational separators)
-//!   - list/marker *spelling*             (dropped; decoration *style* kept)
-//!   - trailing whitespace                (every text field trimmed)
-//!   - annotation label *spelling*        (canonical `.value` kept)
-//!   - table cell padding                 (cell text trimmed)
+//! The Skeleton reducer `canon` (and what it quotients out) lives in the shared
+//! `crate::skeleton` module, so this suite and the conversion-faithfulness tests
+//! compare Skeletons through one comparator.
 //!
 //! Note on footnotes: the only footnote form is the canonical `:: notes ::`
 //! *list*, which the formatter serializes as-is. (A legacy session→list
 //! migration once ran here as part of `format`; it has been removed, so `canon`
 //! does not model that equivalence and no test input uses the legacy form.)
 
+use crate::skeleton::canon;
 use lex_babel::transforms::format_lex_source;
-use lex_core::lex::ast::elements::inlines::{InlineNode, ReferenceType};
-use lex_core::lex::ast::elements::sequence_marker::DecorationStyle;
-use lex_core::lex::ast::{Annotation, ContentItem, Document, TableRow, TextContent};
 use lex_core::lex::parsing::parse_document;
 
 // -----------------------------------------------------------------------------
@@ -45,274 +34,6 @@ use lex_core::lex::parsing::parse_document;
 /// so proptest can shrink a formatting failure to a minimal input.
 fn format(source: &str) -> Result<String, String> {
     format_lex_source(source).map_err(|e| format!("formatting failed: {e}"))
-}
-
-// -----------------------------------------------------------------------------
-// Canon — lossless, presentation-quotiented AST projection
-// -----------------------------------------------------------------------------
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Canon {
-    Document {
-        title: Option<String>,
-        subtitle: Option<String>,
-        annotations: Vec<Canon>,
-        children: Vec<Canon>,
-    },
-    Session {
-        title: String,
-        style: Option<String>,
-        annotations: Vec<Canon>,
-        children: Vec<Canon>,
-    },
-    Paragraph {
-        text: String,
-        refs: Vec<String>,
-        annotations: Vec<Canon>,
-    },
-    List {
-        style: Option<String>,
-        annotations: Vec<Canon>,
-        items: Vec<Canon>,
-    },
-    ListItem {
-        text: String,
-        refs: Vec<String>,
-        annotations: Vec<Canon>,
-        children: Vec<Canon>,
-    },
-    Definition {
-        subject: String,
-        annotations: Vec<Canon>,
-        children: Vec<Canon>,
-    },
-    Verbatim {
-        subject: String,
-        closing_label: String,
-        lines: Vec<String>,
-    },
-    Annotation {
-        label: String,
-        params: Vec<(String, String)>,
-        children: Vec<Canon>,
-    },
-    Table {
-        subject: String,
-        rows: Vec<CanonRow>,
-        footnotes: Vec<Canon>,
-        annotations: Vec<Canon>,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct CanonRow {
-    header: bool,
-    cells: Vec<CanonCell>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct CanonCell {
-    text: String,
-    refs: Vec<String>,
-    colspan: usize,
-    rowspan: usize,
-    align: String,
-}
-
-/// Stable tag for a reference's classified type. Captures *which* of the 8
-/// reference forms the parser resolved, plus the target/key, so the suite
-/// asserts reference-type preservation explicitly (lex#681 ask).
-fn ref_tag(ty: &ReferenceType) -> String {
-    match ty {
-        ReferenceType::ToCome { identifier } => {
-            format!("tk:{}", identifier.as_deref().unwrap_or(""))
-        }
-        ReferenceType::Citation(data) => format!("cite:{}", data.keys.join(",")),
-        ReferenceType::AnnotationReference { label } => format!("annref:{label}"),
-        ReferenceType::FootnoteNumber { number } => format!("foot:{number}"),
-        ReferenceType::Session { target } => format!("session:{target}"),
-        ReferenceType::Url { target } => format!("url:{target}"),
-        ReferenceType::File { target } => format!("file:{target}"),
-        ReferenceType::General { target } => format!("general:{target}"),
-        ReferenceType::NotSure => "notsure".to_string(),
-    }
-}
-
-/// Extract classified references from a text field by parsing its inlines.
-/// `inlines()` may be lazy/unpopulated on a freshly-parsed document, so parse
-/// on a clone.
-fn refs_in(tc: &TextContent) -> Vec<String> {
-    let mut tc = tc.clone();
-    tc.inlines_or_parse()
-        .iter()
-        .filter_map(|node| match node {
-            InlineNode::Reference { data, .. } => Some(ref_tag(&data.reference_type)),
-            _ => None,
-        })
-        .collect()
-}
-
-fn style_tag(style: DecorationStyle) -> String {
-    format!("{style:?}")
-}
-
-fn canon_annotations(anns: &[Annotation]) -> Vec<Canon> {
-    anns.iter().map(canon_annotation).collect()
-}
-
-fn canon_annotation(ann: &Annotation) -> Canon {
-    Canon::Annotation {
-        // `.value` is the canonical label; the formatter re-emits the source
-        // spelling form, which reparses back to the same canonical value.
-        label: ann.data.label.value.clone(),
-        params: ann
-            .data
-            .parameters
-            .iter()
-            .map(|p| (p.key.clone(), p.value.clone()))
-            .collect(),
-        children: canon_items(ann.children.iter()),
-    }
-}
-
-fn canon_items<'a, I: Iterator<Item = &'a ContentItem>>(items: I) -> Vec<Canon> {
-    items.filter_map(canon_item).collect()
-}
-
-fn canon_row(row: &TableRow) -> CanonRow {
-    CanonRow {
-        header: row.cells.iter().any(|c| c.header),
-        cells: row
-            .cells
-            .iter()
-            .map(|c| CanonCell {
-                text: c.content.as_string().trim().to_string(),
-                refs: refs_in(&c.content),
-                colspan: c.colspan,
-                rowspan: c.rowspan,
-                align: format!("{:?}", c.align),
-            })
-            .collect(),
-    }
-}
-
-/// Project a `ContentItem` to its semantic Canon, or `None` for nodes that are
-/// purely presentational (blank-line groups) or already folded into a parent
-/// (loose `TextLine`s are handled inside `Paragraph`).
-fn canon_item(item: &ContentItem) -> Option<Canon> {
-    Some(match item {
-        ContentItem::BlankLineGroup(_) => return None,
-        // A bare TextLine outside a Paragraph: treat as a one-line paragraph.
-        ContentItem::TextLine(tl) => Canon::Paragraph {
-            text: tl.content.as_string().trim_end().to_string(),
-            refs: refs_in(&tl.content),
-            annotations: Vec::new(),
-        },
-        ContentItem::Paragraph(p) => {
-            let mut text = String::new();
-            let mut refs = Vec::new();
-            for line in &p.lines {
-                if let ContentItem::TextLine(tl) = line {
-                    if !text.is_empty() {
-                        text.push('\n');
-                    }
-                    text.push_str(tl.content.as_string().trim_end());
-                    refs.extend(refs_in(&tl.content));
-                }
-            }
-            Canon::Paragraph {
-                text,
-                refs,
-                annotations: canon_annotations(&p.annotations),
-            }
-        }
-        ContentItem::Session(s) => Canon::Session {
-            title: s.title.as_string().trim_end().to_string(),
-            style: s.marker.as_ref().map(|m| style_tag(m.style)),
-            annotations: canon_annotations(&s.annotations),
-            children: canon_items(s.children.iter()),
-        },
-        ContentItem::List(l) => Canon::List {
-            style: l.marker.as_ref().map(|m| style_tag(m.style)),
-            annotations: canon_annotations(&l.annotations),
-            items: canon_items(l.items.iter()),
-        },
-        ContentItem::ListItem(li) => {
-            // Project *all* text elements (not just the first) so multi-line
-            // item content is covered; collect refs from each.
-            let text = li
-                .text
-                .iter()
-                .map(|t| t.as_string().trim_end())
-                .collect::<Vec<_>>()
-                .join("\n");
-            let refs = li.text.iter().flat_map(refs_in).collect();
-            Canon::ListItem {
-                text,
-                refs,
-                annotations: canon_annotations(&li.annotations),
-                children: canon_items(li.children.iter()),
-            }
-        }
-        ContentItem::Definition(d) => Canon::Definition {
-            subject: d.subject.as_string().trim_end().to_string(),
-            annotations: canon_annotations(&d.annotations),
-            children: canon_items(d.children.iter()),
-        },
-        ContentItem::VerbatimBlock(v) => Canon::Verbatim {
-            subject: v.subject.as_string().trim_end().to_string(),
-            closing_label: v.closing_data.label.value.clone(),
-            lines: v
-                .children
-                .iter()
-                .filter_map(|c| match c {
-                    ContentItem::VerbatimLine(vl) => Some(vl.content.as_string().to_string()),
-                    _ => None,
-                })
-                .collect(),
-        },
-        ContentItem::VerbatimLine(vl) => Canon::Verbatim {
-            subject: String::new(),
-            closing_label: String::new(),
-            lines: vec![vl.content.as_string().to_string()],
-        },
-        ContentItem::Annotation(a) => canon_annotation(a),
-        ContentItem::Table(t) => {
-            let mut rows: Vec<CanonRow> = Vec::new();
-            for r in &t.header_rows {
-                rows.push(canon_row(r));
-            }
-            for r in &t.body_rows {
-                rows.push(canon_row(r));
-            }
-            let footnotes = match &t.footnotes {
-                Some(list) => canon_items(list.items.iter()),
-                None => Vec::new(),
-            };
-            Canon::Table {
-                subject: t.subject.as_string().trim_end().to_string(),
-                rows,
-                footnotes,
-                annotations: canon_annotations(&t.annotations),
-            }
-        }
-    })
-}
-
-fn canon(doc: &Document) -> Canon {
-    Canon::Document {
-        title: doc
-            .title
-            .as_ref()
-            .map(|t| t.content.as_string().trim_end().to_string()),
-        subtitle: doc
-            .title
-            .as_ref()
-            .and_then(|t| t.subtitle.as_ref())
-            .map(|s| s.as_string().trim_end().to_string()),
-        annotations: canon_annotations(&doc.annotations),
-        children: canon_items(doc.root.children.iter()),
-    }
 }
 
 // -----------------------------------------------------------------------------
@@ -449,52 +170,152 @@ fn targeted_cases() -> Vec<(&'static str, &'static str)> {
 // listed case still fails (so the list cannot rot — when a bug is fixed the
 // test tells you to delete the entry) and logs the excluded set on each run.
 //
-// (The lex#681 umbrella is closed: its deliverable — this suite — shipped and
-// every bug it originally found is fixed. The residual Tier-2 fixture failures
-// were triaged into focused issues — #699 (paragraph merge), #700 (open-form
-// drop), #703 (annotation comma) — all now fixed, so every list below is empty.
-// Re-populate only when a newly-filed formatter bug needs to keep the suite
-// green while it is open.)
+// The `TARGETED` lists cover the in-code `targeted_cases()`; the `FIXTURE` lists
+// cover the curated comms corpus (`corpus_fixtures()` — elements/**, trifecta,
+// benchmark). Tier-1 (idempotence) and Tier-2 (canon) are listed separately so
+// each entry names the issue that actually explains *that tier's* failure.
+//
+// Every corpus entry below is a PRE-EXISTING faithfulness gap newly surfaced by
+// the expanded coverage — NOT a regression from #782. Each was confirmed by
+// running the real `check_idempotent` / `check_semantic_preserved` on the file:
+//
+//   #790 — nested block bodies (verbatim/definition) de-indent and multi-line /
+//          nested table cells break on serialize. Both tiers for the affected
+//          tables + verbatim + the two benchmark docs (which #790 names by name);
+//          the inlines-spec fixtures fail Tier-2 here because their indented
+//          grammar-production blocks de-indent on the first format.
+//   #791 — leading document-level annotations reorder around the title / first
+//          block on serialize. The #783 title-model work (document-level
+//          annotations now serialize at the head) subsumed the inlines-spec
+//          Tier-1 fixtures — they pass now. What remains is the subtitle case
+//          (document-09) and the multiple-document-level annotation fixture
+//          (annotation-27, Tier-2), where title/subtitle/annotation ordering is
+//          still not reconciled.
+//   #792 — ragged/mismatched-row tables get padded + a separator row injected,
+//          adding cells (Tier-2 only).
+//   #783 — the `:: doc.untitled ::` title-model sentinel (document-06) now
+//          parses and round-trips under the ADR-0002 title model, so it is no
+//          longer a known failure.
 // -----------------------------------------------------------------------------
 
 const TIER1_TARGETED_KNOWN_FAIL: &[(&str, &str)] = &[];
 
 const TIER2_TARGETED_KNOWN_FAIL: &[(&str, &str)] = &[];
 
-const TIER1_FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[];
+const TIER1_FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[
+    // #790 — nested-body de-indent / table-cell break (non-idempotent downstream).
+    ("benchmark/080-gentle-introduction.lex", "lex#790"),
+    ("benchmark/20-ideas-naked.lex", "lex#790"),
+    ("table.docs/table-05-flat-multiline.lex", "lex#790"),
+    ("table.docs/table-08-nested-in-definition.lex", "lex#790"),
+    ("table.docs/table-19-cell-with-list.lex", "lex#790"),
+    ("table.docs/table-20-cell-with-definition.lex", "lex#790"),
+    ("table.docs/table-21-cell-with-verbatim.lex", "lex#790"),
+    ("table.docs/table-22-cell-with-mixed-content.lex", "lex#790"),
+    ("table.docs/table-23-cell-with-annotation.lex", "lex#790"),
+    ("verbatim.docs/verbatim-13-group-spades.lex", "lex#790"),
+    // #791 — leading annotations reorder around the title/first block (2nd pass).
+    // The inlines-spec fixtures (their lead paragraph hoisted above the leading
+    // annotations on the second format) are fixed by the #783 title-model work:
+    // document-level annotations now serialize at the head. The subtitle case
+    // still reorders — its title/subtitle interleaving with leading annotations
+    // is not yet handled.
+    (
+        "document.docs/document-09-subtitle-with-annotations.lex",
+        "lex#791",
+    ),
+];
 
-const TIER2_FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[];
+const TIER2_FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[
+    // #790 — nested-body de-indent / table-cell break (canon changes).
+    ("benchmark/080-gentle-introduction.lex", "lex#790"),
+    ("benchmark/20-ideas-naked.lex", "lex#790"),
+    ("inlines.docs/specs/formatting/formatting.lex", "lex#790"),
+    (
+        "inlines.docs/specs/formatting/inlines-general.lex",
+        "lex#790",
+    ),
+    ("inlines.docs/specs/references/citations.lex", "lex#790"),
+    (
+        "inlines.docs/specs/references/references-general.lex",
+        "lex#790",
+    ),
+    ("table.docs/table-05-flat-multiline.lex", "lex#790"),
+    ("table.docs/table-08-nested-in-definition.lex", "lex#790"),
+    ("table.docs/table-19-cell-with-list.lex", "lex#790"),
+    ("table.docs/table-20-cell-with-definition.lex", "lex#790"),
+    ("table.docs/table-21-cell-with-verbatim.lex", "lex#790"),
+    ("table.docs/table-22-cell-with-mixed-content.lex", "lex#790"),
+    ("table.docs/table-23-cell-with-annotation.lex", "lex#790"),
+    ("verbatim.docs/verbatim-13-group-spades.lex", "lex#790"),
+    // #791 — leading annotations reorder around the title/first block (canon).
+    (
+        "annotation.docs/annotation-27-attachment-example-l-multiple-document-level.lex",
+        "lex#791",
+    ),
+    (
+        "document.docs/document-09-subtitle-with-annotations.lex",
+        "lex#791",
+    ),
+    // #792 — ragged table rows padded + separator row injected.
+    ("table.docs/table-13-flat-mismatched-rows.lex", "lex#792"),
+];
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
-    fn elements_dir() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../comms/specs/elements")
+    fn specs_dir() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../comms/specs")
     }
 
-    /// All top-level element fixtures (`*.lex` directly under `elements/`).
-    /// These are real, maintained documents that exercise every element kind,
-    /// including the newer table/footnote/reference features.
-    fn element_fixtures() -> Vec<(String, String)> {
-        let dir = elements_dir();
-        let mut out = Vec::new();
+    /// Recursively collect every `*.lex` under `root`, keyed by its path relative
+    /// to `root` prefixed with `key_prefix` (so callers can namespace the corpus
+    /// roots into one flat map). The relative path keeps `.docs/` sub-fixtures
+    /// distinct from their bare-stem top-level siblings — e.g.
+    /// `table.docs/table-05-flat-multiline.lex` never collides with `table.lex`.
+    fn collect_lex(root: &Path, key_prefix: &str, out: &mut Vec<(String, String)>) {
         let entries =
-            std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("read {}: {e}", dir.display()));
+            std::fs::read_dir(root).unwrap_or_else(|e| panic!("read {}: {e}", root.display()));
         for entry in entries {
             let path = entry.unwrap().path();
-            if path.extension().and_then(|s| s.to_str()) == Some("lex") {
-                let name = path.file_name().unwrap().to_string_lossy().to_string();
+            if path.is_dir() {
+                let sub = path.file_name().unwrap().to_string_lossy();
+                let prefix = format!("{key_prefix}{sub}/");
+                collect_lex(&path, &prefix, out);
+            } else if path.extension().and_then(|s| s.to_str()) == Some("lex") {
+                let name = format!(
+                    "{key_prefix}{}",
+                    path.file_name().unwrap().to_string_lossy()
+                );
                 let src = std::fs::read_to_string(&path).unwrap();
                 out.push((name, src));
             }
         }
+    }
+
+    /// The full curated comms corpus: every `.lex` under `specs/elements/**`
+    /// (including the ~150 `.docs/` sub-fixtures), plus `specs/trifecta/*` and
+    /// `specs/benchmark/*`. These are all real, maintained documents that
+    /// authors keep faithful, so they are the right anchor for the formatter's
+    /// two text-first invariants — no machine-generated snapshot required.
+    ///
+    /// Keys are namespaced by corpus root: `trifecta/…` and `benchmark/…` carry
+    /// their root; element keys are relative to `elements/` (top-level stems bare,
+    /// `.docs/` fixtures prefixed with their subdir). Every key is unique.
+    fn corpus_fixtures() -> Vec<(String, String)> {
+        let specs = specs_dir();
+        let mut out = Vec::new();
+        collect_lex(&specs.join("elements"), "", &mut out);
+        collect_lex(&specs.join("trifecta"), "trifecta/", &mut out);
+        collect_lex(&specs.join("benchmark"), "benchmark/", &mut out);
         out.sort();
         assert!(
-            !out.is_empty(),
-            "no element fixtures found in {}",
-            dir.display()
+            out.len() > 150,
+            "expected the full curated corpus (>150 files); got {} under {}",
+            out.len(),
+            specs.display()
         );
         out
     }
@@ -582,20 +403,20 @@ mod tests {
     }
 
     #[test]
-    fn tier1_idempotence_element_fixtures() {
+    fn tier1_idempotence_corpus_fixtures() {
         run_sweep(
-            "tier1/fixtures",
-            &element_fixtures(),
+            "tier1/corpus",
+            &corpus_fixtures(),
             TIER1_FIXTURE_KNOWN_FAIL,
             check_idempotent,
         );
     }
 
     #[test]
-    fn tier2_semantic_preservation_element_fixtures() {
+    fn tier2_semantic_preservation_corpus_fixtures() {
         run_sweep(
-            "tier2/fixtures",
-            &element_fixtures(),
+            "tier2/corpus",
+            &corpus_fixtures(),
             TIER2_FIXTURE_KNOWN_FAIL,
             check_semantic_preserved,
         );

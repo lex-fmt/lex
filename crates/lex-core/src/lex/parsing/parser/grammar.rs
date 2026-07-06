@@ -94,15 +94,19 @@ pub(super) const GRAMMAR_PATTERNS: &[(&str, &str)] = &[
     // (Rust regex crate does not support lookahead)
     // Title accepts same line types as session: paragraph, subject, list, or subject-or-list-item
     //
+    // Leading blank lines between the document start and the title are consumed
+    // by the optional `<lead>` group: per ADR-0002 they are irrelevant and no
+    // longer suppress title promotion (the parser drops that special case).
+    //
     // Subtitle variant: title line ending with colon (subject-line) + second line + blank lines.
     // Tried first so subtitle form wins over plain title.
     (
         "document_title_with_subtitle",
-        r"^<document-start-line>(?P<title><subject-line>|<subject-or-list-item-line>)(?P<subtitle><paragraph-line>|<subject-line>|<list-line>|<subject-or-list-item-line>)(?P<blank>(<blank-line>)+)",
+        r"^<document-start-line>(?P<lead>(<blank-line>)*)(?P<title><subject-line>|<subject-or-list-item-line>)(?P<subtitle><paragraph-line>|<subject-line>|<list-line>|<subject-or-list-item-line>)(?P<blank>(<blank-line>)+)",
     ),
     (
         "document_title",
-        r"^<document-start-line>(?P<title><paragraph-line>|<subject-line>|<list-line>|<subject-or-list-item-line>)(?P<blank>(<blank-line>)+)",
+        r"^<document-start-line>(?P<lead>(<blank-line>)*)(?P<title><paragraph-line>|<subject-line>|<list-line>|<subject-or-list-item-line>)(?P<blank>(<blank-line>)+)",
     ),
     // Document start marker: synthetic boundary between metadata and content
     // Only matched when there's no document title (fallback)

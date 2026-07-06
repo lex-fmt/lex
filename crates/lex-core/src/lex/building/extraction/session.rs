@@ -4,7 +4,9 @@
 //! for building Session AST nodes.
 
 use crate::lex::ast::elements::sequence_marker::{DecorationStyle, Form, Separator};
-use crate::lex::lexing::line_classification::parse_seq_marker;
+use crate::lex::lexing::line_classification::{
+    parse_seq_marker, unescape_session_title_marker_guard,
+};
 use crate::lex::token::normalization::utilities::{compute_bounding_box, extract_text};
 use crate::lex::token::Token;
 use std::ops::Range as ByteRange;
@@ -82,7 +84,17 @@ pub(in crate::lex::building) fn extract_session_data(
 
     // No valid marker found, treat everything as title
     let title_byte_range = compute_bounding_box(&tokens);
-    let title_text = extract_text(title_byte_range.clone(), source);
+    let mut title_text = extract_text(title_byte_range.clone(), source);
+
+    // escaping.lex §3.4: if the title is an *escaped* session marker (`1\.`,
+    // `\(1)`, `IV\.`, …) — the serializer guard that stops a style-less
+    // marker-like title from re-parsing WITH a sequence-marker style (lex#795) —
+    // strip the escaping backslash so the stored title text matches the
+    // original. The marker stays `None`; the source range keeps covering the
+    // backslash (the title spans it in source, it is just not part of the text).
+    if let Some(stripped) = unescape_session_title_marker_guard(&title_text) {
+        title_text = stripped;
+    }
 
     SessionData {
         title_text,
