@@ -122,8 +122,16 @@ fn comrak_ast_to_events<'a>(
                 for c in child.children() {
                     collect_text_content(c, &mut title_text);
                 }
-                document_title = Some(title_text.trim().to_string());
-                title_index = Some(idx);
+                let title_text = title_text.trim();
+                // A whitespace-only H1 is not a usable title: leave it in the
+                // body so the untitled-marker path applies, rather than lifting
+                // an empty title that `to_lex` drops — which would leave the
+                // document with neither a title nor a `:: doc.untitled ::`
+                // marker and mis-promote the first body paragraph on re-parse.
+                if !title_text.is_empty() {
+                    document_title = Some(title_text.to_string());
+                    title_index = Some(idx);
+                }
             }
         }
         break;
@@ -838,14 +846,14 @@ mod tests {
         let doc = parse_from_markdown(md).unwrap();
 
         assert_eq!(
-            doc.title.as_ref().map(|t| t.content.as_string()),
+            doc.title.as_ref().map(|t| t.as_str()),
             Some("My Title")
         );
         // No `doc.untitled` marker when a real title was lifted.
         assert!(!doc
             .annotations
             .iter()
-            .any(|a| a.data.label.value.as_str() == "doc.untitled"));
+            .any(|a| a.data.label.value == "doc.untitled"));
     }
 
     #[test]
@@ -856,7 +864,7 @@ mod tests {
         let doc = parse_from_markdown(md).unwrap();
 
         assert_eq!(
-            doc.title.as_ref().map(|t| t.content.as_string()),
+            doc.title.as_ref().map(|t| t.as_str()),
             Some("My Title"),
             "frontmatter must not suppress the leading H1 title"
         );
@@ -864,7 +872,7 @@ mod tests {
         assert!(!doc
             .annotations
             .iter()
-            .any(|a| a.data.label.value.as_str() == "doc.untitled"));
+            .any(|a| a.data.label.value == "doc.untitled"));
     }
 
     #[test]
@@ -878,7 +886,22 @@ mod tests {
         assert!(doc
             .annotations
             .iter()
-            .any(|a| a.data.label.value.as_str() == "doc.untitled"));
+            .any(|a| a.data.label.value == "doc.untitled"));
+    }
+
+    #[test]
+    fn test_whitespace_only_h1_is_not_a_title() {
+        // A whitespace-only leading H1 must not be lifted into an (empty) title:
+        // that would leave the document with neither a title nor a
+        // `:: doc.untitled ::` marker. It stays body content and gets the marker.
+        let md = "#  \n\nBody.\n";
+        let doc = parse_from_markdown(md).unwrap();
+
+        assert!(doc.title.is_none());
+        assert!(doc
+            .annotations
+            .iter()
+            .any(|a| a.data.label.value == "doc.untitled"));
     }
 
     #[test]
