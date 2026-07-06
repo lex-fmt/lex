@@ -1,0 +1,1 @@
+- Fix colon-terminated paragraph being absorbed as a following table/verbatim subject on re-parse (lex#814 §1/§3)
