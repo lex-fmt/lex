@@ -217,21 +217,19 @@ const TIER1_TARGETED_KNOWN_FAIL: &[(&str, &str)] = &[];
 const TIER2_TARGETED_KNOWN_FAIL: &[(&str, &str)] = &[];
 
 const TIER1_FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[
-    // #790 (residual) — a table nested inside definitions emits its closing
-    // `:: table ::` annotation one indent level too shallow, escaping the
-    // innermost container. The cell-block-content de-indent that used to list
-    // table-19/21/22/23 here is fixed (the serializer no longer re-walks cell
-    // children); this remaining case is the nested-closer indent.
+    // #790 (serializer residual) — a table nested inside definitions emits its
+    // closing `:: table ::` annotation one indent level too shallow (at the
+    // definition-body indent instead of the table-subject indent), escaping the
+    // innermost container. This is a SERIALIZER bug and remains open: the
+    // lex#814 §1/§3 parser fix repaired the semantic round-trip (Tier-2, below,
+    // no longer fails), but idempotence still breaks — re-formatting the
+    // shallow-closer output re-parses the table out of its container and drops
+    // it. The cell-block-content de-indent that used to list table-19/21/22/23
+    // here is a separate, already-fixed class.
     ("table.docs/table-08-nested-in-definition.lex", "lex#790"),
 ];
 
 const TIER2_FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[
-    // #790 (residual) — a table nested inside definitions emits its closing
-    // `:: table ::` annotation one indent level too shallow, so on re-parse the
-    // closer (and the table) detach from the innermost container. The cell-block-
-    // content class (table-19/20/21/22/23) is fixed; this nested-closer case
-    // remains.
-    ("table.docs/table-08-nested-in-definition.lex", "lex#790"),
     // #791 (deeper case) — leading/document-level annotations that in the source
     // are attached to the first *session* re-attach to the document *root* across
     // a round-trip: the annotations serialize at the document head and re-parse as

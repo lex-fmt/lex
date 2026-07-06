@@ -120,23 +120,28 @@ const FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[
     // Skeleton diff) to have no remaining list- or session-marker divergence; the
     // entry names the OTHER bug it still trips.
     //
-    // commonmark-reference / comrak-readme / comrak-reference → #790 (a
-    // colon-terminated paragraph before a fenced code block is absorbed as the
-    // verbatim subject / becomes a Definition, some inside a list item).
+    // commonmark-reference / comrak-readme / comrak-reference → the colon-para-
+    // before-fenced-code *absorption* named in #790 is now FIXED at the parser
+    // (lex#814 §1/§3: a colon-terminated paragraph is no longer swallowed as the
+    // following verbatim's subject). These three big real-world READMEs, however,
+    // still diverge on OTHER residuals — nested block/standalone annotations that
+    // re-attach across the round-trip (the #791 class) and empty-image fences —
+    // so they stay blocked. Retagged to the lex#814 umbrella (§2/§4 + empty-fence
+    // residuals own what remains); do NOT re-attribute to the absorbed-subject
+    // cause, which no longer fires.
     //
-    // kitchensink → #790 as well: with #795 fixed, its residual divergence is the
-    // empty ```` ``` image ```` fence, which serializes to an empty-subject
-    // verbatim (`:` + `:: image ::`) whose colon line is re-anchored by the
-    // closer hijack (separation.rs "Closer re-anchoring") and swallows the
-    // preceding `:: todo ::` block-annotation body. It ALSO trips the standalone
-    // block-annotation limitation (a floating annotation attaches to its
-    // neighboring paragraph rather than round-tripping as a sibling — documented
-    // in separation.rs §"Annotations", the #791 class), so kitchensink stays
-    // blocked until both land. Tagged against #790, the first tracked cause.
-    ("kitchensink", "lex#790"),
-    ("comrak-readme", "lex#790"),
-    ("commonmark-reference", "lex#790"),
-    ("comrak-reference", "lex#790"),
+    // kitchensink → same story plus the empty ```` ``` image ```` fence, which
+    // serializes to an empty-subject verbatim (`:` + `:: image ::`) whose colon
+    // line is re-anchored by the closer hijack (separation.rs "Closer
+    // re-anchoring") and swallows the preceding `:: todo ::` block-annotation
+    // body. It ALSO trips the standalone block-annotation limitation (a floating
+    // annotation attaches to its neighboring paragraph rather than round-tripping
+    // as a sibling — separation.rs §"Annotations", the #791 class), so
+    // kitchensink stays blocked until those land.
+    ("kitchensink", "lex#814"),
+    ("comrak-readme", "lex#814"),
+    ("commonmark-reference", "lex#814"),
+    ("comrak-reference", "lex#814"),
     // #791 — leading document-level annotations reorder around the title.
     ("ideas-naked", "lex#791"),
 ];

@@ -502,6 +502,40 @@ impl GrammarMatcher {
             _ => return None,
         };
 
+        // Guard against absorbing a colon-terminated *paragraph* as this block's
+        // subject (lex#814 §1/§3). If the very first subject owns no content of its
+        // own — i.e. the next non-blank token is *another* subject — then the first
+        // subject is a colon-terminated paragraph, not a verbatim/table subject.
+        // Bail so the paragraph matcher claims it; the next `try_match` iteration
+        // re-anchors the verbatim/table on the REAL subject (the one that owns its
+        // container) and closes correctly.
+        //
+        // This must NOT fire for genuine verbatim shapes, whose first subject is
+        // directly followed by:
+        //   - a Container (inflow verbatim / multi-group verbatim), or
+        //   - a DataMarkerLine (marker-form empty verbatim, e.g. `An image:` /
+        //     `:: image ::`), or
+        //   - flat prose lines (fullwidth mode).
+        {
+            let mut peek = first_subject_idx + 1;
+            while peek < len {
+                if let LineContainer::Token(line) = &tokens[peek] {
+                    if line.line_type == BlankLine {
+                        peek += 1;
+                        continue;
+                    }
+                }
+                break;
+            }
+            if peek < len {
+                if let LineContainer::Token(line) = &tokens[peek] {
+                    if matches!(line.line_type, SubjectLine | SubjectOrListItemLine) {
+                        return None;
+                    }
+                }
+            }
+        }
+
         let mut cursor = first_subject_idx + 1;
 
         // Try to match one or more subject+content pairs followed by closing annotation
@@ -905,5 +939,72 @@ mod prose_continuation_tests {
             line(SubjectLine),
             container(vec![line(ParagraphLine)]),
         ]));
+    }
+}
+
+#[cfg(test)]
+mod verbatim_anchor_tests {
+    use super::*;
+    use crate::lex::token::LineToken;
+
+    fn line(line_type: LineType) -> LineContainer {
+        LineContainer::Token(LineToken {
+            source_tokens: vec![],
+            token_spans: vec![],
+            line_type,
+        })
+    }
+
+    fn container(children: Vec<LineContainer>) -> LineContainer {
+        LineContainer::Container { children }
+    }
+
+    // lex#814 §1/§3: a colon-terminated *paragraph* directly before a
+    // verbatim/table subject must NOT be absorbed as the block's subject. The
+    // matcher bails (returns None) so the paragraph matcher claims the colon
+    // line and the next `try_match` iteration re-anchors the verbatim on the
+    // REAL subject (the one that owns its container).
+    #[test]
+    fn colon_paragraph_before_verbatim_is_not_absorbed() {
+        use LineType::*;
+        // subject (colon-para) / blank / subject / container / closer
+        let tokens = vec![
+            line(SubjectLine),
+            line(BlankLine),
+            line(SubjectLine),
+            container(vec![line(ParagraphLine)]),
+            line(DataMarkerLine),
+        ];
+        assert!(
+            GrammarMatcher::match_verbatim_block(&tokens, 0).is_none(),
+            "first subject owns no container of its own — the block must not anchor on it"
+        );
+        // Re-anchored on the REAL subject at idx 2, it matches cleanly.
+        assert!(GrammarMatcher::match_verbatim_block(&tokens, 2).is_some());
+    }
+
+    // A genuine multi-group verbatim (every group subject is followed by its own
+    // container) must STILL match as one block — the guard must not fire here.
+    #[test]
+    fn multi_group_verbatim_still_matches() {
+        use LineType::*;
+        let tokens = vec![
+            line(SubjectLine),
+            container(vec![line(ParagraphLine)]),
+            line(SubjectLine),
+            container(vec![line(ParagraphLine)]),
+            line(DataMarkerLine),
+        ];
+        assert!(GrammarMatcher::match_verbatim_block(&tokens, 0).is_some());
+    }
+
+    // Marker-form empty verbatim (`An image:` / `:: image ::`) — the first
+    // subject is directly followed by the closing DataMarkerLine, not another
+    // subject, so the guard must not fire.
+    #[test]
+    fn marker_form_empty_verbatim_still_matches() {
+        use LineType::*;
+        let tokens = vec![line(SubjectLine), line(DataMarkerLine)];
+        assert!(GrammarMatcher::match_verbatim_block(&tokens, 0).is_some());
     }
 }
