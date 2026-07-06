@@ -12,6 +12,13 @@ logs = "./bin/shipit logs"
 provision-lexd = "./bin/shipit provision lexd"
 # <<< shipit-managed tasks <<<
 
+# Consumer-owned tasks (outside the shipit-managed block above).
+# `test` runs the workspace suite via cargo-nextest — the runner lex's CI uses
+# (.github/workflows test-rust.yml / sandbox-tests.yml). Without this, `pixi run
+# test` falls through to the POSIX `test` builtin (silent exit 1, no suite run) —
+# the #444 trap.
+test = "cargo nextest run --workspace"
+
 [feature.lint.dependencies]
 # >>> shipit-managed lint deps (do not edit; regenerate via `shipit install`) >>>
 # The fleet-pinned lint toolchain (docs/prd/adoption.md: the managed set owns
