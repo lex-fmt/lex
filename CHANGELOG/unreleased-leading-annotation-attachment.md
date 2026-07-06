@@ -1,0 +1,1 @@
+- Attach leading document-level annotations to the document root consistently across parse and re-parse (lex#814 §2)

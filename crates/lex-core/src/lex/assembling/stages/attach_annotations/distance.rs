@@ -102,7 +102,8 @@ pub fn blank_gap_after(
 /// Decide where an annotation should attach based on proximity to surrounding content.
 ///
 /// # Attachment Rules
-/// 1. Document-start: Annotations at document start followed by a blank line attach to Document
+/// 1. Document-start: A leading annotation at document start attaches to Document when it is
+///    followed by a blank line or the next content element is a session (document metadata)
 /// 2. Closest wins: Otherwise, attach to the closest content element
 /// 3. Tie-breaker: If equidistant, the next element wins
 /// 4. Container-end: When no next content exists, may attach to container if allowed
@@ -114,6 +115,7 @@ pub fn blank_gap_after(
 /// - `blank_after`: Number of blank lines immediately after the annotation
 /// - `kind`: The kind of container (Document, Regular, or Detached)
 /// - `container_allowed`: Whether the container itself can receive annotations
+/// - `next_is_session`: Whether the next content element is a session
 ///
 /// # Returns
 /// The attachment target, or `None` if no valid target exists
@@ -124,9 +126,27 @@ pub fn decide_attachment(
     blank_after: usize,
     kind: &ContainerKind,
     container_allowed: bool,
+    next_is_session: bool,
 ) -> Option<AttachmentTarget> {
     // Rule 1: Document-level attachment
-    if kind.is_document() && previous.is_none() && blank_after > 0 {
+    //
+    // A leading document-level annotation (no previous content) is document
+    // metadata and must attach to the document root. In authored `parse(D)`
+    // form these leading annotations are single-line, so `blank_after == 0`;
+    // the serializer rewrites them to block form on `format(D)`, which adds a
+    // trailing blank (`blank_after > 0`). Keying attachment on `blank_after`
+    // alone therefore flips the target across a round-trip (lex#814 §2).
+    //
+    // To keep attachment consistent we also route a leading annotation to the
+    // root when the next content is a session: the annotations authored above
+    // the first session are document header metadata regardless of the trailing
+    // gap. (Annotations authored *above the document title* already route here
+    // via `blank_after > 0`, because title extraction leaves a line gap between
+    // the annotation and the first body element — so no separate title clause
+    // is needed, and adding one would mis-capture annotations authored *below*
+    // the title, which also present `previous.is_none()` once the title node is
+    // lifted out of the child list.)
+    if kind.is_document() && previous.is_none() && (blank_after > 0 || next_is_session) {
         return Some(AttachmentTarget::Container);
     }
 
