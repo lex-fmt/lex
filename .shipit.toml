@@ -21,7 +21,7 @@ AGY_REVIEW_APP_ID            = { doppler = "AGY_REVIEW_APP_ID" }
 copilot = {}
 
 [shipit]
-version = "585de97d983bc85c338865c0cc57784c277b9746"
+version = "b204c130ea3b999ab42009a0d2420dcdaa26a08b"
 
 [managed]
 "skills/lex-primer/SKILL.md" = "sha256:ff616c1c447661298fb8e06a8a8a6ce60400d838c7c881b9e8bd526128e32901"

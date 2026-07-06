@@ -16,33 +16,3 @@
 # gates the source).
 skills/
 AGENTS.md
-
-# --- consumer-owned exclusions (lex) ---
-# OVERRIDE of the shipit-managed file (see header): there is no consumer-owned
-# markdownlint ignore seam separate from this managed file, so lex's own
-# non-prose reference markdown has to live here for now. Tracked as a shipit
-# model gap (arthur-debert/shipit#484) — a consumer with test-fixture/reference
-# markdown needs a sanctioned way to exclude it from the managed gate WITHOUT
-# editing this managed file.
-#
-#   - crates/lex-babel/tests/fixtures/*.md — verbatim upstream reference
-#     documents (comrak's README, the CommonMark/comrak markdown references)
-#     consumed byte-for-byte by lex-babel's interop tests. They are DELIBERATE
-#     reference inputs; reformatting them to satisfy prose rules would corrupt
-#     the fixtures and break the tests.
-crates/lex-babel/tests/fixtures/comrak-readme.md
-crates/lex-babel/tests/fixtures/markdown-reference-commonmark.md
-crates/lex-babel/tests/fixtures/markdown-reference-comrak.md
-#
-#   - CHANGELOG.md + CHANGELOG/*.md — the changelog surface. CHANGELOG.md is
-#     GENERATED from the CHANGELOG/*.md fragments by bin/changelog (release.toml
-#     pre-release-hook), so linting the generated aggregate is the generator's
-#     job, and hand-fixes to it are clobbered on the next release cut. The
-#     fragments and the aggregate also carry the normal changelog shape that the
-#     default prose ruleset misfires on — MD024 no-duplicate-heading fires on the
-#     repeated per-release `### Added` / `### Fixed` sub-headings, which is
-#     correct changelog structure, not debt. Excluding the surface rather than
-#     rewriting it to dedupe. (The managed ruleset lacks a changelog-genre
-#     accommodation — see the shipit model-gap issue.)
-CHANGELOG.md
-CHANGELOG/
