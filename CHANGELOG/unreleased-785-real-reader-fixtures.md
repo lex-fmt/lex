@@ -1,0 +1,1 @@
+- faithfulness: real Markdown reader over fixture corpus + adjacency/degrade cases (lex#785)
