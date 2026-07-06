@@ -11,6 +11,8 @@ use lex_core::lex::ast::{
 
 use lex_core::lex::assembling::stages::normalize_labels::source_spelling;
 use lex_core::lex::ast::elements::sequence_marker::DecorationStyle;
+use lex_core::lex::lexing::line_classification::escape_session_title_marker_guard;
+use std::borrow::Cow;
 
 mod numbering;
 mod tables;
@@ -256,10 +258,20 @@ impl LexSerializer {
 impl Visitor for LexSerializer {
     fn visit_session(&mut self, session: &Session) {
         self.separate_before(BlockKind::Session);
-        let title = session.title.as_string();
-        if !title.is_empty() {
+        let raw_title = session.title.as_string();
+        if !raw_title.is_empty() {
             self.ensure_blank_lines(self.rules.session_blank_lines_before);
-            self.write_line(title);
+            // lex#795: a style-less session whose title text begins with a
+            // marker-like token (`1. X`, `IV. X`, `(a) X`, …) must be escaped, or
+            // it re-parses as a session WITH that sequence-marker style. A
+            // genuinely marked session carries its marker in `session.marker` and
+            // must keep its real marker unescaped.
+            let title = if session.marker.is_none() {
+                escape_session_title_marker_guard(raw_title)
+            } else {
+                Cow::Borrowed(raw_title)
+            };
+            self.write_line(&title);
             self.ensure_blank_lines(self.rules.session_blank_lines_after);
             self.indent_level += 1;
         }
