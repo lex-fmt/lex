@@ -3,7 +3,7 @@ use super::{FormattingRules, LexSerializer};
 use crate::format::Format;
 use lex_core::lex::ast::text_content::TextContent;
 use lex_core::lex::ast::traits::AstNode;
-use lex_core::lex::ast::{TableCell, TableRow};
+use lex_core::lex::ast::{ContentItem, TableCell, TableRow};
 use lex_core::lex::testing::lexplore::{ElementType, Lexplore};
 use lex_core::lex::testing::text_diff::assert_text_eq;
 
@@ -529,4 +529,157 @@ fn build_grid_pads_hole_before_trailing_rowspan() {
         ["d", "", "^^"],
         "hole padded empty, trailing rowspan marker kept"
     );
+}
+
+// ==== Leading-annotation / title ordering (lex#791) ====
+
+#[test]
+fn test_leading_annotation_stays_above_title_with_subtitle() {
+    // A document-level annotation authored *before* the title must serialize
+    // above it, not be hoisted below the title/subtitle (lex#791). The title is
+    // a first-class node parked outside the body stream; the serializer must
+    // still emit it at its source position relative to the leading annotations.
+    let source = "\
+:: author :: Yuval Noah Harari
+
+Sapiens:
+A Brief History of Humankind
+
+This document has annotations before the title with subtitle.
+";
+    let formatted = format_full(source);
+    let author_at = formatted.find(":: author").expect("annotation emitted");
+    let title_at = formatted.find("Sapiens:").expect("title emitted");
+    assert!(
+        author_at < title_at,
+        "leading annotation must stay above the title; got:\n{formatted}"
+    );
+    assert_eq!(
+        format_full(&formatted),
+        formatted,
+        "leading-annotation/title ordering must be idempotent"
+    );
+}
+
+#[test]
+fn test_multiple_leading_annotations_keep_first_paragraph_below() {
+    // Several leading document-level annotations followed by the first body
+    // paragraph (which the parser adopts as the title). The paragraph must not
+    // jump above the annotation run on serialize (lex#791).
+    let source = "\
+:: foo ::
+
+:: bar ::
+
+Some text here.
+
+There is something in the way she moves.
+";
+    let formatted = format_full(source);
+    let foo_at = formatted.find(":: foo").expect("foo emitted");
+    let bar_at = formatted.find(":: bar").expect("bar emitted");
+    let text_at = formatted
+        .find("Some text here.")
+        .expect("paragraph emitted");
+    assert!(
+        foo_at < bar_at && bar_at < text_at,
+        "leading annotations must stay above the first paragraph; got:\n{formatted}"
+    );
+    assert_eq!(
+        format_full(&formatted),
+        formatted,
+        "ordering must be idempotent"
+    );
+}
+
+#[test]
+fn test_title_without_leading_annotations_stays_at_head() {
+    // No leading annotation: the title still leads and a blank separates it from
+    // the body (the pre-existing head behavior must be unchanged).
+    let formatted = format_full("Sapiens:\nA Brief History of Humankind\n\nBody line.\n");
+    assert_eq!(
+        formatted,
+        "Sapiens:\nA Brief History of Humankind\n\nBody line.\n"
+    );
+}
+
+#[test]
+fn verbatim_subject_with_trailing_space_round_trips_lex790() {
+    // Regression for lex#790: a verbatim (group) subject whose source colon is
+    // followed by trailing whitespace must NOT be re-serialized with a doubled
+    // colon. The bug stored the subject as "The Tower of Babel:" (colon kept,
+    // because a trailing-whitespace token pushed the bounding box past the colon),
+    // and the serializer's `{subject}:` then produced "The Tower of Babel::",
+    // which re-parses as a plain paragraph and the verbatim is lost.
+    let source = "Doc\n===\n\nThe Tower of Babel: \n    Body line one.\n:: image ref=x.jpg ::\n";
+    let formatted = format_source(source);
+    assert!(
+        formatted.contains("The Tower of Babel:\n"),
+        "subject must keep exactly one colon; got:\n{formatted}"
+    );
+    assert!(
+        !formatted.contains("Babel::"),
+        "subject colon must not be doubled; got:\n{formatted}"
+    );
+    // And the verbatim survives a reparse (idempotent second format).
+    let again = format_source(&formatted);
+    assert_text_eq(&formatted, &again);
+}
+
+#[test]
+fn multiline_table_cell_stacks_and_round_trips_lex790() {
+    // Regression for lex#790: a multi-line table cell (stacked pipe-line group
+    // in the source) must serialize back as stacked pipe rows separated by a
+    // blank line — not with the cell's embedded newline dumped inline, which
+    // splits the pipe row and collapses the whole table into prose on reparse.
+    let source = "Log:\n    | Trial   | Result         |\n\n    | Trial 1 | Successful     |\n    |         | after 48 hours |\n\n    | Trial 2 | No growth      |\n:: table ::\n";
+    let formatted = format_source(source);
+
+    // The multi-line cell is emitted as two physical rows within one group, and
+    // the continuation line's first column is empty padding.
+    assert!(
+        formatted.contains("| Trial 1 | Successful     |"),
+        "first physical line of the multi-line row missing:\n{formatted}"
+    );
+    assert!(
+        formatted.contains("|         | after 48 hours |"),
+        "continuation line of the multi-line cell missing:\n{formatted}"
+    );
+    // No raw newline inside a pipe row: every non-blank output line that starts
+    // with `|` also ends with `|`.
+    for line in formatted.lines() {
+        let t = line.trim();
+        if t.starts_with('|') {
+            assert!(
+                t.ends_with('|'),
+                "pipe row split across lines (lex#790):\n{formatted}"
+            );
+        }
+    }
+
+    // The table structure survives a reparse: a Table node is still present (the
+    // bug collapsed it into loose paragraphs), with one header and two body rows
+    // and the multi-line cell content intact.
+    let format = super::super::LexFormat::default();
+    let doc = format.parse(&formatted).unwrap();
+    let table = doc
+        .root
+        .children
+        .iter()
+        .find_map(|item| match item {
+            ContentItem::Table(t) => Some(t),
+            _ => None,
+        })
+        .expect("table must survive round-trip, not collapse to paragraphs");
+    assert_eq!(table.header_rows.len(), 1);
+    assert_eq!(table.body_rows.len(), 2);
+    assert_eq!(
+        table.body_rows[0].cells[1].content.as_string(),
+        "Successful\nafter 48 hours",
+        "multi-line cell content must survive the round-trip"
+    );
+
+    // Idempotent second format.
+    let again = format_source(&formatted);
+    assert_text_eq(&formatted, &again);
 }

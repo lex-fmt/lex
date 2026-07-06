@@ -5,8 +5,8 @@ use lex_core::lex::ast::{
         verbatim::VerbatimGroupItemRef, VerbatimLine,
     },
     traits::{AstNode, Visitor},
-    Annotation, ContentItem, Definition, Document, List, ListItem, Paragraph, Session, Table,
-    Verbatim,
+    Annotation, ContentItem, Definition, Document, DocumentTitle, List, ListItem, Paragraph,
+    Session, Table, Verbatim,
 };
 
 use lex_core::lex::assembling::stages::normalize_labels::source_spelling;
@@ -81,29 +81,38 @@ impl LexSerializer {
     }
 
     pub fn serialize(mut self, doc: &Document) -> Result<String, String> {
-        // Output document title if present
-        if let Some(title) = &doc.title {
-            if title.subtitle.is_some() {
-                // Title with subtitle: "Title:\nSubtitle\n"
-                self.output.push_str(title.as_str());
-                self.output.push_str(":\n");
-            } else {
-                self.output.push_str(title.as_str());
-                self.output.push('\n');
+        match &doc.title {
+            // The title is a first-class node parked outside the body stream
+            // (`doc.title`), but leading document-level annotations were woven
+            // back into `doc.root.children` in source order by
+            // `inline_attached_annotations`. Emitting the title unconditionally
+            // first would hoist it ahead of any annotation authored before it,
+            // reordering the document head on serialize (lex#791). Instead, emit
+            // the title at its own source position: the root children whose
+            // source line precedes the title come first, then the title, then the
+            // rest. A reader-built AST (Markdown, RFC-XML, …) has no real source
+            // lines — every node shares the default line 0 — so the title lands at
+            // the head there, as before.
+            Some(title) => {
+                let title_line = title.location.start.line;
+                let children = &doc.root.children;
+                let split = children
+                    .iter()
+                    .position(|c| c.range().start.line >= title_line)
+                    .unwrap_or(children.len());
+
+                self.visit_session(&doc.root);
+                for child in &children[..split] {
+                    child.accept(&mut self);
+                }
+                self.emit_document_title(title, split < children.len());
+                for child in &children[split..] {
+                    child.accept(&mut self);
+                }
+                self.leave_session(&doc.root);
             }
-            if let Some(subtitle) = title.subtitle_str() {
-                self.output.push_str(subtitle);
-                self.output.push('\n');
-            }
-            self.consecutive_newlines = 1;
-            // A blank line must separate the title from the body; otherwise the
-            // first body line is absorbed into the title on reparse (lex#687).
-            // Skip when there is no body (avoids a stray trailing blank).
-            if !doc.root.children.is_empty() {
-                self.ensure_blank_lines(1);
-            }
+            None => doc.root.accept(&mut self),
         }
-        doc.root.accept(&mut self);
 
         // Normalize trailing blank lines to a single newline unless configured
         // to preserve them. Block elements (annotations, verbatim) can leave a
@@ -117,6 +126,36 @@ impl LexSerializer {
             }
         }
         Ok(self.output)
+    }
+
+    /// Emit the document title (and optional subtitle) as its own head block.
+    ///
+    /// `has_following` says whether any body sibling comes after the title in
+    /// source order; when true a blank line must separate the title from it,
+    /// otherwise the first body line is absorbed into the title on reparse
+    /// (lex#687). The title opens with a plain line, so it separates from any
+    /// preceding sibling exactly like a `Session` title — `separate_before`
+    /// supplies the leading blank (a no-op when the title is at the document
+    /// head), so a leading document-level annotation stays above the title
+    /// (lex#791).
+    fn emit_document_title(&mut self, title: &DocumentTitle, has_following: bool) {
+        self.separate_before(BlockKind::Session);
+        if title.subtitle.is_some() {
+            // Title with subtitle: "Title:\nSubtitle\n"
+            self.output.push_str(title.as_str());
+            self.output.push_str(":\n");
+        } else {
+            self.output.push_str(title.as_str());
+            self.output.push('\n');
+        }
+        if let Some(subtitle) = title.subtitle_str() {
+            self.output.push_str(subtitle);
+            self.output.push('\n');
+        }
+        self.consecutive_newlines = 1;
+        if has_following {
+            self.ensure_blank_lines(1);
+        }
     }
 
     fn indent(&self) -> String {
