@@ -679,6 +679,44 @@ fn test_list_with_multi_paragraph_items() {
     assert!(md.contains("Item two"));
 }
 
+#[test]
+fn test_wrapped_list_item_keeps_following_sibling_bullet() {
+    let lex_src = concat!(
+        "Title\n",
+        "\n",
+        "- Hook invocations -- every Claude Code hook fires as `pixi run shipit\n",
+        "    hook <name>` (a transient `pixi run` per firing).\n",
+        "- The write-Run agent session -- as of PR #197, does work.\n",
+    );
+    let lex_doc = STRING_TO_AST.run(lex_src.to_string()).unwrap();
+    let md = MarkdownFormat.serialize(&lex_doc).unwrap();
+
+    assert!(
+        md.contains("\n- The write-Run agent session"),
+        "following sibling must remain its own list item: {md}"
+    );
+    assert!(
+        !md.contains("per firing). - The write-Run"),
+        "wrapped item text must not merge with the following sibling: {md}"
+    );
+}
+
+#[test]
+fn test_parenthesized_session_refs_keep_guide_text_outside_links() {
+    let lex_src = "(see [#6], [#7])\n";
+    let lex_doc = STRING_TO_AST.run(lex_src.to_string()).unwrap();
+    let md = MarkdownFormat.serialize(&lex_doc).unwrap();
+
+    assert!(
+        md.contains("(see [\\#6](#6), [\\#7](#7))"),
+        "parenthesized refs should self-link references without linking guide text: {md}"
+    );
+    assert!(
+        !md.contains("[(see]"),
+        "opening parenthesis and guide text must not be absorbed into a link: {md}"
+    );
+}
+
 // ============================================================================
 // DEFINITION LIST TESTS (#605)
 // ============================================================================
