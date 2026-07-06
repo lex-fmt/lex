@@ -206,8 +206,8 @@ fn targeted_cases() -> Vec<(&'static str, &'static str)> {
 //          when the next content is a session, so parse(D) and parse(format(D))
 //          converge). The four inlines-spec fixtures round-trip again;
 //          20-ideas-naked still fails, but on a serializer residual (single-line→
-//          block annotation rewrite alters content), not attachment — see the
-//          TIER2_FIXTURE_KNOWN_FAIL note below.
+//          block annotation rewrite alters content) tracked as lex#817 (deferred),
+//          not attachment — see the TIER2_FIXTURE_KNOWN_FAIL note below.
 //   #792 — FIXED. Ragged/mismatched-row tables used to get padded + a separator
 //          row injected, adding cells to short rows (Tier-2). The serializer no
 //          longer pads short rows, so table-13 round-trips faithfully.
@@ -249,9 +249,10 @@ const TIER2_FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[
     // block form, which trims the trailing spaces AND folds a trailing blank into
     // the annotation as a `BlankLineGroup` child — so the annotation's *content*
     // (not its target) differs across the round-trip. That is a serializer
-    // faithfulness bug for single-line→block annotation rewriting, tracked under
-    // the lex#814 umbrella; the §2 attachment fix does not address it.
-    ("benchmark/20-ideas-naked.lex", "lex#814"),
+    // faithfulness bug for single-line→block annotation rewriting, tracked as its
+    // own issue lex#817 (deferred, not fixed here); the lex#814 §2 attachment fix
+    // does not address it.
+    ("benchmark/20-ideas-naked.lex", "lex#817"),
 ];
 
 #[cfg(test)]

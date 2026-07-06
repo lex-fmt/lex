@@ -43,22 +43,23 @@
 //!    a Table, and a block-form Verbatim all open with a construct the look-ahead
 //!    detects structurally, so they are NOT absorbed and need no blank.
 //!
-//! 2. **Closer re-anchoring (a parser hijack, NOT separation-fixable)** — the
-//!    verbatim/table matcher runs at the highest precedence and greedily pairs the
-//!    *first* `subject:` line it sees with the *next* `:: label ::` closer,
-//!    spanning blanks (multi-group verbatim) and dedents. A **Definition**
-//!    (`subject:` + indented body, no closer of its own) placed immediately before
-//!    any block that presents a `:: label ::` line — a Verbatim, a Table, or even
-//!    an Annotation (`:: label ::` is a valid verbatim closer) — is therefore
-//!    swallowed: its subject becomes the verbatim subject and everything down to
-//!    that closer is absorbed. No blank count prevents this — it is a grammar-level
-//!    ambiguity between Definition and `subject:`-plus-indent blocks. The three
-//!    cells (`Definition → Verbatim`, `Definition → Table`, `Definition →
-//!    Annotation`) are marked below; their value is the structural boundary
-//!    minimum (0, the definition's dedent), but the pair does not round-trip until
-//!    the parser bug is fixed. Tracked as a flagged finding in the PR; the
-//!    verification test characterizes the hijack rather than asserting faithfulness
-//!    for those cells.
+//! 2. **Multi-group verbatim absorption (intended group semantics, NOT a
+//!    separation gap)** — the verbatim/table matcher runs at the highest precedence
+//!    and pairs the *first* `subject:` line it sees with the *next* `:: label ::`
+//!    closer, spanning blanks and dedents. This is the multi-group verbatim
+//!    production (`comms/specs/grammar-core.lex` §4.5c): a verbatim block is
+//!    `<verbatim-group-with-content>+` sharing ONE closing annotation. A
+//!    **Definition** (`subject:` + indented body, no closer of its own) placed
+//!    immediately before any block that presents a `:: label ::` line — a Verbatim,
+//!    a Table, or even an Annotation (`:: label ::` is a valid verbatim closer) — is
+//!    structurally identical to a `<verbatim-group-with-content>`, and verbatim is
+//!    tried before definition (§4.7), so it becomes that block's FIRST group. No
+//!    blank count changes this: blank lines do not separate groups. The three cells
+//!    (`Definition → Verbatim`, `Definition → Table`, `Definition → Annotation`) are
+//!    marked below; their value is the structural boundary minimum (0, the
+//!    definition's dedent), and the merge is intended (lex#814 §4, resolved as
+//!    intended), not a bug. The verification test characterizes the merge as a
+//!    regression guard rather than asserting faithfulness for those cells.
 //!
 //! ## Spec/parser disagreements found
 //!
@@ -151,16 +152,18 @@ pub(super) fn min_blank_lines(prev: BlockKind, next: BlockKind) -> usize {
         (Verbatim, _) => 0,
 
         // ── Definition → * ───────────────────────────────────────────────────
-        // A Definition ends with a dedent (boundary minimum 0). BUT its bare
-        // `subject:` line is re-anchored by the next `:: label ::` closer (the
-        // hijack — see module docs), so Definition → Verbatim / Table / Annotation
-        // do NOT round-trip and no blank count fixes it. Value stays the boundary
-        // minimum; the hijack is a flagged parser bug, not a separation gap.
-        (Definition, Verbatim) => 0, // HIJACK: merges into a multi-group verbatim
-        (Definition, Table) => 0,    // HIJACK: merges into the table
+        // A Definition ends with a dedent (boundary minimum 0). Its `subject:` +
+        // indented body IS a `<verbatim-group-with-content>`, so when it sits
+        // immediately above a closer-terminated block the shared `:: label ::`
+        // closer makes it that verbatim's first group (see module docs). Per grammar
+        // §4.5c this is intended multi-group verbatim, not a separation gap —
+        // Definition → Verbatim / Table / Annotation merge by design and the value
+        // stays the boundary minimum.
+        (Definition, Verbatim) => 0, // merges as the verbatim's first group (multi-group verbatim)
+        (Definition, Table) => 0,    // merges into the table under the shared closer
         // Both annotation shapes present a `:: label ::` line (the marker *is* one;
-        // the block form opens with one), and either re-anchors as a verbatim closer.
-        (Definition, Annotation) | (Definition, AnnotationBody) => 0, // HIJACK: `:: label ::` re-anchors as a verbatim closer
+        // the block form opens with one), and either serves as the shared verbatim closer.
+        (Definition, Annotation) | (Definition, AnnotationBody) => 0, // merges: `:: label ::` is the shared verbatim closer
         (Definition, _) => 0,
 
         // ── Annotation (marker form) → * ─────────────────────────────────────

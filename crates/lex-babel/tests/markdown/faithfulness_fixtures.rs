@@ -45,8 +45,9 @@
 //!     inconsistently across a round-trip; the attachment inconsistency is now
 //!     fixed (a leading annotation above the first session attaches to the root in
 //!     both parse directions). ideas-naked stays blocked on a serializer residual
-//!     (single-line→block annotation rewrite trims trailing whitespace and folds a
-//!     trailing blank into the body). A related annotation-attachment limitation (a
+//!     tracked as its own issue lex#817 (deferred): single-line→block annotation
+//!     rewrite trims trailing whitespace and folds a trailing blank into the body.
+//!     A related annotation-attachment limitation (a
 //!     floating block annotation attaches to its neighbor rather than round-tripping
 //!     as a sibling) is a second residual blocker for kitchensink.
 //!
@@ -153,8 +154,9 @@ const FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[
     // residual: its single-line leading annotations (`:: author :: Arthur Debert  `)
     // are rewritten to block form, which trims trailing whitespace and folds a
     // trailing blank into the annotation body — altering content, not target.
-    // Retagged to the lex#814 umbrella for that serializer residual.
-    ("ideas-naked", "lex#814"),
+    // Tracked as its own issue lex#817 (deferred, not fixed here) for that
+    // single-line→block serializer residual.
+    ("ideas-naked", "lex#817"),
 ];
 
 /// Drive the real reader over every fixture and grade Faithfulness against the
