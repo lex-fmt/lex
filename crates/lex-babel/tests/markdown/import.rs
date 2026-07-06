@@ -861,3 +861,20 @@ fn title_model_single_heading_less_paragraph_is_faithful() {
     let doc = md_to_lex(md);
     assert!(doc.title.is_none());
 }
+
+#[test]
+fn title_model_empty_document_emits_no_untitled_marker() {
+    // A genuinely empty (or blank-only) Markdown document has no paragraph to
+    // promote, so it must NOT carry a `:: doc.untitled ::` marker — emitting one
+    // would turn an empty file into a non-empty Lex document.
+    for md in ["", "\n\n", "   \n"] {
+        let doc = md_to_lex(md);
+        assert!(doc.title.is_none(), "empty source has no title ({md:?})");
+        assert!(
+            !doc.annotations
+                .iter()
+                .any(|a| a.data.label.value == "doc.untitled"),
+            "empty source must not manufacture a doc.untitled marker ({md:?})"
+        );
+    }
+}

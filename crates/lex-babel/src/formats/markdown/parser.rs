@@ -44,14 +44,17 @@ pub fn parse_from_markdown(source: &str) -> Result<Document, FormatError> {
 
     // Title model (ADR-0002): record the title on the IR so `to_lex` sets
     // `Document.title` (surviving the Lex round-trip via the title→body blank).
-    // A heading-less source genuinely has no title — emit the explicit
-    // `:: doc.untitled ::` no-title marker so the parser does not promote the
-    // first body paragraph into a title on re-parse.
+    // A heading-less source *with content* genuinely has no title — emit the
+    // explicit `:: doc.untitled ::` no-title marker so the parser does not
+    // promote the first body paragraph into a title on re-parse. A genuinely
+    // empty document has no paragraph to promote, so it needs no marker;
+    // emitting one there would turn an empty Markdown file into a non-empty Lex
+    // document and break empty ↔ empty faithfulness.
     match document_title {
         Some(title) => {
             ir_doc.title = Some(vec![InlineContent::Text(title)]);
         }
-        None => {
+        None if !ir_doc.children.is_empty() => {
             ir_doc
                 .document_annotations
                 .push(crate::ir::nodes::Annotation {
@@ -61,6 +64,7 @@ pub fn parse_from_markdown(source: &str) -> Result<Document, FormatError> {
                     form: LabelForm::Canonical,
                 });
         }
+        None => {}
     }
 
     // Step 4: Convert IR to Lex AST

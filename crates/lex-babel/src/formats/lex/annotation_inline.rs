@@ -85,9 +85,13 @@ pub fn inline_attached_annotations(doc: &mut Document) {
     let had_doc_anns = !doc_anns.is_empty();
 
     let children = doc.root.children.as_mut_vec();
-    for ann in doc_anns.into_iter().rev() {
-        children.insert(0, ContentItem::Annotation(ann));
-    }
+    // Prepend the document-level annotations in a single pass. `insert(0, …)` in
+    // a loop is O(M·N) — every insertion shifts the entire existing tail — so
+    // build the head first and append the original stream (O(M + N)).
+    let mut rest = std::mem::take(children);
+    children.reserve(doc_anns.len() + rest.len());
+    children.extend(doc_anns.into_iter().map(ContentItem::Annotation));
+    children.append(&mut rest);
     process_stream(children);
     if had_doc_anns {
         ensure_blank_after_leading_marker_annotations(children);
