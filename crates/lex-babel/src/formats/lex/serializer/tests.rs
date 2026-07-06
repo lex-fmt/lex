@@ -3,7 +3,7 @@ use super::{FormattingRules, LexSerializer};
 use crate::format::Format;
 use lex_core::lex::ast::text_content::TextContent;
 use lex_core::lex::ast::traits::AstNode;
-use lex_core::lex::ast::{TableCell, TableRow};
+use lex_core::lex::ast::{ContentItem, TableCell, TableRow};
 use lex_core::lex::testing::lexplore::{ElementType, Lexplore};
 use lex_core::lex::testing::text_diff::assert_text_eq;
 
@@ -529,4 +529,85 @@ fn build_grid_pads_hole_before_trailing_rowspan() {
         ["d", "", "^^"],
         "hole padded empty, trailing rowspan marker kept"
     );
+}
+
+#[test]
+fn verbatim_subject_with_trailing_space_round_trips_lex790() {
+    // Regression for lex#790: a verbatim (group) subject whose source colon is
+    // followed by trailing whitespace must NOT be re-serialized with a doubled
+    // colon. The bug stored the subject as "The Tower of Babel:" (colon kept,
+    // because a trailing-whitespace token pushed the bounding box past the colon),
+    // and the serializer's `{subject}:` then produced "The Tower of Babel::",
+    // which re-parses as a plain paragraph and the verbatim is lost.
+    let source = "Doc\n===\n\nThe Tower of Babel: \n    Body line one.\n:: image ref=x.jpg ::\n";
+    let formatted = format_source(source);
+    assert!(
+        formatted.contains("The Tower of Babel:\n"),
+        "subject must keep exactly one colon; got:\n{formatted}"
+    );
+    assert!(
+        !formatted.contains("Babel::"),
+        "subject colon must not be doubled; got:\n{formatted}"
+    );
+    // And the verbatim survives a reparse (idempotent second format).
+    let again = format_source(&formatted);
+    assert_text_eq(&formatted, &again);
+}
+
+#[test]
+fn multiline_table_cell_stacks_and_round_trips_lex790() {
+    // Regression for lex#790: a multi-line table cell (stacked pipe-line group
+    // in the source) must serialize back as stacked pipe rows separated by a
+    // blank line — not with the cell's embedded newline dumped inline, which
+    // splits the pipe row and collapses the whole table into prose on reparse.
+    let source = "Log:\n    | Trial   | Result         |\n\n    | Trial 1 | Successful     |\n    |         | after 48 hours |\n\n    | Trial 2 | No growth      |\n:: table ::\n";
+    let formatted = format_source(source);
+
+    // The multi-line cell is emitted as two physical rows within one group, and
+    // the continuation line's first column is empty padding.
+    assert!(
+        formatted.contains("| Trial 1 | Successful     |"),
+        "first physical line of the multi-line row missing:\n{formatted}"
+    );
+    assert!(
+        formatted.contains("|         | after 48 hours |"),
+        "continuation line of the multi-line cell missing:\n{formatted}"
+    );
+    // No raw newline inside a pipe row: every non-blank output line that starts
+    // with `|` also ends with `|`.
+    for line in formatted.lines() {
+        let t = line.trim();
+        if t.starts_with('|') {
+            assert!(
+                t.ends_with('|'),
+                "pipe row split across lines (lex#790):\n{formatted}"
+            );
+        }
+    }
+
+    // The table structure survives a reparse: a Table node is still present (the
+    // bug collapsed it into loose paragraphs), with one header and two body rows
+    // and the multi-line cell content intact.
+    let format = super::super::LexFormat::default();
+    let doc = format.parse(&formatted).unwrap();
+    let table = doc
+        .root
+        .children
+        .iter()
+        .find_map(|item| match item {
+            ContentItem::Table(t) => Some(t),
+            _ => None,
+        })
+        .expect("table must survive round-trip, not collapse to paragraphs");
+    assert_eq!(table.header_rows.len(), 1);
+    assert_eq!(table.body_rows.len(), 2);
+    assert_eq!(
+        table.body_rows[0].cells[1].content.as_string(),
+        "Successful\nafter 48 hours",
+        "multi-line cell content must survive the round-trip"
+    );
+
+    // Idempotent second format.
+    let again = format_source(&formatted);
+    assert_text_eq(&formatted, &again);
 }
