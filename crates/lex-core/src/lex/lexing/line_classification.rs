@@ -309,9 +309,11 @@ pub fn escape_session_title_marker_guard(title: &str) -> Cow<'_, str> {
     if !leads_with_session_marker(title) {
         return Cow::Borrowed(title);
     }
-    // The leading marker segment is ASCII-alphanumeric (digits, a single ASCII
-    // letter, or ASCII Roman numerals), so the marker's first structural
-    // character is the first non-alphanumeric byte of the title.
+    // The marker's first structural character — the byte the guard backslash
+    // must precede — is the first non-alphanumeric byte of the title. For `1.`,
+    // `IV.`, or `a)` that byte follows an ASCII-alphanumeric run (digits, a
+    // single letter, or Roman numerals); for a parenthetical marker like `(1)`
+    // it is the leading `(` at position 0.
     match title.bytes().position(|b| !b.is_ascii_alphanumeric()) {
         Some(sep) => {
             let mut escaped = String::with_capacity(title.len() + 1);
