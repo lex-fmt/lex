@@ -158,6 +158,13 @@ fn wrap_preceding_word(out: &mut Vec<InlineContent>, word: &str, href: &str) -> 
             // node might still match, so keep scanning rather than giving up.
             continue;
         }
+        if last_word.starts_with(|c: char| !c.is_alphanumeric()) {
+            // A leading delimiter means the resolved "word" is guide text
+            // inside punctuation, e.g. `(see [#6])`. Treat that as unsafe to
+            // split so the reference can render as its own self-link instead
+            // of absorbing the delimiter and guide word into the link text.
+            return false;
+        }
 
         let prefix = prefix.to_string();
         let last_word = last_word.to_string();
@@ -617,6 +624,72 @@ mod tests {
                 },
             ],
             "unfound preceding anchor must fall back to the original reference"
+        );
+    }
+
+    #[test]
+    fn preceding_word_with_leading_punctuation_falls_back_to_reference() {
+        let nodes = vec![
+            plain("(see "),
+            reference(
+                "#6",
+                ReferenceType::Session {
+                    target: "#6".into(),
+                },
+                Some(WordAnchor {
+                    word: "see".into(),
+                    direction: AnchorDirection::Preceding,
+                }),
+            ),
+        ];
+        let out = apply_word_anchors(&nodes, &convert);
+        assert_eq!(
+            out,
+            vec![
+                InlineContent::Text("(see ".into()),
+                InlineContent::Reference {
+                    raw: "#6".into(),
+                    kind: ReferenceType::Session {
+                        target: "#6".into(),
+                    },
+                },
+            ],
+            "guide text with leading punctuation must stay outside the link"
+        );
+    }
+
+    #[test]
+    fn unsafe_nearest_preceding_word_does_not_wrap_earlier_match() {
+        let nodes = vec![
+            plain("see"),
+            InlineNode::code(" gap ".into()),
+            plain("(see "),
+            reference(
+                "#6",
+                ReferenceType::Session {
+                    target: "#6".into(),
+                },
+                Some(WordAnchor {
+                    word: "see".into(),
+                    direction: AnchorDirection::Preceding,
+                }),
+            ),
+        ];
+        let out = apply_word_anchors(&nodes, &convert_full);
+        assert_eq!(
+            out,
+            vec![
+                InlineContent::Text("see".into()),
+                InlineContent::Code(" gap ".into()),
+                InlineContent::Text("(see ".into()),
+                InlineContent::Reference {
+                    raw: "#6".into(),
+                    kind: ReferenceType::Session {
+                        target: "#6".into(),
+                    },
+                },
+            ],
+            "unsafe nearest match must fall back instead of wrapping an earlier occurrence"
         );
     }
 
