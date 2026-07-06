@@ -20,8 +20,36 @@ AGY_REVIEW_APP_ID            = { doppler = "AGY_REVIEW_APP_ID" }
 [reviewers]
 copilot = {}
 
+# [lint] — consumer-owned paths this repo excludes from the managed lint gate
+# (shipit#484). Gitignore-style globs, matched by shipit's own engine; they filter
+# the discovered file list BEFORE routing, so each entry drops a path from EVERY
+# leg (markdownlint, shfmt, …). This is the reconcile-safe home for these — install
+# never clobbers a consumer table — replacing the old OVERRIDE block in the
+# shipit-managed `.markdownlintignore` (now back to pristine).
+#   - crates/lex-babel/tests/fixtures/ — verbatim upstream reference documents
+#     (comrak's README, the CommonMark/comrak markdown references, kitchensink)
+#     consumed byte-for-byte by lex-babel's interop tests; reformatting them to
+#     satisfy prose rules would corrupt the fixtures and break the tests.
+#   - CHANGELOG.md + CHANGELOG/ — CHANGELOG.md is GENERATED from the CHANGELOG/*.md
+#     fragments by bin/changelog (release.toml pre-release-hook); the surface also
+#     carries the normal changelog shape MD024/no-duplicate-heading misfires on
+#     (repeated per-release `### Added` / `### Fixed`).
+#   - bin/install-release-core — VENDORED: release-core distributes and re-syncs
+#     this boot resolver (ADR-0003) on every release cut, and its upstream copy is
+#     not shfmt-clean to this repo's config, so a `chore: Release` sync reverts any
+#     local shfmt fix (it did — #799's fix was undone by v0.19.0). lex does not
+#     author this file; excluding it here keeps the gate green durably rather than
+#     re-fixing it every release. Real fix is upstream in release-core.
+[lint]
+ignore = [
+    "crates/lex-babel/tests/fixtures/",
+    "CHANGELOG.md",
+    "CHANGELOG/",
+    "bin/install-release-core",
+]
+
 [shipit]
-version = "585de97d983bc85c338865c0cc57784c277b9746"
+version = "8c46984320acee3f2202f8a76717323171037924"
 
 [managed]
 "skills/lex-primer/SKILL.md" = "sha256:ff616c1c447661298fb8e06a8a8a6ce60400d838c7c881b9e8bd526128e32901"
