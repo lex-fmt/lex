@@ -24,6 +24,7 @@
 //!
 //! `Table` annotations are left untouched — `Table::accept` already emits them.
 
+use lex_core::lex::ast::elements::BlankLineGroup;
 use lex_core::lex::ast::traits::AstNode;
 use lex_core::lex::ast::{Annotation, ContentItem, Document};
 
@@ -70,11 +71,58 @@ pub fn inline_attached_annotations(doc: &mut Document) {
     // only the annotation item when it attached). `process_stream` then cleans
     // each body and re-sorts the whole stream by source position, weaving them
     // back where they were authored.
+    //
+    // Insert at the head, not the tail: a reader-built document (Markdown,
+    // RFC-XML, …) has no real source positions — every item shares the default
+    // (0, 0, 0) key — so the subsequent stable sort preserves insertion order.
+    // Document-level annotations there (notably the ADR-0002 `:: doc.untitled ::`
+    // no-title marker, which the parser only honors when it *leads*) must sit at
+    // the head. For a lex-sourced document the positional sort governs instead,
+    // so a genuine container-end annotation still sorts back to the tail.
+    // Whether the document carried genuine document-level annotations (as
+    // opposed to element-attached ones that merely bubble up here). Only those
+    // need the structural head-blank below.
+    let had_doc_anns = !doc_anns.is_empty();
+
     let children = doc.root.children.as_mut_vec();
-    for ann in doc_anns {
-        children.push(ContentItem::Annotation(ann));
-    }
+    // Prepend the document-level annotations in a single pass. `insert(0, …)` in
+    // a loop is O(M·N) — every insertion shifts the entire existing tail — so
+    // build the head first and append the original stream (O(M + N)).
+    let mut rest = std::mem::take(children);
+    children.reserve(doc_anns.len() + rest.len());
+    children.extend(doc_anns.into_iter().map(ContentItem::Annotation));
+    children.append(&mut rest);
     process_stream(children);
+    if had_doc_anns {
+        ensure_blank_after_leading_marker_annotations(children);
+    }
+}
+
+/// A leading marker annotation (`:: label ::`, empty body) at the document head
+/// is document-level: the parser promotes it out of the body only when a blank
+/// separates it from the first content block (the document-start rule). A
+/// reader-built AST carries no `BlankLineGroup`, so without this the
+/// serialized marker would sit flush against the first paragraph and re-parse
+/// as an annotation *attached* to that paragraph rather than a document-level
+/// one — the `:: doc.untitled ::` no-title marker would then be lost (ADR-0002).
+///
+/// Guarded by `had_doc_anns` at the call site so it never fires on a marker
+/// that was element-attached in the source (`:: foo ::` with no following blank
+/// attaches forward and must stay that way). Insert the structural blank only
+/// when one is not already present, so a lex-sourced document (whose
+/// `BlankLineGroup` survives the round-trip) stays byte-identical.
+fn ensure_blank_after_leading_marker_annotations(items: &mut Vec<ContentItem>) {
+    let mut end = 0;
+    while matches!(items.get(end), Some(ContentItem::Annotation(a)) if a.children.is_empty()) {
+        end += 1;
+    }
+    // A leading marker run exists and is followed by a non-blank content block.
+    if end > 0 && end < items.len() && !matches!(items[end], ContentItem::BlankLineGroup(_)) {
+        items.insert(
+            end,
+            ContentItem::BlankLineGroup(BlankLineGroup::new(1, Vec::new())),
+        );
+    }
 }
 
 /// Split annotations attached to one element: those whose source line falls

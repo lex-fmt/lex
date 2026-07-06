@@ -407,23 +407,23 @@ fn test_document_title_from_lex_document() {
 }
 
 #[test]
-fn test_document_untitled_marker_rejected_today() {
-    // document-06 now leads with `:: doc.untitled ::`, the ADR-0002 no-title
-    // marker. TODO(#783): doc.untitled lands in slice 3 — update to title-less
-    // expectations (default <title>, first paragraph stays body). Until the
-    // parser honors the doc.* builtin, NormalizeLabels rejects the reserved
-    // prefix, so parsing this fixture errors. Assert today's actual behavior
-    // rather than silently dropping the coverage.
+fn test_document_untitled_marker_is_title_less() {
+    // document-06 leads with `:: doc.untitled ::`, the ADR-0002 no-title marker
+    // (#783): the parser honors it, suppressing title promotion, so the first
+    // paragraph stays body and no document title is emitted. HTML falls back to
+    // the default `<title>`; the first paragraph renders as a `<p>`, not a heading.
     let lex_src = std::fs::read_to_string(
         "../../comms/specs/elements/document.docs/document-06-title-untitled.lex",
     )
     .expect("document-06 spec file should exist");
-    let err = STRING_TO_AST
-        .run(lex_src.to_string())
-        .expect_err("doc.untitled is rejected by NormalizeLabels until slice #783");
+    let html = lex_to_html(&lex_src, HtmlTheme::Modern);
     assert!(
-        err.to_string().contains("uses the reserved `doc.*` prefix"),
-        "expected the NormalizeLabels reserved doc.* rejection, got: {err}"
+        !html.contains("<title>Just a paragraph with no title.</title>"),
+        "the first paragraph must not become the document title; got: {html}"
+    );
+    assert!(
+        html.contains("<p class=\"lex-paragraph\">Just a paragraph with no title.</p>"),
+        "the first paragraph must render as body, got: {html}"
     );
 }
 

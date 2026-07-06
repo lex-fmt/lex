@@ -152,6 +152,16 @@ pub fn classify_label(input: &str) -> Resolution {
         return Resolution::Resolved((*canonical).to_string(), LabelForm::Shortcut);
     }
 
+    // The Reserved-core-builtin `doc.*` marker flags (currently
+    // `doc.untitled`, general.lex §4) are honored, not rejected. They
+    // are boolean flags the parser interprets (ADR-0002), carry no
+    // render schema, and so are NOT in `CANONICAL_LABELS`; accept them
+    // here as their own `doc.*` verbatim, tagged Canonical so emitters
+    // round-trip the exact `doc.untitled` spelling.
+    if builtins::doc::is_doc_reserved_marker(input) {
+        return Resolution::Resolved(input.to_string(), LabelForm::Canonical);
+    }
+
     // doc.* is reserved-forbidden — reject before any other branch,
     // EXCEPT for the curated built-in canonicals from #615
     // (doc.title, doc.author, doc.date, doc.tags, doc.category,
@@ -578,6 +588,39 @@ mod tests {
                 "{forbidden} must reject as Forbidden"
             );
         }
+    }
+
+    #[test]
+    fn classify_doc_untitled_reserved_marker_resolves_as_canonical() {
+        // `doc.untitled` (ADR-0002) is a Reserved-core-builtin marker: it is
+        // honored, not rejected, and tagged Canonical so emitters round-trip the
+        // exact spelling. It is NOT in CANONICAL_LABELS (no render schema), so it
+        // reaches acceptance via the dedicated reserved-marker carve-out.
+        assert_eq!(
+            classify_label("doc.untitled"),
+            Resolution::Resolved("doc.untitled".to_string(), LabelForm::Canonical),
+        );
+        assert!(!builtins::is_canonical_label("doc.untitled"));
+        // A different, unregistered `doc.*` still rejects — the carve-out is
+        // exactly the closed reserved set, not an open `doc.*` allowance.
+        assert_eq!(
+            classify_label("doc.untitledx"),
+            Resolution::Rejected(RejectReason::Forbidden {
+                input: "doc.untitledx".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn doc_untitled_marker_parses_in_strict_mode() {
+        // End-to-end: `:: doc.untitled ::` at the document head parses (no
+        // reserved-prefix rejection) and suppresses title promotion — the first
+        // paragraph stays in the body and `Document.title` is `None`.
+        let doc = parse(":: doc.untitled ::\n\nFirst paragraph.\n\nSecond paragraph.\n");
+        assert!(doc.title.is_none(), "doc.untitled must suppress the title");
+        let ann = doc.annotations.first().expect("document-level annotation");
+        assert_eq!(ann.data.label.value, "doc.untitled");
+        assert_eq!(ann.data.label.form, LabelForm::Canonical);
     }
 
     #[test]

@@ -54,6 +54,26 @@ pub fn is_doc_builtin(label: &str) -> bool {
     DOC_BUILTIN_LABELS.contains(&label)
 }
 
+/// The Reserved-core-builtin `doc.*` marker flags (comms `general.lex`
+/// §4). Distinct from [`DOC_BUILTIN_LABELS`]: these are boolean flags
+/// written in marker form (`:: doc.untitled ::`, no value), honored by
+/// the **parser** as document-level semantics rather than rendered as
+/// metadata — so they carry no `render` schema and are not part of the
+/// registry-mirrored [`crate::lex::builtins::CANONICAL_LABELS`]. Only
+/// the core may add to this closed set; adding one is a minor version
+/// bump (§4).
+///
+/// - `doc.untitled` — suppresses document-title promotion (ADR-0002).
+pub const DOC_RESERVED_MARKERS: &[&str] = &["doc.untitled"];
+
+/// `true` if `label` names a Reserved-core-builtin `doc.*` marker flag
+/// (currently only `doc.untitled`). `NormalizeLabels` accepts these
+/// through the otherwise-forbidden `doc.*` namespace without requiring a
+/// registered render schema.
+pub fn is_doc_reserved_marker(label: &str) -> bool {
+    DOC_RESERVED_MARKERS.contains(&label)
+}
+
 /// Common shape: every `doc.*` metadata label attaches to the document,
 /// carries its value as the annotation body (single-line text), and
 /// declares the `markdown` + `html` render hooks that
@@ -314,6 +334,21 @@ mod tests {
         assert!(!is_doc_builtin("doc."));
         assert!(!is_doc_builtin("title"));
         assert!(!is_doc_builtin("lex.metadata.title"));
+    }
+
+    #[test]
+    fn doc_untitled_is_a_reserved_marker_not_a_metadata_builtin() {
+        // `doc.untitled` (ADR-0002 / general.lex §4) is a Reserved-core-builtin
+        // marker flag: honored by the parser, but NOT a render-bearing metadata
+        // builtin, so it must stay out of DOC_BUILTIN_LABELS / all_schemas().
+        assert!(is_doc_reserved_marker("doc.untitled"));
+        assert!(!is_doc_builtin("doc.untitled"));
+        assert!(!DOC_BUILTIN_LABELS.contains(&"doc.untitled"));
+        assert!(!all_schemas().iter().any(|s| s.label == "doc.untitled"));
+        // The set is closed; nothing else is a reserved marker.
+        assert!(!is_doc_reserved_marker("doc.title"));
+        assert!(!is_doc_reserved_marker("doc.bogus"));
+        assert!(!is_doc_reserved_marker("untitled"));
     }
 
     #[test]

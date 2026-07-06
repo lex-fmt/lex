@@ -4,9 +4,6 @@ expression: serialized
 ---
 <document>
   <paragraph>1 line(s)
-    <text-line>Comrak</text-line>
-  </paragraph>
-  <paragraph>1 line(s)
     <text-line>Build status [https://github.com/kivikakk/comrak/a…</text-line>
   </paragraph>
   <paragraph>1 line(s)

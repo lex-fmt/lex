@@ -37,6 +37,7 @@ impl GrammarMatcher {
     /// consumed token indices.
     ///
     /// Returns (matched_pattern, consumed_indices)
+    #[allow(clippy::too_many_arguments)]
     fn try_match(
         tokens: &[LineContainer],
         start_idx: usize,
@@ -45,6 +46,7 @@ impl GrammarMatcher {
         has_preceding_blank: bool,
         has_preceding_boundary: bool,
         prev_was_session: bool,
+        suppress_title: bool,
     ) -> Option<(PatternMatch, Range<usize>)> {
         if start_idx >= tokens.len() {
             return None;
@@ -201,18 +203,31 @@ impl GrammarMatcher {
                         },
                         "blank_line_group" => PatternMatch::BlankLineGroup,
                         "document_title_with_subtitle" => {
+                            // A `:: doc.untitled ::` among the leading document-level
+                            // annotations suppresses title promotion (ADR-0002).
+                            if suppress_title {
+                                continue;
+                            }
                             // No container lookahead needed: the subtitle variant
                             // consumed two lines (title + subtitle) before blank lines.
                             // A session only has one line before blank + container, so
                             // the presence of a container after the blank is NOT ambiguous
                             // here — it's the document body, not a session body.
-                            // Match: DocumentStart(0) + title(1) + subtitle(2) + blank lines
+                            // `<lead>` absorbs any leading blank lines (ADR-0002), so the
+                            // title/subtitle sit at DocumentStart(0) + lead + 1 / + 2.
+                            let lead_count = caps
+                                .name("lead")
+                                .map(|m| Self::count_consumed_tokens(m.as_str()))
+                                .unwrap_or(0);
                             PatternMatch::DocumentTitle {
-                                title_idx: 1,
-                                subtitle_idx: Some(2),
+                                title_idx: 1 + lead_count,
+                                subtitle_idx: Some(2 + lead_count),
                             }
                         }
                         "document_title" => {
+                            if suppress_title {
+                                continue;
+                            }
                             // Imperative negative lookahead: not followed by container
                             let next_idx = start_idx + consumed_count;
                             if next_idx < tokens.len()
@@ -221,9 +236,13 @@ impl GrammarMatcher {
                                 // Followed by container — this is a session, not a title
                                 continue;
                             }
-                            // Match is: DocumentStart(0) + title line(1) + blank lines
+                            // Match is: DocumentStart(0) + lead blanks + title line + blank lines
+                            let lead_count = caps
+                                .name("lead")
+                                .map(|m| Self::count_consumed_tokens(m.as_str()))
+                                .unwrap_or(0);
                             PatternMatch::DocumentTitle {
-                                title_idx: 1,
+                                title_idx: 1 + lead_count,
                                 subtitle_idx: None,
                             }
                         }
@@ -587,7 +606,49 @@ pub fn parse_with_declarative_grammar(
     source: &str,
 ) -> Result<Vec<ParseNode>, String> {
     let tokens = fold_prose_continuations(tokens);
-    parse_with_declarative_grammar_internal(tokens, source, true, true)
+    // A `:: doc.untitled ::` among the leading document-level annotations
+    // suppresses document-title promotion for the whole document (ADR-0002).
+    // Detected here, at the one root entry point, so both parse paths (engine
+    // and the `Parsing` transform stage) honor it without threading a flag in.
+    let suppress_title = leading_untitled_marker(&tokens, source);
+    parse_with_declarative_grammar_internal(tokens, source, true, true, suppress_title)
+}
+
+/// True when the leading document-level annotations (the run before the
+/// synthetic `DocumentStart` marker) contain a `:: doc.untitled ::` marker.
+/// This is the ADR-0002 no-title opt-out, honored by the parser itself.
+fn leading_untitled_marker(tokens: &[LineContainer], source: &str) -> bool {
+    for token in tokens {
+        if let LineContainer::Token(line) = token {
+            match line.line_type {
+                // The metadata/content boundary — stop before the body so a
+                // `doc.untitled` appearing later (as body content) is ignored.
+                LineType::DocumentStart => break,
+                LineType::DataMarkerLine if line_is_untitled_marker(line, source) => {
+                    return true;
+                }
+                _ => {}
+            }
+        }
+    }
+    false
+}
+
+/// True when `line` is exactly the `:: doc.untitled ::` marker annotation
+/// (marker form, no params, no body). Reconstructs the line's source text from
+/// its token spans and matches the closed `:: label ::` shape.
+fn line_is_untitled_marker(line: &crate::lex::token::LineToken, source: &str) -> bool {
+    let (Some(start), Some(end)) = (
+        line.token_spans.iter().map(|s| s.start).min(),
+        line.token_spans.iter().map(|s| s.end).max(),
+    ) else {
+        return false;
+    };
+    let text = source.get(start..end).unwrap_or("").trim();
+    text.strip_prefix("::")
+        .and_then(|rest| rest.trim().strip_suffix("::"))
+        .map(|inner| inner.trim() == "doc.untitled")
+        .unwrap_or(false)
 }
 
 /// True when a line token is paragraph prose (a `ParagraphLine` or `DialogLine`).
@@ -698,6 +759,7 @@ fn parse_with_declarative_grammar_internal(
     source: &str,
     allow_sessions: bool,
     is_doc_start: bool,
+    suppress_title: bool,
 ) -> Result<Vec<ParseNode>, String> {
     let mut items: Vec<ParseNode> = Vec::new();
     let mut idx = 0;
@@ -729,6 +791,7 @@ fn parse_with_declarative_grammar_internal(
             has_preceding_blank,
             has_preceding_boundary,
             prev_was_session,
+            suppress_title,
         ) {
             let mut pending_nodes = Vec::new();
 
@@ -758,7 +821,7 @@ fn parse_with_declarative_grammar_internal(
                 range.clone(),
                 source,
                 &move |children, src| {
-                    parse_with_declarative_grammar_internal(children, src, is_session, false)
+                    parse_with_declarative_grammar_internal(children, src, is_session, false, false)
                 },
             )?;
             pending_nodes.push(item);
@@ -785,6 +848,7 @@ fn parse_with_declarative_grammar_internal(
                         inner.clone(),
                         source,
                         allow_sessions,
+                        false,
                         false,
                     )?;
                     items.extend(orphaned);

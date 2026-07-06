@@ -709,17 +709,16 @@ fn test_lex_validity_kitchensink() {
 // stay within paragraph adjacency. Other block-adjacency pairs (paragraph→list,
 // heading→body, …) arrive with #782 and are NOT asserted faithful here yet.
 //
-// A note on the leading `## Heading`: lex-core's title-steal rule promotes a
+// A note on the leading `## Heading`: lex-core's title rule promotes a
 // *single-line* first paragraph, at the document's top, to the Document Title on
-// re-parse. The Markdown reader does not populate `Document.title`, so a
-// heading-less two-paragraph source is NOT faithful yet — the first paragraph is
-// body on read but title on re-parse. Reconciling that is the ADR-0002 title
-// model, honored via `:: doc.untitled ::`, which lands in slice #783. To grade
-// paragraph→paragraph separation *in isolation* here, the multi-paragraph cases
-// nest their paragraphs under a `## Heading` (a Lex Session): the session body is
-// past the document-title boundary, so its adjacent paragraphs are separated
-// purely by the matrix. Without the fix, they merge into one paragraph on
-// re-parse.
+// re-parse. Under the ADR-0002 title model (slice #783, now landed) the Markdown
+// reader reconciles this on both sides: a leading `# H1` populates
+// `Document.title`, and a heading-less source emits the `:: doc.untitled ::`
+// no-title marker so its first paragraph stays body on re-parse. The
+// multi-paragraph cases below still nest their paragraphs under a `## Heading`
+// (a Lex Session) to grade paragraph→paragraph separation *in isolation*, away
+// from the title boundary; the title-model faithfulness cases are asserted
+// directly in the `title_model` tests further down.
 // ============================================================================
 
 /// Count `Paragraph` children directly under a reparsed session (the Markdown
@@ -806,4 +805,76 @@ fn test_faithful_multiline_paragraph_not_split() {
         paragraphs, 1,
         "a soft-wrapped Markdown paragraph must stay one Lex paragraph; Lex was:\n{lex_text}"
     );
+}
+
+// ============================================================================
+// TITLE MODEL FAITHFULNESS (ADR-0002 / lex#783)
+//
+// The Markdown reader maps a leading `# H1` to the Document Title and a
+// heading-less source to the `:: doc.untitled ::` no-title marker. Both must
+// survive Markdown → Lex → Lex (Skeleton-equal): the title's trailing blank
+// keeps it a title on re-parse, and the marker keeps the first paragraph in the
+// body rather than letting it be promoted.
+// ============================================================================
+
+#[test]
+fn title_model_h1_led_document_is_faithful() {
+    let md = "# My Title\n\nFirst paragraph.\n\nSecond paragraph.\n";
+    crate::skeleton::check_faithful(&MarkdownFormat, md).unwrap();
+    // The H1 is the title, not a body paragraph.
+    let doc = md_to_lex(md);
+    assert_eq!(doc.title.as_ref().map(|t| t.as_str()), Some("My Title"));
+}
+
+#[test]
+fn title_model_heading_less_document_is_faithful() {
+    // Heading-less: the reader records "no title" with `:: doc.untitled ::`, the
+    // first paragraph stays body, and the round-trip never invents a heading.
+    let md = "First paragraph.\n\nSecond paragraph.\n";
+    crate::skeleton::check_faithful(&MarkdownFormat, md).unwrap();
+
+    let doc = md_to_lex(md);
+    assert!(doc.title.is_none(), "heading-less source has no title");
+    assert!(
+        doc.annotations
+            .iter()
+            .any(|a| a.data.label.value == "doc.untitled"),
+        "heading-less source carries the doc.untitled marker"
+    );
+
+    // Round-trips back to heading-less Markdown (no `# H1` invented).
+    let lex_text = LexFormat::default().serialize(&doc).unwrap();
+    let reparsed = LexFormat::default().parse(&lex_text).unwrap();
+    assert!(reparsed.title.is_none(), "re-parse must stay title-less");
+    let md_again = MarkdownFormat.serialize(&doc).unwrap();
+    assert!(
+        !md_again.starts_with("# "),
+        "round-trip must not promote the first paragraph to a heading; got:\n{md_again}"
+    );
+}
+
+#[test]
+fn title_model_single_heading_less_paragraph_is_faithful() {
+    // A lone heading-less paragraph must not be stolen as a title on re-parse.
+    let md = "Just one paragraph.\n";
+    crate::skeleton::check_faithful(&MarkdownFormat, md).unwrap();
+    let doc = md_to_lex(md);
+    assert!(doc.title.is_none());
+}
+
+#[test]
+fn title_model_empty_document_emits_no_untitled_marker() {
+    // A genuinely empty (or blank-only) Markdown document has no paragraph to
+    // promote, so it must NOT carry a `:: doc.untitled ::` marker — emitting one
+    // would turn an empty file into a non-empty Lex document.
+    for md in ["", "\n\n", "   \n"] {
+        let doc = md_to_lex(md);
+        assert!(doc.title.is_none(), "empty source has no title ({md:?})");
+        assert!(
+            !doc.annotations
+                .iter()
+                .any(|a| a.data.label.value == "doc.untitled"),
+            "empty source must not manufacture a doc.untitled marker ({md:?})"
+        );
+    }
 }
