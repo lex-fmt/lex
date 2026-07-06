@@ -96,7 +96,7 @@ discoverable. See ADR-0002.
 ## Faithfulness status — what round-trips today
 
 The Markdown↔Lex faithfulness epic (#781–#785, #798, #795) is the current state
-of the world. This table is the durable "what survives the trip" summary; the
+of the world. This section is the durable "what survives the trip" summary; the
 live, per-fixture truth is the anti-rot known-fail lists in
 `crates/lex-babel/tests/markdown/faithfulness_fixtures.rs` and
 `crates/lex-babel/tests/format_invariants/mod.rs` — keep this in sync with them.
@@ -122,9 +122,12 @@ removal from the list):
 - Nested verbatim/definition **body de-indent**: a colon-terminated paragraph
   before a fenced block is absorbed as a verbatim subject / becomes a Definition,
   and multi-line or nested table-cell bodies de-indent — **#790** (blocks
-  kitchensink, comrak-readme, both CommonMark references).
+  kitchensink, comrak-readme, both reference fixtures).
 - Leading document-level **annotation reorder** around the title / subtitle —
-  **#791** (blocks `20-ideas-naked`; also `document-09`, `annotation-27`).
+  **#791** (blocks the Markdown fixture `20-ideas-naked.md` / key
+  `ideas-naked`; also the formatter fixtures `document-09`, `annotation-27`).
+  Note the formatter fixture `benchmark/20-ideas-naked.lex` is a separate
+  known-fail tagged **#790**, not #791.
 - Ragged / mismatched-row **table normalization** — padding + a separator row are
   injected, adding cells — **#792** (`table-13`).
 
