@@ -470,7 +470,7 @@ fn faithful_definition_followed_by_each_non_hijack_block() {
 fn annotation_with_body_does_not_swallow_the_following_block() {
     // The boundary the removed lex#682 band-aid protected: a block annotation's
     // indented body must not pull the next sibling in. The matrix's
-    // `Annotation -> *` = 1 emits the trailing blank. (The annotation itself may
+    // `AnnotationBody -> *` = 1 emits the trailing blank. (The annotation itself may
     // be re-attached by the parser — that is the orthogonal attachment behavior;
     // here we assert only that the following paragraph survives as its own block.)
     let doc = doc_with(vec![

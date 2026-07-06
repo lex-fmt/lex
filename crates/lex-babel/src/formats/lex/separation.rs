@@ -25,7 +25,7 @@
 //! Every cell was derived from — and is verified against — the lex-core parser's
 //! actual behavior, not the prose grammar (where the two disagree, the parser
 //! wins; the disagreements are called out below). The verification lives in
-//! `tests/lex_separation/mod.rs::every_ordered_pair_reparses_as_two_blocks`,
+//! `tests/lex_separation/matrix.rs::every_ordered_pair_reparses_as_two_blocks`,
 //! which builds a minimal reader-shaped document for each ordered pair, serializes
 //! it, re-parses, and asserts both blocks survive with the right types.
 //!
@@ -158,7 +158,9 @@ pub(super) fn min_blank_lines(prev: BlockKind, next: BlockKind) -> usize {
         // minimum; the hijack is a flagged parser bug, not a separation gap.
         (Definition, Verbatim) => 0, // HIJACK: merges into a multi-group verbatim
         (Definition, Table) => 0,    // HIJACK: merges into the table
-        (Definition, Annotation) => 0, // HIJACK: `:: label ::` re-anchors as a verbatim closer
+        // Both annotation shapes present a `:: label ::` line (the marker *is* one;
+        // the block form opens with one), and either re-anchors as a verbatim closer.
+        (Definition, Annotation) | (Definition, AnnotationBody) => 0, // HIJACK: `:: label ::` re-anchors as a verbatim closer
         (Definition, _) => 0,
 
         // ── Annotation (marker form) → * ─────────────────────────────────────

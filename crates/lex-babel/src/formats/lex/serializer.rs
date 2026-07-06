@@ -417,8 +417,9 @@ impl Visitor for LexSerializer {
             self.indent_level -= 1;
         }
         // The trailing blank a block annotation needs before its next sibling is
-        // now emitted by the separation matrix (`Annotation → *` = 1), not here
-        // (formerly the lex#682 band-aid).
+        // now emitted by the separation matrix (`AnnotationBody → *` = 1), not here
+        // (formerly the lex#682 band-aid). The marker form has no body and so takes
+        // the `Annotation → *` row (Verbatim-shaped), not this trailing blank.
     }
 
     fn visit_verbatim_block(&mut self, _verbatim: &Verbatim) {
