@@ -102,7 +102,8 @@ pub fn blank_gap_after(
 /// Decide where an annotation should attach based on proximity to surrounding content.
 ///
 /// # Attachment Rules
-/// 1. Document-start: Annotations at document start followed by a blank line attach to Document
+/// 1. Document-start: A leading annotation at document start attaches to Document when it is
+///    followed by a blank line or the next content element is a session (document metadata)
 /// 2. Closest wins: Otherwise, attach to the closest content element
 /// 3. Tie-breaker: If equidistant, the next element wins
 /// 4. Container-end: When no next content exists, may attach to container if allowed
