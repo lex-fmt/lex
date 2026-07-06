@@ -1018,3 +1018,136 @@ proptest! {
         );
     }
 }
+
+// ============================================================================
+// lex#798 — the exact reader-built list shape, as in-code ASTs (no Markdown).
+//
+// A foreign reader (comrak) builds each item as `ListItem { text: "", children:
+// [Paragraph, …] }` — the item's lead text lives in a wrapping Paragraph, never
+// on the marker line. The Lex serializer must hoist that leading Paragraph onto
+// the tight `- text` form so it re-parses as a list instead of collapsing to a
+// Paragraph. These assert that directly on the built AST, and that genuinely
+// multi-block items keep their indented body.
+// ============================================================================
+
+/// A reader-built list item: empty marker-line text, content in child blocks.
+fn reader_item(children: Vec<ContentItem>) -> ListItem {
+    let mut c = GeneralContainer::empty();
+    for child in children {
+        c.push(child);
+    }
+    ListItem {
+        marker: TextContent::from_string("-".to_string(), None),
+        text: vec![TextContent::from_string(String::new(), None)],
+        children: c,
+        annotations: vec![],
+        location: Default::default(),
+    }
+}
+
+fn para(text: &str) -> ContentItem {
+    ContentItem::Paragraph(Paragraph {
+        lines: vec![ContentItem::TextLine(TextLine::new(
+            TextContent::from_string(text.to_string(), None),
+        ))],
+        annotations: vec![],
+        location: Default::default(),
+    })
+}
+
+fn plain_list(items: Vec<ListItem>) -> List {
+    let mut container = ListContainer::empty();
+    for item in items {
+        container.push(ContentItem::ListItem(item));
+    }
+    let mut list = List::new(vec![]);
+    list.items = container;
+    list.marker = Some(SequenceMarker {
+        raw_text: TextContent::from_string("-".to_string(), None),
+        style: DecorationStyle::Plain,
+        separator: Separator::Period,
+        form: Form::Short,
+        location: Default::default(),
+    });
+    list
+}
+
+fn doc_with_list(list: List) -> Document {
+    let mut doc = Document::new();
+    doc.root.children =
+        SessionContainer::from_typed(vec![SessionContent::Element(ContentElement::List(list))]);
+    doc
+}
+
+#[test]
+fn reader_shaped_list_serializes_to_reparseable_list() {
+    let list = plain_list(vec![
+        reader_item(vec![para("one")]),
+        reader_item(vec![para("two")]),
+    ]);
+    let doc = doc_with_list(list);
+
+    let serialized = export(&doc).expect("serialization should not fail");
+    // Tight form, not the loose `-\n    text` that collapses on reparse.
+    assert!(
+        serialized.contains("- one") && serialized.contains("- two"),
+        "expected tight `- text` items, got:\n{serialized}"
+    );
+
+    let parsed = parse_document(&serialized).expect("serialized Lex must re-parse");
+    let lists = parsed
+        .root
+        .children
+        .iter()
+        .filter(|c| matches!(c, ContentItem::List(_)))
+        .count();
+    assert_eq!(
+        lists, 1,
+        "reader-built list must re-parse as a List:\n{serialized}"
+    );
+    // Skeleton-faithful: the empty-text + leading-Paragraph shape folds to the
+    // same item text the tight form re-parses to.
+    assert_eq!(canon(&doc), canon(&parsed), "not faithful:\n{serialized}");
+}
+
+#[test]
+fn reader_shaped_multi_block_item_keeps_body() {
+    // First item is genuinely multi-block: a lead paragraph plus a sublist. Only
+    // the lead paragraph is hoisted; the sublist stays in the indented body.
+    let sublist = plain_list(vec![
+        reader_item(vec![para("sub a")]),
+        reader_item(vec![para("sub b")]),
+    ]);
+    let list = plain_list(vec![
+        reader_item(vec![para("first"), ContentItem::List(sublist)]),
+        reader_item(vec![para("second")]),
+    ]);
+    let doc = doc_with_list(list);
+
+    let serialized = export(&doc).expect("serialization should not fail");
+    let parsed = parse_document(&serialized).expect("serialized Lex must re-parse");
+    assert_eq!(canon(&doc), canon(&parsed), "not faithful:\n{serialized}");
+
+    // The sublist survived as a nested List under the first item.
+    let outer = parsed
+        .root
+        .children
+        .iter()
+        .find_map(|c| match c {
+            ContentItem::List(l) => Some(l),
+            _ => None,
+        })
+        .expect("outer list");
+    let first = outer.items.iter().next().expect("first item");
+    let has_sublist = match first {
+        ContentItem::ListItem(li) => li
+            .children
+            .iter()
+            .any(|c| matches!(c, ContentItem::List(_))),
+        _ => false,
+    };
+    assert!(
+        has_sublist,
+        "multi-block item lost its sublist:\n{serialized}"
+    );
+}

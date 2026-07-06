@@ -241,18 +241,48 @@ fn canon_item(item: &ContentItem) -> Option<Canon> {
         ContentItem::ListItem(li) => {
             // Project *all* text elements (not just the first) so multi-line
             // item content is covered; collect refs from each.
-            let text = li
+            let mut text = li
                 .text
                 .iter()
                 .map(|t| t.as_string().trim_end())
                 .collect::<Vec<_>>()
                 .join("\n");
-            let refs = li.text.iter().flat_map(refs_in).collect();
+            let mut refs: Vec<String> = li.text.iter().flat_map(refs_in).collect();
+            let mut children = canon_items(li.children.iter());
+
+            // A foreign reader (comrak) builds a list item as
+            // `{ text: "", children: [Paragraph, …] }` — the item's lead text
+            // lives in a wrapping Paragraph, not in `text`. lex has no such
+            // wrapper: its lead text sits on the marker line, so the serializer
+            // hoists that leading Paragraph onto the `- text` marker line
+            // (lex#798), and it re-parses as `{ text: "…", children: [] }`. Fold
+            // the two representations together here — when the item carries no
+            // marker-line text but leads with a Paragraph, treat that
+            // paragraph's text as the item text. This is the Faithfulness analog
+            // of the serializer's marker-line hoist, exactly as
+            // `canon_annotation` mirrors the serializer's `clean_annotation`. It
+            // only fires on the empty-text (reader-built) shape; a Lex-sourced
+            // item always has marker-line text, so its Skeleton is unchanged.
+            if text.is_empty() {
+                if let Some(Canon::Paragraph {
+                    text: lead,
+                    refs: lead_refs,
+                    annotations,
+                }) = children.first()
+                {
+                    if annotations.is_empty() {
+                        text = lead.clone();
+                        refs = lead_refs.clone();
+                        children.remove(0);
+                    }
+                }
+            }
+
             Canon::ListItem {
                 text,
                 refs,
                 annotations: canon_annotations(&li.annotations),
-                children: canon_items(li.children.iter()),
+                children,
             }
         }
         ContentItem::Definition(d) => Canon::Definition {

@@ -5,7 +5,8 @@ use lex_core::lex::ast::{
         verbatim::VerbatimGroupItemRef, VerbatimLine,
     },
     traits::{AstNode, Visitor},
-    Annotation, Definition, Document, List, ListItem, Paragraph, Session, Table, Verbatim,
+    Annotation, ContentItem, Definition, Document, List, ListItem, Paragraph, Session, Table,
+    Verbatim,
 };
 
 use lex_core::lex::assembling::stages::normalize_labels::source_spelling;
@@ -47,6 +48,18 @@ pub struct LexSerializer {
     /// first. `separate_before` consults the separation matrix against it to emit
     /// the grammar-mandated blank lines between adjacent blocks.
     sibling_levels: Vec<Option<BlockKind>>,
+    /// The Paragraph whose first line was hoisted onto a list item's marker line
+    /// (lex#798). A foreign reader (comrak) builds every list item as
+    /// `{ text: "", children: [Paragraph, …] }`; that empty-text shape would
+    /// serialize to the loose `-\n    body` form, which lex-core does NOT
+    /// re-parse as a list (it reads the bare `-` as prose and collapses the whole
+    /// list to a paragraph). `visit_list_item` instead emits the leading
+    /// paragraph's first line as the tight `- text` item, records that paragraph
+    /// here, and `visit_paragraph` skips re-emitting its first line.
+    hoisted_paragraph: Option<*const Paragraph>,
+    /// Set when `visit_paragraph` recognizes the hoisted paragraph, consumed by
+    /// the next `visit_text_line` to drop the already-hoisted first line.
+    skip_paragraph_first_line: bool,
 }
 
 impl LexSerializer {
@@ -60,6 +73,8 @@ impl LexSerializer {
             emitted_footnote_lists: Vec::new(),
             suppress_output: 0,
             sibling_levels: Vec::new(),
+            hoisted_paragraph: None,
+            skip_paragraph_first_line: false,
         }
     }
 
@@ -205,6 +220,28 @@ impl LexSerializer {
             }
         }
     }
+
+    /// lex#798 helper: if the item's leading block is a Paragraph with a first
+    /// text line, record it as the hoisted paragraph and return that first line
+    /// (to become the tight `- text` marker-line text). Leading BlankLineGroups
+    /// (which a reader would not emit, but which are harmless) are skipped. The
+    /// recorded paragraph's first line is dropped by `visit_paragraph` /
+    /// `visit_text_line` so it is not emitted twice.
+    fn hoist_leading_paragraph_line(&mut self, list_item: &ListItem) -> Option<String> {
+        let first_block = list_item
+            .children
+            .iter()
+            .find(|c| !matches!(c, ContentItem::BlankLineGroup(_)))?;
+        let ContentItem::Paragraph(paragraph) = first_block else {
+            return None;
+        };
+        let first_line = paragraph.lines.iter().find_map(|line| match line {
+            ContentItem::TextLine(tl) => Some(tl.text().trim_end().to_string()),
+            _ => None,
+        })?;
+        self.hoisted_paragraph = Some(paragraph as *const Paragraph);
+        Some(first_line)
+    }
 }
 
 impl Visitor for LexSerializer {
@@ -229,7 +266,16 @@ impl Visitor for LexSerializer {
         }
     }
 
-    fn visit_paragraph(&mut self, _paragraph: &Paragraph) {
+    fn visit_paragraph(&mut self, paragraph: &Paragraph) {
+        // lex#798: this paragraph's first line was hoisted onto the enclosing
+        // list item's marker line. It is not a standalone sibling block, so skip
+        // the separation blank and mark its first line to be dropped. Any
+        // remaining lines still emit as the item's indented body.
+        if self.hoisted_paragraph == Some(paragraph as *const Paragraph) {
+            self.hoisted_paragraph = None;
+            self.skip_paragraph_first_line = true;
+            return;
+        }
         // Paragraphs are handled by visiting TextLines; this hook only registers
         // the paragraph as a sibling block so the separation matrix can emit the
         // grammar-mandated blank before it (a reader-built AST has no
@@ -240,6 +286,11 @@ impl Visitor for LexSerializer {
     }
 
     fn visit_text_line(&mut self, text_line: &TextLine) {
+        // lex#798: drop the line already hoisted onto the list item's marker line.
+        if self.skip_paragraph_first_line {
+            self.skip_paragraph_first_line = false;
+            return;
+        }
         let text = text_line.text().trim_end();
         self.write_line(text);
     }
@@ -340,10 +391,28 @@ impl Visitor for LexSerializer {
             ""
         };
 
-        let line = if text.is_empty() {
+        // lex#798: a foreign reader builds each item as `{ text: "", children:
+        // [Paragraph, …] }` (comrak's block model — the item's content lives in a
+        // child Paragraph, not in `text`). Serializing that empty-text shape as
+        // the loose `-\n    body` form does not re-parse as a list — lex-core
+        // reads the bare `-` as prose and the whole list collapses to a
+        // paragraph. When the item has no marker-line text but its leading block
+        // is a Paragraph, hoist that paragraph's first line onto the marker line
+        // (the tight `- text` form, which re-parses as a list item). The
+        // paragraph's remaining lines and every other child stay in the indented
+        // body, so genuinely multi-block items (paragraph + sublist, extra
+        // paragraphs) are untouched.
+        let hoisted = if text.is_empty() {
+            self.hoist_leading_paragraph_line(list_item)
+        } else {
+            None
+        };
+        let effective_text = hoisted.as_deref().unwrap_or(text);
+
+        let line = if effective_text.is_empty() {
             marker
         } else {
-            format!("{marker} {text}")
+            format!("{marker} {effective_text}")
         };
 
         self.write_line(&line);

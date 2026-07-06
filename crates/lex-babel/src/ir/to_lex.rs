@@ -4,10 +4,11 @@
 //! back to Lex AST structures.
 
 use lex_core::lex::ast::elements::{
-    typed_content, verbatim::VerbatimBlockMode, Annotation as LexAnnotation, ContentElement,
-    ContentItem as LexContentItem, Definition as LexDefinition, Label, List as LexList,
-    ListItem as LexListItem, Paragraph as LexParagraph, Session as LexSession,
-    Verbatim as LexVerbatim, VerbatimContent, VerbatimLine as LexVerbatimLine,
+    sequence_marker::SequenceMarker, typed_content, verbatim::VerbatimBlockMode,
+    Annotation as LexAnnotation, ContentElement, ContentItem as LexContentItem,
+    Definition as LexDefinition, Label, List as LexList, ListItem as LexListItem,
+    Paragraph as LexParagraph, Session as LexSession, Verbatim as LexVerbatim, VerbatimContent,
+    VerbatimLine as LexVerbatimLine,
 };
 use lex_core::lex::ast::range::Position;
 use lex_core::lex::ast::{Data, Document as LexDocument, Parameter, Range, TextContent};
@@ -342,7 +343,16 @@ fn to_lex_list(list: &List) -> LexContentItem {
         .enumerate()
         .map(|(i, item)| to_lex_list_item_with_style(item, &list.style, i + 1))
         .collect();
-    LexContentItem::List(LexList::new(items))
+    let mut lex_list = LexList::new(items);
+    // Record the list's decoration style on the List node (lex#798). Leaving
+    // `marker: None` here made the Lex serializer fall back to the plain dash —
+    // numbered/alpha/roman lists lost their markers on serialize — and left the
+    // Skeleton's list-style `None` where a re-parsed list carries a concrete
+    // style, tripping Faithfulness. Deriving the marker from the first item's
+    // style mirrors how the Lex parser sets a list's style from its first item.
+    let first_marker = format_marker_for_style(&list.style, 1);
+    lex_list.marker = SequenceMarker::parse(&first_marker, None);
+    LexContentItem::List(lex_list)
 }
 
 /// Converts an IR ListItem to a Lex ListItem with a marker derived from style and position.
