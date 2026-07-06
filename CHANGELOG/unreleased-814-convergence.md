@@ -1,0 +1,1 @@
+- Bump comms to the multi-group verbatim grammar; document the Definition→Verbatim separation as intended group semantics (lex#814 §4)

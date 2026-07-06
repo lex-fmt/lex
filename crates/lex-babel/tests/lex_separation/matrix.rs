@@ -12,12 +12,16 @@
 //! through the real matrix-driven serializer, re-parses, and asserts both blocks
 //! survive with the correct types.
 //!
-//! Documented parser limitations are characterized rather than asserted faithful
+//! Intended group semantics are characterized rather than asserted faithful
 //! (see `separation.rs` module docs and `definition_before_closer_led_block_is_a_
-//! known_hijack`): a Definition immediately before a Verbatim, a Table, or an
-//! Annotation is swallowed by the verbatim/table matcher's greedy closer
-//! re-anchoring (any `:: label ::` closes the definition's subject as a verbatim),
-//! which no blank count fixes. Bare Annotation siblings are also not
+//! known_hijack`): per `comms/specs/grammar-core.lex` §4.5c, a Definition
+//! immediately before a closer-terminated Verbatim (or a Table/Annotation whose
+//! `:: label ::` marker doubles as a verbatim closer) is that block's FIRST group.
+//! A definition's `subject:` + indented body is structurally identical to a
+//! `<verbatim-group-with-content>`, and verbatim is tried before definition (§4.7),
+//! so the two cannot be authored as separate adjacent blocks — blank lines do not
+//! separate groups. This is the multi-group verbatim feature working as designed
+//! (lex#814 §4, resolved as intended), not a bug. Bare Annotation siblings are also not
 //! round-trippable as siblings (the parser attaches a floating annotation to a
 //! neighbor or the document head), so they are excluded from the sibling-sequence
 //! properties; the matrix still owns the lex#682 trailing-blank boundary, tested
@@ -208,12 +212,19 @@ fn body_kinds(doc: &Document) -> Vec<Kind> {
 
 // ─── The matrix, made executable ────────────────────────────────────────────
 
-/// The ordered pairs the parser cannot separate: a Definition's bare `subject:`
-/// line is re-anchored by the *next* `:: label ::` closer the verbatim/table
-/// matcher sees, merging the pair into one block. That closer can belong to a
-/// Verbatim, a Table, or an Annotation (`:: label ::` is a valid verbatim
-/// closer), so all three `Definition → …` pairs hijack. Documented in
-/// `separation.rs`; a flagged parser bug, not separation-fixable.
+/// The ordered pairs that merge by design, not by a separation gap. Per
+/// `comms/specs/grammar-core.lex` §4.5c, a verbatim block is
+/// `<verbatim-group-with-content>+` sharing ONE closing annotation (multi-group
+/// verbatim). A `<definition>` (`<subject-line> <indent> content`) authored as a
+/// peer immediately above a closer-terminated verbatim run is structurally
+/// identical to a `<verbatim-group-with-content>` and is therefore that verbatim's
+/// FIRST group — verbatim is tried before definition (parse order §4.7), and blank
+/// lines do not separate groups, so the two cannot be authored as separate adjacent
+/// blocks. The same closer re-anchoring absorbs the Definition ahead of a Table or
+/// an Annotation closer (`:: label ::` is a valid verbatim closer), so all three
+/// `Definition → …` pairs merge. This is the multi-group verbatim feature working
+/// AS DESIGNED (lex#814 §4, resolved as intended), NOT a bug to fix. Documented in
+/// `separation.rs`.
 fn is_known_hijack(prev: Kind, next: Kind) -> bool {
     matches!(
         (prev, next),
@@ -237,14 +248,17 @@ fn every_ordered_pair_reparses_as_two_blocks() {
             let kinds = body_kinds(&reparsed);
 
             if is_known_hijack(a, b) {
-                // Characterize the documented limitation: the pair merges. If the
-                // parser is fixed, this assertion flips and the cell can be
-                // asserted faithful — a deliberate tripwire.
+                // Regression guard for the multi-group verbatim feature: the pair
+                // MUST still merge (the Definition is the verbatim's first group per
+                // grammar §4.5c). If it ever separates, multi-group verbatim has
+                // regressed — the opposite of a fix.
                 assert_ne!(
                     kinds,
                     vec![Kind::Paragraph, a, b],
-                    "({a:?} -> {b:?}) is a documented parser hijack that should still merge; \
-                     if this now separates, update the matrix + separation.rs docs.\n{out}"
+                    "({a:?} -> {b:?}) must still merge — a definition adjacent to a \
+                     closer-terminated verbatim is that verbatim's first group per the \
+                     multi-group grammar (§4.5c); if this separates, multi-group verbatim \
+                     has regressed.\n{out}"
                 );
                 continue;
             }
@@ -274,13 +288,14 @@ fn every_ordered_pair_reparses_as_two_blocks() {
 
 #[test]
 fn definition_before_closer_led_block_is_a_known_hijack() {
-    // Explicit, documented characterization of the unfixable-by-separation cells:
-    // the verbatim/table matcher re-anchors the next `:: label ::` closer to the
-    // definition's `subject:` line and swallows the pair. A Verbatim and a Table
-    // supply that closer directly; an Annotation's `:: label ::` marker is *also*
-    // a valid verbatim closer, so it hijacks too. Tracked as a parser bug — no
-    // blank count in the matrix changes the outcome. If the parser is fixed, this
-    // test flips (a deliberate tripwire) and the matrix docs must be revisited.
+    // Explicit regression guard for the intended group semantics (grammar §4.5c):
+    // a Definition immediately above a closer-terminated block is that block's
+    // first verbatim group. A Verbatim and a Table supply the shared `:: label ::`
+    // closer directly; an Annotation's `:: label ::` marker is *also* a valid
+    // verbatim closer, so it absorbs the definition too. This is multi-group
+    // verbatim working as designed — no blank count in the matrix changes it, and
+    // the pair MUST stay merged. If it ever separates, multi-group verbatim has
+    // regressed and the matrix docs must be revisited.
     for next in [Kind::Verbatim, Kind::Table, Kind::Annotation] {
         let doc = doc_with(vec![
             lead(),
@@ -294,8 +309,9 @@ fn definition_before_closer_led_block_is_a_known_hijack() {
         // the verbatim the matcher synthesizes around the re-anchored closer.
         assert!(
             !kinds.contains(&Kind::Definition),
-            "Definition -> {next:?} is expected to be hijacked (definition subject \
-             absorbed into a verbatim); got {kinds:?}\n{out}"
+            "Definition -> {next:?} must stay merged — the definition subject is the \
+             verbatim's first group per grammar §4.5c; if it survives as a sibling, \
+             multi-group verbatim has regressed; got {kinds:?}\n{out}"
         );
     }
 }
@@ -568,8 +584,8 @@ proptest::proptest! {
     /// serializes and re-parses with the same block-type sequence. Drawn from the
     /// six kinds that round-trip as bare siblings (Annotation is excluded — bare
     /// annotation siblings re-attach, an orthogonal parser behavior), and the
-    /// documented Definition→Verbatim / Definition→Table hijack adjacencies are
-    /// rejected. #784 will grow this into the full reader-content proptest.
+    /// intended Definition→Verbatim / Definition→Table merge adjacencies (grammar
+    /// §4.5c) are skipped. #784 will grow this into the full reader-content proptest.
     #[test]
     fn reader_shaped_sibling_sequence_preserves_block_types(
         indices in proptest::collection::vec(0usize..6, 1..7),
@@ -586,7 +602,7 @@ proptest::proptest! {
             ][i])
             .collect();
 
-        // Reject the documented, unfixable hijack adjacencies.
+        // Skip the intended merge adjacencies (multi-group verbatim, grammar §4.5c).
         for pair in kinds.windows(2) {
             if is_known_hijack(pair[0], pair[1]) {
                 return Ok(());
