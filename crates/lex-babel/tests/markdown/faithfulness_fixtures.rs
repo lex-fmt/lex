@@ -44,12 +44,12 @@
 //!     leading document-level annotations used to reorder around the title / bind
 //!     inconsistently across a round-trip; the attachment inconsistency is now
 //!     fixed (a leading annotation above the first session attaches to the root in
-//!     both parse directions). ideas-naked stays blocked on a serializer residual
-//!     tracked as its own issue lex#817 (deferred): single-line→block annotation
-//!     rewrite trims trailing whitespace and folds a trailing blank into the body.
-//!     A related annotation-attachment limitation (a
-//!     floating block annotation attaches to its neighbor rather than round-tripping
-//!     as a sibling) is a second residual blocker for kitchensink.
+//!     both parse directions). The lex#817 single-line annotation serializer
+//!     residual is also fixed. ideas-naked remains blocked on broader markdown
+//!     conversion residuals tracked under lex#814. A related annotation-attachment
+//!     limitation (a floating block annotation attaches to its neighbor rather
+//!     than round-tripping as a sibling) is a second residual blocker for
+//!     kitchensink.
 //!
 //! ## How this suite stays honest (no forced green, no weakened canon)
 //!
@@ -147,16 +147,7 @@ const FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[
     ("comrak-readme", "lex#814"),
     ("commonmark-reference", "lex#814"),
     ("comrak-reference", "lex#814"),
-    // #791 — leading document-level annotations reorder around the title. The
-    // attachment-inconsistency half of this (a leading annotation binding to the
-    // first session in parse(D) but to the root in parse(format(D))) is now FIXED
-    // by lex#814 §2. ideas-naked STILL fails faithfulness on a separate serializer
-    // residual: its single-line leading annotations (`:: author :: Arthur Debert  `)
-    // are rewritten to block form, which trims trailing whitespace and folds a
-    // trailing blank into the annotation body — altering content, not target.
-    // Tracked as its own issue lex#817 (deferred, not fixed here) for that
-    // single-line→block serializer residual.
-    ("ideas-naked", "lex#817"),
+    ("ideas-naked", "lex#814"),
 ];
 
 /// Drive the real reader over every fixture and grade Faithfulness against the

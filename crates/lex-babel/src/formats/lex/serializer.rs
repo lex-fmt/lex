@@ -24,6 +24,28 @@ use tables::emit_pipe_table;
 #[cfg(test)]
 mod tests;
 
+fn source_single_line_annotation_body(annotation: &Annotation) -> Option<&str> {
+    if annotation.children.len() != 1 {
+        return None;
+    }
+    let Some(ContentItem::Paragraph(paragraph)) = annotation.children.iter().next() else {
+        return None;
+    };
+    if !paragraph.annotations.is_empty() {
+        return None;
+    }
+    let [ContentItem::TextLine(line)] = paragraph.lines.as_slice() else {
+        return None;
+    };
+    if annotation.range().span.is_empty() || line.range().span.is_empty() {
+        return None;
+    }
+    if annotation.range().start.line != line.range().start.line {
+        return None;
+    }
+    Some(line.text())
+}
+
 struct ListContext {
     index: usize,
     style: DecorationStyle,
@@ -509,15 +531,17 @@ impl Visitor for LexSerializer {
     }
 
     fn visit_annotation(&mut self, annotation: &Annotation) {
+        let single_line_body = source_single_line_annotation_body(annotation);
+        let has_block_body = !annotation.children.is_empty() && single_line_body.is_none();
         // The trailing-blank requirement (lex#682) applies only to a block
         // annotation *with a body* — its indented body would otherwise pull the
         // next sibling in. A marker-form annotation ends with a closed
         // `:: label ::` and separates like a Verbatim closer. Distinguish the two
         // so the separation matrix picks the right row/column.
-        let kind = if annotation.children.is_empty() {
-            BlockKind::Annotation
-        } else {
+        let kind = if has_block_body {
             BlockKind::AnnotationBody
+        } else {
+            BlockKind::Annotation
         };
         self.separate_before(kind);
         let label = source_spelling(&annotation.data.label);
@@ -540,16 +564,24 @@ impl Visitor for LexSerializer {
         // (lex#682).
         header.push_str(" ::");
 
+        if let Some(body) = single_line_body {
+            header.push(' ');
+            header.push_str(body);
+        }
         self.write_line(&header);
 
-        if !annotation.children.is_empty() {
+        if single_line_body.is_some() {
+            self.suppress_output += 1;
+        } else if has_block_body {
             self.indent_level += 1;
             self.enter_sibling_scope();
         }
     }
 
     fn leave_annotation(&mut self, annotation: &Annotation) {
-        if !annotation.children.is_empty() {
+        if source_single_line_annotation_body(annotation).is_some() {
+            self.suppress_output -= 1;
+        } else if !annotation.children.is_empty() {
             self.leave_sibling_scope();
             self.indent_level -= 1;
         }
