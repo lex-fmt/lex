@@ -26,12 +26,10 @@
 //! survive as the verbatim's first group.
 //!
 //! Definition → Table is the ONE exception and is NOT intended: a table is
-//! single-group, so the definition cannot become a group. The merge instead
-//! collapses to a degenerate table that keeps only the definition's subject and
-//! DROPS the definition body and the table's own rows — a real, pre-existing
-//! content-loss bug tracked in lex#819 (deferred, not fixed here). Its tripwire
-//! CHARACTERIZES the known-bad shape; when #819 is fixed the pair should separate
-//! and Table drops out of `is_known_hijack`.
+//! single-group, so the definition cannot become a group. The parser now requires
+//! a `:: table ::` span to start with pipe-row table content, so this pair
+//! separates into Definition + Table instead of collapsing to a degenerate table
+//! that drops both the definition body and the table's rows (lex#819).
 //!
 //! Bare Annotation siblings are also not round-trippable as siblings (the parser
 //! attaches a floating annotation to a neighbor or the document head), so they are
@@ -247,18 +245,12 @@ fn body_items(doc: &Document) -> Vec<&ContentItem> {
 /// verbatim feature working AS DESIGNED (lex#814 §4, resolved as intended) and lose
 /// no content.
 ///
-/// `Definition → Table` is included too but for the OPPOSITE reason: it is a KNOWN
-/// CONTENT-LOSS BUG (lex#819, deferred), NOT intended. A table is single-group, so
-/// the definition cannot become a group; the merge collapses to a degenerate table
-/// that drops the definition body and the table rows. It stays in this set only
-/// because the pair does currently merge (not separate); when lex#819 is fixed the
-/// pair should separate and this arm must be removed. Documented in `separation.rs`.
+/// `Definition → Table` used to be the known lex#819 content-loss exception, but
+/// tables are single-group and now separate rather than merging lossily.
 fn is_known_hijack(prev: Kind, next: Kind) -> bool {
     matches!(
         (prev, next),
-        (Kind::Definition, Kind::Verbatim)
-            | (Kind::Definition, Kind::Table)
-            | (Kind::Definition, Kind::Annotation)
+        (Kind::Definition, Kind::Verbatim) | (Kind::Definition, Kind::Annotation)
     )
 }
 
@@ -365,40 +357,9 @@ fn assert_definition_hijack_shape(next: Kind, reparsed: &Document, out: &str) {
             );
         }
         Kind::Table => {
-            // KNOWN CONTENT-LOSS BUG (lex#819), NOT intended group semantics.
-            // Unlike verbatim, a table is single-group, so the definition cannot
-            // become a group; instead the merge collapses to a degenerate table
-            // that keeps ONLY the definition's subject and DROPS everything else —
-            // both the definition body AND the table's own rows. This is a real,
-            // pre-existing bug (deferred, tracked in lex#819), not faithful and not
-            // "intended." The assertion CHARACTERIZES the current known-bad shape so
-            // the loss is pinned and visible; when lex#819 is fixed the pair should
-            // SEPARATE (Table drops out of `is_known_hijack`) and this arm must be
-            // updated to expect two siblings.
-            assert_eq!(
+            panic!(
+                "Definition -> Table is no longer a known hijack after lex#819; got {:?}\n{out}",
                 body_kinds(reparsed),
-                vec![Kind::Paragraph, Kind::Table],
-                "(Definition -> Table) known bug lex#819: currently merges into lead + one \
-                 degenerate table; got {:?}\n{out}",
-                body_kinds(reparsed),
-            );
-            let table = match items[1] {
-                ContentItem::Table(t) => t.as_ref(),
-                other => panic!("expected a Table; got {other:?}\n{out}"),
-            };
-            assert_eq!(
-                table.subject.as_string(),
-                "Term",
-                "(Definition -> Table) known bug lex#819: the merged table keeps only the \
-                 definition subject\n{out}",
-            );
-            assert!(
-                table.header_rows.is_empty() && table.body_rows.is_empty(),
-                "(Definition -> Table) known bug lex#819: the merge DROPS all rows (content \
-                 loss); when #819 is fixed the pair should separate and this tripwire must be \
-                 updated; got {} header + {} body row(s)\n{out}",
-                table.header_rows.len(),
-                table.body_rows.len(),
             );
         }
         other => panic!("assert_definition_hijack_shape called with non-hijack next {other:?}"),
@@ -423,10 +384,9 @@ fn every_ordered_pair_reparses_as_two_blocks() {
                 // than the weak "does not equal the separated shape" check (which
                 // codex flagged — it would pass even if the parser dropped content
                 // or produced the wrong merged block), assert the POSITIVE merged
-                // shape. `assert_definition_hijack_shape` pins each pair: the
-                // lossless §4.5c merges (Verbatim/Annotation) AND the lex#819
-                // Table content-loss bug. If it separates OR the merged shape is
-                // wrong, the guard fails.
+                // shape. `assert_definition_hijack_shape` pins the lossless §4.5c
+                // merges (Verbatim/Annotation). If either separates OR the merged
+                // shape is wrong, the guard fails.
                 assert_definition_hijack_shape(b, &reparsed, &out);
                 continue;
             }
@@ -457,17 +417,15 @@ fn every_ordered_pair_reparses_as_two_blocks() {
 #[test]
 fn definition_before_closer_led_block_is_a_known_hijack() {
     // Explicit regression guard that a Definition immediately above a
-    // closer-terminated block is absorbed rather than kept as a sibling. Two of
-    // these are the intended multi-group behavior (grammar §4.5c): Definition →
-    // Verbatim (the definition is the verbatim's first group under the shared
-    // closer) and Definition → Annotation (the `:: label ::` marker doubles as a
-    // verbatim closer, so the definition becomes a verbatim closed by it and the
-    // annotation body spills out as a trailing paragraph) — both lossless. The
-    // third, Definition → Table, is the lex#819 content-loss bug (deferred): a
-    // single-group table cannot hold the definition as a group, so the merge drops
-    // content. `assert_definition_hijack_shape` pins each shape positively — merge
-    // vs separate AND the exact merged block — so it fails on regression either way.
-    for next in [Kind::Verbatim, Kind::Table, Kind::Annotation] {
+    // closer-terminated Verbatim/Annotation is absorbed rather than kept as a
+    // sibling. Both are intended multi-group behavior (grammar §4.5c):
+    // Definition → Verbatim makes the definition the verbatim's first group under
+    // the shared closer; Definition → Annotation uses the `:: label ::` marker as
+    // a verbatim closer, so the definition becomes a verbatim closed by it and the
+    // annotation body spills out as a trailing paragraph. Definition → Table used
+    // to live here as lex#819's known content-loss bug, but a table is
+    // single-group and now separates instead.
+    for next in [Kind::Verbatim, Kind::Annotation] {
         let doc = doc_with(vec![
             lead(),
             block(Kind::Definition, Role::Prev),
@@ -747,9 +705,10 @@ proptest::proptest! {
     /// serializes and re-parses with the same block-type sequence. Drawn from the
     /// six kinds that round-trip as bare siblings (Annotation is excluded — bare
     /// annotation siblings re-attach, an orthogonal parser behavior). The
-    /// `is_known_hijack` merge adjacencies are skipped: Definition→Verbatim (the
-    /// intended multi-group behavior, §4.5c) and Definition→Table (the lex#819
-    /// content-loss bug). #784 will grow this into the full reader-content proptest.
+    /// `is_known_hijack` merge adjacency is skipped: Definition→Verbatim, the
+    /// intended multi-group behavior (§4.5c). Definition→Table used to be a
+    /// lossy member of this family, but tables are single-group and now separate
+    /// normally (lex#819). #784 will grow this into the full reader-content proptest.
     #[test]
     fn reader_shaped_sibling_sequence_preserves_block_types(
         indices in proptest::collection::vec(0usize..6, 1..7),

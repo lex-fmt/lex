@@ -209,6 +209,35 @@ fn test_table_multiline_from_string() {
     });
 }
 
+#[test]
+fn test_definition_adjacent_to_table_keeps_table_rows_lex819() {
+    use lex_core::lex::parsing::parse_document;
+
+    let source =
+        "Term:\n    Definition body.\nData table:\n    | A | B |\n    | 1 | 2 |\n:: table ::\n";
+    let doc = parse_document(source).unwrap();
+
+    assert_ast(&doc)
+        .item_count(2)
+        .item(0, |item| {
+            item.assert_definition()
+                .subject("Term")
+                .child_count(1)
+                .child(0, |child| {
+                    child.assert_paragraph().text("Definition body.");
+                });
+        })
+        .item(1, |item| {
+            item.assert_table()
+                .subject("Data table")
+                .header_row_count(1)
+                .body_row_count(1)
+                .column_count(2)
+                .header_cells(0, &["A", "B"])
+                .body_cells(0, &["1", "2"]);
+        });
+}
+
 // ============================================================================
 // Separator Lines
 // ============================================================================

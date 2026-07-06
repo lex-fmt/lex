@@ -13,7 +13,7 @@
 //! - `builder.rs` - AST node construction from matched patterns
 
 use crate::lex::parsing::ir::{NodeType, ParseNode};
-use crate::lex::token::{LineContainer, LineType};
+use crate::lex::token::{LineContainer, LineType, Token};
 use regex::Regex;
 use std::ops::Range;
 
@@ -594,6 +594,22 @@ impl GrammarMatcher {
                 LineContainer::Token(line) => {
                     if matches!(line.line_type, DataMarkerLine) {
                         // Found closing annotation (:: label ::) - success!
+                        // A table is single-group: unlike verbatim, it cannot
+                        // absorb preceding subject+content groups. If a shared
+                        // `:: table ::` closer would build a table from a span
+                        // whose first group is not pipe-row content, or from a
+                        // multi-group span, back off so the normal
+                        // definition/table matchers can claim their own blocks
+                        // without dropping rows (lex#819).
+                        if line_is_table_marker(line)
+                            && !table_span_has_single_pipe_group(
+                                tokens,
+                                first_subject_idx + 1,
+                                cursor,
+                            )
+                        {
+                            return None;
+                        }
                         // But only if we haven't mixed containers with flat content in a problematic way
                         return Some((
                             PatternMatch::VerbatimBlock {
@@ -618,6 +634,72 @@ impl GrammarMatcher {
             }
         }
     }
+}
+
+fn line_is_table_marker(line: &crate::lex::token::LineToken) -> bool {
+    line.line_type == LineType::DataMarkerLine
+        && line.source_tokens.iter().find_map(|token| match token {
+            Token::Text(text) => Some(text.as_str()),
+            _ => None,
+        }) == Some("table")
+}
+
+fn table_span_has_single_pipe_group(
+    tokens: &[LineContainer],
+    content_start: usize,
+    closing_idx: usize,
+) -> bool {
+    let mut saw_table_content = false;
+
+    for token in &tokens[content_start..closing_idx] {
+        match token {
+            LineContainer::Token(line) if line.line_type == LineType::BlankLine => continue,
+            LineContainer::Container { .. } if !saw_table_content => {
+                if !container_starts_with_pipe_row(token) {
+                    return false;
+                }
+                saw_table_content = true;
+            }
+            LineContainer::Token(line)
+                if !saw_table_content
+                    && matches!(
+                        line.line_type,
+                        LineType::SubjectLine | LineType::SubjectOrListItemLine
+                    ) =>
+            {
+                return false;
+            }
+            LineContainer::Token(line) if !saw_table_content => {
+                if !line_starts_with_pipe_row(line) {
+                    return false;
+                }
+                saw_table_content = true;
+            }
+            LineContainer::Token(line)
+                if matches!(
+                    line.line_type,
+                    LineType::SubjectLine | LineType::SubjectOrListItemLine
+                ) =>
+            {
+                return false;
+            }
+            LineContainer::Container { .. } => return false,
+            LineContainer::Token(_) => {}
+        }
+    }
+
+    saw_table_content
+}
+
+fn line_starts_with_pipe_row(line: &crate::lex::token::LineToken) -> bool {
+    for token in &line.source_tokens {
+        match token {
+            Token::Whitespace(_) | Token::Indentation | Token::Indent(_) => continue,
+            Token::Text(text) => return text.starts_with('|'),
+            _ => return false,
+        }
+    }
+    false
 }
 
 /// Main recursive descent parser using the declarative grammar.
