@@ -93,6 +93,57 @@ faithfully. Replaces the rejected "leading-blank title escape" — it survives
 `lexd format` (it is real content, not strippable whitespace) and is
 discoverable. See ADR-0002.
 
+## Faithfulness status — what round-trips today
+
+The Markdown↔Lex faithfulness epic (#781–#785, #798, #795) is the current state
+of the world. This section is the durable "what survives the trip" summary; the
+live, per-fixture truth is the anti-rot known-fail lists in
+`crates/lex-babel/tests/markdown/faithfulness_fixtures.rs` and
+`crates/lex-babel/tests/format_invariants/mod.rs` — keep this in sync with them.
+
+**Round-trips faithfully today** (Markdown → Lex → re-parse, Skeleton-equal):
+
+- Paragraphs, and Block Separation between **every** ordered sibling pair (the
+  separation matrix, ADR-0001 / #782).
+- Document title: a leading `# H1` ↔ `Document.title`, and a heading-less source
+  via the `:: doc.untitled ::` no-title marker (ADR-0002 / #783).
+- Lists — unordered, ordered (markers preserved), nested, and multi-block items
+  (reader-built loose lists hoist to tight form, #798).
+- Definitions.
+- Verbatim / fenced code blocks (as blocks).
+- Inline emphasis and inline code.
+- Marker-like session titles (`## 1. X` → `1\. X` guard, re-parses `style: None`,
+  #795).
+
+**Deferred — tracked bugs that do not round-trip yet** (listed in the test
+known-fail sweeps; fixing the bug flips the fixture to faithful and forces its
+removal from the list):
+
+- Nested verbatim/definition **body de-indent**: a colon-terminated paragraph
+  before a fenced block is absorbed as a verbatim subject / becomes a Definition,
+  and multi-line or nested table-cell bodies de-indent — **#790** (blocks
+  kitchensink, comrak-readme, both reference fixtures).
+- Leading document-level **annotation reorder** around the title / subtitle —
+  **#791** (blocks the Markdown fixture `20-ideas-naked.md` / key
+  `ideas-naked`; also the formatter fixtures `document-09`, `annotation-27`).
+  Note the formatter fixture `benchmark/20-ideas-naked.lex` is a separate
+  known-fail tagged **#790**, not #791.
+- Ragged / mismatched-row **table normalization** — padding + a separator row are
+  injected, adding cells — **#792** (`table-13`).
+
+**Declared Lossy** — knowingly non-round-trippable by construction, degrades
+predictably (never a bug to "fix"):
+
+- A **backtick inside a code span** (Markdown's ``` `` a`b `` ```): a Lex code
+  span is single-backtick and literal, so it cannot hold its own delimiter. The
+  markup is dropped; the text degrades to well-formed prose (no corrupt re-parse).
+- **Blank-line counts**: a run of blanks collapses to the single structural
+  separator (Skeleton ignores blank _count_).
+- **Single-item lists**: Lex requires ≥ 2 items, so a one-item Markdown list
+  degrades to a Paragraph (content preserved, not a faithful list).
+- **Lex-only constructs** outside the Equivalence Set: annotations, citation /
+  reference syntax, and sessions deeper than Markdown's six heading levels.
+
 ## Flagged ambiguities
 
 **"Lossless"** — always scope it: lossless _for the Equivalence Set_. A bare
