@@ -12,6 +12,8 @@
 //!
 //! Slice #781 wires only paragraph→paragraph; other pairs still emit 0 here.
 
+mod matrix;
+
 use lex_babel::formats::lex::export;
 use lex_babel::transforms::format_lex_source;
 use lex_core::lex::ast::elements::container::SessionContainer;
@@ -118,6 +120,45 @@ fn lex_source_multiple_body_paragraphs_byte_identical() {
     let src = "Head line one.\nHead line two.\n\nMiddle.\n\nTail.\n";
     let formatted = format_lex_source(src).expect("format");
     assert_eq!(formatted, src);
+}
+
+/// Well-formed lex documents exercising each block kind whose matrix cell the
+/// #782 slice touched (verbatim, definition, list, table, annotation) format to
+/// themselves byte-for-byte — the block-level statement of the zero-regression
+/// guarantee. Because a lex-sourced AST already carries a `BlankLineGroup` ≥ the
+/// structural minimum between blocks, the matrix (max-composing) never adds a
+/// blank these documents did not already have.
+#[test]
+fn lex_source_block_documents_are_byte_identical() {
+    let cases: &[(&str, &str)] = &[
+        (
+            "paragraph then verbatim",
+            "Lead one.\nLead two.\n\nIntro paragraph.\n\nCode Example:\n    fn main() {}\n:: rust ::\n",
+        ),
+        (
+            "paragraph then definition",
+            "Lead one.\nLead two.\n\nIntro paragraph.\n\nTerm:\n    The definition body.\n",
+        ),
+        (
+            "paragraph then list",
+            "Lead one.\nLead two.\n\nIntro paragraph.\n\n- item one\n- item two\n",
+        ),
+        (
+            "verbatim then paragraph",
+            "Snippet:\n    let x = 1;\n:: rust ::\n\nAfter the code.\n",
+        ),
+        (
+            "session with mixed body",
+            "Section\n\n    A paragraph.\n\n    - list one\n    - list two\n\n    Another paragraph.\n",
+        ),
+    ];
+    for (label, src) in cases {
+        let formatted = format_lex_source(src).unwrap_or_else(|e| panic!("[{label}] format: {e}"));
+        assert_eq!(
+            &formatted, src,
+            "[{label}] lex -> lex must be byte-identical"
+        );
+    }
 }
 
 /// Count `Paragraph` nodes directly under a session's children.
