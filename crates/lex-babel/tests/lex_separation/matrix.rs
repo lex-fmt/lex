@@ -12,9 +12,10 @@
 //! through the real matrix-driven serializer, re-parses, and asserts both blocks
 //! survive with the correct types.
 //!
-//! Group semantics are characterized rather than asserted faithful (see
-//! `separation.rs` module docs and `definition_before_closer_led_block_is_a_
-//! known_hijack`): per `comms/specs/grammar-core.lex` §4.5c, a Definition
+//! Group semantics are characterized rather than asserted faithful (see the
+//! `separation.rs` module docs and the
+//! `definition_before_closer_led_block_is_a_known_hijack` test): per
+//! `comms/specs/grammar-core.lex` §4.5c, a Definition
 //! immediately before a closer-terminated Verbatim (or before an Annotation whose
 //! `:: label ::` marker doubles as a verbatim closer) is that block's FIRST group.
 //! A definition's `subject:` + indented body is structurally identical to a
