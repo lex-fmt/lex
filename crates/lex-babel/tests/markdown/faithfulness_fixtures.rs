@@ -9,27 +9,29 @@
 //! ## MAJOR FINDING — real documents do NOT round-trip faithfully today
 //!
 //! Every real fixture (`010-kitchensink.md`, `comrak-readme.md`, the CommonMark
-//! reference, …) currently FAILS end-to-end Faithfulness through the real reader.
+//! reference, …) still FAILS end-to-end Faithfulness through the real reader.
 //! The empirical causes, all **pre-existing** and confirmed by minimal repros:
 //!
-//!   - **lex#798 (reader-built loose lists collapse on serialize)** — the dominant
-//!     blocker. The Markdown reader builds every list item as
+//!   - **lex#798 (reader-built loose lists collapse on serialize) — FIXED.** The
+//!     Markdown reader builds every list item as
 //!     `ListItem { text: "", children: [Paragraph] }` (comrak's block model — an
-//!     item contains a paragraph). The Lex serializer emits that as the loose form
-//!     `-\n    text`, which lex-core does **not** re-parse as a list — it collapses
-//!     the whole list into one Paragraph blob. So NO reader-built list round-trips;
-//!     since every real fixture contains lists, this alone sinks all of them. Same
-//!     root *mechanism* as #790 (a nested block body under a marker collapses to a
-//!     paragraph) but a distinct, separately-tracked manifestation — #790's title
-//!     and repros name only verbatim/definition/table.
-//!   - **lex#790 (verbatim/definition nested bodies de-indent)** — a definition
-//!     body carrying a paragraph+list, and a colon-terminated paragraph before a
-//!     verbatim (the paragraph is absorbed as the verbatim subject and the body
-//!     de-indents). Present in comrak-readme / comrak-reference on top of #798.
+//!     item contains a paragraph); the Lex serializer used to emit that as the
+//!     loose `-\n    text` form, which lex-core does not re-parse as a list (it
+//!     collapsed the whole list into one Paragraph). The serializer now hoists the
+//!     item's leading Paragraph onto the tight `- text` marker line (and the
+//!     reader records the list's decoration style on the List node), so
+//!     reader-built lists — unordered, ordered, nested, multi-block — round-trip.
+//!     Lists are no longer a blocker for any fixture; the entries below were
+//!     re-attributed to the OTHER bug each still trips once #798 was out of the way.
+//!   - **lex#790 (verbatim/definition nested bodies de-indent)** — a colon-terminated
+//!     paragraph before a verbatim is absorbed as the verbatim subject / turned into
+//!     a Definition, and the body de-indents. This is what now blocks the CommonMark
+//!     reference, comrak-readme, and comrak-reference (each has such a colon-para →
+//!     fenced-code adjacency, some inside a list item).
 //!   - **lex#795 (session-marker inference)** — a heading whose text begins with a
 //!     marker-like token (`## 1\. Primary Session` in kitchensink) serializes to
 //!     `1. Primary Session`, which re-parses with a Numerical session marker where
-//!     the reader had `style: None`. A distinct axis; filed by this slice.
+//!     the reader had `style: None`. What now blocks kitchensink.
 //!   - **lex#791 (leading-annotation reorder)** — `20-ideas-naked.md`'s leading
 //!     document-level annotations reorder around the title on serialize.
 //!
@@ -93,21 +95,25 @@ const FIXTURES: &[(&str, &str)] = &[
 ];
 
 /// Fixtures whose end-to-end Faithfulness is BLOCKED by a tracked pre-existing
-/// bug, mapped to the dominant tracked issue. See the module docs for the full
-/// per-fixture cause analysis (kitchensink is additionally blocked by #795).
+/// bug, mapped to the remaining tracked issue now that lex#798 (lists) is fixed.
+/// See the module docs for the full per-fixture cause analysis.
 ///
 /// DO NOT clear an entry by weakening `canon` — fix the referenced bug. The
 /// sweep fails loudly if a listed fixture starts passing (promote it) or an
 /// unlisted one starts failing (a new regression).
 const FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[
-    // #798 — reader-built loose lists collapse on serialize (every fixture has
-    // lists, so #798 blocks them all). kitchensink ALSO hits #795 (numbered
-    // heading); comrak-readme / comrak-reference ALSO hit #790 (colon-para →
-    // verbatim-subject absorption). See the module docs for the full analysis.
-    ("kitchensink", "lex#798 (+ lex#795)"),
-    ("comrak-readme", "lex#798 (+ lex#790)"),
-    ("commonmark-reference", "lex#798"),
-    ("comrak-reference", "lex#798 (+ lex#790)"),
+    // #798 (reader-built loose lists) is FIXED — reader-built lists now round-trip.
+    // Each fixture below was verified (recursive Skeleton diff) to have no
+    // remaining list-structure divergence; the entry names the OTHER bug it still
+    // trips. kitchensink → #795 (its `## 1. Primary Session` numbered heading
+    // re-parses as a Numerical session marker). commonmark-reference /
+    // comrak-readme / comrak-reference → #790 (a colon-terminated paragraph before
+    // a fenced code block is absorbed as the verbatim subject / becomes a
+    // Definition, some inside a list item). See the module docs for the analysis.
+    ("kitchensink", "lex#795"),
+    ("comrak-readme", "lex#790"),
+    ("commonmark-reference", "lex#790"),
+    ("comrak-reference", "lex#790"),
     // #791 — leading document-level annotations reorder around the title.
     ("ideas-naked", "lex#791"),
 ];
@@ -192,11 +198,8 @@ fn every_fixture_reader_output_is_reparseable() {
 // Inputs are wrapped in a `# T` H1 (the Document Title) so the first body block
 // is not title-promoted, isolating the pair from the title boundary.
 //
-// Empirically today: para→para, heading→body, para→verbatim, para→definition
-// round-trip faithfully; para→list and list→para do NOT (blocked by lex#798 —
-// reader-built loose lists collapse on serialize). The blocked pair is asserted
-// as a currently-failing known gap rather than skipped, with the same anti-rot
-// as the fixture sweep.
+// All adjacency pairs — para→para, heading→body, para→verbatim, para→definition,
+// and (since lex#798) para→list and list→para — round-trip faithfully.
 // ============================================================================
 
 const H1: &str = "# T\n\n";
@@ -233,26 +236,16 @@ fn adjacency_paragraph_to_definition() {
     .unwrap();
 }
 
-/// paragraph→list and list→paragraph are the two adjacency pairs blocked by
-/// lex#798. Asserted as currently-failing (not skipped): the Markdown reader
-/// builds loose list items (`ListItem { text: "", children: [Paragraph] }`)
-/// which the serializer emits as `-\n    text` — a form lex-core re-parses as a
-/// paragraph, collapsing the list. When #798 is fixed these round-trip and this
-/// test fails, prompting promotion to plain `check_faithful(...).unwrap()`.
+/// paragraph→list and list→paragraph now round-trip faithfully (lex#798 fixed):
+/// the Lex serializer hoists a reader-built item's leading Paragraph onto the
+/// `- text` marker line, which re-parses as a list instead of collapsing to a
+/// paragraph.
 #[test]
-fn adjacency_list_pairs_blocked_by_lex798() {
+fn adjacency_list_pairs() {
     let para_to_list = format!("{H1}Lead in.\n\n- one\n- two\n");
     let list_to_para = format!("{H1}- one\n- two\n\nTrailer.\n");
-    for (name, md) in [
-        ("paragraph->list", &para_to_list),
-        ("list->paragraph", &list_to_para),
-    ] {
-        assert!(
-            check_faithful(&MarkdownFormat, md).is_err(),
-            "{name} now round-trips faithfully — lex#798 appears fixed; \
-             promote this to a live `check_faithful(...).unwrap()` adjacency assertion"
-        );
-    }
+    check_faithful(&MarkdownFormat, &para_to_list).unwrap();
+    check_faithful(&MarkdownFormat, &list_to_para).unwrap();
 }
 
 // ============================================================================
@@ -345,4 +338,135 @@ fn backtick_in_code_span_degrades_predictably() {
     // happens to survive `canon` too (the guarantee is non-corruption, not
     // round-trip; here both hold).
     assert_eq!(canon(&doc), canon(&reparsed));
+}
+
+// ============================================================================
+// lex#798 — reader-built lists round-trip (unordered / ordered / nested /
+// multi-block), driven through the real Markdown reader. Each item comrak builds
+// is `ListItem { text: "", children: [Paragraph, …] }`; the serializer hoists the
+// leading paragraph onto the tight `- text` marker line so it re-parses as a
+// list. Inputs are minimal in-test Markdown literals (no new .lex fixtures).
+// ============================================================================
+
+#[test]
+fn unordered_list_round_trips() {
+    check_faithful(&MarkdownFormat, &format!("{H1}- one\n- two\n- three\n")).unwrap();
+}
+
+#[test]
+fn ordered_list_keeps_numbers_and_round_trips() {
+    let md = format!("{H1}1. first\n2. second\n3. third\n");
+    check_faithful(&MarkdownFormat, &md).unwrap();
+    // The numbers must survive: a reader-built ordered list used to lose them to
+    // the plain dash because the List node carried no decoration style.
+    let lex = LexFormat::default()
+        .serialize(&MarkdownFormat.parse(&md).unwrap())
+        .unwrap();
+    assert!(
+        lex.contains("1. first") && lex.contains("2. second"),
+        "ordered markers lost on serialize:\n{lex}"
+    );
+}
+
+#[test]
+fn nested_list_round_trips() {
+    // Two-plus levels of nesting; sub-items stay under their parents.
+    let md = format!("{H1}- a\n    - b\n        - c\n        - c2\n    - b2\n- d\n");
+    check_faithful(&MarkdownFormat, &md).unwrap();
+}
+
+#[test]
+fn ordered_outer_with_nested_bullets_round_trips() {
+    let md = format!("{H1}1. first\n    - bullet\n    - bullet2\n2. second\n");
+    check_faithful(&MarkdownFormat, &md).unwrap();
+}
+
+#[test]
+fn multi_block_list_item_round_trips() {
+    // A genuinely multi-block item: lead paragraph + a nested paragraph + a
+    // sublist + a trailing paragraph. These must stay in the indented body (only
+    // the single leading paragraph is hoisted to the marker line), and the whole
+    // thing must round-trip.
+    let md = format!(
+        "{H1}- First item\n\n    Nested paragraph.\n\n    - sub a\n    - sub b\n\n    Trailing paragraph.\n\n- Second item\n"
+    );
+    check_faithful(&MarkdownFormat, &md).unwrap();
+}
+
+#[test]
+fn single_item_list_degrades_to_paragraph() {
+    // Declared Lossy (per list.lex): a Lex list needs >= 2 items, so a single
+    // `- x` is prose, not a list. comrak builds a one-item list; the serializer
+    // emits the tight `- x`, which lex-core re-parses as a Paragraph. The degrade
+    // must be predictable — content preserved, well-formed, no corruption — not a
+    // faithful round-trip.
+    let md = format!("{H1}- only one\n");
+    let doc = MarkdownFormat.parse(&md).unwrap();
+    let lex = LexFormat::default().serialize(&doc).unwrap();
+    let reparsed = LexFormat::default()
+        .parse(&lex)
+        .unwrap_or_else(|e| panic!("degraded Lex did not re-parse: {e}\n{lex}"));
+    let body: Vec<&ContentItem> = reparsed
+        .root
+        .children
+        .iter()
+        .filter(|c| !matches!(c, ContentItem::BlankLineGroup(_)))
+        .collect();
+    assert_eq!(body.len(), 1, "expected a single body block, got:\n{lex}");
+    match body[0] {
+        ContentItem::Paragraph(p) => assert!(
+            p.text().contains("only one"),
+            "single-item content lost in degrade:\n{lex}"
+        ),
+        other => panic!("expected the one-item list to degrade to a Paragraph, got {other:?}"),
+    }
+}
+
+#[test]
+fn nested_single_item_degrades_but_outer_list_survives() {
+    // The >= 2-item rule (list.lex) applies at EVERY level: a one-item *nested*
+    // list is prose too. So `- a / <indent>- only / - b` keeps the two-item outer
+    // list, and item `a`'s single nested item degrades to a Paragraph in its body
+    // — a clean, non-corrupting degrade (the outer structure is preserved), not a
+    // #798 list-collapse. This pins the boundary between #798 (fixed) and the
+    // 2-item Declared-Lossy rule.
+    let md = format!("{H1}- a\n    - only\n- b\n");
+    let doc = MarkdownFormat.parse(&md).unwrap();
+    let lex = LexFormat::default().serialize(&doc).unwrap();
+    let reparsed = LexFormat::default()
+        .parse(&lex)
+        .unwrap_or_else(|e| panic!("degraded Lex did not re-parse: {e}\n{lex}"));
+
+    let outer = reparsed
+        .root
+        .children
+        .iter()
+        .find_map(|c| match c {
+            ContentItem::List(l) => Some(l),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("outer list must survive, got:\n{lex}"));
+    assert_eq!(
+        outer.items.len(),
+        2,
+        "outer list should keep 2 items:\n{lex}"
+    );
+
+    let first = outer.items.iter().next().unwrap();
+    match first {
+        ContentItem::ListItem(li) => {
+            assert!(
+                li.children
+                    .iter()
+                    .all(|c| !matches!(c, ContentItem::List(_))),
+                "the one-item nested list should degrade to prose, not stay a List:\n{lex}"
+            );
+            let has_only = li.children.iter().any(|c| match c {
+                ContentItem::Paragraph(p) => p.text().contains("only"),
+                _ => false,
+            });
+            assert!(has_only, "nested single-item content lost:\n{lex}");
+        }
+        other => panic!("expected a ListItem, got {other:?}"),
+    }
 }

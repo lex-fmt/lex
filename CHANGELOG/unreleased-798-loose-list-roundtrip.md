@@ -1,0 +1,1 @@
+- faithfulness: reader-built Markdown lists (unordered, ordered, nested, multi-block) round-trip through Lex — the serializer hoists a foreign-reader item's leading paragraph onto the tight `- text` marker line instead of the loose form that collapsed the list to a paragraph (lex#798)
