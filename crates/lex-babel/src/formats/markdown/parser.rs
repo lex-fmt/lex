@@ -845,10 +845,7 @@ mod tests {
         let md = "# My Title\n\nBody.\n";
         let doc = parse_from_markdown(md).unwrap();
 
-        assert_eq!(
-            doc.title.as_ref().map(|t| t.as_str()),
-            Some("My Title")
-        );
+        assert_eq!(doc.title.as_ref().map(|t| t.as_str()), Some("My Title"));
         // No `doc.untitled` marker when a real title was lifted.
         assert!(!doc
             .annotations
