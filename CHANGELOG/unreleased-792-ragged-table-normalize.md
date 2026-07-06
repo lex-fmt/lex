@@ -1,0 +1,1 @@
+- faithfulness: ragged (mismatched-row) tables no longer get their short rows padded on `lexd format`. The serializer projected every row onto the table's max column count, appending phantom empty cells that re-parsed as real cells and changed a short row's cell count; rows now emit exactly their own cells (rectangular tables are unaffected) (lex#792)
