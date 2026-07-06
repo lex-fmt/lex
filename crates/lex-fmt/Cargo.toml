@@ -1,6 +1,6 @@
 [package]
 name = "lex-fmt"
-version = "0.19.2"
+version = "0.19.3"
 edition = "2021"
 authors = ["lex contributors"]
 description = "Canonical Rust embedder API for the lex document format. Hosts Engine::builder() plus the boot helpers shared by lexd and lexd-lsp."

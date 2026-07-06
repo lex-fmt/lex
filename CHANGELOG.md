@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+## 0.19.3 - 2026-07-06
+
+- Fix Definition→Table adjacency parsing so a closer-led table immediately after a
+  definition keeps both the definition body and all table rows (lex#819)
+
 ## 0.19.2 - 2026-07-06
 
 - Bump comms to the multi-group verbatim grammar; document the Definition→Verbatim and Definition→Annotation separations as intended group semantics (lex#814 §4), with full positive-shape regression guards in the separation matrix
