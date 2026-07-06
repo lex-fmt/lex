@@ -184,13 +184,13 @@ fn targeted_cases() -> Vec<(&'static str, &'static str)> {
 //          tables + verbatim + the two benchmark docs (which #790 names by name);
 //          the inlines-spec fixtures fail Tier-2 here because their indented
 //          grammar-production blocks de-indent on the first format.
-//   #791 — leading document-level annotations reorder around the title / first
-//          block on serialize. The #783 title-model work (document-level
-//          annotations now serialize at the head) subsumed the inlines-spec
-//          Tier-1 fixtures — they pass now. What remains is the subtitle case
-//          (document-09) and the multiple-document-level annotation fixture
-//          (annotation-27, Tier-2), where title/subtitle/annotation ordering is
-//          still not reconciled.
+//   #791 — FIXED. Leading document-level annotations used to reorder around the
+//          title / first block on serialize because the serializer emitted the
+//          first-class title node before the body stream, hoisting it ahead of
+//          any annotation authored above it. The serializer now emits the title
+//          at its own source position (the root children whose source line
+//          precedes the title come first, then the title, then the rest), so
+//          both tiers pass for document-09 and annotation-27.
 //   #792 — ragged/mismatched-row tables get padded + a separator row injected,
 //          adding cells (Tier-2 only).
 //   #783 — the `:: doc.untitled ::` title-model sentinel (document-06) now
@@ -214,16 +214,6 @@ const TIER1_FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[
     ("table.docs/table-22-cell-with-mixed-content.lex", "lex#790"),
     ("table.docs/table-23-cell-with-annotation.lex", "lex#790"),
     ("verbatim.docs/verbatim-13-group-spades.lex", "lex#790"),
-    // #791 — leading annotations reorder around the title/first block (2nd pass).
-    // The inlines-spec fixtures (their lead paragraph hoisted above the leading
-    // annotations on the second format) are fixed by the #783 title-model work:
-    // document-level annotations now serialize at the head. The subtitle case
-    // still reorders — its title/subtitle interleaving with leading annotations
-    // is not yet handled.
-    (
-        "document.docs/document-09-subtitle-with-annotations.lex",
-        "lex#791",
-    ),
 ];
 
 const TIER2_FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[
@@ -248,15 +238,6 @@ const TIER2_FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[
     ("table.docs/table-22-cell-with-mixed-content.lex", "lex#790"),
     ("table.docs/table-23-cell-with-annotation.lex", "lex#790"),
     ("verbatim.docs/verbatim-13-group-spades.lex", "lex#790"),
-    // #791 — leading annotations reorder around the title/first block (canon).
-    (
-        "annotation.docs/annotation-27-attachment-example-l-multiple-document-level.lex",
-        "lex#791",
-    ),
-    (
-        "document.docs/document-09-subtitle-with-annotations.lex",
-        "lex#791",
-    ),
     // #792 — ragged table rows padded + separator row injected.
     ("table.docs/table-13-flat-mismatched-rows.lex", "lex#792"),
 ];

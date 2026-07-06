@@ -530,3 +530,75 @@ fn build_grid_pads_hole_before_trailing_rowspan() {
         "hole padded empty, trailing rowspan marker kept"
     );
 }
+
+// ==== Leading-annotation / title ordering (lex#791) ====
+
+#[test]
+fn test_leading_annotation_stays_above_title_with_subtitle() {
+    // A document-level annotation authored *before* the title must serialize
+    // above it, not be hoisted below the title/subtitle (lex#791). The title is
+    // a first-class node parked outside the body stream; the serializer must
+    // still emit it at its source position relative to the leading annotations.
+    let source = "\
+:: author :: Yuval Noah Harari
+
+Sapiens:
+A Brief History of Humankind
+
+This document has annotations before the title with subtitle.
+";
+    let formatted = format_full(source);
+    let author_at = formatted.find(":: author").expect("annotation emitted");
+    let title_at = formatted.find("Sapiens:").expect("title emitted");
+    assert!(
+        author_at < title_at,
+        "leading annotation must stay above the title; got:\n{formatted}"
+    );
+    assert_eq!(
+        format_full(&formatted),
+        formatted,
+        "leading-annotation/title ordering must be idempotent"
+    );
+}
+
+#[test]
+fn test_multiple_leading_annotations_keep_first_paragraph_below() {
+    // Several leading document-level annotations followed by the first body
+    // paragraph (which the parser adopts as the title). The paragraph must not
+    // jump above the annotation run on serialize (lex#791).
+    let source = "\
+:: foo ::
+
+:: bar ::
+
+Some text here.
+
+There is something in the way she moves.
+";
+    let formatted = format_full(source);
+    let foo_at = formatted.find(":: foo").expect("foo emitted");
+    let bar_at = formatted.find(":: bar").expect("bar emitted");
+    let text_at = formatted
+        .find("Some text here.")
+        .expect("paragraph emitted");
+    assert!(
+        foo_at < bar_at && bar_at < text_at,
+        "leading annotations must stay above the first paragraph; got:\n{formatted}"
+    );
+    assert_eq!(
+        format_full(&formatted),
+        formatted,
+        "ordering must be idempotent"
+    );
+}
+
+#[test]
+fn test_title_without_leading_annotations_stays_at_head() {
+    // No leading annotation: the title still leads and a blank separates it from
+    // the body (the pre-existing head behavior must be unchanged).
+    let formatted = format_full("Sapiens:\nA Brief History of Humankind\n\nBody line.\n");
+    assert_eq!(
+        formatted,
+        "Sapiens:\nA Brief History of Humankind\n\nBody line.\n"
+    );
+}
