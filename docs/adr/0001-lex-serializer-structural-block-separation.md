@@ -2,7 +2,11 @@
 
 ## Status
 
-accepted
+accepted — implemented in the Markdown↔Lex faithfulness epic (#781 invariant
+harness, #782 separation matrix; the lex#505/lex#682 band-aids were removed as
+planned). The title-boundary handling this ADR sketched (the leading-blank
+"title-escape") was **superseded by ADR-0002** before it shipped — see the "As
+implemented" note under Decision.
 
 ## Context
 
@@ -48,6 +52,14 @@ blank suppresses Lex's title-steal rule — `<document-title>` requires the *fir
 line) are the same structural rule applied to the title boundary. **No grammar
 or lexer change:** the title-steal rule in `grammar-core.lex` is intentional and
 untouched; the serializer merely emits spec-valid output.
+
+> **As implemented (ADR-0002 supersedes the title-escape).** The title→first-block
+> structural blank shipped as described (the title→\* cell of the separation
+> matrix, #782). The *title-escape for title-less documents* — a leading blank to
+> suppress the title-steal rule — did **not** ship: ADR-0002 settled that leading
+> blanks carry no title semantics and that a title-less document declares itself
+> with an explicit `:: doc.untitled ::` marker the parser honors. Read this ADR
+> for block separation; read ADR-0002 for the title model.
 
 ## Considered alternatives
 

@@ -1,0 +1,1 @@
+- Document title model, faithfulness status, and ADR implementation notes

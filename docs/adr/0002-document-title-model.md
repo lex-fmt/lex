@@ -2,7 +2,12 @@
 
 ## Status
 
-accepted (supersedes the title-handling portions of ADR-0001)
+accepted (supersedes the title-handling portions of ADR-0001) — implemented in
+the Markdown↔Lex faithfulness epic (#783 title model: the parser drops
+leading-blank suppression, `doc.untitled` is a registered reserved marker, and
+the Markdown reader emits it for a heading-less source). See the "As implemented"
+note under Consequences for the fixture renames that landed differently from the
+sketch below.
 
 ## Context
 
@@ -70,6 +75,17 @@ because leading blanks no longer carry title semantics.
   leading blank). `document-06-title-empty` is renamed/repurposed to match the
   settled behavior; `document-05-title-session-hoist`'s hoisting question is
   tracked separately.
+
+> **As implemented.** `document-06-title-empty` shipped renamed to
+> `document-06-title-untitled.lex`, carrying an explicit `:: doc.untitled ::`
+> lead — the settled title-less form (not an "empty title"). `document-05` shipped
+> as `document-05-title-session-none.lex`, pinning decision (2): a document whose
+> first content element is a session has **no** title. `doc.untitled` is
+> registered as a *reserved-core-builtin marker* (`DOC_RESERVED_MARKERS` in
+> `crates/lex-core/src/lex/builtins/doc.rs`, comms `general.lex` §4) — honored by
+> the parser but deliberately kept out of the render-bearing `DOC_BUILTIN_LABELS`
+> set, so it carries no metadata render schema.
+
 - The Markdown Reader emits `:: doc.untitled ::` for a heading-less source; the
   Markdown Serializer maps a Lex title to `# H1`. A leading `# H1` maps to the
   title. This replaces the "leading-blank title escape" that an earlier plan
