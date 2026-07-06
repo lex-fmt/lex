@@ -30,12 +30,12 @@ manifest="$repo_root/.shipit.toml"
 
 # The development override (ADR-0033): honored and announced, never silent.
 if [ -n "${SHIPIT_EXEC:-}" ]; then
-  if [ -e "$SHIPIT_EXEC" ] && [ "$SHIPIT_EXEC" -ef "$self" ]; then
-    echo "shipit: SHIPIT_EXEC points at this launcher itself ($SHIPIT_EXEC); refusing the exec loop." >&2
-    exit 127
-  fi
-  echo "shipit: SHIPIT_EXEC override — exec'ing $SHIPIT_EXEC (the repo's pin is bypassed)." >&2
-  exec "$SHIPIT_EXEC" "$@"
+	if [ -e "$SHIPIT_EXEC" ] && [ "$SHIPIT_EXEC" -ef "$self" ]; then
+		echo "shipit: SHIPIT_EXEC points at this launcher itself ($SHIPIT_EXEC); refusing the exec loop." >&2
+		exit 127
+	fi
+	echo "shipit: SHIPIT_EXEC override — exec'ing $SHIPIT_EXEC (the repo's pin is bypassed)." >&2
+	exec "$SHIPIT_EXEC" "$@"
 fi
 
 # Resolve the pin: the `version` key of .shipit.toml's [shipit] table (a full
@@ -44,17 +44,17 @@ fi
 # the real parser lives on the Python side.
 pin=""
 if [ -f "$manifest" ]; then
-  pin="$(awk -F'"' '
+	pin="$(awk -F'"' '
 		/^\[/ { in_shipit = ($0 == "[shipit]") ? 1 : 0; next }
 		in_shipit && $1 ~ /^[[:space:]]*version[[:space:]]*=[[:space:]]*$/ { print $2; exit }
 	' "$manifest")"
 fi
 
 if [ -z "$pin" ]; then
-  echo "shipit: $manifest has no [shipit].version pin — this repo is not bootstrapped (ADR-0033)." >&2
-  echo "Bootstrap it: install shipit once (uv tool install --from $SHIPIT_GIT_URL shipit)," >&2
-  echo "then run \`shipit install --pr\` in this repo — the install stamps the pin this launcher execs." >&2
-  exit 127
+	echo "shipit: $manifest has no [shipit].version pin — this repo is not bootstrapped (ADR-0033)." >&2
+	echo "Bootstrap it: install shipit once (uv tool install --from $SHIPIT_GIT_URL shipit)," >&2
+	echo "then run \`shipit install --pr\` in this repo — the install stamps the pin this launcher execs." >&2
+	exit 127
 fi
 
 # The pin must be a FULL git object sha (40 hex for SHA-1, 64 for SHA-256) — the
@@ -63,10 +63,10 @@ fi
 # sha) is NOT a resolvable build: refuse toward the bootstrap rather than hand uv
 # a ref it would fail on with a murkier error.
 if ! printf '%s' "$pin" | grep -Eq '^[0-9a-f]{40}([0-9a-f]{24})?$'; then
-  echo "shipit: $manifest [shipit].version is not a full git sha (40 or 64 hex chars) — this repo is not bootstrapped (ADR-0033)." >&2
-  echo "Re-bootstrap it: install shipit once (uv tool install --from $SHIPIT_GIT_URL shipit)," >&2
-  echo "then run \`shipit install --pr\` in this repo — the install stamps a valid pin this launcher execs." >&2
-  exit 127
+	echo "shipit: $manifest [shipit].version is not a full git sha (40 or 64 hex chars) — this repo is not bootstrapped (ADR-0033)." >&2
+	echo "Re-bootstrap it: install shipit once (uv tool install --from $SHIPIT_GIT_URL shipit)," >&2
+	echo "then run \`shipit install --pr\` in this repo — the install stamps a valid pin this launcher execs." >&2
+	exit 127
 fi
 
 # Self-certification probe (ADR-0033): `shipit install` asserts this launcher
@@ -74,14 +74,14 @@ fi
 # resolved pin and stop — the real parse over the real manifest, with no uv
 # requirement and no network resolve in the postcondition.
 if [ -n "${SHIPIT_PIN_CHECK:-}" ]; then
-  printf '%s\n' "$pin"
-  exit 0
+	printf '%s\n' "$pin"
+	exit 0
 fi
 
 command -v uv >/dev/null 2>&1 || {
-  echo "shipit: uv is not on PATH — the pinned launcher provisions the repo's shipit via uv (ADR-0033)." >&2
-  echo "Install uv (https://docs.astral.sh/uv/), then re-run." >&2
-  exit 127
+	echo "shipit: uv is not on PATH — the pinned launcher provisions the repo's shipit via uv (ADR-0033)." >&2
+	echo "Install uv (https://docs.astral.sh/uv/), then re-run." >&2
+	exit 127
 }
 
 # Exec the repo's pinned build via uv — cached after the first resolve; PATH
