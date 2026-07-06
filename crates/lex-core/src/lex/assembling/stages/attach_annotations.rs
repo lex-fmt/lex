@@ -169,9 +169,13 @@ fn attach_annotations_in_container(
 
         // Whether the next content element is a session. A leading document-level
         // annotation above the first session is document metadata (lex#814 §2).
-        let next_is_session = next
-            .next
-            .is_some_and(|(_, idx)| matches!(children[idx], ContentItem::Session(_)));
+        // `decide_attachment` only consults this at the document root for a leading
+        // annotation, so gate the child lookup on those conditions (gemini, #816).
+        let next_is_session = kind.is_document()
+            && previous.is_none()
+            && next
+                .next
+                .is_some_and(|(_, idx)| matches!(children[idx], ContentItem::Session(_)));
 
         if let Some(target) = distance::decide_attachment(
             previous,
