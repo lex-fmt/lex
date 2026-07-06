@@ -270,12 +270,8 @@ impl AstNode for Table {
         // Lex serializer) opts out so the children are not emitted a second time
         // as stranded document-level blocks (lex#790).
         if visitor.descend_into_table_cells() {
-            for row in self.all_rows() {
-                for cell in &row.cells {
-                    for child in cell.children.iter() {
-                        child.accept(visitor);
-                    }
-                }
+            for child in self.cell_children_iter() {
+                child.accept(visitor);
             }
         }
         // Visit annotations

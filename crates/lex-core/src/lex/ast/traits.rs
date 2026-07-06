@@ -80,7 +80,7 @@ pub trait Visitor {
     /// override this to `false` so the redundant children are not walked a second
     /// time and emitted as stranded document-level blocks (lex#790). Analysis
     /// visitors keep the default `true` so they see the cells' inner structure.
-    fn descend_into_table_cells(&self) -> bool {
+    fn descend_into_table_cells(&mut self) -> bool {
         true
     }
 }

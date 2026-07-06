@@ -299,7 +299,7 @@ impl Visitor for LexSerializer {
     // across pipe continuation rows by `emit_pipe_table`), so it must NOT also
     // walk the cells' structured `children` — doing so re-emitted that block
     // content as stranded document-level siblings after the table (lex#790).
-    fn descend_into_table_cells(&self) -> bool {
+    fn descend_into_table_cells(&mut self) -> bool {
         false
     }
 
