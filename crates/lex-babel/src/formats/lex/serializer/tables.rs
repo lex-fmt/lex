@@ -214,10 +214,12 @@ fn compute_column_widths(
         for (col, slot) in slots.iter().enumerate() {
             // Width is driven by the widest *physical* line, so a multi-line
             // cell pads to its longest stacked line, not the newline-joined whole.
+            // Iterate `text().lines()` directly (each trimmed, matching
+            // `Slot::lines`) rather than collecting a throwaway `Vec` per slot.
             let cell_width = slot
+                .text()
                 .lines()
-                .iter()
-                .map(|line| line.chars().count())
+                .map(|line| line.trim().chars().count())
                 .max()
                 .unwrap_or(0);
             widths[col] = widths[col].max(cell_width);
@@ -267,9 +269,13 @@ fn format_grid_row_lines(slots: &[Slot], widths: &[usize]) -> Vec<String> {
     let columns: Vec<Vec<&str>> = slots.iter().map(Slot::lines).collect();
     let height = columns.iter().map(Vec::len).max().unwrap_or(1);
 
+    // Exact capacity per row: each cell is ` <text-padded-to-width> |` (width + 3
+    // chars) plus the leading `|`, so no re-allocation as cells are appended.
+    let row_capacity = widths.iter().take(columns.len()).sum::<usize>() + columns.len() * 3 + 1;
     (0..height)
         .map(|line_idx| {
-            let mut out = String::from("|");
+            let mut out = String::with_capacity(row_capacity);
+            out.push('|');
             for (col, column) in columns.iter().enumerate() {
                 let width = widths.get(col).copied().unwrap_or(0);
                 let text = column.get(line_idx).copied().unwrap_or("");
