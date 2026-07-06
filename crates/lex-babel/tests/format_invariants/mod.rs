@@ -106,6 +106,10 @@ fn targeted_cases() -> Vec<(&'static str, &'static str)> {
             "Doc\n===\n\nDraft here [TK] and [TK-budget]. Per [@smith2019 p. 5]. As noted [::caveat].\n\n:: caveat ::\n    A caveat.\n",
         ),
         (
+            "single_line_annotation_trailing_space",
+            ":: author :: Arthur Debert  \n\nBody.\n",
+        ),
+        (
             "table_basic_ragged",
             "Stats:\n    |A|B|\n    |1|2|\n:: table ::\n",
         ),
@@ -204,10 +208,11 @@ fn targeted_cases() -> Vec<(&'static str, &'static str)> {
 //          re-attaching to the document *root* on round-trip — is now FIXED by
 //          lex#814 §2 (`decide_attachment` routes a leading annotation to the root
 //          when the next content is a session, so parse(D) and parse(format(D))
-//          converge). The four inlines-spec fixtures round-trip again;
-//          20-ideas-naked still fails, but on a serializer residual (single-line→
-//          block annotation rewrite alters content) tracked as lex#817 (deferred),
-//          not attachment — see the TIER2_FIXTURE_KNOWN_FAIL note below.
+//          converge). The four inlines-spec fixtures round-trip again.
+//   #817 — FIXED. Single-line annotation bodies with trailing whitespace used to
+//          rewrite to block form, trimming the body and changing the annotation
+//          boundary around following blanks. Source-authored single-line
+//          annotation bodies now stay single-line.
 //   #792 — FIXED. Ragged/mismatched-row tables used to get padded + a separator
 //          row injected, adding cells to short rows (Tier-2). The serializer no
 //          longer pads short rows, so table-13 round-trips faithfully.
@@ -233,27 +238,7 @@ const TIER1_FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[
     ("table.docs/table-08-nested-in-definition.lex", "lex#790"),
 ];
 
-const TIER2_FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[
-    // lex#814 §2 — FIXED the attachment inconsistency that this #791 "deeper case"
-    // described: leading document-level annotations authored above the first
-    // *session* used to bind to that session in parse(D) but re-attach to the
-    // document *root* in parse(format(D)) (the serializer emits them at the head
-    // in block form). `decide_attachment` now routes a leading annotation to the
-    // root whenever the next content is a session, so both directions converge on
-    // root. The four inlines-spec fixtures (formatting, inlines-general, citations,
-    // references-general) round-trip again and have been removed from this list.
-    //
-    // 20-ideas-naked STILL fails Tier-2, but on a SEPARATE serializer residual,
-    // not attachment: its leading annotations are single-line with trailing
-    // whitespace (`:: author :: Arthur Debert  `). The serializer rewrites them to
-    // block form, which trims the trailing spaces AND folds a trailing blank into
-    // the annotation as a `BlankLineGroup` child — so the annotation's *content*
-    // (not its target) differs across the round-trip. That is a serializer
-    // faithfulness bug for single-line→block annotation rewriting, tracked as its
-    // own issue lex#817 (deferred, not fixed here); the lex#814 §2 attachment fix
-    // does not address it.
-    ("benchmark/20-ideas-naked.lex", "lex#817"),
-];
+const TIER2_FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[];
 
 #[cfg(test)]
 mod tests {

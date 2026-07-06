@@ -318,6 +318,39 @@ fn test_annotation_05_block_paragraph() {
     );
 }
 
+#[test]
+fn single_line_annotation_body_preserves_trailing_spaces_lex817() {
+    let source = ":: author :: Arthur Debert  \n\nBody.\n";
+    let formatted = format_full(source);
+    assert_eq!(formatted, source);
+    assert_eq!(format_full(&formatted), formatted, "must be idempotent");
+}
+
+#[test]
+fn single_line_annotation_body_before_title_stays_single_line_lex817() {
+    let source = ":: author :: Arthur Debert  \n:: publishing-date :: 2025/10/12\nIdeas, Naked\n";
+    let formatted = format_full(source);
+    assert!(
+        formatted.starts_with(":: author :: Arthur Debert  \n:: publishing-date :: 2025/10/12\n"),
+        "single-line leading annotation bodies must not be rewritten to block form:\n{formatted}"
+    );
+    assert_eq!(format_full(&formatted), formatted, "must be idempotent");
+}
+
+#[test]
+fn authored_block_annotation_body_stays_block_form() {
+    let source = ":: note ::\n    Body.\n\nNext.\n";
+    let formatted = format_full(source);
+    assert!(
+        formatted.starts_with(":: note ::\n    Body.\n"),
+        "authored block annotation body must not collapse to single-line form:\n{formatted}"
+    );
+    assert!(
+        !formatted.starts_with(":: note :: Body."),
+        "block annotation form must be preserved:\n{formatted}"
+    );
+}
+
 // ==== Round-trip Tests ====
 // Format → parse → format should be idempotent
 
