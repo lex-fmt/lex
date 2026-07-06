@@ -264,11 +264,17 @@ impl AstNode for Table {
 
     fn accept(&self, visitor: &mut dyn Visitor) {
         visitor.visit_table(self);
-        // Descend into cell children (block-level content inside cells)
-        for row in self.all_rows() {
-            for cell in &row.cells {
-                for child in cell.children.iter() {
-                    child.accept(visitor);
+        // Descend into cell children (block-level content inside cells). A cell
+        // carries block content redundantly as flat `content` and structured
+        // `children`; a visitor that rebuilds the cell from the pipe rows (the
+        // Lex serializer) opts out so the children are not emitted a second time
+        // as stranded document-level blocks (lex#790).
+        if visitor.descend_into_table_cells() {
+            for row in self.all_rows() {
+                for cell in &row.cells {
+                    for child in cell.children.iter() {
+                        child.accept(visitor);
+                    }
                 }
             }
         }
