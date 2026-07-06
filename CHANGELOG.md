@@ -4,6 +4,13 @@
 
 ## Unreleased
 
+## 0.19.1 - 2026-07-06
+
+- faithfulness: nested block bodies no longer de-indent on `lexd format`. A verbatim/definition subject whose source colon was followed by trailing whitespace was re-serialized as `Subject::` (escaping its body, which re-parsed as prose); the subject box now excludes trailing whitespace so exactly one colon is emitted. Multi-line table cells are serialized in stacked, blank-delimited row groups instead of dumping the embedded newline inline (which split the pipe row and collapsed the table to prose) (lex#790)
+- faithfulness: leading document-level annotations no longer reorder around the title on `lexd format`. The serializer emitted the first-class title node ahead of the body stream, hoisting it above any annotation authored before it (and, when the first paragraph was adopted as the title, hoisting that paragraph over the whole leading annotation run); it now emits the title at its own source position, so annotation/title order round-trips and the format is idempotent (lex#791)
+- faithfulness: ragged (mismatched-row) tables no longer get their short rows padded on `lexd format`. The serializer projected every row onto the table's max column count, appending phantom empty cells that re-parsed as real cells and changed a short row's cell count; rows now emit exactly their own cells (rectangular tables are unaffected) (lex#792)
+- build/test: restore the `comms` submodule pin to v0.20.0 (`adeb49d`). The v0.19.0 managed-tree sync had reverted it to a commit predating the ADR-0002 title-model fixture rename, so the `document-05-title-session-none` / `document-06-title-untitled` HTML/Markdown export tests failed to load their spec files
+
 ## 0.19.0 - 2026-07-06
 
 - The Lex serializer now emits block separation structurally, from a named separation matrix, rather than only when it visits a `BlankLineGroup`. Slice one wires the paragraph→paragraph cell (minimum one blank), composed max (never additive) with any `BlankLineGroup`, so two blank-separated Markdown paragraphs no longer merge into one on the round-trip through Lex while `lex → lex` output stays byte-identical. Adds a shared Skeleton reducer (`canon`) and a Markdown→Lex Faithfulness test harness.

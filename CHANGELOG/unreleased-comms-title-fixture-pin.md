@@ -1,1 +1,0 @@
-- build/test: restore the `comms` submodule pin to v0.20.0 (`adeb49d`). The v0.19.0 managed-tree sync had reverted it to a commit predating the ADR-0002 title-model fixture rename, so the `document-05-title-session-none` / `document-06-title-untitled` HTML/Markdown export tests failed to load their spec files
