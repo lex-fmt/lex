@@ -221,12 +221,18 @@ impl LexSerializer {
         }
     }
 
-    /// lex#798 helper: if the item's leading block is a Paragraph with a first
-    /// text line, record it as the hoisted paragraph and return that first line
-    /// (to become the tight `- text` marker-line text). Leading BlankLineGroups
-    /// (which a reader would not emit, but which are harmless) are skipped. The
-    /// recorded paragraph's first line is dropped by `visit_paragraph` /
-    /// `visit_text_line` so it is not emitted twice.
+    /// lex#798 helper: if the item's leading block is a *plain* Paragraph with a
+    /// first text line, record it as the hoisted paragraph and return that first
+    /// line (to become the tight `- text` marker-line text). Leading
+    /// BlankLineGroups (which a reader would not emit, but which are harmless) are
+    /// skipped. The recorded paragraph's first line is dropped by `visit_paragraph`
+    /// / `visit_text_line` so it is not emitted twice.
+    ///
+    /// A paragraph carrying block annotations is NOT hoisted: hoisting bypasses
+    /// its `visit_paragraph` body, and the Skeleton fold (`canon`) likewise only
+    /// folds an unannotated leading paragraph — keeping the two decisions
+    /// symmetric. (A Markdown-reader item never carries annotations; this is a
+    /// defensive invariant, not a reachable path today.)
     fn hoist_leading_paragraph_line(&mut self, list_item: &ListItem) -> Option<String> {
         let first_block = list_item
             .children
@@ -235,6 +241,9 @@ impl LexSerializer {
         let ContentItem::Paragraph(paragraph) = first_block else {
             return None;
         };
+        if !paragraph.annotations.is_empty() {
+            return None;
+        }
         let first_line = paragraph.lines.iter().find_map(|line| match line {
             ContentItem::TextLine(tl) => Some(tl.text().trim_end().to_string()),
             _ => None,

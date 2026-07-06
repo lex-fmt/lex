@@ -421,3 +421,52 @@ fn single_item_list_degrades_to_paragraph() {
         other => panic!("expected the one-item list to degrade to a Paragraph, got {other:?}"),
     }
 }
+
+#[test]
+fn nested_single_item_degrades_but_outer_list_survives() {
+    // The >= 2-item rule (list.lex) applies at EVERY level: a one-item *nested*
+    // list is prose too. So `- a / <indent>- only / - b` keeps the two-item outer
+    // list, and item `a`'s single nested item degrades to a Paragraph in its body
+    // — a clean, non-corrupting degrade (the outer structure is preserved), not a
+    // #798 list-collapse. This pins the boundary between #798 (fixed) and the
+    // 2-item Declared-Lossy rule.
+    let md = format!("{H1}- a\n    - only\n- b\n");
+    let doc = MarkdownFormat.parse(&md).unwrap();
+    let lex = LexFormat::default().serialize(&doc).unwrap();
+    let reparsed = LexFormat::default()
+        .parse(&lex)
+        .unwrap_or_else(|e| panic!("degraded Lex did not re-parse: {e}\n{lex}"));
+
+    let outer = reparsed
+        .root
+        .children
+        .iter()
+        .find_map(|c| match c {
+            ContentItem::List(l) => Some(l),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("outer list must survive, got:\n{lex}"));
+    assert_eq!(
+        outer.items.len(),
+        2,
+        "outer list should keep 2 items:\n{lex}"
+    );
+
+    let first = outer.items.iter().next().unwrap();
+    match first {
+        ContentItem::ListItem(li) => {
+            assert!(
+                li.children
+                    .iter()
+                    .all(|c| !matches!(c, ContentItem::List(_))),
+                "the one-item nested list should degrade to prose, not stay a List:\n{lex}"
+            );
+            let has_only = li.children.iter().any(|c| match c {
+                ContentItem::Paragraph(p) => p.text().contains("only"),
+                _ => false,
+            });
+            assert!(has_only, "nested single-item content lost:\n{lex}");
+        }
+        other => panic!("expected a ListItem, got {other:?}"),
+    }
+}
