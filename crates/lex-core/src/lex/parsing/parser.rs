@@ -517,21 +517,12 @@ impl GrammarMatcher {
         //     `:: image ::`), or
         //   - flat prose lines (fullwidth mode).
         {
-            let mut peek = first_subject_idx + 1;
-            while peek < len {
-                if let LineContainer::Token(line) = &tokens[peek] {
-                    if line.line_type == BlankLine {
-                        peek += 1;
-                        continue;
-                    }
-                }
-                break;
-            }
-            if peek < len {
-                if let LineContainer::Token(line) = &tokens[peek] {
-                    if matches!(line.line_type, SubjectLine | SubjectOrListItemLine) {
-                        return None;
-                    }
+            if let Some(LineContainer::Token(line)) = tokens[first_subject_idx + 1..]
+                .iter()
+                .find(|tc| !matches!(tc, LineContainer::Token(l) if l.line_type == BlankLine))
+            {
+                if matches!(line.line_type, SubjectLine | SubjectOrListItemLine) {
+                    return None;
                 }
             }
         }
