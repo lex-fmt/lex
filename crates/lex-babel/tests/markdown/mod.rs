@@ -4,6 +4,7 @@
 
 mod annotations;
 mod export;
+mod faithfulness_fixtures;
 mod frontmatter;
 mod import;
 mod sessions;
