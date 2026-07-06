@@ -7,6 +7,7 @@ find_unsubstituted post-check fails the run if any {{PLACEHOLDER}} survives.
 
 Called from .github/workflows/release.yml. Not a general-purpose tool.
 """
+
 from __future__ import annotations
 
 import os
@@ -67,7 +68,7 @@ def normalize_brew_desc(s: str) -> str:
     s = s.strip()
     for article in ("A ", "An ", "The "):
         if s.startswith(article):
-            s = s[len(article):]
+            s = s[len(article) :]
             if s and s[0].islower():
                 s = s[0].upper() + s[1:]
             break

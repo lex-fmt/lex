@@ -14,7 +14,7 @@
 - **Corpus**: four documents from `comms/specs/benchmark/`. Two pairs are hand-authored in both formats (tier A — fairest); two have the `.md` produced by `lexd … --to markdown` (tier B — production lex-babel converter, well exercised).
 
 | # | Fixture | Lex bytes | MD bytes | MD source |
-|---|---|---:|---:|---|
+| --- | --- | ---: | ---: | --- |
 | 1 | `010-kitchensink` | 2 456 | 2 189 | hand-authored |
 | 2 | `20-ideas-naked` | 10 057 | 9 453 | hand-authored |
 | 3 | `040-on-parsing` | 12 646 | 11 541 | auto-converted |
@@ -27,7 +27,7 @@ The Lex source is consistently ~5–10% larger than the Markdown encoding, but t
 ## Results
 
 | Fixture | Lex parse | MD parse | **Ratio** | Lex MB/s | MD MB/s |
-|---|---:|---:|---:|---:|---:|
+| --- | ---: | ---: | ---: | ---: | ---: |
 | 010-kitchensink | 7.35 ms | 17.0 µs | **432×** | 0.33 | 129 |
 | 20-ideas-naked | 18.63 ms | 34.6 µs | **538×** | 0.54 | 273 |
 | 040-on-parsing | 22.94 ms | 51.1 µs | **449×** | 0.55 | 226 |

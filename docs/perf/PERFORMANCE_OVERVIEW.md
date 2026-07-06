@@ -15,14 +15,14 @@ Hyperfine, `--warmup 3 --runs 20 --shell=none`, on a freshly-built `target/relea
 **Startup baselines** (process boot + arg parsing, no work):
 
 | Tool | Mean | Notes |
-|---|---:|---|
+| --- | ---: | --- |
 | `lexd --version` | **1.7 ms** | small Rust binary |
 | `pandoc --version` | **24.8 ms** | Haskell runtime |
 
 **Per-fixture** (mean ± σ, 20 runs each):
 
 | Fixture | Size (KB) | `lexd format` | `lexd → md` | `lexd → html` | `pandoc md → html` | lexd vs pandoc |
-|---|---:|---:|---:|---:|---:|---:|
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | 010-kitchensink | 2.4 | 10.5 ms ± 0.2 | 10.7 ± 0.3 | 10.7 ± 0.2 | 200.0 ± 3.2 | **19× faster** |
 | 20-ideas-naked | 9.8 | 23.2 ± 0.3 | 23.3 ± 0.2 | 23.5 ± 0.3 | 223.2 ± 4.2 | **9.6× faster** |
 | 040-on-parsing | 12.3 | 27.6 ± 0.2 | 27.8 ± 0.2 | 27.9 ± 0.4 | 225.1 ± 4.0 | **8.2× faster** |
@@ -47,7 +47,7 @@ Hyperfine, `--warmup 3 --runs 20 --shell=none`, on a freshly-built `target/relea
 ## Where Lex sits
 
 | Layer | What we measured | Verdict |
-|---|---|---|
+| --- | --- | --- |
 | **Wire-codec dispatch tax** | Include resolution through the extension registry | < 0.6% — invisible. |
 | **Raw parser throughput** | parse_document on 2–25 KB docs | ~0.3–0.5 MB/s. Slow end of parsers; comrak is ~500× faster. |
 | **End-to-end CLI ops** (`format`, `convert`) | hyperfine `target/release/lexd …` | 10–60 ms across 2.4–24 KB. 4–19× faster than pandoc. |

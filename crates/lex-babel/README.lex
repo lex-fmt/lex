@@ -288,6 +288,8 @@ the export implementation for testing.
           assert!(output.contains("expected content"));
       }
 
+    :: rust ::
+
     3.2. Integration test pattern (string level):
 
       #[test]
@@ -305,6 +307,8 @@ the export implementation for testing.
           // Use `insta` crate for snapshot testing
           insta::assert_snapshot!(format_output);
       }
+
+    :: rust ::
 
   Note: Use lex-parser's STRING_TO_AST.run() or similar parsing utilities to load
   isolated elements from spec files for testing.

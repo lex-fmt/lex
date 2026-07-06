@@ -109,7 +109,7 @@ If `clone-lex-repos` is not on `$PATH` (env-setup hasn't propagated yet to the r
 ## Where each piece lives
 
 | Piece | Repo | Path | Distribution |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `clone-lex-repos` source | `arthur-debert/release` | `scripts/clone-lex-repos` | versioned in release repo |
 | Install step | `arthur-debert/release` | `env/setup.sh` | runs on session start |
 | Canonical-list update protocol | `arthur-debert/release` | (commit to scripts/) | PR + redeploy env |
@@ -123,7 +123,7 @@ Nothing lives in the per-stack lex-fmt repos themselves. This is intentional —
 ## Cost & tradeoff summary
 
 | Concern | Mitigation |
-|---|---|
+| --- | --- |
 | Full clones can be heavy (lexed 46M, lex 9M) | Default to full; expose `--depth=1` flag for fast read-only |
 | `--with-setup` runs 8 different toolchain bootstraps | Opt-in only; agents must add the flag when they need it |
 | Stale clones across long-running sessions | `--refresh` flag; skip-if-exists is the default but documented |

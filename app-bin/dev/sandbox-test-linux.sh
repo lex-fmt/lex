@@ -31,23 +31,23 @@ IMAGE="lex-sandbox-dev:latest"
 DOCKERFILE="$REPO_ROOT/app-bin/dev/Dockerfile.sandbox"
 PLATFORM_FLAG=()
 if [[ -n "${SANDBOX_PLATFORM:-}" ]]; then
-    PLATFORM_FLAG=(--platform "$SANDBOX_PLATFORM")
+	PLATFORM_FLAG=(--platform "$SANDBOX_PLATFORM")
 fi
 
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-    docker build "${PLATFORM_FLAG[@]}" -t "$IMAGE" -f "$DOCKERFILE" "$REPO_ROOT/app-bin/dev"
+	docker build "${PLATFORM_FLAG[@]}" -t "$IMAGE" -f "$DOCKERFILE" "$REPO_ROOT/app-bin/dev"
 fi
 
 if [[ $# -eq 0 ]]; then
-    set -- cargo nextest run -p lex-extension-host -E 'test(/sandbox/)'
+	set -- cargo nextest run -p lex-extension-host -E 'test(/sandbox/)'
 fi
 
 exec docker run --rm \
-    "${PLATFORM_FLAG[@]}" \
-    -v "$REPO_ROOT:/work" \
-    -v lex-sandbox-target:/target \
-    -v lex-sandbox-cargo-registry:/usr/local/cargo/registry \
-    -e CARGO_TARGET_DIR=/target \
-    -w /work \
-    "$IMAGE" \
-    "$@"
+	"${PLATFORM_FLAG[@]}" \
+	-v "$REPO_ROOT:/work" \
+	-v lex-sandbox-target:/target \
+	-v lex-sandbox-cargo-registry:/usr/local/cargo/registry \
+	-e CARGO_TARGET_DIR=/target \
+	-w /work \
+	"$IMAGE" \
+	"$@"

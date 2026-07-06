@@ -26,7 +26,7 @@ comms/
 ## Key Files
 
 | What | Where |
-|------|-------|
+| ------ | ------- |
 | AST nodes | `crates/lex-core/src/lex/ast.rs` |
 | Parser | `crates/lex-core/src/lex/parsing.rs` |
 | Lexer | `crates/lex-core/src/lex/lexing.rs` |

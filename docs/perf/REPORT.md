@@ -26,7 +26,7 @@ wire-codec tax is below the measurement floor. **Ship it.**
 ### Corpus
 
 | Scenario | Host bytes | Total bytes | Notes |
-|---|---:|---:|---|
+| --- | ---: | ---: | --- |
 | s1_no_includes | 10 010 | 10 010 | Calibration: parse path only, no `lex.include` |
 | s2_one_small | 4 103 | 4 260 | One ~100 B include |
 | s3_one_medium | 4 103 | 14 113 | One ~10 KB include |
@@ -46,7 +46,7 @@ post-flip codec — so the result generalises beyond the prose corpus.
 Median wall time per `resolve_from_source` call (Criterion mid-estimate).
 
 | Scenario | Baseline R1 | Baseline R2 | Post-flip R1 | Post-flip R2 | HEAD R1 | Δ (post-flip vs baseline, mean) | Δ (HEAD vs baseline, mean) |
-|---|---:|---:|---:|---:|---:|---:|---:|
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | s1_no_includes | 12.278 ms | 12.371 ms | 12.286 ms | 12.373 ms | 12.361 ms | +0.04% | +0.30% |
 | s2_one_small | 6.4189 ms | 6.4863 ms | 6.4087 ms | 6.4587 ms | 6.4332 ms | −0.29% | −0.34% |
 | s3_one_medium | 18.202 ms | 18.381 ms | 18.172 ms | 18.310 ms | 18.186 ms | −0.27% | −0.55% |

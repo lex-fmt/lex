@@ -11,7 +11,7 @@ Structure comes from indentation and numbering, not markup. Ideas grow from free
 This repo is the unified Rust workspace containing all backend crates:
 
 | Crate | Description |
-|-------|-------------|
+| ------- | ------------- |
 | `lex-core` | Parser and AST |
 | `lex-babel` | Format conversion (Markdown, HTML, PDF, PNG, Pandoc JSON, RFC XML) |
 | `lex-analysis` | Semantic analysis |

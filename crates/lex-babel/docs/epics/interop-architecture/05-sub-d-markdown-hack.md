@@ -17,7 +17,7 @@ The HACK in `crates/lex-babel/src/formats/markdown/serializer.rs:441-503` (peak 
 Every serialization-oriented format on our horizon already has a native concept of "raw passthrough content":
 
 | Format | Native raw-passthrough mechanism |
-|---|---|
+| --- | --- |
 | Markdown (comrak) | `NodeValue::HtmlBlock { literal }` |
 | HTML (rcdom) | Raw text node (or today's splice-sentinel) |
 | Pandoc (planned, pandoc_ast) | `Block::RawBlock { format, content }` |
@@ -52,7 +52,7 @@ impl<'a> SpliceState<'a> {
 1. **Each format adapter wires `SpliceState` into its event walk** (~5 LOC of wiring) and provides a 1-line `emit_raw_passthrough(content)` callback:
 
 | Format | `emit_raw_passthrough` implementation |
-|---|---|
+| --- | --- |
 | Markdown | `push_child(parent, NodeValue::HtmlBlock { literal: content.to_string(), .. })` |
 | HTML | `append_text_node(parent, content, ContentType::Raw)` |
 | (Future) Pandoc | `push_child(parent, Block::RawBlock("markdown".into(), content.to_string()))` |

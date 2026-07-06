@@ -42,7 +42,7 @@ Every format adapter then re-parses or guesses. The IR should carry the classifi
 ### 3. Round-trip parity audit
 
 | Element | Loss | Location |
-|---|---|---|
+| --- | --- | --- |
 | Heading | Level info reconstructed from parent context, not stored | `to_lex.rs:166-201` |
 | Bold/Italic nesting | `Bold([Italic([Text])])` flattens to `*_text_*` text | `to_lex.rs:517-541` |
 | Annotation rich body | OK structurally; semantics depend on dispatch (see umbrella) | — |

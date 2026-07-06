@@ -45,7 +45,7 @@ The grammar itself is **regular at each indent level**. Once indent/dedent bound
 ### External Scanner Responsibilities
 
 | What | How |
-|------|-----|
+| ------ | ----- |
 | Indentation tracking | Stack of indent levels; 4 spaces or 1 tab = 1 level |
 | INDENT token | Emitted when indent level increases |
 | DEDENT token(s) | Emitted when indent level decreases (possibly multiple) |
@@ -222,7 +222,7 @@ Integrate into CI alongside the existing test suite.
 Don't require full parity from day one. Compare progressively:
 
 | Phase | Compare | Ignore |
-|-------|---------|--------|
+| ------- | --------- | -------- |
 | M1-M2 | Node types + nesting depth | Inline content, locations, annotations |
 | M3-M4 | + List structure, annotation forms | Inline content, locations |
 | M5 | + Verbatim raw content | Inline content, locations |
@@ -305,7 +305,7 @@ Implemented in three sub-phases:
 ## Risk Register
 
 | Risk | Impact | Likelihood | Mitigation |
-|------|--------|------------|------------|
+| ------ | -------- | ------------ | ------------ |
 | Verbatim block scanning too complex for external scanner | High | Medium | Prototype early (Phase 5). Fallback: mark verbatim as opaque node, use current parser for content |
 | Session/definition ambiguity causes parse conflicts | Medium | Low | Tree-sitter's GLR + precedence handles this. Proven pattern from other indentation-sensitive grammars |
 | Inline parsing too complex in-grammar | Medium | Medium | Fallback: parse inlines as flat text in grammar, run inline pass in consumer. Loses incremental benefit but unblocks |
