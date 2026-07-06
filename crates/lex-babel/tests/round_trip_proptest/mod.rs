@@ -906,18 +906,8 @@ fn nested_list_strategy() -> impl Strategy<Value = List> {
                 parent_text,
                 vec![ContentElement::List(inner)],
             );
-            let sibling = ListItem {
-                marker: TextContent::from_string("-".to_string(), None),
-                text: vec![TextContent::from_string(format!("{sibling_text}\n"), None)],
-                children: GeneralContainer::empty(),
-                annotations: vec![],
-                location: Default::default(),
-            };
-            let mut container = ListContainer::empty();
-            container.push(ContentItem::ListItem(parent));
-            container.push(ContentItem::ListItem(sibling));
-            let mut list = List::new(vec![]);
-            list.items = container;
+            let sibling = ListItem::new("-".to_string(), format!("{sibling_text}\n"));
+            let mut list = List::new(vec![parent, sibling]);
             list.marker = Some(SequenceMarker {
                 raw_text: TextContent::from_string("-".to_string(), None),
                 style: DecorationStyle::Plain,
@@ -998,12 +988,13 @@ proptest! {
         // Reject the documented Definition → Verbatim hijack (the verbatim closer
         // re-anchors the definition subject). Mirrors matrix.rs::is_known_hijack;
         // the other two hijack partners (Table/Annotation) are never generated.
+        // `prop_assume!` discards the sample so proptest regenerates and still runs
+        // the full 256 accepted cases — rejected inputs are not counted as passes.
         for pair in blocks.windows(2) {
-            if pair[0].0 == ReaderBlockKind::Definition
-                && pair[1].0 == ReaderBlockKind::Verbatim
-            {
-                return Ok(());
-            }
+            prop_assume!(
+                !(pair[0].0 == ReaderBlockKind::Definition
+                    && pair[1].0 == ReaderBlockKind::Verbatim)
+            );
         }
 
         // A title-neutralizing lead, then the generated blocks — all reader-shaped,

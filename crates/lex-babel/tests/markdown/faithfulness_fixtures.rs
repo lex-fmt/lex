@@ -12,23 +12,24 @@
 //! reference, …) currently FAILS end-to-end Faithfulness through the real reader.
 //! The empirical causes, all **pre-existing** and confirmed by minimal repros:
 //!
-//!   - **lex#790 (nested block bodies collapse on serialize)** — the dominant
-//!     blocker, and broader than #790's written repros (verbatim/definition/table)
-//!     suggest. Its most pervasive manifestation is **lists**: the Markdown reader
-//!     builds every list item as `ListItem { text: "", children: [Paragraph] }`
-//!     (comrak's block model — an item contains a paragraph). The Lex serializer
-//!     emits that as the loose form `-\n    text`, which lex-core does **not**
-//!     re-parse as a list — it collapses the whole list into one Paragraph blob.
-//!     So NO reader-built list round-trips, nor does any definition body carrying
-//!     a paragraph+list, nor a colon-terminated paragraph before a verbatim (the
-//!     paragraph is absorbed as the verbatim subject and the body de-indents).
-//!     Any #790 fix must cover reader-built loose lists, not only the named
-//!     verbatim/definition/table cases.
+//!   - **lex#798 (reader-built loose lists collapse on serialize)** — the dominant
+//!     blocker. The Markdown reader builds every list item as
+//!     `ListItem { text: "", children: [Paragraph] }` (comrak's block model — an
+//!     item contains a paragraph). The Lex serializer emits that as the loose form
+//!     `-\n    text`, which lex-core does **not** re-parse as a list — it collapses
+//!     the whole list into one Paragraph blob. So NO reader-built list round-trips;
+//!     since every real fixture contains lists, this alone sinks all of them. Same
+//!     root *mechanism* as #790 (a nested block body under a marker collapses to a
+//!     paragraph) but a distinct, separately-tracked manifestation — #790's title
+//!     and repros name only verbatim/definition/table.
+//!   - **lex#790 (verbatim/definition nested bodies de-indent)** — a definition
+//!     body carrying a paragraph+list, and a colon-terminated paragraph before a
+//!     verbatim (the paragraph is absorbed as the verbatim subject and the body
+//!     de-indents). Present in comrak-readme / comrak-reference on top of #798.
 //!   - **lex#795 (session-marker inference)** — a heading whose text begins with a
 //!     marker-like token (`## 1\. Primary Session` in kitchensink) serializes to
 //!     `1. Primary Session`, which re-parses with a Numerical session marker where
-//!     the reader had `style: None`. A distinct axis from #790; filed by this
-//!     slice.
+//!     the reader had `style: None`. A distinct axis; filed by this slice.
 //!   - **lex#791 (leading-annotation reorder)** — `20-ideas-naked.md`'s leading
 //!     document-level annotations reorder around the title on serialize.
 //!
@@ -39,9 +40,9 @@
 //! fixture is driven through the real reader, and each one still blocked by a
 //! tracked bug is listed against that issue. The sweep asserts (a) no *unlisted*
 //! fixture violates Faithfulness (so a genuinely-new regression fails loudly) and
-//! (b) every *listed* fixture still violates it (anti-rot — the moment #790/#791/
-//! #795 is fixed, the fixture flips to faithful and this list forces its removal,
-//! turning the acceptance criterion into a live end-to-end assertion). The floor
+//! (b) every *listed* fixture still violates it (anti-rot — the moment its bug
+//! (#798/#790/#791/#795) is fixed, the fixture flips to faithful and this list
+//! forces its removal, turning the criterion into a live assertion). The floor
 //! that DOES hold today — the reader always emits well-formed, re-parseable Lex —
 //! is asserted directly (`every_fixture_reader_output_is_reparseable`).
 
@@ -99,12 +100,14 @@ const FIXTURES: &[(&str, &str)] = &[
 /// sweep fails loudly if a listed fixture starts passing (promote it) or an
 /// unlisted one starts failing (a new regression).
 const FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[
-    // #790 — reader-built loose lists (and def/verbatim nested bodies) collapse
-    // on serialize; kitchensink ALSO hits #795 (numbered-heading session marker).
-    ("kitchensink", "lex#790 (+ lex#795)"),
-    ("comrak-readme", "lex#790"),
-    ("commonmark-reference", "lex#790"),
-    ("comrak-reference", "lex#790"),
+    // #798 — reader-built loose lists collapse on serialize (every fixture has
+    // lists, so #798 blocks them all). kitchensink ALSO hits #795 (numbered
+    // heading); comrak-readme / comrak-reference ALSO hit #790 (colon-para →
+    // verbatim-subject absorption). See the module docs for the full analysis.
+    ("kitchensink", "lex#798 (+ lex#795)"),
+    ("comrak-readme", "lex#798 (+ lex#790)"),
+    ("commonmark-reference", "lex#798"),
+    ("comrak-reference", "lex#798 (+ lex#790)"),
     // #791 — leading document-level annotations reorder around the title.
     ("ideas-naked", "lex#791"),
 ];
@@ -190,7 +193,7 @@ fn every_fixture_reader_output_is_reparseable() {
 // is not title-promoted, isolating the pair from the title boundary.
 //
 // Empirically today: para→para, heading→body, para→verbatim, para→definition
-// round-trip faithfully; para→list and list→para do NOT (blocked by lex#790 —
+// round-trip faithfully; para→list and list→para do NOT (blocked by lex#798 —
 // reader-built loose lists collapse on serialize). The blocked pair is asserted
 // as a currently-failing known gap rather than skipped, with the same anti-rot
 // as the fixture sweep.
@@ -231,13 +234,13 @@ fn adjacency_paragraph_to_definition() {
 }
 
 /// paragraph→list and list→paragraph are the two adjacency pairs blocked by
-/// lex#790. Asserted as currently-failing (not skipped): the Markdown reader
+/// lex#798. Asserted as currently-failing (not skipped): the Markdown reader
 /// builds loose list items (`ListItem { text: "", children: [Paragraph] }`)
 /// which the serializer emits as `-\n    text` — a form lex-core re-parses as a
-/// paragraph, collapsing the list. When #790 is fixed these round-trip and this
+/// paragraph, collapsing the list. When #798 is fixed these round-trip and this
 /// test fails, prompting promotion to plain `check_faithful(...).unwrap()`.
 #[test]
-fn adjacency_list_pairs_blocked_by_lex790() {
+fn adjacency_list_pairs_blocked_by_lex798() {
     let para_to_list = format!("{H1}Lead in.\n\n- one\n- two\n");
     let list_to_para = format!("{H1}- one\n- two\n\nTrailer.\n");
     for (name, md) in [
@@ -246,7 +249,7 @@ fn adjacency_list_pairs_blocked_by_lex790() {
     ] {
         assert!(
             check_faithful(&MarkdownFormat, md).is_err(),
-            "{name} now round-trips faithfully — lex#790 appears fixed; \
+            "{name} now round-trips faithfully — lex#798 appears fixed; \
              promote this to a live `check_faithful(...).unwrap()` adjacency assertion"
         );
     }
