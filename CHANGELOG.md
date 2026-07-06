@@ -4,6 +4,14 @@
 
 ## Unreleased
 
+## 0.19.2 - 2026-07-06
+
+- Bump comms to the multi-group verbatim grammar; document the Definition→Verbatim and Definition→Annotation separations as intended group semantics (lex#814 §4), with full positive-shape regression guards in the separation matrix
+- Characterize the Definition→Table adjacency as a known content-loss bug (lex#819, deferred): a single-group table cannot hold the definition as a group, so the merge drops the definition body and the table rows
+- Retag the `20-ideas-naked` known-failure to its own issue lex#817 (deferred): the single-line→block annotation rewrite alters annotation content across a round-trip
+- Fix colon-terminated paragraph being absorbed as a following table/verbatim subject on re-parse (lex#814 §1/§3)
+- Attach leading document-level annotations to the document root consistently across parse and re-parse (lex#814 §2)
+
 ## 0.19.1 - 2026-07-06
 
 - faithfulness: nested block bodies no longer de-indent on `lexd format`. A verbatim/definition subject whose source colon was followed by trailing whitespace was re-serialized as `Subject::` (escaping its body, which re-parsed as prose); the subject box now excludes trailing whitespace so exactly one colon is emitted. Multi-line table cells are serialized in stacked, blank-delimited row groups instead of dumping the embedded newline inline (which split the pipe row and collapsed the table to prose) (lex#790)
