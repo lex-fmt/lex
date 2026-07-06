@@ -142,6 +142,16 @@ fn canon_annotations(anns: &[Annotation]) -> Vec<Canon> {
 }
 
 fn canon_annotation(ann: &Annotation) -> Canon {
+    // A marker annotation (`:: label ::`, no body) re-parses with a lone
+    // empty-Paragraph artifact, while a reader builds it with no children at
+    // all. Both are the same marker, so drop empty-paragraph children here —
+    // the Faithfulness analog of the serializer's `clean_annotation`. Without
+    // this a reader-emitted marker (e.g. the ADR-0002 `:: doc.untitled ::`)
+    // would never compare equal to its own re-parse.
+    let children: Vec<Canon> = canon_items(ann.children.iter())
+        .into_iter()
+        .filter(|c| !is_empty_paragraph(c))
+        .collect();
     Canon::Annotation {
         // `.value` is the canonical label; the formatter re-emits the source
         // spelling form, which reparses back to the same canonical value.
@@ -152,8 +162,18 @@ fn canon_annotation(ann: &Annotation) -> Canon {
             .iter()
             .map(|p| (p.key.clone(), p.value.clone()))
             .collect(),
-        children: canon_items(ann.children.iter()),
+        children,
     }
+}
+
+/// True for a content-free `Canon::Paragraph` — the empty-body artifact a
+/// marker annotation re-parses into. See [`canon_annotation`].
+fn is_empty_paragraph(c: &Canon) -> bool {
+    matches!(
+        c,
+        Canon::Paragraph { text, refs, annotations }
+            if text.is_empty() && refs.is_empty() && annotations.is_empty()
+    )
 }
 
 fn canon_items<'a, I: Iterator<Item = &'a ContentItem>>(items: I) -> Vec<Canon> {

@@ -185,16 +185,17 @@ fn targeted_cases() -> Vec<(&'static str, &'static str)> {
 //          the inlines-spec fixtures fail Tier-2 here because their indented
 //          grammar-production blocks de-indent on the first format.
 //   #791 — leading document-level annotations reorder around the title / first
-//          block on serialize. This is the idempotence (Tier-1) breaker for the
-//          inlines-spec fixtures (their lead paragraph hoists above the leading
-//          annotations on the second format) and both tiers for the two document
-//          fixtures + the document-level annotation fixture. May be subsumed by
-//          the #783 title-model work.
+//          block on serialize. The #783 title-model work (document-level
+//          annotations now serialize at the head) subsumed the inlines-spec
+//          Tier-1 fixtures — they pass now. What remains is the subtitle case
+//          (document-09) and the multiple-document-level annotation fixture
+//          (annotation-27, Tier-2), where title/subtitle/annotation ordering is
+//          still not reconciled.
 //   #792 — ragged/mismatched-row tables get padded + a separator row injected,
 //          adding cells (Tier-2 only).
-//   #783 — the `:: doc.untitled ::` title-model sentinel is rejected by the
-//          NormalizeLabels stage (`doc.*` reserved), so `format` errors — both
-//          tiers, until the ADR-0002 title model lands.
+//   #783 — the `:: doc.untitled ::` title-model sentinel (document-06) now
+//          parses and round-trips under the ADR-0002 title model, so it is no
+//          longer a known failure.
 // -----------------------------------------------------------------------------
 
 const TIER1_TARGETED_KNOWN_FAIL: &[(&str, &str)] = &[];
@@ -214,22 +215,15 @@ const TIER1_FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[
     ("table.docs/table-23-cell-with-annotation.lex", "lex#790"),
     ("verbatim.docs/verbatim-13-group-spades.lex", "lex#790"),
     // #791 — leading annotations reorder around the title/first block (2nd pass).
+    // The inlines-spec fixtures (their lead paragraph hoisted above the leading
+    // annotations on the second format) are fixed by the #783 title-model work:
+    // document-level annotations now serialize at the head. The subtitle case
+    // still reorders — its title/subtitle interleaving with leading annotations
+    // is not yet handled.
     (
         "document.docs/document-09-subtitle-with-annotations.lex",
         "lex#791",
     ),
-    ("inlines.docs/specs/formatting/formatting.lex", "lex#791"),
-    (
-        "inlines.docs/specs/formatting/inlines-general.lex",
-        "lex#791",
-    ),
-    ("inlines.docs/specs/references/citations.lex", "lex#791"),
-    (
-        "inlines.docs/specs/references/references-general.lex",
-        "lex#791",
-    ),
-    // #783 — `:: doc.untitled ::` sentinel rejected by NormalizeLabels.
-    ("document.docs/document-06-title-untitled.lex", "lex#783"),
 ];
 
 const TIER2_FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[
@@ -265,8 +259,6 @@ const TIER2_FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[
     ),
     // #792 — ragged table rows padded + separator row injected.
     ("table.docs/table-13-flat-mismatched-rows.lex", "lex#792"),
-    // #783 — `:: doc.untitled ::` sentinel rejected by NormalizeLabels.
-    ("document.docs/document-06-title-untitled.lex", "lex#783"),
 ];
 
 #[cfg(test)]

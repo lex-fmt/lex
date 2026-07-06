@@ -371,6 +371,72 @@ Final paragraph.
         assert!(has_sessions, "Should contain sessions");
     }
 
+    // ── Document title model (ADR-0002) ────────────────────────────────────
+
+    #[test]
+    fn title_promoted_despite_leading_blank_lines() {
+        // ADR-0002 drops the leading-blank suppression special case: a lone first
+        // paragraph is the title regardless of any leading blank lines.
+        let source = "\n\nTitle line\n\nBody paragraph.\n";
+        let tokens = lex_helper(source).expect("tokenize");
+        let out = parse_flat(tokens, source).expect("parse");
+        assert_eq!(
+            out.title.as_ref().map(|t| t.as_str()),
+            Some("Title line"),
+            "leading blanks must no longer suppress the title"
+        );
+    }
+
+    #[test]
+    fn title_promoted_without_leading_blank() {
+        let source = "Title line\n\nBody paragraph.\n";
+        let tokens = lex_helper(source).expect("tokenize");
+        let out = parse_flat(tokens, source).expect("parse");
+        assert_eq!(out.title.as_ref().map(|t| t.as_str()), Some("Title line"));
+    }
+
+    #[test]
+    fn doc_untitled_marker_suppresses_title() {
+        // A `:: doc.untitled ::` among the leading document-level annotations
+        // suppresses promotion: no title, first paragraph stays in the body.
+        let source = ":: doc.untitled ::\n\nFirst paragraph.\n\nSecond paragraph.\n";
+        let tokens = lex_helper(source).expect("tokenize");
+        let out = parse_flat(tokens, source).expect("parse");
+        assert!(out.title.is_none(), "doc.untitled must suppress the title");
+        let paragraphs = out
+            .root
+            .children
+            .iter()
+            .filter(|c| matches!(c, ContentItem::Paragraph(_)))
+            .count();
+        assert_eq!(paragraphs, 2, "both paragraphs stay in the body");
+    }
+
+    #[test]
+    fn first_non_paragraph_element_is_not_a_title() {
+        // A document that opens with a session (a title line + indented body)
+        // has no document title — that element starts the document.
+        let source = "Section:\n\n    Body content.\n";
+        let tokens = lex_helper(source).expect("tokenize");
+        let out = parse_flat(tokens, source).expect("parse");
+        assert!(
+            out.title.is_none(),
+            "a leading session is not promoted to a title"
+        );
+    }
+
+    #[test]
+    fn colon_first_line_promotes_title_and_subtitle() {
+        // A first line ending in a colon + a second line is title + subtitle;
+        // the structural colon is stripped from the title content.
+        let source = "Sapiens:\nA Brief History of Humankind\n\nBody.\n";
+        let tokens = lex_helper(source).expect("tokenize");
+        let out = parse_flat(tokens, source).expect("parse");
+        let title = out.title.expect("title present");
+        assert_eq!(title.as_str(), "Sapiens");
+        assert_eq!(title.subtitle_str(), Some("A Brief History of Humankind"));
+    }
+
     #[test]
     fn test_parse_empty_input() {
         let source = "";

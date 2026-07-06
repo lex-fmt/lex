@@ -3,6 +3,7 @@ source: crates/lex-babel/tests/markdown/import.rs
 expression: serialized
 ---
 <document>
+  <annotation>doc.untitled</annotation>
   <session>CommonMark
     <paragraph>1 line(s)
       <text-line>CommonMark is a rationalized version of Markdown s…</text-line>

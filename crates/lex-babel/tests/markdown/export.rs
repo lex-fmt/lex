@@ -767,23 +767,30 @@ fn test_document_title_exported_as_h1() {
 }
 
 #[test]
-fn test_document_untitled_marker_rejected_today() {
-    // document-06 now leads with `:: doc.untitled ::`, the ADR-0002 no-title
-    // marker. TODO(#783): doc.untitled lands in slice 3 — update to title-less
-    // expectations (the first paragraph stays body, no H1 title is emitted).
-    // Until the parser honors the doc.* builtin, NormalizeLabels rejects the
-    // reserved prefix, so parsing this fixture errors. Assert that today's
-    // actual behavior rather than silently dropping the coverage.
+fn test_document_untitled_marker_is_title_less() {
+    // document-06 leads with `:: doc.untitled ::`, the ADR-0002 no-title marker
+    // (#783): the parser honors it, so the document has no title and the first
+    // paragraph stays body. Exporting to Markdown emits no `# H1` heading — the
+    // no-title marker is dropped (Markdown's absent title *is* the round-trip).
     let lex_src = std::fs::read_to_string(
         "../../comms/specs/elements/document.docs/document-06-title-untitled.lex",
     )
     .expect("document-06 spec file should exist");
-    let err = STRING_TO_AST
+    let lex_doc = STRING_TO_AST
         .run(lex_src)
-        .expect_err("doc.untitled is rejected by NormalizeLabels until slice #783");
+        .expect("document-06 parses title-less");
+    let md = MarkdownFormat.serialize(&lex_doc).unwrap();
     assert!(
-        err.to_string().contains("uses the reserved `doc.*` prefix"),
-        "expected the NormalizeLabels reserved doc.* rejection, got: {err}"
+        !md.starts_with("# "),
+        "a title-less document must not emit an H1 heading, got: {md}"
+    );
+    assert!(
+        !md.contains("doc.untitled"),
+        "the no-title marker must not leak into Markdown, got: {md}"
+    );
+    assert!(
+        md.starts_with("Just a paragraph with no title."),
+        "the first paragraph must lead the Markdown body, got: {md}"
     );
 }
 
