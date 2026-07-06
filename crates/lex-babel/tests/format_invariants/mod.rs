@@ -170,52 +170,160 @@ fn targeted_cases() -> Vec<(&'static str, &'static str)> {
 // listed case still fails (so the list cannot rot — when a bug is fixed the
 // test tells you to delete the entry) and logs the excluded set on each run.
 //
-// (The lex#681 umbrella is closed: its deliverable — this suite — shipped and
-// every bug it originally found is fixed. The residual Tier-2 fixture failures
-// were triaged into focused issues — #699 (paragraph merge), #700 (open-form
-// drop), #703 (annotation comma) — all now fixed, so every list below is empty.
-// Re-populate only when a newly-filed formatter bug needs to keep the suite
-// green while it is open.)
+// The `TARGETED` lists cover the in-code `targeted_cases()`; the `FIXTURE` lists
+// cover the curated comms corpus (`corpus_fixtures()` — elements/**, trifecta,
+// benchmark). Tier-1 (idempotence) and Tier-2 (canon) are listed separately so
+// each entry names the issue that actually explains *that tier's* failure.
+//
+// Every corpus entry below is a PRE-EXISTING faithfulness gap newly surfaced by
+// the expanded coverage — NOT a regression from #782. Each was confirmed by
+// running the real `check_idempotent` / `check_semantic_preserved` on the file:
+//
+//   #790 — nested block bodies (verbatim/definition) de-indent and multi-line /
+//          nested table cells break on serialize. Both tiers for the affected
+//          tables + verbatim + the two benchmark docs (which #790 names by name);
+//          the inlines-spec fixtures fail Tier-2 here because their indented
+//          grammar-production blocks de-indent on the first format.
+//   #791 — leading document-level annotations reorder around the title / first
+//          block on serialize. This is the idempotence (Tier-1) breaker for the
+//          inlines-spec fixtures (their lead paragraph hoists above the leading
+//          annotations on the second format) and both tiers for the two document
+//          fixtures + the document-level annotation fixture. May be subsumed by
+//          the #783 title-model work.
+//   #792 — ragged/mismatched-row tables get padded + a separator row injected,
+//          adding cells (Tier-2 only).
+//   #783 — the `:: doc.untitled ::` title-model sentinel is rejected by the
+//          NormalizeLabels stage (`doc.*` reserved), so `format` errors — both
+//          tiers, until the ADR-0002 title model lands.
 // -----------------------------------------------------------------------------
 
 const TIER1_TARGETED_KNOWN_FAIL: &[(&str, &str)] = &[];
 
 const TIER2_TARGETED_KNOWN_FAIL: &[(&str, &str)] = &[];
 
-const TIER1_FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[];
+const TIER1_FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[
+    // #790 — nested-body de-indent / table-cell break (non-idempotent downstream).
+    ("benchmark/080-gentle-introduction.lex", "lex#790"),
+    ("benchmark/20-ideas-naked.lex", "lex#790"),
+    ("table.docs/table-05-flat-multiline.lex", "lex#790"),
+    ("table.docs/table-08-nested-in-definition.lex", "lex#790"),
+    ("table.docs/table-19-cell-with-list.lex", "lex#790"),
+    ("table.docs/table-20-cell-with-definition.lex", "lex#790"),
+    ("table.docs/table-21-cell-with-verbatim.lex", "lex#790"),
+    ("table.docs/table-22-cell-with-mixed-content.lex", "lex#790"),
+    ("table.docs/table-23-cell-with-annotation.lex", "lex#790"),
+    ("verbatim.docs/verbatim-13-group-spades.lex", "lex#790"),
+    // #791 — leading annotations reorder around the title/first block (2nd pass).
+    (
+        "document.docs/document-09-subtitle-with-annotations.lex",
+        "lex#791",
+    ),
+    ("inlines.docs/specs/formatting/formatting.lex", "lex#791"),
+    (
+        "inlines.docs/specs/formatting/inlines-general.lex",
+        "lex#791",
+    ),
+    ("inlines.docs/specs/references/citations.lex", "lex#791"),
+    (
+        "inlines.docs/specs/references/references-general.lex",
+        "lex#791",
+    ),
+    // #783 — `:: doc.untitled ::` sentinel rejected by NormalizeLabels.
+    ("document.docs/document-06-title-untitled.lex", "lex#783"),
+];
 
-const TIER2_FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[];
+const TIER2_FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[
+    // #790 — nested-body de-indent / table-cell break (canon changes).
+    ("benchmark/080-gentle-introduction.lex", "lex#790"),
+    ("benchmark/20-ideas-naked.lex", "lex#790"),
+    ("inlines.docs/specs/formatting/formatting.lex", "lex#790"),
+    (
+        "inlines.docs/specs/formatting/inlines-general.lex",
+        "lex#790",
+    ),
+    ("inlines.docs/specs/references/citations.lex", "lex#790"),
+    (
+        "inlines.docs/specs/references/references-general.lex",
+        "lex#790",
+    ),
+    ("table.docs/table-05-flat-multiline.lex", "lex#790"),
+    ("table.docs/table-08-nested-in-definition.lex", "lex#790"),
+    ("table.docs/table-19-cell-with-list.lex", "lex#790"),
+    ("table.docs/table-20-cell-with-definition.lex", "lex#790"),
+    ("table.docs/table-21-cell-with-verbatim.lex", "lex#790"),
+    ("table.docs/table-22-cell-with-mixed-content.lex", "lex#790"),
+    ("table.docs/table-23-cell-with-annotation.lex", "lex#790"),
+    ("verbatim.docs/verbatim-13-group-spades.lex", "lex#790"),
+    // #791 — leading annotations reorder around the title/first block (canon).
+    (
+        "annotation.docs/annotation-27-attachment-example-l-multiple-document-level.lex",
+        "lex#791",
+    ),
+    (
+        "document.docs/document-09-subtitle-with-annotations.lex",
+        "lex#791",
+    ),
+    // #792 — ragged table rows padded + separator row injected.
+    ("table.docs/table-13-flat-mismatched-rows.lex", "lex#792"),
+    // #783 — `:: doc.untitled ::` sentinel rejected by NormalizeLabels.
+    ("document.docs/document-06-title-untitled.lex", "lex#783"),
+];
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
-    fn elements_dir() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../comms/specs/elements")
+    fn specs_dir() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../comms/specs")
     }
 
-    /// All top-level element fixtures (`*.lex` directly under `elements/`).
-    /// These are real, maintained documents that exercise every element kind,
-    /// including the newer table/footnote/reference features.
-    fn element_fixtures() -> Vec<(String, String)> {
-        let dir = elements_dir();
-        let mut out = Vec::new();
+    /// Recursively collect every `*.lex` under `root`, keyed by its path relative
+    /// to `root` prefixed with `key_prefix` (so callers can namespace the corpus
+    /// roots into one flat map). The relative path keeps `.docs/` sub-fixtures
+    /// distinct from their bare-stem top-level siblings — e.g.
+    /// `table.docs/table-05-flat-multiline.lex` never collides with `table.lex`.
+    fn collect_lex(root: &Path, key_prefix: &str, out: &mut Vec<(String, String)>) {
         let entries =
-            std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("read {}: {e}", dir.display()));
+            std::fs::read_dir(root).unwrap_or_else(|e| panic!("read {}: {e}", root.display()));
         for entry in entries {
             let path = entry.unwrap().path();
-            if path.extension().and_then(|s| s.to_str()) == Some("lex") {
-                let name = path.file_name().unwrap().to_string_lossy().to_string();
+            if path.is_dir() {
+                let sub = path.file_name().unwrap().to_string_lossy();
+                let prefix = format!("{key_prefix}{sub}/");
+                collect_lex(&path, &prefix, out);
+            } else if path.extension().and_then(|s| s.to_str()) == Some("lex") {
+                let name = format!(
+                    "{key_prefix}{}",
+                    path.file_name().unwrap().to_string_lossy()
+                );
                 let src = std::fs::read_to_string(&path).unwrap();
                 out.push((name, src));
             }
         }
+    }
+
+    /// The full curated comms corpus: every `.lex` under `specs/elements/**`
+    /// (including the ~150 `.docs/` sub-fixtures), plus `specs/trifecta/*` and
+    /// `specs/benchmark/*`. These are all real, maintained documents that
+    /// authors keep faithful, so they are the right anchor for the formatter's
+    /// two text-first invariants — no machine-generated snapshot required.
+    ///
+    /// Keys are namespaced by corpus root: `trifecta/…` and `benchmark/…` carry
+    /// their root; element keys are relative to `elements/` (top-level stems bare,
+    /// `.docs/` fixtures prefixed with their subdir). Every key is unique.
+    fn corpus_fixtures() -> Vec<(String, String)> {
+        let specs = specs_dir();
+        let mut out = Vec::new();
+        collect_lex(&specs.join("elements"), "", &mut out);
+        collect_lex(&specs.join("trifecta"), "trifecta/", &mut out);
+        collect_lex(&specs.join("benchmark"), "benchmark/", &mut out);
         out.sort();
         assert!(
-            !out.is_empty(),
-            "no element fixtures found in {}",
-            dir.display()
+            out.len() > 150,
+            "expected the full curated corpus (>150 files); got {} under {}",
+            out.len(),
+            specs.display()
         );
         out
     }
@@ -303,20 +411,20 @@ mod tests {
     }
 
     #[test]
-    fn tier1_idempotence_element_fixtures() {
+    fn tier1_idempotence_corpus_fixtures() {
         run_sweep(
-            "tier1/fixtures",
-            &element_fixtures(),
+            "tier1/corpus",
+            &corpus_fixtures(),
             TIER1_FIXTURE_KNOWN_FAIL,
             check_idempotent,
         );
     }
 
     #[test]
-    fn tier2_semantic_preservation_element_fixtures() {
+    fn tier2_semantic_preservation_corpus_fixtures() {
         run_sweep(
-            "tier2/fixtures",
-            &element_fixtures(),
+            "tier2/corpus",
+            &corpus_fixtures(),
             TIER2_FIXTURE_KNOWN_FAIL,
             check_semantic_preserved,
         );

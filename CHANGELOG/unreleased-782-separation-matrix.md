@@ -1,1 +1,2 @@
 - Complete the Lex serializer block-separation matrix for every sibling block pair and remove the lex#505/lex#682 per-block blank-line band-aids
+- Guard the change with properties over the curated comms corpus instead of a committed snapshot: the `format_invariants` sweep now runs idempotence + canon-faithfulness over every `specs/elements/**` (incl. `.docs/`), `specs/trifecta`, and `specs/benchmark` fixture, with the sibling-adjacency AST matrix as its in-code complement (no generated `.golden` text committed)
