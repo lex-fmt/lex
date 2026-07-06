@@ -191,10 +191,18 @@ fn extract_group(
     wall_column: usize,
     source: &str,
 ) -> VerbatimGroupData {
+    // The subject line is `<text>:` optionally followed by trailing whitespace.
+    // The bounding box must span only the content tokens: filtering the structural
+    // `Colon` alone is not enough, because a trailing whitespace token *after* the
+    // colon would keep the box's end past the colon, so `extract_text` reads the
+    // colon back out of the source (lex#790 — subject re-serialized as `Subject::`).
+    // Excluding every whitespace token (which `is_whitespace` also counts blank-line
+    // and indentation tokens as) ends the box at the last content token; interior
+    // colons and spaces are still recovered from the source slice.
     let subject_pairs: Vec<_> = subject_line
         .source_token_pairs()
         .into_iter()
-        .filter(|(token, _)| !matches!(token, Token::Colon | Token::BlankLine(_)))
+        .filter(|(token, _)| !token.is_whitespace() && !matches!(token, Token::Colon))
         .collect();
     let subject_byte_range = if subject_pairs.is_empty() {
         0..0
@@ -398,6 +406,15 @@ mod tests {
     }
 
     fn subject_line(builder: &mut SourceBuilder, indent_levels: usize, label: &str) -> LineToken {
+        subject_line_inner(builder, indent_levels, label, false)
+    }
+
+    fn subject_line_inner(
+        builder: &mut SourceBuilder,
+        indent_levels: usize,
+        label: &str,
+        trailing_space: bool,
+    ) -> LineToken {
         let mut parts = Vec::new();
         for _ in 0..indent_levels {
             let range = builder.push("    ");
@@ -407,6 +424,10 @@ mod tests {
         parts.push((Token::Text(label.to_string()), range));
         let range = builder.push(":");
         parts.push((Token::Colon, range));
+        if trailing_space {
+            let range = builder.push(" ");
+            parts.push((Token::Whitespace(1), range));
+        }
         let range = builder.push("\n");
         parts.push((Token::BlankLine(Some("\n".to_string())), range));
         line_token(LineType::SubjectLine, parts)
@@ -470,6 +491,21 @@ mod tests {
         assert_eq!(data.groups[0].content_lines[0].0, "line one");
         assert_eq!(data.groups[1].subject_text, "Another block");
         assert_eq!(data.groups[1].content_lines[0].0, "inner body");
+    }
+
+    #[test]
+    fn subject_trailing_whitespace_is_not_kept_in_text_lex790() {
+        // Regression for lex#790: a subject whose structural colon is followed by
+        // trailing whitespace must extract to the bare text — the trailing-space
+        // token must not push the bounding box past the colon (which would read
+        // the colon back out of the source, yielding "Subject:" and, on serialize,
+        // the doubled-colon "Subject::" that de-nests the body).
+        let mut builder = SourceBuilder::new();
+        let subject = subject_line_inner(&mut builder, 0, "The Tower of Babel", true);
+        let content = content_line(&mut builder, INFLOW_INDENT_STEP_COLUMNS, "Body.");
+
+        let data = extract_verbatim_block_data(&subject, &[content], &builder.text);
+        assert_eq!(data.groups[0].subject_text, "The Tower of Babel");
     }
 
     #[test]

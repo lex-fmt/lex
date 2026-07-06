@@ -186,18 +186,24 @@ fn targeted_cases() -> Vec<(&'static str, &'static str)> {
 // the expanded coverage — NOT a regression from #782. Each was confirmed by
 // running the real `check_idempotent` / `check_semantic_preserved` on the file:
 //
-//   #790 — nested block bodies (verbatim/definition) de-indent and multi-line /
-//          nested table cells break on serialize. Both tiers for the affected
-//          tables + verbatim + the two benchmark docs (which #790 names by name);
-//          the inlines-spec fixtures fail Tier-2 here because their indented
-//          grammar-production blocks de-indent on the first format.
-//   #791 — FIXED. Leading document-level annotations used to reorder around the
-//          title / first block on serialize because the serializer emitted the
-//          first-class title node before the body stream, hoisting it ahead of
-//          any annotation authored above it. The serializer now emits the title
-//          at its own source position (the root children whose source line
-//          precedes the title come first, then the title, then the rest), so
-//          both tiers pass for document-09 and annotation-27.
+//   #790 — nested block bodies de-indent on serialize. The subject-colon
+//          de-indent (a verbatim/definition subject whose source colon was
+//          followed by trailing whitespace re-serialized as `Subject::`, escaping
+//          the body) and multi-line *text* table cells (whose embedded newline
+//          split the pipe row) are now FIXED — the two benchmark docs, the
+//          flat-multiline table, and the verbatim-group fixture pass. What remains
+//          under #790 is table cells that carry *block* content (a list, verbatim,
+//          annotation, or a table nested in a definition inside a cell): that
+//          inner structure still de-indents/escapes on serialize.
+//   #791 — leading document-level annotations reorder around the title / subtitle
+//          on serialize. The serializer used to emit the first-class title node
+//          before the body stream, hoisting it ahead of any annotation authored
+//          above it; it now emits the title at its own source position, so the two
+//          named repros (document-09, annotation-27) pass. A DEEPER case remains:
+//          annotations that in the source attach to the first *session* re-attach
+//          to the document *root* on round-trip (they serialize at the document
+//          head and re-parse as root-owned) — the inlines-spec fixtures and
+//          20-ideas-naked still fail Tier-2 on that attachment change.
 //   #792 — FIXED. Ragged/mismatched-row tables used to get padded + a separator
 //          row injected, adding cells to short rows (Tier-2). The serializer no
 //          longer pads short rows, so table-13 round-trips faithfully.
@@ -211,41 +217,44 @@ const TIER1_TARGETED_KNOWN_FAIL: &[(&str, &str)] = &[];
 const TIER2_TARGETED_KNOWN_FAIL: &[(&str, &str)] = &[];
 
 const TIER1_FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[
-    // #790 — nested-body de-indent / table-cell break (non-idempotent downstream).
-    ("benchmark/080-gentle-introduction.lex", "lex#790"),
-    ("benchmark/20-ideas-naked.lex", "lex#790"),
-    ("table.docs/table-05-flat-multiline.lex", "lex#790"),
+    // #790 — table cells that carry *block* content (a list, verbatim, annotation,
+    // or a table nested in a definition inside a cell) still de-indent that inner
+    // structure on serialize, so the reformat is not idempotent. The subject-colon
+    // de-indent and simple multi-line text cells are fixed.
     ("table.docs/table-08-nested-in-definition.lex", "lex#790"),
     ("table.docs/table-19-cell-with-list.lex", "lex#790"),
-    ("table.docs/table-20-cell-with-definition.lex", "lex#790"),
     ("table.docs/table-21-cell-with-verbatim.lex", "lex#790"),
     ("table.docs/table-22-cell-with-mixed-content.lex", "lex#790"),
     ("table.docs/table-23-cell-with-annotation.lex", "lex#790"),
-    ("verbatim.docs/verbatim-13-group-spades.lex", "lex#790"),
 ];
 
 const TIER2_FIXTURE_KNOWN_FAIL: &[(&str, &str)] = &[
-    // #790 — nested-body de-indent / table-cell break (canon changes).
-    ("benchmark/080-gentle-introduction.lex", "lex#790"),
-    ("benchmark/20-ideas-naked.lex", "lex#790"),
-    ("inlines.docs/specs/formatting/formatting.lex", "lex#790"),
-    (
-        "inlines.docs/specs/formatting/inlines-general.lex",
-        "lex#790",
-    ),
-    ("inlines.docs/specs/references/citations.lex", "lex#790"),
-    (
-        "inlines.docs/specs/references/references-general.lex",
-        "lex#790",
-    ),
-    ("table.docs/table-05-flat-multiline.lex", "lex#790"),
+    // #790 — table cells carrying block content (a list, verbatim, annotation, or a
+    // definition — incl. a table nested inside a definition) still lose or de-indent
+    // that inner structure across a round-trip.
     ("table.docs/table-08-nested-in-definition.lex", "lex#790"),
     ("table.docs/table-19-cell-with-list.lex", "lex#790"),
     ("table.docs/table-20-cell-with-definition.lex", "lex#790"),
     ("table.docs/table-21-cell-with-verbatim.lex", "lex#790"),
     ("table.docs/table-22-cell-with-mixed-content.lex", "lex#790"),
     ("table.docs/table-23-cell-with-annotation.lex", "lex#790"),
-    ("verbatim.docs/verbatim-13-group-spades.lex", "lex#790"),
+    // #791 (deeper case) — leading/document-level annotations that in the source
+    // are attached to the first *session* re-attach to the document *root* across
+    // a round-trip: the annotations serialize at the document head and re-parse as
+    // root-owned rather than session-owned. #791's serializer-ordering fix keeps a
+    // leading annotation above the title (document-09, annotation-27 pass) but does
+    // not change this attachment target, so these fixtures still fail Tier-2.
+    ("benchmark/20-ideas-naked.lex", "lex#791"),
+    ("inlines.docs/specs/formatting/formatting.lex", "lex#791"),
+    (
+        "inlines.docs/specs/formatting/inlines-general.lex",
+        "lex#791",
+    ),
+    ("inlines.docs/specs/references/citations.lex", "lex#791"),
+    (
+        "inlines.docs/specs/references/references-general.lex",
+        "lex#791",
+    ),
 ];
 
 #[cfg(test)]
