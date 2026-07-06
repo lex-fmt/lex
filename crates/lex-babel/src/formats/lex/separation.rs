@@ -43,23 +43,36 @@
 //!    a Table, and a block-form Verbatim all open with a construct the look-ahead
 //!    detects structurally, so they are NOT absorbed and need no blank.
 //!
-//! 2. **Multi-group verbatim absorption (intended group semantics, NOT a
-//!    separation gap)** — the verbatim/table matcher runs at the highest precedence
-//!    and pairs the *first* `subject:` line it sees with the *next* `:: label ::`
-//!    closer, spanning blanks and dedents. This is the multi-group verbatim
-//!    production (`comms/specs/grammar-core.lex` §4.5c): a verbatim block is
-//!    `<verbatim-group-with-content>+` sharing ONE closing annotation. A
-//!    **Definition** (`subject:` + indented body, no closer of its own) placed
-//!    immediately before any block that presents a `:: label ::` line — a Verbatim,
-//!    a Table, or even an Annotation (`:: label ::` is a valid verbatim closer) — is
-//!    structurally identical to a `<verbatim-group-with-content>`, and verbatim is
-//!    tried before definition (§4.7), so it becomes that block's FIRST group. No
-//!    blank count changes this: blank lines do not separate groups. The three cells
-//!    (`Definition → Verbatim`, `Definition → Table`, `Definition → Annotation`) are
-//!    marked below; their value is the structural boundary minimum (0, the
-//!    definition's dedent), and the merge is intended (lex#814 §4, resolved as
-//!    intended), not a bug. The verification test characterizes the merge as a
-//!    regression guard rather than asserting faithfulness for those cells.
+//! 2. **Multi-group verbatim absorption** — the verbatim/table matcher runs at the
+//!    highest precedence and pairs the *first* `subject:` line it sees with the
+//!    *next* `:: label ::` closer, spanning blanks and dedents. This is the
+//!    multi-group verbatim production (`comms/specs/grammar-core.lex` §4.5c): a
+//!    verbatim block is `<verbatim-group-with-content>+` sharing ONE closing
+//!    annotation. A **Definition** (`subject:` + indented body, no closer of its
+//!    own) placed immediately before any block that presents a `:: label ::` line —
+//!    a Verbatim, a Table, or an Annotation (`:: label ::` is a valid verbatim
+//!    closer) — is structurally identical to a `<verbatim-group-with-content>`, and
+//!    verbatim is tried before definition (§4.7), so it becomes that block's FIRST
+//!    group. No blank count changes this: blank lines do not separate groups. The
+//!    three cells (`Definition → Verbatim`, `Definition → Table`,
+//!    `Definition → Annotation`) all take the structural boundary minimum (0, the
+//!    definition's dedent) below, but they split into TWO cases:
+//!
+//!    - `Definition → Verbatim` and `Definition → Annotation` are **intended and
+//!      lossless**: the definition's subject AND body survive as the verbatim's
+//!      first group. This is the group feature working as designed (lex#814 §4,
+//!      resolved as intended), not a separation gap.
+//!    - `Definition → Table` is the ONE exception and is **NOT intended**: a table
+//!      is single-group, so the definition cannot become a group. The merge instead
+//!      collapses to a degenerate table that keeps only the definition's subject and
+//!      DROPS the definition body AND the table's own rows — a real, pre-existing
+//!      **content-loss bug tracked in lex#819** (deferred, not fixed here). It is
+//!      explicitly NOT sanctioned; it merges lossily today, and when #819 is fixed
+//!      the pair should SEPARATE and Table drops out of `is_known_hijack`.
+//!
+//!    The verification test characterizes each merge (regression guard for the
+//!    lossless pairs, known-bad-shape tripwire for Table) rather than asserting
+//!    faithfulness for those cells.
 //!
 //! ## Spec/parser disagreements found
 //!
@@ -155,15 +168,21 @@ pub(super) fn min_blank_lines(prev: BlockKind, next: BlockKind) -> usize {
         // A Definition ends with a dedent (boundary minimum 0). Its `subject:` +
         // indented body IS a `<verbatim-group-with-content>`, so when it sits
         // immediately above a closer-terminated block the shared `:: label ::`
-        // closer makes it that verbatim's first group (see module docs). Per grammar
-        // §4.5c this is intended multi-group verbatim, not a separation gap —
-        // Definition → Verbatim / Table / Annotation merge by design and the value
-        // stays the boundary minimum.
-        (Definition, Verbatim) => 0, // merges as the verbatim's first group (multi-group verbatim)
-        (Definition, Table) => 0,    // merges into the table under the shared closer
+        // closer makes it that verbatim's first group (see module docs). All these
+        // cells take the boundary minimum, but they split by intent:
+        //   - Definition → Verbatim / Annotation: INTENDED and LOSSLESS (grammar
+        //     §4.5c multi-group verbatim). The definition becomes the verbatim's
+        //     first group; subject AND body survive. Not a separation gap.
+        //   - Definition → Table: a KNOWN CONTENT-LOSS BUG (lex#819, deferred), NOT
+        //     intended. A table is single-group, so the definition cannot become a
+        //     group; the merge collapses to a degenerate table that drops the
+        //     definition body AND the table rows. When #819 is fixed the pair should
+        //     SEPARATE (Table leaves `is_known_hijack`).
+        (Definition, Verbatim) => 0, // INTENDED lossless: becomes the verbatim's first group (multi-group verbatim §4.5c)
+        (Definition, Table) => 0, // KNOWN CONTENT-LOSS BUG (lex#819), NOT intended: table is single-group, merge drops the definition body and the table rows
         // Both annotation shapes present a `:: label ::` line (the marker *is* one;
         // the block form opens with one), and either serves as the shared verbatim closer.
-        (Definition, Annotation) | (Definition, AnnotationBody) => 0, // merges: `:: label ::` is the shared verbatim closer
+        (Definition, Annotation) | (Definition, AnnotationBody) => 0, // INTENDED lossless: `:: label ::` is the shared verbatim closer (multi-group verbatim §4.5c)
         (Definition, _) => 0,
 
         // ── Annotation (marker form) → * ─────────────────────────────────────

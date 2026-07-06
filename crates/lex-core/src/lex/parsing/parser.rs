@@ -516,14 +516,12 @@ impl GrammarMatcher {
         //   - a DataMarkerLine (marker-form empty verbatim, e.g. `An image:` /
         //     `:: image ::`), or
         //   - flat prose lines (fullwidth mode).
+        if let Some(LineContainer::Token(line)) = tokens[first_subject_idx + 1..]
+            .iter()
+            .find(|tc| !matches!(tc, LineContainer::Token(l) if l.line_type == BlankLine))
         {
-            if let Some(LineContainer::Token(line)) = tokens[first_subject_idx + 1..]
-                .iter()
-                .find(|tc| !matches!(tc, LineContainer::Token(l) if l.line_type == BlankLine))
-            {
-                if matches!(line.line_type, SubjectLine | SubjectOrListItemLine) {
-                    return None;
-                }
+            if matches!(line.line_type, SubjectLine | SubjectOrListItemLine) {
+                return None;
             }
         }
 
