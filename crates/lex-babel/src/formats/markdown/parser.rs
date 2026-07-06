@@ -103,28 +103,58 @@ fn comrak_ast_to_events<'a>(
 ) -> Result<(Vec<Event>, Option<String>), FormatError> {
     let mut events = vec![Event::StartDocument];
 
-    // Check if first child is an H1 heading - if so, treat it as document title
-    let mut children_iter = root.children().peekable();
+    // Per ADR-0002 the document title is the first *content* element when it is
+    // a leading level-1 heading. Leading metadata nodes (e.g. YAML frontmatter)
+    // are document metadata, not body content, so scan past them before
+    // deciding whether the first content node is that H1.
+    let children: Vec<&'a AstNode<'a>> = root.children().collect();
     let mut document_title: Option<String> = None;
+    let mut title_index: Option<usize> = None;
 
-    if let Some(first_child) = children_iter.peek() {
-        if let NodeValue::Heading(heading) = &first_child.data.borrow().value {
+    for (idx, child) in children.iter().enumerate() {
+        if is_leading_metadata(child) {
+            continue;
+        }
+        // First content node: lift it as the title only if it is an H1.
+        if let NodeValue::Heading(heading) = &child.data.borrow().value {
             if heading.level == 1 {
-                // Extract H1 text as document title
-                let first_child = children_iter.next().unwrap();
                 let mut title_text = String::new();
-                for child in first_child.children() {
-                    collect_text_content(child, &mut title_text);
+                for c in child.children() {
+                    collect_text_content(c, &mut title_text);
                 }
-                document_title = Some(title_text.trim().to_string());
+                let title_text = title_text.trim();
+                // A whitespace-only H1 is not a usable title: leave it in the
+                // body so the untitled-marker path applies, rather than lifting
+                // an empty title that `to_lex` drops — which would leave the
+                // document with neither a title nor a `:: doc.untitled ::`
+                // marker and mis-promote the first body paragraph on re-parse.
+                if !title_text.is_empty() {
+                    document_title = Some(title_text.to_string());
+                    title_index = Some(idx);
+                }
             }
         }
+        break;
     }
 
-    collect_children_with_definitions(children_iter, &mut events)?;
+    // Emit every child except the consumed title node, preserving order so the
+    // leading frontmatter stays as document metadata ahead of the body.
+    let remaining = children
+        .into_iter()
+        .enumerate()
+        .filter(|(idx, _)| Some(*idx) != title_index)
+        .map(|(_, node)| node);
+    collect_children_with_definitions(remaining, &mut events)?;
 
     events.push(Event::EndDocument);
     Ok((events, document_title))
+}
+
+/// Whether a Comrak node is document metadata that precedes body content, and
+/// therefore should not count as the "first content element" when deciding the
+/// document title (ADR-0002).
+fn is_leading_metadata(node: &AstNode<'_>) -> bool {
+    matches!(node.data.borrow().value, NodeValue::FrontMatter(_))
 }
 
 /// Collect text content from a node (for extracting document title)
@@ -808,6 +838,70 @@ mod tests {
 
         // Should have session with content
         assert!(!doc.root.children.is_empty());
+    }
+
+    #[test]
+    fn test_leading_h1_becomes_title() {
+        let md = "# My Title\n\nBody.\n";
+        let doc = parse_from_markdown(md).unwrap();
+
+        assert_eq!(
+            doc.title.as_ref().map(|t| t.as_str()),
+            Some("My Title")
+        );
+        // No `doc.untitled` marker when a real title was lifted.
+        assert!(!doc
+            .annotations
+            .iter()
+            .any(|a| a.data.label.value == "doc.untitled"));
+    }
+
+    #[test]
+    fn test_frontmatter_before_h1_still_becomes_title() {
+        // Regression for #804: a leading YAML frontmatter node must not block
+        // the following `# H1` from becoming the document title.
+        let md = "---\nauthor: Jane\n---\n\n# My Title\n\nBody.\n";
+        let doc = parse_from_markdown(md).unwrap();
+
+        assert_eq!(
+            doc.title.as_ref().map(|t| t.as_str()),
+            Some("My Title"),
+            "frontmatter must not suppress the leading H1 title"
+        );
+        // The frontmatter is metadata, not the title, so no untitled marker.
+        assert!(!doc
+            .annotations
+            .iter()
+            .any(|a| a.data.label.value == "doc.untitled"));
+    }
+
+    #[test]
+    fn test_frontmatter_without_h1_stays_untitled() {
+        // Frontmatter alone is metadata, not a title: a body-only document
+        // still gets the explicit no-title marker.
+        let md = "---\nauthor: Jane\n---\n\nJust body.\n";
+        let doc = parse_from_markdown(md).unwrap();
+
+        assert!(doc.title.is_none());
+        assert!(doc
+            .annotations
+            .iter()
+            .any(|a| a.data.label.value == "doc.untitled"));
+    }
+
+    #[test]
+    fn test_whitespace_only_h1_is_not_a_title() {
+        // A whitespace-only leading H1 must not be lifted into an (empty) title:
+        // that would leave the document with neither a title nor a
+        // `:: doc.untitled ::` marker. It stays body content and gets the marker.
+        let md = "#  \n\nBody.\n";
+        let doc = parse_from_markdown(md).unwrap();
+
+        assert!(doc.title.is_none());
+        assert!(doc
+            .annotations
+            .iter()
+            .any(|a| a.data.label.value == "doc.untitled"));
     }
 
     #[test]
