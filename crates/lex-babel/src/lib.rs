@@ -14,10 +14,10 @@
 //!
 //! ## Big picture pipeline
 //!
-//! `lex_core::ast::Document` is the native document boundary for Lex. Lex source parses
+//! `lex_core::lex::ast::Document` is the native document boundary for Lex. Lex source parses
 //! directly into that AST through `lex-core`. Non-Lex inputs first go through the best
 //! available parser for that format, such as Comrak for Markdown or roxmltree for RFC XML.
-//! The format adapter then maps the parsed structure into Babel's IR, and the IR is lowered
+//! The format adapter then maps the parsed structure into Babel's IR, and the IR is converted
 //! into the Lex AST.
 //!
 //! The IR exists so the hard interop work is centralized. Semantic mismatches such as Lex's
