@@ -15,7 +15,6 @@ import re
 import sys
 from pathlib import Path
 
-
 RUBY_STRING_KEYS = {"DESC", "LICENSE", "HOMEPAGE"}
 
 PASSTHROUGH_KEYS = [
