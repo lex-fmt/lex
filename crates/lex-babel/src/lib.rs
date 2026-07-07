@@ -12,6 +12,38 @@
 //!         - Each format should have a kitchensink unit tested in from and to formats to lex
 //!         - Read the README.lex for full details
 //!
+//! ## Big picture pipeline
+//!
+//! `lex_core::ast::Document` is the native document boundary for Lex. Lex source parses
+//! directly into that AST through `lex-core`. Non-Lex inputs first go through the best
+//! available parser for that format, such as Comrak for Markdown or roxmltree for RFC XML.
+//! The format adapter then maps the parsed structure into Babel's IR, and the IR is lowered
+//! into the Lex AST.
+//!
+//! The IR exists so the hard interop work is centralized. Semantic mismatches such as Lex's
+//! hierarchical structure versus flatter heading-based formats are handled by shared code with
+//! shared coverage, instead of being reimplemented separately by every importer.
+//!
+//! Output follows the reverse shape for most non-Lex formats: Lex AST to Babel IR, optionally
+//! to an IR event stream, then to the target format's serializer or renderer. Markdown builds
+//! a Comrak AST and lets Comrak write Markdown; HTML builds an RcDom tree and serializes it;
+//! PDF and PNG are downstream of the HTML renderer through headless Chrome. Lex formatting is
+//! the simpler special case: Lex source parses to the native AST and the Lex serializer emits
+//! canonical Lex text directly, without converting through Babel IR. Diagnostic outputs such
+//! as `tag`, `treeviz`, `linetreeviz`, and `nodemap` are AST inspection views, so they also
+//! read the Lex AST directly rather than passing through the IR.
+//!
+//! ```text
+//! Lex input:
+//!   Lex source -> Lex AST -> LexSerializer -> Lex output
+//!
+//! Non-Lex input:
+//!   source -> format parser -> Babel IR -> Lex AST
+//!
+//! Non-Lex output:
+//!   Lex AST -> Babel IR -> format-specific serializer -> output
+//! ```
+//!
 //! Architecture
 //!
 //!     The goal here is to, as much as possible, split what is the common logic for multiple formats
