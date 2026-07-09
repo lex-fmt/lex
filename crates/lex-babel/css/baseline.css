@@ -85,11 +85,11 @@ section.lex-session:first-child {
   margin-top: 0;
 }
 
-.lex-document>section.lex-session {
+.lex-document > section.lex-session {
   margin: var(--lex-space-200) 0;
 }
 
-.lex-document>section.lex-session:first-child {
+.lex-document > section.lex-session:first-child {
   margin-top: 0;
 }
 
@@ -168,12 +168,12 @@ h6 {
   font-weight: 600;
 }
 
-section.lex-session>h1:first-child,
-section.lex-session>h2:first-child,
-section.lex-session>h3:first-child,
-section.lex-session>h4:first-child,
-section.lex-session>h5:first-child,
-section.lex-session>h6:first-child {
+section.lex-session > h1:first-child,
+section.lex-session > h2:first-child,
+section.lex-session > h3:first-child,
+section.lex-session > h4:first-child,
+section.lex-session > h5:first-child,
+section.lex-session > h6:first-child {
   margin-top: 0;
 }
 
@@ -188,12 +188,12 @@ section.lex-session>h6:first-child {
   margin-top: 0;
 }
 
-h1+.lex-paragraph,
-h2+.lex-paragraph,
-h3+.lex-paragraph,
-h4+.lex-paragraph,
-h5+.lex-paragraph,
-h6+.lex-paragraph {
+h1 + .lex-paragraph,
+h2 + .lex-paragraph,
+h3 + .lex-paragraph,
+h4 + .lex-paragraph,
+h5 + .lex-paragraph,
+h6 + .lex-paragraph {
   margin-top: 0;
 }
 
@@ -478,13 +478,19 @@ img {
 
   /* Headings shouldn't appear at the bottom of a page orphaned from
    * their first content paragraph. */
-  h1, h2, h3, h4, h5, h6 {
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
     break-after: avoid-page;
     page-break-after: avoid;
   }
 
   /* Figures and tables read poorly when split mid-element. */
-  figure, table {
+  figure,
+  table {
     break-inside: avoid-page;
     page-break-inside: avoid;
   }
@@ -494,7 +500,7 @@ img {
  * paged renderers (Chromium headless, weasyprint, etc.) honor it. */
 @page {
   @bottom-center {
-    content: counter(page) " / " counter(pages);
+    content: counter(page) ' / ' counter(pages);
     font-size: 9pt;
     color: #666;
   }

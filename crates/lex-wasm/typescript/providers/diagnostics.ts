@@ -5,8 +5,8 @@
  * Instead, diagnostics are set via `monaco.editor.setModelMarkers`.
  */
 
-import type * as monaco from 'monaco-editor';
-import type { LexDocument, EmbeddedSpellchecker, DiagnosticSeverity } from '../index';
+import type * as monaco from 'monaco-editor'
+import type { LexDocument, EmbeddedSpellchecker, DiagnosticSeverity } from '../index'
 
 /**
  * Update diagnostics for a model.
@@ -19,10 +19,10 @@ export function updateDiagnostics(
   doc: LexDocument,
   spellchecker?: EmbeddedSpellchecker
 ): void {
-  const markers: monaco.editor.IMarkerData[] = [];
+  const markers: monaco.editor.IMarkerData[] = []
 
   // Get structural diagnostics
-  const diagnostics = doc.diagnostics();
+  const diagnostics = doc.diagnostics()
   for (const diag of diagnostics) {
     markers.push({
       severity: convertSeverity(monacoInstance, diag.severity),
@@ -31,13 +31,13 @@ export function updateDiagnostics(
       startColumn: diag.range.start.character + 1,
       endLineNumber: diag.range.end.line + 1,
       endColumn: diag.range.end.character + 1,
-      source: diag.source || 'lex',
-    });
+      source: diag.source || 'lex'
+    })
   }
 
   // Get spellcheck diagnostics if checker is provided
   if (spellchecker) {
-    const spellDiags = doc.spellcheckDiagnostics(spellchecker);
+    const spellDiags = doc.spellcheckDiagnostics(spellchecker)
     for (const diag of spellDiags) {
       markers.push({
         severity: monacoInstance.MarkerSeverity.Info,
@@ -47,12 +47,12 @@ export function updateDiagnostics(
         endLineNumber: diag.range.end.line + 1,
         endColumn: diag.range.end.character + 1,
         source: 'lex-spell',
-        code: 'spelling',
-      });
+        code: 'spelling'
+      })
     }
   }
 
-  monacoInstance.editor.setModelMarkers(model, 'lex', markers);
+  monacoInstance.editor.setModelMarkers(model, 'lex', markers)
 }
 
 function convertSeverity(
@@ -61,14 +61,14 @@ function convertSeverity(
 ): monaco.MarkerSeverity {
   switch (severity) {
     case 1:
-      return monacoInstance.MarkerSeverity.Error;
+      return monacoInstance.MarkerSeverity.Error
     case 2:
-      return monacoInstance.MarkerSeverity.Warning;
+      return monacoInstance.MarkerSeverity.Warning
     case 3:
-      return monacoInstance.MarkerSeverity.Info;
+      return monacoInstance.MarkerSeverity.Info
     case 4:
-      return monacoInstance.MarkerSeverity.Hint;
+      return monacoInstance.MarkerSeverity.Hint
     default:
-      return monacoInstance.MarkerSeverity.Warning;
+      return monacoInstance.MarkerSeverity.Warning
   }
 }

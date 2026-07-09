@@ -2,9 +2,9 @@
  * Monaco go-to-definition provider for Lex.
  */
 
-import type * as monaco from 'monaco-editor';
-import type { LexDocument } from '../index';
-import type { DocumentProvider } from './semantic_tokens';
+import type * as monaco from 'monaco-editor'
+import type { LexDocument } from '../index'
+import type { DocumentProvider } from './semantic_tokens'
 
 /**
  * Register a definition provider for Lex in Monaco.
@@ -19,16 +19,13 @@ export function registerDefinitionProvider(
       model: monaco.editor.ITextModel,
       position: monaco.Position
     ): monaco.languages.ProviderResult<monaco.languages.Definition> {
-      const doc = documentProvider.getDocument(model.uri.toString());
-      if (!doc) return null;
+      const doc = documentProvider.getDocument(model.uri.toString())
+      if (!doc) return null
 
       // Monaco positions are 1-indexed, lex-wasm expects 0-indexed
-      const locations = doc.gotoDefinition(
-        position.lineNumber - 1,
-        position.column - 1
-      );
+      const locations = doc.gotoDefinition(position.lineNumber - 1, position.column - 1)
 
-      if (locations.length === 0) return null;
+      if (locations.length === 0) return null
 
       return locations.map((loc) => ({
         uri: monacoInstance.Uri.parse(loc.uri),
@@ -37,10 +34,10 @@ export function registerDefinitionProvider(
           loc.range.start.character + 1,
           loc.range.end.line + 1,
           loc.range.end.character + 1
-        ),
-      }));
-    },
-  });
+        )
+      }))
+    }
+  })
 }
 
 /**
@@ -57,15 +54,15 @@ export function registerReferencesProvider(
       position: monaco.Position,
       context: monaco.languages.ReferenceContext
     ): monaco.languages.ProviderResult<monaco.languages.Location[]> {
-      const doc = documentProvider.getDocument(model.uri.toString());
-      if (!doc) return null;
+      const doc = documentProvider.getDocument(model.uri.toString())
+      if (!doc) return null
 
       // Monaco positions are 1-indexed, lex-wasm expects 0-indexed
       const locations = doc.references(
         position.lineNumber - 1,
         position.column - 1,
         context.includeDeclaration
-      );
+      )
 
       return locations.map((loc) => ({
         uri: monacoInstance.Uri.parse(loc.uri),
@@ -74,8 +71,8 @@ export function registerReferencesProvider(
           loc.range.start.character + 1,
           loc.range.end.line + 1,
           loc.range.end.character + 1
-        ),
-      }));
-    },
-  });
+        )
+      }))
+    }
+  })
 }

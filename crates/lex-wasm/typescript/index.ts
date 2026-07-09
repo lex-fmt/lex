@@ -23,24 +23,24 @@ import type {
   Location,
   Position,
   SemanticTokensData,
-  SemanticTokensLegend,
-} from './types';
+  SemanticTokensLegend
+} from './types'
 
 // Re-export types
-export * from './types';
+export * from './types'
 
 // The WASM module will be imported dynamically
-let wasmModule: typeof import('../pkg/lex_wasm') | null = null;
+let wasmModule: typeof import('../pkg/lex_wasm') | null = null
 
 /**
  * Initialize the WASM module.
  * Must be called before using any other functions.
  */
 export async function init(): Promise<void> {
-  if (wasmModule) return;
+  if (wasmModule) return
 
   // Dynamic import of the WASM module
-  wasmModule = await import('../pkg/lex_wasm');
+  wasmModule = await import('../pkg/lex_wasm')
 }
 
 /**
@@ -48,47 +48,43 @@ export async function init(): Promise<void> {
  */
 export interface LexDocument {
   /** Get the document source text. */
-  source(): string;
+  source(): string
 
   /** Get the document URI. */
-  uri(): string;
+  uri(): string
 
   /** Get semantic tokens for syntax highlighting. */
-  semanticTokens(): SemanticTokensData;
+  semanticTokens(): SemanticTokensData
 
   /** Get document symbols (outline). */
-  documentSymbols(): DocumentSymbol[];
+  documentSymbols(): DocumentSymbol[]
 
   /** Get hover information at a position. */
-  hover(line: number, character: number): Hover | null;
+  hover(line: number, character: number): Hover | null
 
   /** Get go-to-definition locations. */
-  gotoDefinition(line: number, character: number): Location[];
+  gotoDefinition(line: number, character: number): Location[]
 
   /** Find all references to the symbol at a position. */
-  references(
-    line: number,
-    character: number,
-    includeDeclaration: boolean
-  ): Location[];
+  references(line: number, character: number, includeDeclaration: boolean): Location[]
 
   /** Get folding ranges. */
-  foldingRanges(): FoldingRange[];
+  foldingRanges(): FoldingRange[]
 
   /** Get completion suggestions. */
-  completion(line: number, character: number): CompletionItem[];
+  completion(line: number, character: number): CompletionItem[]
 
   /** Get diagnostics (errors, warnings). */
-  diagnostics(): Diagnostic[];
+  diagnostics(): Diagnostic[]
 
   /** Get spellcheck diagnostics using the provided checker. */
-  spellcheckDiagnostics(checker: EmbeddedSpellchecker): Diagnostic[];
+  spellcheckDiagnostics(checker: EmbeddedSpellchecker): Diagnostic[]
 
   /** Format the document source. */
-  format(): string;
+  format(): string
 
   /** Export the document as HTML. */
-  toHtml(): string;
+  toHtml(): string
 }
 
 /**
@@ -96,19 +92,19 @@ export interface LexDocument {
  */
 export interface EmbeddedSpellchecker {
   /** Check if a word is spelled correctly. */
-  check(word: string): boolean;
+  check(word: string): boolean
 
   /** Get spelling suggestions for a word. */
-  suggest(word: string): string[];
+  suggest(word: string): string[]
 
   /** Add a word to the custom dictionary (session-only). */
-  addCustomWord(word: string): void;
+  addCustomWord(word: string): void
 
   /** Get all custom words. */
-  getCustomWords(): string[];
+  getCustomWords(): string[]
 
   /** Load custom words (e.g., from localStorage). */
-  loadCustomWords(words: string[]): void;
+  loadCustomWords(words: string[]): void
 }
 
 /**
@@ -116,19 +112,19 @@ export interface EmbeddedSpellchecker {
  */
 export interface LexAnalyzer {
   /** Parse source text into a LexDocument. */
-  parse(source: string): LexDocument;
+  parse(source: string): LexDocument
 
   /** Parse source text with a specific URI. */
-  parseWithUri(source: string, uri: string): LexDocument;
+  parseWithUri(source: string, uri: string): LexDocument
 
   /** Get the semantic token legend for Monaco. */
-  semanticTokenLegend(): SemanticTokensLegend;
+  semanticTokenLegend(): SemanticTokensLegend
 
   /** Create a new spellchecker with the embedded dictionary. */
-  createSpellchecker(): EmbeddedSpellchecker;
+  createSpellchecker(): EmbeddedSpellchecker
 
   /** Get the version of lex-wasm. */
-  version(): string;
+  version(): string
 }
 
 /**
@@ -138,33 +134,33 @@ export interface LexAnalyzer {
  * that can parse documents and provide LSP-like features.
  */
 export async function createLexAnalyzer(): Promise<LexAnalyzer> {
-  await init();
+  await init()
 
   if (!wasmModule) {
-    throw new Error('Failed to initialize WASM module');
+    throw new Error('Failed to initialize WASM module')
   }
 
-  const { LexDocument, EmbeddedSpellchecker, version } = wasmModule;
+  const { LexDocument, EmbeddedSpellchecker, version } = wasmModule
 
   return {
     parse(source: string): LexDocument {
-      return new LexDocument(source) as unknown as LexDocument;
+      return new LexDocument(source) as unknown as LexDocument
     },
 
     parseWithUri(source: string, uri: string): LexDocument {
-      return LexDocument.withUri(source, uri) as unknown as LexDocument;
+      return LexDocument.withUri(source, uri) as unknown as LexDocument
     },
 
     semanticTokenLegend(): SemanticTokensLegend {
-      return LexDocument.semanticTokenLegend() as SemanticTokensLegend;
+      return LexDocument.semanticTokenLegend() as SemanticTokensLegend
     },
 
     createSpellchecker(): EmbeddedSpellchecker {
-      return new EmbeddedSpellchecker() as unknown as EmbeddedSpellchecker;
+      return new EmbeddedSpellchecker() as unknown as EmbeddedSpellchecker
     },
 
     version(): string {
-      return version();
-    },
-  };
+      return version()
+    }
+  }
 }

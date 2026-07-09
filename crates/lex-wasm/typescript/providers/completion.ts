@@ -2,9 +2,9 @@
  * Monaco completion provider for Lex.
  */
 
-import type * as monaco from 'monaco-editor';
-import type { LexDocument, CompletionItemKind } from '../index';
-import type { DocumentProvider } from './semantic_tokens';
+import type * as monaco from 'monaco-editor'
+import type { LexDocument, CompletionItemKind } from '../index'
+import type { DocumentProvider } from './semantic_tokens'
 
 /**
  * Register a completion provider for Lex in Monaco.
@@ -21,38 +21,36 @@ export function registerCompletionProvider(
       model: monaco.editor.ITextModel,
       position: monaco.Position
     ): monaco.languages.ProviderResult<monaco.languages.CompletionList> {
-      const doc = documentProvider.getDocument(model.uri.toString());
-      if (!doc) return { suggestions: [] };
+      const doc = documentProvider.getDocument(model.uri.toString())
+      if (!doc) return { suggestions: [] }
 
       // Monaco positions are 1-indexed, lex-wasm expects 0-indexed
-      const items = doc.completion(position.lineNumber - 1, position.column - 1);
+      const items = doc.completion(position.lineNumber - 1, position.column - 1)
 
-      const suggestions: monaco.languages.CompletionItem[] = items.map(
-        (item, index) => ({
-          label: item.label,
-          kind: convertCompletionKind(monacoInstance, item.kind),
-          detail: item.detail,
-          insertText: item.insertText || item.label,
-          range: new monacoInstance.Range(
-            position.lineNumber,
-            position.column,
-            position.lineNumber,
-            position.column
-          ),
-          sortText: String(index).padStart(5, '0'),
-        })
-      );
+      const suggestions: monaco.languages.CompletionItem[] = items.map((item, index) => ({
+        label: item.label,
+        kind: convertCompletionKind(monacoInstance, item.kind),
+        detail: item.detail,
+        insertText: item.insertText || item.label,
+        range: new monacoInstance.Range(
+          position.lineNumber,
+          position.column,
+          position.lineNumber,
+          position.column
+        ),
+        sortText: String(index).padStart(5, '0')
+      }))
 
-      return { suggestions };
-    },
-  });
+      return { suggestions }
+    }
+  })
 }
 
 function convertCompletionKind(
   monacoInstance: typeof monaco,
   kind?: CompletionItemKind
 ): monaco.languages.CompletionItemKind {
-  if (!kind) return monacoInstance.languages.CompletionItemKind.Text;
+  if (!kind) return monacoInstance.languages.CompletionItemKind.Text
 
   // Map LSP completion kinds to Monaco
   const map: Record<number, monaco.languages.CompletionItemKind> = {
@@ -64,8 +62,8 @@ function convertCompletionKind(
     15: monacoInstance.languages.CompletionItemKind.Snippet,
     17: monacoInstance.languages.CompletionItemKind.File,
     18: monacoInstance.languages.CompletionItemKind.Reference,
-    19: monacoInstance.languages.CompletionItemKind.Folder,
-  };
+    19: monacoInstance.languages.CompletionItemKind.Folder
+  }
 
-  return map[kind] || monacoInstance.languages.CompletionItemKind.Text;
+  return map[kind] || monacoInstance.languages.CompletionItemKind.Text
 }

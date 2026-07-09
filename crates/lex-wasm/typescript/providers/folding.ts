@@ -2,9 +2,9 @@
  * Monaco folding range provider for Lex.
  */
 
-import type * as monaco from 'monaco-editor';
-import type { LexDocument } from '../index';
-import type { DocumentProvider } from './semantic_tokens';
+import type * as monaco from 'monaco-editor'
+import type { LexDocument } from '../index'
+import type { DocumentProvider } from './semantic_tokens'
 
 /**
  * Register a folding range provider for Lex in Monaco.
@@ -18,18 +18,18 @@ export function registerFoldingRangeProvider(
     provideFoldingRanges(
       model: monaco.editor.ITextModel
     ): monaco.languages.ProviderResult<monaco.languages.FoldingRange[]> {
-      const doc = documentProvider.getDocument(model.uri.toString());
-      if (!doc) return [];
+      const doc = documentProvider.getDocument(model.uri.toString())
+      if (!doc) return []
 
-      const ranges = doc.foldingRanges();
+      const ranges = doc.foldingRanges()
 
       return ranges.map((r) => ({
         start: r.startLine + 1, // Monaco is 1-indexed
         end: r.endLine + 1,
-        kind: convertFoldingKind(monacoInstance, r.kind),
-      }));
-    },
-  });
+        kind: convertFoldingKind(monacoInstance, r.kind)
+      }))
+    }
+  })
 }
 
 function convertFoldingKind(
@@ -38,12 +38,12 @@ function convertFoldingKind(
 ): monaco.languages.FoldingRangeKind | undefined {
   switch (kind) {
     case 'comment':
-      return monacoInstance.languages.FoldingRangeKind.Comment;
+      return monacoInstance.languages.FoldingRangeKind.Comment
     case 'imports':
-      return monacoInstance.languages.FoldingRangeKind.Imports;
+      return monacoInstance.languages.FoldingRangeKind.Imports
     case 'region':
-      return monacoInstance.languages.FoldingRangeKind.Region;
+      return monacoInstance.languages.FoldingRangeKind.Region
     default:
-      return undefined;
+      return undefined
   }
 }

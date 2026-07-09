@@ -6,42 +6,42 @@
  */
 
 export interface Position {
-  line: number;
-  character: number;
+  line: number
+  character: number
 }
 
 export interface Range {
-  start: Position;
-  end: Position;
+  start: Position
+  end: Position
 }
 
 export interface Location {
-  uri: string;
-  range: Range;
+  uri: string
+  range: Range
 }
 
 export interface Diagnostic {
-  range: Range;
-  severity?: DiagnosticSeverity;
-  code?: string | number;
-  source?: string;
-  message: string;
+  range: Range
+  severity?: DiagnosticSeverity
+  code?: string | number
+  source?: string
+  message: string
 }
 
 export enum DiagnosticSeverity {
   Error = 1,
   Warning = 2,
   Information = 3,
-  Hint = 4,
+  Hint = 4
 }
 
 export interface DocumentSymbol {
-  name: string;
-  detail?: string;
-  kind: SymbolKind;
-  range: Range;
-  selectionRange: Range;
-  children?: DocumentSymbol[];
+  name: string
+  detail?: string
+  kind: SymbolKind
+  range: Range
+  selectionRange: Range
+  children?: DocumentSymbol[]
 }
 
 export enum SymbolKind {
@@ -70,38 +70,38 @@ export enum SymbolKind {
   Struct = 23,
   Event = 24,
   Operator = 25,
-  TypeParameter = 26,
+  TypeParameter = 26
 }
 
 export interface Hover {
-  contents: MarkupContent;
-  range?: Range;
+  contents: MarkupContent
+  range?: Range
 }
 
 export interface MarkupContent {
-  kind: 'plaintext' | 'markdown';
-  value: string;
+  kind: 'plaintext' | 'markdown'
+  value: string
 }
 
 export interface FoldingRange {
-  startLine: number;
-  startCharacter?: number;
-  endLine: number;
-  endCharacter?: number;
-  kind?: FoldingRangeKind;
+  startLine: number
+  startCharacter?: number
+  endLine: number
+  endCharacter?: number
+  kind?: FoldingRangeKind
 }
 
 export enum FoldingRangeKind {
   Comment = 'comment',
   Imports = 'imports',
-  Region = 'region',
+  Region = 'region'
 }
 
 export interface CompletionItem {
-  label: string;
-  kind?: CompletionItemKind;
-  detail?: string;
-  insertText?: string;
+  label: string
+  kind?: CompletionItemKind
+  detail?: string
+  insertText?: string
 }
 
 export enum CompletionItemKind {
@@ -129,16 +129,16 @@ export enum CompletionItemKind {
   Struct = 22,
   Event = 23,
   Operator = 24,
-  TypeParameter = 25,
+  TypeParameter = 25
 }
 
 export interface SemanticTokensLegend {
-  tokenTypes: string[];
-  tokenModifiers: string[];
+  tokenTypes: string[]
+  tokenModifiers: string[]
 }
 
 /**
  * Semantic tokens data as a flat array.
  * Format: [deltaLine, deltaStartChar, length, tokenType, tokenModifiers, ...]
  */
-export type SemanticTokensData = number[];
+export type SemanticTokensData = number[]
