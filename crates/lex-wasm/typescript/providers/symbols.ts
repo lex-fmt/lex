@@ -2,9 +2,9 @@
  * Monaco document symbol provider for Lex.
  */
 
-import type * as monaco from 'monaco-editor';
-import type { LexDocument, DocumentSymbol, SymbolKind } from '../index';
-import type { DocumentProvider } from './semantic_tokens';
+import type * as monaco from 'monaco-editor'
+import type { LexDocument, DocumentSymbol, SymbolKind } from '../index'
+import type { DocumentProvider } from './semantic_tokens'
 
 /**
  * Register a document symbol provider for Lex in Monaco.
@@ -18,13 +18,13 @@ export function registerDocumentSymbolProvider(
     provideDocumentSymbols(
       model: monaco.editor.ITextModel
     ): monaco.languages.ProviderResult<monaco.languages.DocumentSymbol[]> {
-      const doc = documentProvider.getDocument(model.uri.toString());
-      if (!doc) return [];
+      const doc = documentProvider.getDocument(model.uri.toString())
+      if (!doc) return []
 
-      const symbols = doc.documentSymbols();
-      return symbols.map((s) => convertSymbol(monacoInstance, s));
-    },
-  });
+      const symbols = doc.documentSymbols()
+      return symbols.map((s) => convertSymbol(monacoInstance, s))
+    }
+  })
 }
 
 function convertSymbol(
@@ -48,8 +48,8 @@ function convertSymbol(
       sym.selectionRange.end.line + 1,
       sym.selectionRange.end.character + 1
     ),
-    children: sym.children?.map((c) => convertSymbol(monacoInstance, c)) || [],
-  };
+    children: sym.children?.map((c) => convertSymbol(monacoInstance, c)) || []
+  }
 }
 
 function convertSymbolKind(
@@ -57,5 +57,5 @@ function convertSymbolKind(
   kind: SymbolKind
 ): monaco.languages.SymbolKind {
   // Monaco and LSP symbol kinds mostly align
-  return kind as monaco.languages.SymbolKind;
+  return kind as monaco.languages.SymbolKind
 }
