@@ -7,6 +7,13 @@
 
 export interface Position {
   line: number
+  /**
+   * Column within the line as a UTF-8 *byte* offset — NOT a UTF-16 code unit
+   * or codepoint index. lex-core/lex-wasm treat LSP columns as byte offsets
+   * throughout (see lex-lsp-core `prepare_paste.rs`), so on non-ASCII text
+   * this differs from the standard LSP/Monaco UTF-16 convention. Callers must
+   * pass byte offsets to get correct ranges.
+   */
   character: number
 }
 
