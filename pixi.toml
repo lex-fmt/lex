@@ -7,6 +7,7 @@ platforms = ["linux-64", "linux-aarch64", "osx-64", "osx-arm64"]
 
 [tasks]
 # >>> shipit-managed tasks (do not edit; regenerate via `shipit install`) >>>
+changelog = "./bin/shipit changelog"
 lint = "./bin/shipit lint"
 logs = "./bin/shipit logs"
 provision-lexd = "./bin/shipit provision lexd"
@@ -20,17 +21,37 @@ provision-lexd = "./bin/shipit provision lexd"
 test = "cargo nextest run --workspace"
 
 [feature.lint.dependencies]
+# >>> shipit-managed rust lint toolchain (do not edit; regenerate via `shipit install`) >>>
+# The fleet-pinned rust lint toolchain (#547 Layer 1) — delivered because this
+# repo tracks a Cargo.toml, which is exactly what makes the rust leg of `shipit
+# lint` run (cargo clippy / cargo fmt per tracked manifest). conda-forge's
+# `rust` is the official toolchain (cargo + clippy + rustfmt included), so the
+# leg stops hard-failing (127) on hosts and CI runners without cargo (#526).
+# Same pin as shipit's own [feature.test.dependencies] rust. If this repo no
+# longer ships rust (the last Cargo.toml is gone), delete this block and its
+# `pixi.toml#shipit-rust-lint-toolchain` entry in .shipit.toml's [managed]
+# table — a reconcile only ADDS toolchain blocks, it never retires one.
+rust = "1.96.*"
+# <<< shipit-managed rust lint toolchain <<<
 # >>> shipit-managed lint deps (do not edit; regenerate via `shipit install`) >>>
 # The fleet-pinned lint toolchain (docs/prd/adoption.md: the managed set owns
 # the consumer environment). Canonical versions live HERE — a bump is one data
 # edit, rolled fleet-wide on each consumer's next `shipit install` reconcile.
 ruff = "0.15.*"
-shellcheck = "0.11.*"
+# shellcheck is PINNED DOWN to 0.10.* (not 0.11): shellcheck 0.11.0 has an SC2218
+# reaching-definitions false positive — a call to an EARLIER-defined function is
+# flagged "defined later" when a subshell (`$(...)`, a pipeline component, `<(...)`)
+# sits near the call, reddening the hermetic gate on CORRECT code across 5+ fleet
+# repos. 0.11.0 is the latest upstream (no fixed 0.11.x yet); restore 0.11+ when
+# upstream fixes it.
+shellcheck = "0.10.*"
 # conda-forge name for the `shfmt` binary
 go-shfmt = "3.*"
 yamllint = "1.38.*"
 prettier = "3.8.*"
 markdownlint-cli = "0.49.*"
+# GitHub Actions workflow gate — the actions Lang of `shipit lint` (TOL01-WS04)
+actionlint = "1.7.*"
 lefthook = "2.1.*"
 # <<< shipit-managed lint deps <<<
 
