@@ -99,6 +99,14 @@ permissions:
   # gh-release creates the release and uploads assets on this repo.
   contents: write
 
+env:
+  # Campaign override (ADR-0033's sanctioned SHIPIT_EXEC, announced by the
+  # launcher): the uv launcher's RUNNER leg (uv install + private-clone
+  # credentials for the pin resolve) lands with ADP02, so this branch
+  # provisions the pinned build via pixi (vendored wheel, same sha as the
+  # .shipit.toml pin) and points the launcher at it.
+  SHIPIT_EXEC: ${{ github.workspace }}/.pixi/envs/default/bin/shipit
+
 jobs:
   assert:
     # Plan-gated: only when the plan carries an assert-bundle stage and at

@@ -53,6 +53,14 @@ on:
 permissions:
   contents: read
 
+env:
+  # Campaign override (ADR-0033's sanctioned SHIPIT_EXEC, announced by the
+  # launcher): the uv launcher's RUNNER leg (uv install + private-clone
+  # credentials for the pin resolve) lands with ADP02, so this branch
+  # provisions the pinned build via pixi (vendored wheel, same sha as the
+  # .shipit.toml pin) and points the launcher at it.
+  SHIPIT_EXEC: ${{ github.workspace }}/.pixi/envs/default/bin/shipit
+
 jobs:
   build:
     # An empty matrix is a legitimate plan (no build-bearing artifact —
