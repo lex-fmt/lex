@@ -51,8 +51,33 @@ ignore = [
 [toolchains]
 "." = "rust"
 
+# [artifacts] — lex's declared Artifact set for the shipit release pipeline
+# (TOL02-WS07 rc campaign). Two binaries off the one rust workspace
+# (ADR-0007 many-to-many): the CLI (lexd — the brew formula subject) and the
+# LSP server (lexd-lsp — tarball-only; editor extensions bundle it).
+# Platforms are the NATIVE-runner lanes only: shipit's build stage does not
+# cross-compile (no --target plumbing), so the legacy musl / darwin-x86_64 /
+# windows legs are named as remote-unverified remainder in the WS07 go/no-go
+# note rather than declared here. No `sign = true`: shipit's mac signer
+# signs the coupled .app/.dmg unit (mac-app composition); lex's legacy
+# raw-binary Developer ID codesign has no shipit equivalent yet — recorded
+# in the WS07 note, not silently elided. The wasm/npm leg (lex-wasm via
+# wasm-pack → @lex-fmt/lex-wasm) likewise has no shipit build/bundle
+# composition yet and is not declared — same note.
+[artifacts.lexd]
+build = [{ toolchain = "rust", package = "lexd" }]
+platforms = ["darwin-arm64", "linux-x86_64", "linux-arm64"]
+bundle = { composition = "archive" }
+endpoints = ["gh-release", "crates", "brew"]
+
+[artifacts.lexd-lsp]
+build = [{ toolchain = "rust", package = "lexd-lsp" }]
+platforms = ["darwin-arm64", "linux-x86_64", "linux-arm64"]
+bundle = { composition = "archive" }
+endpoints = ["gh-release"]
+
 [shipit]
-version = "0898a6f9847e80d30f709ef4d9b539cbd68b253a"
+version = "ee6ea6c08479934ae264967d8154996952928e2e"
 
 [managed]
 "skills/coordinating/SKILL.md" = "sha256:d39855cd948076fd3d25b10ba345efd4e0f6f8eea26fcc546723cc063c4511bc"

@@ -67,3 +67,23 @@ lint = ["lint"]
 # lex's CI (setup-rust), which is why only the nextest runner is pinned here.
 [dependencies]
 cargo-nextest = ">=0.9.138,<0.10"
+
+# shipit-rc campaign (TOL02-WS07): the wf-* release blocks run
+# `pixi run --locked ./bin/shipit …` in THIS repo's default env, and the
+# bin/shipit launcher defers to a `shipit` on PATH — so the default env must
+# carry the shipit CLI itself (pinned to the same commit as
+# .shipit.toml [shipit].version), the rust toolchain the build/bump legs
+# exec (cargo/rustc — wf-build runs on bare runners, nothing else provisions
+# it there), and cargo-edit (`cargo set-version`, the rust bump adapter).
+[dependencies.python]
+version = "3.13.*"
+
+[dependencies.rust]
+version = "1.96.*"
+
+[dependencies.cargo-edit]
+version = ">=0.13"
+
+[pypi-dependencies.shipit]
+git = "https://github.com/arthur-debert/shipit.git"
+rev = "ee6ea6c08479934ae264967d8154996952928e2e"
