@@ -84,6 +84,9 @@ version = "1.96.*"
 [dependencies.cargo-edit]
 version = ">=0.13"
 
+# Vendored wheel built from arthur-debert/shipit @ ee6ea6c (the campaign
+# head): a git dependency on the PRIVATE shipit repo cannot resolve on
+# lex-fmt org runners (no cross-owner credential plumbing — campaign
+# Finding 3), so the pin rides a committed wheel for the rc branch.
 [pypi-dependencies.shipit]
-git = "https://github.com/arthur-debert/shipit.git"
-rev = "ee6ea6c08479934ae264967d8154996952928e2e"
+path = "vendor/shipit-0.0.1-py3-none-any.whl"
