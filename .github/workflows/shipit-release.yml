@@ -1,13 +1,17 @@
 name: shipit-release
 
 # TOL02-WS07 rc-campaign caller: drives lex through shipit's COMPOSED
-# release pipeline (ADR-0040) — one `uses:` line against wf-release.yml,
-# the standard-consumer shape. The composed chain and its stage blocks are
-# VENDORED verbatim on this branch (campaign Finding 3, shipit#565: a
-# private repo's reusable workflows cannot be `uses:`-called cross-owner,
-# and lex is org-owned under lex-fmt while shipit is private under
-# arthur-debert; the standard `arthur-debert/shipit/...@v1` remote ref is
-# therefore recorded as remote-unverified pending the visibility decision).
+# release pipeline (ADR-0040) — one `uses:` line against the REAL remote
+# wf-release.yml at @v1, the standard-consumer shape (ADR-0010).
+#
+# Campaign Finding 3/4 (shipit#565) is RESOLVED: shipit was made PUBLIC by
+# the owner on 2026-07-11 (mirroring legacy arthur-debert/release), so a
+# private-repo cross-owner `uses:` wall no longer exists — lex-fmt/lex
+# (org-owned) calls arthur-debert/shipit's (user-owned) reusable workflows
+# directly, the nested `@v1` refs resolve, and the launcher's uv git-pin
+# clones the now-public shipit. The earlier vendored-blocks run remains
+# valid stage evidence; this run verifies the remote-@v1 distribution leg.
+#
 # Runs ALONGSIDE the legacy release.yml caller — the cutover canon keeps
 # legacy callers untouched and running until ADP02 re-points them.
 #
@@ -30,7 +34,7 @@ permissions:
 
 jobs:
   release:
-    uses: ./.github/workflows/wf-release.yml
+    uses: arthur-debert/shipit/.github/workflows/wf-release.yml@v1
     with:
       version: ${{ inputs.version }}
     secrets:

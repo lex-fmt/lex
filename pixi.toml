@@ -67,13 +67,19 @@ lint = ["lint"]
 # lex's CI (setup-rust), which is why only the nextest runner is pinned here.
 [dependencies]
 cargo-nextest = ">=0.9.138,<0.10"
+# uv provisions the ADR-0033 launcher: bin/shipit execs the pinned build
+# via `uv tool run --from git+https://github.com/arthur-debert/shipit@<sha>`,
+# which now clones the PUBLIC shipit (Finding 3/4 resolved) — no vendored
+# wheel, the real @vN consumer path.
+uv = ">=0.5"
 
 # shipit-rc campaign (TOL02-WS07): the wf-* release blocks run
 # `pixi run --locked ./bin/shipit …` in THIS repo's default env, and the
-# bin/shipit launcher defers to a `shipit` on PATH — so the default env must
-# carry the shipit CLI itself (pinned to the same commit as
-# .shipit.toml [shipit].version), the rust toolchain the build/bump legs
-# exec (cargo/rustc — wf-build runs on bare runners, nothing else provisions
+# bin/shipit launcher (ADR-0033) execs the pin at
+# .shipit.toml [shipit].version via `uv tool run --from git+…/shipit@<sha>`
+# — so the default env carries uv (above), plus the rust toolchain the
+# build/bump legs exec (cargo/rustc — wf-build runs on bare runners, nothing
+# else provisions
 # it there), and cargo-edit (`cargo set-version`, the rust bump adapter).
 [dependencies.python]
 version = "3.13.*"
@@ -84,9 +90,3 @@ version = "1.96.*"
 [dependencies.cargo-edit]
 version = ">=0.13"
 
-# Vendored wheel built from arthur-debert/shipit @ ee6ea6c (the campaign
-# head): a git dependency on the PRIVATE shipit repo cannot resolve on
-# lex-fmt org runners (no cross-owner credential plumbing — campaign
-# Finding 3), so the pin rides a committed wheel for the rc branch.
-[pypi-dependencies.shipit]
-path = "vendor/shipit-0.0.2-py3-none-any.whl"

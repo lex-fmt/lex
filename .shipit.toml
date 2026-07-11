@@ -77,7 +77,7 @@ bundle = { composition = "archive" }
 endpoints = ["gh-release"]
 
 [shipit]
-version = "ee6ea6c08479934ae264967d8154996952928e2e"
+version = "d958bc20044b4c36e30cb8e9cdf6e854a40b6e67"
 
 [managed]
 "skills/coordinating/SKILL.md" = "sha256:d39855cd948076fd3d25b10ba345efd4e0f6f8eea26fcc546723cc063c4511bc"
