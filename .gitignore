@@ -46,3 +46,6 @@ crates/lex-core/benches/md_corpus/auto/
 # Python bytecode (e.g. from .release changelog tooling)
 __pycache__/
 *.pyc
+
+# Release build output — never tracked (campaign hygiene, shipit#565 finding 7).
+dist/
