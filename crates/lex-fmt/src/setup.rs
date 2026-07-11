@@ -766,7 +766,7 @@ mod tests {
         let setup = ExtensionSetup {
             workspace_root: workspace.path(),
             labels_config: &labels,
-            ext_schemas: &[acme_dir.clone()],
+            ext_schemas: std::slice::from_ref(&acme_dir),
             enable_handlers: false,
             surface_override: Some(Surface::CliOneShot),
             trust_prompt: Box::new(DenyAllPrompt),
@@ -819,7 +819,7 @@ mod tests {
         let setup = ExtensionSetup {
             workspace_root: workspace.path(),
             labels_config: &labels,
-            ext_schemas: &[acme_dir.clone()],
+            ext_schemas: std::slice::from_ref(&acme_dir),
             enable_handlers: false,
             surface_override: Some(Surface::LspSession),
             trust_prompt: Box::new(DenyAllPrompt),
@@ -862,7 +862,7 @@ mod tests {
         let outcome = boot_registry(ExtensionSetup {
             workspace_root: workspace.path(),
             labels_config: &labels,
-            ext_schemas: &[acme_dir.clone()],
+            ext_schemas: std::slice::from_ref(&acme_dir),
             enable_handlers: true,
             surface_override: Some(Surface::CliOneShot),
             trust_prompt: Box::new(DenyAllPrompt),

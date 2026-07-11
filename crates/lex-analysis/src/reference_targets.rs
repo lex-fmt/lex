@@ -47,13 +47,11 @@ pub fn targets_from_reference_type(reference_type: &ReferenceType) -> Vec<Refere
             );
         }
         ReferenceType::ToCome { .. } => {}
-        ReferenceType::Session { target } => {
-            if !target.trim().is_empty() {
-                push_unique(
-                    &mut targets,
-                    ReferenceTarget::Session(target.trim().to_string()),
-                );
-            }
+        ReferenceType::Session { target } if !target.trim().is_empty() => {
+            push_unique(
+                &mut targets,
+                ReferenceTarget::Session(target.trim().to_string()),
+            );
         }
         _ => {}
     }

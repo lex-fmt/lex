@@ -96,13 +96,13 @@ fn split_inner_ascii<'a>(
     while i < bytes.len() {
         let b = bytes[i];
         if let Some(delim) = literal_delim {
-            if b == delim && trailing_backslashes_before(bytes, i) % 2 == 0 {
+            if b == delim && trailing_backslashes_before(bytes, i).is_multiple_of(2) {
                 in_literal = !in_literal;
                 i += 1;
                 continue;
             }
         }
-        if !in_literal && b == sep && trailing_backslashes_before(bytes, i) % 2 == 0 {
+        if !in_literal && b == sep && trailing_backslashes_before(bytes, i).is_multiple_of(2) {
             segments.push(extract_segment(s, seg_start, i, sep, literal_delim));
             seg_start = i + 1;
         }
@@ -191,7 +191,7 @@ fn needs_strip_ascii(bytes: &[u8], sep: u8, literal_delim: Option<u8>) -> bool {
     while i < bytes.len() {
         let b = bytes[i];
         if let Some(delim) = literal_delim {
-            if b == delim && trailing_backslashes_before(bytes, i) % 2 == 0 {
+            if b == delim && trailing_backslashes_before(bytes, i).is_multiple_of(2) {
                 in_literal = !in_literal;
                 i += 1;
                 continue;
@@ -212,7 +212,7 @@ fn strip_escapes_ascii(bytes: &[u8], sep: u8, literal_delim: Option<u8>) -> Stri
     while i < bytes.len() {
         let b = bytes[i];
         if let Some(delim) = literal_delim {
-            if b == delim && trailing_backslashes_before(bytes, i) % 2 == 0 {
+            if b == delim && trailing_backslashes_before(bytes, i).is_multiple_of(2) {
                 in_literal = !in_literal;
                 out.push(b);
                 i += 1;
@@ -314,13 +314,16 @@ fn split_with_ranges_inner<'a>(
         while i < bytes.len() {
             let b = bytes[i];
             if let Some(delim) = literal_byte {
-                if b == delim && trailing_backslashes_before(bytes, i) % 2 == 0 {
+                if b == delim && trailing_backslashes_before(bytes, i).is_multiple_of(2) {
                     in_literal = !in_literal;
                     i += 1;
                     continue;
                 }
             }
-            if !in_literal && b == sep_byte && trailing_backslashes_before(bytes, i) % 2 == 0 {
+            if !in_literal
+                && b == sep_byte
+                && trailing_backslashes_before(bytes, i).is_multiple_of(2)
+            {
                 let seg = extract_segment(s, seg_start, i, sep_byte, literal_byte);
                 segments.push((seg, seg_start..i));
                 seg_start = i + 1;
@@ -368,12 +371,12 @@ fn find_inner(s: &str, needle: char, literal_delim: Option<char>) -> Option<usiz
     let mut in_literal = false;
     for (i, ch) in s.char_indices() {
         if let Some(delim) = literal_delim {
-            if ch == delim && trailing_backslashes_before(bytes, i) % 2 == 0 {
+            if ch == delim && trailing_backslashes_before(bytes, i).is_multiple_of(2) {
                 in_literal = !in_literal;
                 continue;
             }
         }
-        if !in_literal && ch == needle && trailing_backslashes_before(bytes, i) % 2 == 0 {
+        if !in_literal && ch == needle && trailing_backslashes_before(bytes, i).is_multiple_of(2) {
             return Some(i);
         }
     }

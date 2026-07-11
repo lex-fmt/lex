@@ -18,11 +18,7 @@ pub(in crate::lex::parsing::parser::builder) fn build_paragraph(
 
     let mut all_tokens = Vec::new();
     for line in paragraph_tokens {
-        all_tokens.extend(
-            line.source_tokens
-                .into_iter()
-                .zip(line.token_spans.into_iter()),
-        );
+        all_tokens.extend(line.source_tokens.into_iter().zip(line.token_spans));
     }
 
     Ok(ParseNode::new(NodeType::Paragraph, all_tokens, vec![]))

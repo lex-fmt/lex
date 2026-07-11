@@ -96,7 +96,7 @@ pub fn is_structural_at(bytes: &[u8], pos: usize, literal_delim: Option<u8>) -> 
         let mut in_literal = false;
         let mut i = 0;
         while i < pos {
-            if bytes[i] == delim && trailing_backslashes_before(bytes, i) % 2 == 0 {
+            if bytes[i] == delim && trailing_backslashes_before(bytes, i).is_multiple_of(2) {
                 in_literal = !in_literal;
             }
             i += 1;

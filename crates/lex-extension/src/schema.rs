@@ -208,18 +208,13 @@ impl BodyKind {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 #[non_exhaustive]
 pub enum BodyPresence {
+    #[default]
     Optional,
     Required,
-}
-
-impl Default for BodyPresence {
-    fn default() -> Self {
-        Self::Optional
-    }
 }
 
 /// Declared capabilities. The subprocess transport will sandbox the handler

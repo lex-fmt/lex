@@ -40,7 +40,7 @@
 //!     ```rust,ignore
 //!     use crate::lex::testing::{assert_ast, lexplore::Lexplore};
 //!
-//!     #[test]
+//!     // Inside a #[test] function:
 //!     fn test_complex_document() {
 //!         let doc = Lexplore::benchmark(10).parse().unwrap();
 //!

@@ -24,7 +24,7 @@ pub fn format_all_tables(document: &Document, source: &str) -> Vec<TextEditSpan>
         .filter_map(|table| format_table(table, source))
         .collect();
     // Reverse order so later edits are applied first (no offset shifting needed)
-    edits.sort_by(|a, b| b.start.cmp(&a.start));
+    edits.sort_by_key(|e| std::cmp::Reverse(e.start));
     edits
 }
 

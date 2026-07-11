@@ -52,11 +52,17 @@ pub(crate) fn handle_convert_command(
     // Parse — for lex input with includes enabled and a real input
     // path, route through the include resolver so the merged tree is
     // what we serialize. Other input formats (markdown, html) have no
-    // include concept; stdin can't anchor relative include paths.
-    let doc = if from == "lex" && inc.enabled && input.is_some() {
+    // include concept; stdin (`None`, filtered out here) can't anchor
+    // relative include paths.
+    let include_entry = if from == "lex" && inc.enabled {
+        input
+    } else {
+        None
+    };
+    let doc = if let Some(input) = include_entry {
         // Canonicalize so resolver-side path comparisons (cycle stack,
         // root-escape prefix check) work in absolute-path space.
-        let entry = absolutize_path(&PathBuf::from(input.expect("input is Some by guard")));
+        let entry = absolutize_path(&PathBuf::from(input));
         let root = inc.resolved_root(&entry);
         let resolve_config = ResolveConfig {
             root: root.clone(),
