@@ -48,6 +48,24 @@ ignore = [
     "bin/install-release-core",
 ]
 
+# [lanes] — the declared PR-time check units (ADP02-WS02, lex#828). The lane
+# planner (`shipit ci plan`) maps these + the CI event + a path-diff to the job
+# matrix the wf-checks workflow block runs (`pixi run --locked <run>` per job).
+# Modeled on shipit's own declaration. `run` names the pixi task the CI job
+# invokes: `lint` is the managed thin caller of `shipit lint`; `test` is the
+# consumer-owned `cargo nextest run --workspace` task — its cargo + cargo-nextest
+# come from pixi's default env ([dependencies] in pixi.toml), because the lane
+# runs on a hosted runner where nothing outside pixi is provisioned.
+[lanes.lint]
+run = "lint"
+required = true
+local = true
+
+[lanes.test]
+run = "test"
+required = true
+local = true
+
 [toolchains]
 "." = "rust"
 

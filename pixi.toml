@@ -63,7 +63,12 @@ lint = ["lint"]
 # Consumer-owned dependencies (outside the shipit-managed blocks above).
 # cargo-nextest provisions the `test` task's runner FROM pixi, so `pixi run test`
 # works in a clean pixi env — not only where nextest already happens to be on
-# PATH. The Rust toolchain itself (cargo/rustc) comes from the host, matching
-# lex's CI (setup-rust), which is why only the nextest runner is pinned here.
+# PATH. The Rust toolchain (cargo/rustc) is pinned here too (ADP02-WS02, #828):
+# the wf-checks test lane runs `pixi run --locked test` on a hosted runner where
+# nothing outside pixi is provisioned (hosted images no longer carry Rust, and
+# the pinned planner emits no env/cache descriptors that would put a toolchain
+# on PATH), so the default env must carry the full `cargo nextest` stack itself.
+# Same conda-forge pin as the managed [feature.lint.dependencies] rust.
 [dependencies]
 cargo-nextest = ">=0.9.138,<0.10"
+rust = "1.96.*"
