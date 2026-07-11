@@ -2,9 +2,10 @@ name: shipit-release
 
 # TOL02-WS07 rc-campaign caller: drives lex through shipit's COMPOSED
 # release pipeline (ADR-0040) — one `uses:` line against wf-release.yml,
-# exactly the standard-consumer shape. Pinned to the TOL02/WS07 campaign
-# branch so shipit-side fixes land in the same run; a standard consumer
-# pins @v1 (the floating major branch). Runs ALONGSIDE the legacy
+# exactly the standard-consumer shape. Pinned to @v1, which the TOL02-WS07 campaign
+# keeps force-synced to the TOL02/WS07 campaign head so shipit-side fixes
+# land in the same run (a `@TOL02/WS07` ref fails GitHub's called-workflow
+# parse — slash-in-ref; recorded in the WS07 note). Runs ALONGSIDE the legacy
 # release.yml caller — the cutover canon keeps legacy callers untouched
 # and running until ADP02 re-points them.
 #
@@ -27,7 +28,7 @@ permissions:
 
 jobs:
   release:
-    uses: arthur-debert/shipit/.github/workflows/wf-release.yml@TOL02/WS07
+    uses: arthur-debert/shipit/.github/workflows/wf-release.yml@v1
     with:
       version: ${{ inputs.version }}
     secrets:
