@@ -325,10 +325,8 @@ fn visit_content(item: &ContentItem, position: AstPosition) -> Option<LabelledHi
                 }
             }
         }
-        ContentItem::VerbatimBlock(v) => {
-            if v.location.contains(position) {
-                return Some(LabelledHit::Verbatim { v: v.as_ref() });
-            }
+        ContentItem::VerbatimBlock(v) if v.location.contains(position) => {
+            return Some(LabelledHit::Verbatim { v: v.as_ref() });
         }
         _ => {}
     }

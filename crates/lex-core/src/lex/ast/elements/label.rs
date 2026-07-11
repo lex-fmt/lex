@@ -44,12 +44,13 @@ use std::fmt;
 /// prefix-strip, `Community` classification, hard-error for `doc.*`
 /// and unrecognized bare); PR 3 wires `form` through the formatter
 /// so the roundtrip promise lands end-to-end.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum LabelForm {
     /// User wrote the canonical form verbatim (`lex.metadata.author`).
     /// This is also the default when a Label is constructed
     /// programmatically without a specific source form (e.g. from the
     /// wire codec, where the wire always carries the canonical).
+    #[default]
     Canonical,
     /// User wrote the prefix-stripped form (`metadata.author`).
     /// Resolves to canonical by prepending `lex.`.
@@ -61,12 +62,6 @@ pub enum LabelForm {
     /// accepted spelling and round-trips unchanged. Registry validation
     /// is deferred to the analysis stage.
     Community,
-}
-
-impl Default for LabelForm {
-    fn default() -> Self {
-        Self::Canonical
-    }
 }
 
 /// A label represents a named identifier in lex documents

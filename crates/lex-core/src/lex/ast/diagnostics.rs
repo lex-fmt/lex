@@ -284,9 +284,9 @@ pub fn validate_structure(document: &Document) -> Vec<Diagnostic> {
                     }
                 }
             }
-            ContentItem::VerbatimBlock(verbatim) => {
+            ContentItem::VerbatimBlock(verbatim)
                 // Check for empty verbatim block label
-                if verbatim.closing_data.label.value.is_empty() {
+                if verbatim.closing_data.label.value.is_empty() => {
                     let diag = Diagnostic::new(
                         verbatim.range().clone(),
                         DiagnosticSeverity::Warning,
@@ -295,7 +295,6 @@ pub fn validate_structure(document: &Document) -> Vec<Diagnostic> {
                     .with_code("empty-verbatim-label");
                     diagnostics.push(diag);
                 }
-            }
             _ => {
                 // Other content types don't need structural validation
             }

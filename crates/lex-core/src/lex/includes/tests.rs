@@ -1014,7 +1014,9 @@ fn cycle_direct_self_reference_errors() {
     if let IncludeError::Cycle { path, chain, .. } = err {
         assert_eq!(path, PathBuf::from("/repo/a.lex"));
         // chain at the moment of detection: entry → a.lex (about to push a.lex again)
-        assert!(chain.iter().any(|p| *p == PathBuf::from("/repo/a.lex")));
+        assert!(chain
+            .iter()
+            .any(|p| p.as_path() == std::path::Path::new("/repo/a.lex")));
     }
 }
 
@@ -1030,8 +1032,12 @@ fn cycle_indirect_through_intermediate_errors() {
     );
     let err = assert_err_kind!(result, IncludeError::Cycle { .. });
     if let IncludeError::Cycle { chain, .. } = err {
-        assert!(chain.iter().any(|p| *p == PathBuf::from("/repo/a.lex")));
-        assert!(chain.iter().any(|p| *p == PathBuf::from("/repo/b.lex")));
+        assert!(chain
+            .iter()
+            .any(|p| p.as_path() == std::path::Path::new("/repo/a.lex")));
+        assert!(chain
+            .iter()
+            .any(|p| p.as_path() == std::path::Path::new("/repo/b.lex")));
     }
 }
 

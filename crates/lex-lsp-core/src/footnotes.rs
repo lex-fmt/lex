@@ -76,7 +76,7 @@ pub fn reorder_footnotes(document: &Document, source: &str) -> String {
 
     // Sort by start desc
     // Note: If ranges overlap, this handling is naive. But references/definitions shouldn't overlap.
-    byte_edits.sort_by(|a, b| b.0.cmp(&a.0));
+    byte_edits.sort_by_key(|e| std::cmp::Reverse(e.0));
 
     let mut new_source = source.to_string();
     for (start, end, kind) in byte_edits {
