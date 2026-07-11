@@ -72,3 +72,9 @@ lint = ["lint"]
 [dependencies]
 cargo-nextest = ">=0.9.138,<0.10"
 rust = "1.96.*"
+# uv backs the pinned bin/shipit launcher (ADR-0033: it provisions the repo's
+# pinned shipit via uv, PATH-independent). Both wf-checks lanes run
+# `pixi run --locked <task>` -> ./bin/shipit on a hosted runner where uv is not
+# otherwise present, so the launcher's one prerequisite must ride the env too.
+# (Flagged upstream: the block/managed set should own this — lex#828/#829.)
+uv = ">=0.5"
