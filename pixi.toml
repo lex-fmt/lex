@@ -89,4 +89,4 @@ version = ">=0.13"
 # lex-fmt org runners (no cross-owner credential plumbing — campaign
 # Finding 3), so the pin rides a committed wheel for the rc branch.
 [pypi-dependencies.shipit]
-path = "vendor/shipit-0.0.1-py3-none-any.whl"
+path = "vendor/shipit-0.0.2-py3-none-any.whl"
