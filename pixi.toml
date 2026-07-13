@@ -122,6 +122,14 @@ wasm-pack = "0.15.*"
 # <<< shipit-managed rust release deps <<<
 cargo-nextest = ">=0.9.138,<0.10"
 rust = "1.96.*"
+# The wasm32 std target for `wasm-pack build` (lex#832). lex OWNS its `rust`
+# pin here (consumer-owned, outside the managed rust-release-deps block), so
+# the managed rust-release-toolchain block that would carry the wasm32 std is
+# SKIPPED — same as phos-core#466. Without this, conda-forge's pinned `rust`
+# ships no wasm32-unknown-unknown sysroot std, and the lex-wasm artifact's
+# wasm-pack composition dies at "wasm32-unknown-unknown target not found in
+# sysroot" (proven live on phos-core). Same 1.96.* line as `rust`.
+rust-std-wasm32-unknown-unknown = "1.96.*"
 # uv backs the pinned bin/shipit launcher (ADR-0033: it provisions the repo's
 # pinned shipit via uv, PATH-independent). Both wf-checks lanes run
 # `pixi run --locked <task>` -> ./bin/shipit on a hosted runner where uv is not
