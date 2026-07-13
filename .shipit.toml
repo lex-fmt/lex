@@ -102,7 +102,7 @@ bundle = { composition = "wasm-pack", wasm-target = "web", scope = "lex-fmt" }
 endpoints = ["gh-release", "npm"]
 
 [shipit]
-version = "ef932bd6f51febab4dd9b9e4ebb69a76eff823b5"
+version = "8859ce2695111607ce58a59865a87ed7f728e133"
 
 [managed]
 "skills/coordinating/SKILL.md" = "sha256:065a793b117dcfbb1e97fea0a80b405c69995850af9a350061dbcc1f4ea4976a"
