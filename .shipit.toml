@@ -67,6 +67,34 @@ local = true
 [toolchains]
 "." = "rust"
 
+# [artifacts] — the release surface this repo publishes (lex#832 cutover),
+# ported from the legacy `.github/workflows/release.yml` rust-cli.yml caller.
+# Two artifacts: the signed `lexd` binary matrix and the `lex-wasm` npm package.
+#
+#   - lexd: the `[[bin]] name = "lexd"` lives in crate `lex-cli` (its
+#     [package].name IS "lexd"), so `package = "lexd"`. Signed darwin + linux
+#     gnu (x86_64 + arm64) + linux musl x86_64, matching the legacy
+#     linux-musl-archs coverage. windows-x86_64 is OMITTED per the fleet
+#     pause (shipit#895), even though the legacy caller listed windows-archs.
+#     The `crates` endpoint triggers the workspace-wide crates.io publish in
+#     topological order — `lex-wasm` (publish = false) is auto-excluded via
+#     cargo metadata, so the legacy explicit `crates:` list is not restated.
+#   - lex-wasm: wasm-pack → @lex-fmt/lex-wasm on npm (legacy wasm-packages +
+#     wasm-npm-scope). Built on the linux-x86_64 host; the `web`-target wasm
+#     output is platform-independent, so one build platform suffices.
+[artifacts.lexd]
+build = [{ toolchain = "rust", package = "lexd" }]
+platforms = ["darwin-arm64", "linux-x86_64", "linux-arm64", "linux-x86_64-musl"]
+bundle = { composition = "archive" }
+sign = true
+endpoints = ["gh-release", "crates"]
+
+[artifacts.lex-wasm]
+build = [{ toolchain = "rust", package = "lex-wasm" }]
+platforms = ["linux-x86_64"]
+bundle = { composition = "wasm-pack", wasm-target = "web", scope = "lex-fmt" }
+endpoints = ["gh-release", "npm"]
+
 [shipit]
 version = "68747540c4a14771a03986ebd0e89ab951815fbf"
 

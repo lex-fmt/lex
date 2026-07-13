@@ -1,0 +1,1 @@
+- Release: author the shipit `[artifacts]` cutover — signed `lexd` binary matrix (darwin + linux gnu/musl) to GitHub Releases + crates.io, and `lex-wasm` to `@lex-fmt/lex-wasm` on npm — plus the wasm32 std target for the wasm-pack build.
