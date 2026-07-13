@@ -73,8 +73,10 @@ local = true
 #
 #   - lexd: the `[[bin]] name = "lexd"` lives in crate `lex-cli` (its
 #     [package].name IS "lexd"), so `package = "lexd"`. Signed darwin + linux
-#     gnu (x86_64 + arm64) + linux musl x86_64, matching the legacy
-#     linux-musl-archs coverage. windows-x86_64 is OMITTED per the fleet
+#     gnu (x86_64 + arm64). The legacy linux-musl-archs coverage
+#     (linux-x86_64-musl) is TEMPORARILY DROPPED pending shipit musl
+#     provisioning (see the platforms comment below); re-add when it lands.
+#     windows-x86_64 is OMITTED per the fleet
 #     pause (shipit#895), even though the legacy caller listed windows-archs.
 #     The `crates` endpoint triggers the workspace-wide crates.io publish in
 #     topological order — `lex-wasm` (publish = false) is auto-excluded via
@@ -84,7 +86,11 @@ local = true
 #     output is platform-independent, so one build platform suffices.
 [artifacts.lexd]
 build = [{ toolchain = "rust", package = "lexd" }]
-platforms = ["darwin-arm64", "linux-x86_64", "linux-arm64", "linux-x86_64-musl"]
+# musl (linux-x86_64-musl) deferred: shipit's conda-forge rust toolchain has no
+# musl rust-std target yet (E0463 can't find crate for core) — a shipit-side gap
+# (lex is the first repo to exercise musl through shipit). Re-add once shipit
+# provisions musl (shipit musl-provisioning feature issue).
+platforms = ["darwin-arm64", "linux-x86_64", "linux-arm64"]
 bundle = { composition = "archive" }
 sign = true
 endpoints = ["gh-release", "crates"]
