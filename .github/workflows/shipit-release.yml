@@ -35,10 +35,9 @@ name: shipit-release
 #   RELEASE_TOKEN             prepare's tag+branch push through the ruleset
 #                             (a GITHUB_TOKEN push would not re-trigger
 #                             workflows).
-#   CARGO_REGISTRY_TOKEN <- CRATES_IO_KEY   the crates endpoint's registry
-#                             token (repo secret keeps its legacy name;
-#                             renaming it is a repo settings change, not this
-#                             caller's). The RC guard drops crates on a
+#   CARGO_REGISTRY_TOKEN      the crates endpoint's registry token — lex's
+#                             repo secret is named CARGO_REGISTRY_TOKEN, so
+#                             this maps 1:1. The RC guard drops crates on a
 #                             -release-rc version centrally.
 #   NPM_TOKEN                  the npm endpoint's token for @lex-fmt/lex-wasm.
 #   APPLE_CERTIFICATE <- APPLE_CERTIFICATE_P12_BASE64   the mac codesign
@@ -114,7 +113,7 @@ jobs:
       unsigned: ${{ inputs.unsigned }}
     secrets:
       RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
-      CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_KEY }}
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
       APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
       APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -130,7 +129,7 @@ jobs:
       unsigned: ${{ inputs.unsigned }}
     secrets:
       RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
-      CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_KEY }}
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
       APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
       APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -165,5 +164,5 @@ jobs:
       run-id: ${{ inputs.run-id }}
       unsigned: ${{ inputs.unsigned }}
     secrets:
-      CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_KEY }}
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
