@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- Release: author the shipit `[artifacts]` cutover — signed `lexd` binary matrix (darwin + linux gnu/musl) to GitHub Releases + crates.io, and `lex-wasm` to `@lex-fmt/lex-wasm` on npm — plus the wasm32 std target for the wasm-pack build.
+
 ## 0.19.3 - 2026-07-06
 
 - Fix Definition→Table adjacency parsing so a closer-led table immediately after a
