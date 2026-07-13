@@ -111,7 +111,7 @@ Note: tree-sitter uses 0-based lines, LSP output uses 1-based lines.
 The canonical mapping from tree-sitter scopes to LSP token types:
 
 | Tree-sitter scope | LSP token types |
-|---|---|
+| --- | --- |
 | `markup.heading` | `SessionTitleText`, `SessionMarker` |
 | `variable.other.definition` | `DefinitionSubject` |
 | `markup.raw.block` | `VerbatimSubject`, `VerbatimLanguage`, `VerbatimAttribute` |
@@ -132,7 +132,7 @@ This mapping is also defined in the VSCode integration test at:
 ## File Locations
 
 | What | Where |
-|---|---|
+| --- | --- |
 | Grammar definition | `tree-sitter/grammar.js` |
 | External scanner | `tree-sitter/src/scanner.c` |
 | Highlight queries | `tree-sitter/queries/highlights.scm` |
