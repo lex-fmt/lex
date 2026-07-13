@@ -1,6 +1,6 @@
 [package]
 name = "lex-extension-host"
-version = "0.19.3"
+version = "0.19.6-release-rc"
 edition = "2021"
 license = "MIT"
 authors = ["lex contributors"]
