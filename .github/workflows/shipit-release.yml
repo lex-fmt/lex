@@ -1,35 +1,168 @@
 name: shipit-release
 
-# TOL02-WS07 rc-campaign caller: drives lex through shipit's COMPOSED
-# release pipeline (ADR-0040) — one `uses:` line against wf-release.yml,
-# exactly the standard-consumer shape. Pinned to @v1, which the TOL02-WS07 campaign
-# keeps force-synced to the TOL02/WS07 campaign head so shipit-side fixes
-# land in the same run (a `@TOL02/WS07` ref fails GitHub's called-workflow
-# parse — slash-in-ref; recorded in the WS07 note). Runs ALONGSIDE the legacy
-# release.yml caller — the cutover canon keeps legacy callers untouched
-# and running until ADP02 re-points them.
+# lex's shipit release caller (lex#835, the rust fleet cutover) — the
+# BLESSED per-stage dispatch shape (ADR-0054, workflows.lex §8), modeled on
+# arthur-debert/dodot's shipit-release.yml (two green staged rc chains
+# 2026-07-13): one workflow_dispatch caller with a `stage` choice (full |
+# prepare | build | sign | publish), one job per stage, each a single
+# `uses:` line against the matching block, gated `if: inputs.stage == '...'`,
+# forwarding `version`/`tag`/`run-id`/`unsigned` verbatim. Routing ONLY
+# (ADR-0040): the release plan — matrix, live stages, the post-RC-guard
+# endpoint set, required secrets — is preflight's, computed inside the
+# blocks; nothing is re-derived or wired stage-to-stage here.
 #
-# Secrets: the rc plan requires RELEASE_TOKEN only (prepare's tag push
-# through the ruleset); gh-release rides the workflow's own GITHUB_TOKEN,
-# and every external endpoint (crates/npm/brew) is dropped from a
-# -release-rc plan by the central RC guard, so their tokens are neither
-# required nor forwarded here.
+# Every ref is the FULL remote `arthur-debert/shipit/...@v1` form — never
+# `./` relative (which would resolve against THIS repo, where no blocks
+# live), never SHA-pinned (the fleet rides the advance-major-moved `v1`
+# BRANCH, ADR-0010).
+#
+# lex's release surface (.shipit.toml [artifacts]): the signed `lexd`
+# binary matrix (gh-release + crates) and the `lex-wasm` npm package
+# (gh-release + npm). So the plan's endpoints are gh-release + crates + npm,
+# with a LIVE sign stage (`sign = true` on lexd routes the darwin tarball
+# through the signer's archive leg, shipit#800). lex has NO brew endpoint
+# and no windows leg (shipit#895 pause) — no HOMEBREW_TAP_TOKEN, no windows
+# input.
+#
+# Secrets — the PER-STAGE INTERSECTION rule (shipit#896): each stage job
+# forwards ONLY the secrets that stage's reusable workflow DECLARES in its
+# `secrets:` block — forwarding an undeclared secret is a workflow-validation
+# startup_failure (the rustloc#116 lesson). preflight re-validates the WHOLE
+# plan at prepare entry, so `prepare` (and `full`) carry the FULL
+# plan-required set; `sign` carries the Apple/notary set only; `publish` the
+# registry set only; `build` declares none. Repo secret NAMES are mapped to
+# the registry names the blocks expect:
+#   RELEASE_TOKEN             prepare's tag+branch push through the ruleset
+#                             (a GITHUB_TOKEN push would not re-trigger
+#                             workflows).
+#   CARGO_REGISTRY_TOKEN      the crates endpoint's registry token — lex's
+#                             repo secret is named CARGO_REGISTRY_TOKEN, so
+#                             this maps 1:1. The RC guard drops crates on a
+#                             -release-rc version centrally.
+#   NPM_TOKEN                  the npm endpoint's token for @lex-fmt/lex-wasm.
+#   APPLE_CERTIFICATE <- APPLE_CERTIFICATE_P12_BASE64   the mac codesign
+#                             identity (repo secret keeps its legacy name).
+#   APPLE_CERTIFICATE_PASSWORD, ASC_API_KEY_BASE64/_ID, ASC_API_ISSUER_ID
+#                             the cert passphrase + the ASC notary trio.
+# gh-release rides the workflow's own GITHUB_TOKEN (no registry entry).
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to release (e.g. 0.19.4-release-rc)"
-        required: true
+        description: >-
+          The release version, consumed by `full`/`prepare`: a bare semver
+          (1.0.0, 1.0.0-release-rc) or a bump word (major|minor|patch).
+          Ignored by the tag-dispatched stages.
+        required: false
         type: string
+      stage:
+        description: >-
+          What to dispatch: the full composed chain (default) or ONE
+          independently re-runnable stage block (per-stage dispatch,
+          ADR-0054). `prepare` dispatches on `version`; `build`, `sign`
+          and `publish` on `tag` (+ `run-id` for the artifact-consuming
+          stages).
+        required: false
+        type: choice
+        default: full
+        options:
+          - full
+          - prepare
+          - build
+          - sign
+          - publish
+      tag:
+        description: >-
+          The release tag (v<version>), consumed by the `build`/`sign`/
+          `publish` stage dispatches (ADR-0041: the version is read off
+          the tag). Ignored by `full`/`prepare`.
+        required: false
+        type: string
+      run-id:
+        description: >-
+          The SOURCE run id whose artifacts feed an artifact-consuming
+          stage dispatch (`sign`, `publish`) — one source run per dispatch
+          (workflows.lex §8). Ignored by the other stages.
+        required: false
+        type: string
+      unsigned:
+        description: >-
+          Break-glass: flip a signing plan to the unsigned path. Forwarded
+          verbatim; lex's plan HAS a live sign stage (signed darwin lexd),
+          so this ships unsigned darwin tarballs — break-glass only.
+        required: false
+        type: boolean
+        default: false
 
+# The standalone dispatch caller's grant (workflows.lex §8): `contents:
+# write` for prepare's push and publish's gh-release, `actions: read` for
+# the cross-run artifact downloads (`run-id` flips download-artifact onto
+# the REST API). The downloading blocks deliberately declare NO
+# `permissions:` key — a called workflow can only downgrade this token.
 permissions:
   contents: write
+  actions: read
 
 jobs:
   release:
+    if: inputs.stage == 'full'
     uses: arthur-debert/shipit/.github/workflows/wf-release.yml@v1
     with:
       version: ${{ inputs.version }}
+      unsigned: ${{ inputs.unsigned }}
     secrets:
       RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      ASC_API_KEY_BASE64: ${{ secrets.ASC_API_KEY_BASE64 }}
+      ASC_API_KEY_ID: ${{ secrets.ASC_API_KEY_ID }}
+      ASC_API_ISSUER_ID: ${{ secrets.ASC_API_ISSUER_ID }}
+
+  prepare:
+    if: inputs.stage == 'prepare'
+    uses: arthur-debert/shipit/.github/workflows/wf-prepare.yml@v1
+    with:
+      version: ${{ inputs.version }}
+      unsigned: ${{ inputs.unsigned }}
+    secrets:
+      RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      ASC_API_KEY_BASE64: ${{ secrets.ASC_API_KEY_BASE64 }}
+      ASC_API_KEY_ID: ${{ secrets.ASC_API_KEY_ID }}
+      ASC_API_ISSUER_ID: ${{ secrets.ASC_API_ISSUER_ID }}
+
+  build:
+    if: inputs.stage == 'build'
+    uses: arthur-debert/shipit/.github/workflows/wf-build.yml@v1
+    with:
+      tag: ${{ inputs.tag }}
+
+  sign:
+    if: inputs.stage == 'sign'
+    uses: arthur-debert/shipit/.github/workflows/wf-sign-mac.yml@v1
+    with:
+      tag: ${{ inputs.tag }}
+      run-id: ${{ inputs.run-id }}
+    secrets:
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      ASC_API_KEY_BASE64: ${{ secrets.ASC_API_KEY_BASE64 }}
+      ASC_API_KEY_ID: ${{ secrets.ASC_API_KEY_ID }}
+      ASC_API_ISSUER_ID: ${{ secrets.ASC_API_ISSUER_ID }}
+
+  publish:
+    if: inputs.stage == 'publish'
+    uses: arthur-debert/shipit/.github/workflows/wf-publish.yml@v1
+    with:
+      tag: ${{ inputs.tag }}
+      run-id: ${{ inputs.run-id }}
+      unsigned: ${{ inputs.unsigned }}
+    secrets:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
