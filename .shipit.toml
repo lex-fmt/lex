@@ -96,7 +96,7 @@ local = true
 #     [package].name IS "lexd-lsp"), so `package = "lexd-lsp"`. Made a
 #     first-class released artifact so downstream VS Code packaging (TOL03 WS03,
 #     shipit#977/#980) consumes it artifact-pinned through `[artifact-deps]` and
-#     this repo's public per-repo conda channel. Same signed non-Windows matrix
+#     this repo's public per-repo conda channel. Same non-Windows matrix
 #     as `lexd` — darwin-arm64 + linux gnu (x86_64 + arm64), the three subdirs
 #     the Artifact channel serves (osx-arm64, linux-64, linux-aarch64); win-64
 #     stays paused (shipit#895), osx-64/musl are unserved by the closed conda
@@ -119,6 +119,10 @@ build = [{ toolchain = "rust", package = "lexd" }]
 # provisions musl (shipit musl-provisioning feature issue).
 platforms = ["darwin-arm64", "linux-x86_64", "linux-arm64"]
 bundle = { composition = "archive" }
+# sign = true enables the sign stage, but signing is applied only where
+# supported: the darwin-arm64 leg is Apple-signed/notarized; the linux legs
+# are NOT signed (no linux signing rail). Do not read the matrix as "all legs
+# signed".
 sign = true
 endpoints = ["gh-release", "crates"]
 
@@ -131,6 +135,9 @@ build = [{ toolchain = "rust", package = "lexd-lsp" }]
 # coverage to defer here.
 platforms = ["darwin-arm64", "linux-x86_64", "linux-arm64"]
 bundle = { composition = "archive" }
+# Same posture as lexd: sign = true enables the sign stage, but signing is
+# applied only where supported — the darwin-arm64 leg is Apple-signed/notarized;
+# the linux legs are NOT signed. The non-Windows matrix above is not all-signed.
 sign = true
 # gh-release is the base surface the `conda` DERIVED endpoint repackages from
 # (a conda endpoint REQUIRES gh-release in the plan). The live channel SEED is
