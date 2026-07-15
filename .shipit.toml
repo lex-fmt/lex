@@ -3,11 +3,21 @@
 # { prompt = true }). Seeded with shipit's local-reviewer (codex/agy) GitHub App
 # credentials, each sourced from Doppler github/prd. `shipit gh-setup` only pushes
 # a secret when its source resolves, so these are safe before the App is installed.
+#
+# ARTIFACT_CHANNEL_* — the Artifact channel's WRITE credential pair (the conda
+# derived endpoint's `secretreq.ENDPOINT_SECRETS["conda"]`, ADR-0064/0065): the
+# GCS HMAC interop key that repackages+pushes the `.conda` and reindexes this
+# repo's per-repo channel. Declared here through the standard source model ONLY —
+# `shipit gh-setup` resolves each from Doppler and pushes it; the credential
+# VALUES are never copied into the repo. gh-setup only pushes when the source
+# resolves, so these are safe before the channel bucket / HMAC key exist.
 [secrets]
 CODEX_REVIEW_APP_PRIVATE_KEY = { doppler = "CODEX_REVIEW_APP_PRIVATE_KEY" }
 CODEX_REVIEW_APP_ID          = { doppler = "CODEX_REVIEW_APP_ID" }
 AGY_REVIEW_APP_PRIVATE_KEY   = { doppler = "AGY_REVIEW_APP_PRIVATE_KEY" }
 AGY_REVIEW_APP_ID            = { doppler = "AGY_REVIEW_APP_ID" }
+ARTIFACT_CHANNEL_KEY_ID      = { doppler = "ARTIFACT_CHANNEL_KEY_ID" }
+ARTIFACT_CHANNEL_SECRET_KEY  = { doppler = "ARTIFACT_CHANNEL_SECRET_KEY" }
 
 # [reviewers] — the required-reviewer SET for this repo's PRs (the map KEYS are
 # required; ALL must be DONE to flip Ready). Seeded with shipit's shipped default
@@ -69,7 +79,8 @@ local = true
 
 # [artifacts] — the release surface this repo publishes (lex#832 cutover),
 # ported from the legacy `.github/workflows/release.yml` rust-cli.yml caller.
-# Two artifacts: the signed `lexd` binary matrix and the `lex-wasm` npm package.
+# Three artifacts: the signed `lexd` binary matrix, the `lexd-lsp` binary matrix
+# (Artifact channel producer, lex#840), and the `lex-wasm` npm package.
 #
 #   - lexd: the `[[bin]] name = "lexd"` lives in crate `lex-cli` (its
 #     [package].name IS "lexd"), so `package = "lexd"`. Signed darwin + linux
@@ -81,6 +92,22 @@ local = true
 #     The `crates` endpoint triggers the workspace-wide crates.io publish in
 #     topological order — `lex-wasm` (publish = false) is auto-excluded via
 #     cargo metadata, so the legacy explicit `crates:` list is not restated.
+#   - lexd-lsp: the `[[bin]] name = "lexd-lsp"` lives in crate `lexd-lsp` (its
+#     [package].name IS "lexd-lsp"), so `package = "lexd-lsp"`. Made a
+#     first-class released artifact so downstream VS Code packaging (TOL03 WS03,
+#     shipit#977/#980) consumes it artifact-pinned through `[artifact-deps]` and
+#     this repo's public per-repo conda channel. Same non-Windows matrix
+#     as `lexd` — darwin-arm64 + linux gnu (x86_64 + arm64), the three subdirs
+#     the Artifact channel serves (osx-arm64, linux-64, linux-aarch64); win-64
+#     stays paused (shipit#895), osx-64/musl are unserved by the closed conda
+#     subdir map (ADR-0064). The `conda` DERIVED endpoint (after `gh-release`)
+#     repackages each release archive into a versioned `.conda`, pushes it to
+#     the repo's channel, and reindexes (ADR-0064/0065); its write credentials
+#     are the ARTIFACT_CHANNEL_* [secrets] pair. The generated conda package
+#     name IS the main-binary name lowercased — exactly `lexd-lsp` — installed
+#     at the materialized env `bin/lexd-lsp` WS03 expects. NOT on `crates`: the
+#     workspace crates.io publish is `lexd`'s endpoint and already covers the
+#     `lexd-lsp` crate topologically; restating it here would double-publish.
 #   - lex-wasm: wasm-pack → @lex-fmt/lex-wasm on npm (legacy wasm-packages +
 #     wasm-npm-scope). Built on the linux-x86_64 host; the `web`-target wasm
 #     output is platform-independent, so one build platform suffices.
@@ -92,8 +119,30 @@ build = [{ toolchain = "rust", package = "lexd" }]
 # provisions musl (shipit musl-provisioning feature issue).
 platforms = ["darwin-arm64", "linux-x86_64", "linux-arm64"]
 bundle = { composition = "archive" }
+# sign = true enables the sign stage, but signing is applied only where
+# supported: the darwin-arm64 leg is Apple-signed/notarized; the linux legs
+# are NOT signed (no linux signing rail). Do not read the matrix as "all legs
+# signed".
 sign = true
 endpoints = ["gh-release", "crates"]
+
+[artifacts.lexd-lsp]
+build = [{ toolchain = "rust", package = "lexd-lsp" }]
+# Same served, non-Windows matrix as lexd: darwin-arm64 + linux gnu
+# (x86_64 + arm64) map to the conda subdirs osx-arm64 / linux-64 /
+# linux-aarch64. windows-x86_64 stays paused (shipit#895); osx-64 and musl are
+# outside the closed Artifact-channel subdir map (ADR-0064), so no dropped
+# coverage to defer here.
+platforms = ["darwin-arm64", "linux-x86_64", "linux-arm64"]
+bundle = { composition = "archive" }
+# Same posture as lexd: sign = true enables the sign stage, but signing is
+# applied only where supported — the darwin-arm64 leg is Apple-signed/notarized;
+# the linux legs are NOT signed. The non-Windows matrix above is not all-signed.
+sign = true
+# gh-release is the base surface the `conda` DERIVED endpoint repackages from
+# (a conda endpoint REQUIRES gh-release in the plan). The live channel SEED is
+# coordinator-owned and NOT dispatched in this change.
+endpoints = ["gh-release", "conda"]
 
 [artifacts.lex-wasm]
 build = [{ toolchain = "rust", package = "lex-wasm" }]
@@ -102,35 +151,35 @@ bundle = { composition = "wasm-pack", wasm-target = "web", scope = "lex-fmt" }
 endpoints = ["gh-release", "npm"]
 
 [shipit]
-version = "8859ce2695111607ce58a59865a87ed7f728e133"
+version = "e206575b6e891e5126bb77dc5b7373449d9dd809"
 
 [managed]
-"skills/coordinating/SKILL.md" = "sha256:065a793b117dcfbb1e97fea0a80b405c69995850af9a350061dbcc1f4ea4976a"
-"skills/grill-me-with-docs/ADR-FORMAT.md" = "sha256:f1f36cd3f8d3b6474ddd5855da4e233bfc4ae1a1c5024909ccf11871819a41b2"
-"skills/grill-me-with-docs/CONTEXT-FORMAT.md" = "sha256:d7f1244807b547de07073244e67279eda8bb0fd681428114bce8452c979ab72c"
-"skills/grill-me-with-docs/SKILL.md" = "sha256:a4eefcb8f9af47b5b2f99a85bde5e52c4b2275c6660c964021f6d186f05b72fd"
-"skills/implementing/SKILL.md" = "sha256:fd7d90eff365955e096dbdf2c72ac6bf32a33b12609d7749aa8a544b8cb259a0"
-"skills/lex-primer/SKILL.md" = "sha256:eb7c4d13f980dbbf0fdc81998ce6d8815783af5f13fabb18decb7e834bfddee0"
-"skills/planning/SKILL.md" = "sha256:e26fe5ef4bba7d0bffd09f2dbbf61ba9ea8b0a8aa77a50bb794481766f8fa791"
-"skills/shepherding-prs/SKILL.md" = "sha256:8f627079f3d9846069742dd77cf4987eb550ff9a6c5e575f751ea8edf958ee2b"
-"skills/shipit-session-status/SKILL.md" = "sha256:4720ad9b381d57c32dfd2aca6cb2a4b338dfa69cac90eedd85a71f7f2f8db962"
-"skills/to-spec/SKILL.md" = "sha256:9f7e5216675070146daabdc0f63ddb8cc8ecf37843ab5d3290354bf57d8097c0"
-"skills/to-tickets/SKILL.md" = "sha256:38df45b1560de0e10be3ab8f7ef4113114ee851e3790ac9087b4c9560c7dc6df"
-"AGENTS.md#shipit-block" = "sha256:aae40d34d67837bdef546e9294b65900b0e5fbf5ed18603a30ca68c756d7d8db"
+".shipit-skills/coordinating/SKILL.md" = "sha256:065a793b117dcfbb1e97fea0a80b405c69995850af9a350061dbcc1f4ea4976a"
+".shipit-skills/grill-me-with-docs/ADR-FORMAT.md" = "sha256:f1f36cd3f8d3b6474ddd5855da4e233bfc4ae1a1c5024909ccf11871819a41b2"
+".shipit-skills/grill-me-with-docs/CONTEXT-FORMAT.md" = "sha256:d7f1244807b547de07073244e67279eda8bb0fd681428114bce8452c979ab72c"
+".shipit-skills/grill-me-with-docs/SKILL.md" = "sha256:06428ff9352d2765056d1af43f9a21592b0ea6e59ab7b72f200710678fcdddea"
+".shipit-skills/implementing/SKILL.md" = "sha256:fd7d90eff365955e096dbdf2c72ac6bf32a33b12609d7749aa8a544b8cb259a0"
+".shipit-skills/lex-primer/SKILL.md" = "sha256:eb7c4d13f980dbbf0fdc81998ce6d8815783af5f13fabb18decb7e834bfddee0"
+".shipit-skills/planning/SKILL.md" = "sha256:843d0a0c3dddb6d1ba1b5db6d494e650fdbc40035cb98def47b964d264b8e57c"
+".shipit-skills/shepherding-prs/SKILL.md" = "sha256:8f627079f3d9846069742dd77cf4987eb550ff9a6c5e575f751ea8edf958ee2b"
+".shipit-skills/shipit-session-status/SKILL.md" = "sha256:4720ad9b381d57c32dfd2aca6cb2a4b338dfa69cac90eedd85a71f7f2f8db962"
+".shipit-skills/to-spec/SKILL.md" = "sha256:eafedcd9b9797aa3d9e97ee466e40000cc74de2d86f86e855f6e1e36219d3cce"
+".shipit-skills/to-tickets/SKILL.md" = "sha256:d922c867458135ebf665233149268b25ba8ea3147a59e5b7ffcc9c3748fda3d5"
+"AGENTS.md#shipit-block" = "sha256:570976e63c75768cd51114f0d3ac5b35757b11abd3405eac400aea034ca5ceb5"
 ".gitignore#shipit-release-outputs" = "sha256:4a9beb3dea542cd0f1426a298069a506c6ea1fdfb3e852a9d2032dd475dfe143"
 "bin/shipit" = "sha256:c1c8d6653ce37ada6b6dbad1866148bc1e54a8951384ebc07df01abd86d084a3"
 "bin/setup-dev-env.sh" = "sha256:0558c0ba79c3569f55683f4fe80098565b5ffae03a11f14beb279ff29a1be8a7"
 agent-start = "sha256:3f8b7d1d6e1d51f9a714e4781f8be89a60e3da26f33f55715c3a67f4ae2c43fd"
 "lefthook.yml" = "sha256:018da1c47329a4731e1f1c9345164f11fdf98771e1ddd57633cc0849286d7c74"
 ".markdownlint.yaml" = "sha256:b0834c9c810555866987cfec39862265322ef5048e92dac536563f6e21213553"
-".markdownlintignore" = "sha256:d155700420d288feb72ddcfd189b74cf8076aac6c906017aae7b8a5fd8541992"
+".markdownlintignore" = "sha256:05b151b2b20689c8c8e5e488ac8c5131f62b273101fb60395eb7be1c5d79d101"
 ".yamllint.yaml" = "sha256:d5c3b7b69d0bdd0ce25335e0db50cea2355b3c8ff62f4edbbf2a7d7909a2fd54"
 ".prettierrc" = "sha256:9d40f301aa8fdd684ebde7c1d7a7493d764e46b6f45585dbb5b99c821123a947"
 "pixi.toml#shipit-tasks" = "sha256:d02ea7ec3c772affa6d9510007e434115e1d75b5f7231567c38fb96c05d1a02b"
 "pixi.toml#shipit-lint-deps" = "sha256:1523474906defcd91f9edbba39a87d2003828a9bf2670fc48240b7ad1bb10e29"
 "pixi.toml#shipit-environments" = "sha256:c54b53e3bb55cd59aaabf9daea85c81cffe3cbae8978e41cbef5db0f16b3838b"
 "pixi.toml#shipit-rust-lint-toolchain" = "sha256:e5105bbd8feb8a1d5bde16dd427028303d1f0b3b4c43d7b85689de95c1200285"
-"pixi.toml#shipit-rust-release-deps" = "sha256:527ebc04d3255f0f436f1208f1f842637202efacbd1bade53fa1e6e26ffe6eb4"
+"pixi.toml#shipit-rust-release-deps" = "sha256:0f4fa11a3baa8d38a52db7649a938c8366b01fa60d3193aa17a1754bd72db2b1"
 "pixi.toml#shipit-node-deps" = "sha256:c9f9ff77b997e755780bcf35094b4ef3c77fd31c99c269e12c1eb61d1646f1a9"
 ".claude/agents/explorer.md" = "sha256:cef84756bfe22e1b73cae1d03bf062dd945453a96db22e0b17e5471524ff6112"
 ".claude/agents/implementer.md" = "sha256:29a0e850f6a50f9f0e74f4bbaf52932b27231f6f2ab489aebeba895f5afdcc6c"
