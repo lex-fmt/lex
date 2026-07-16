@@ -40,8 +40,8 @@ test-full = "git submodule update --init --recursive && cargo nextest run --work
 rust = "1.96.*"
 # <<< shipit-managed rust lint toolchain <<<
 # >>> shipit-managed lint deps (do not edit; regenerate via `shipit install`) >>>
-# The fleet-pinned lint toolchain (docs/legacy-prd/adoption.md in the
-# arthur-debert/shipit repo: the managed set owns the consumer environment).
+# The fleet-pinned lint toolchain (https://github.com/arthur-debert/shipit/blob/main/docs/legacy-prd/adoption.md:
+# the managed set owns the consumer environment).
 # Canonical versions live HERE — a bump is one data edit, rolled fleet-wide on
 # each consumer's next `shipit install` reconcile.
 ruff = "0.15.*"
