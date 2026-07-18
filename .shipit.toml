@@ -151,7 +151,7 @@ bundle = { composition = "wasm-pack", wasm-target = "web", scope = "lex-fmt" }
 endpoints = ["gh-release", "npm"]
 
 [shipit]
-version = "60e13bf208653407218505f5a5970bd14845396c"
+version = "987ede012a3ac3be061e58abeb02e90f4fcbbf2d"
 
 [managed]
 ".shipit-skills/coordinating/SKILL.md" = "sha256:065a793b117dcfbb1e97fea0a80b405c69995850af9a350061dbcc1f4ea4976a"
@@ -179,7 +179,7 @@ agent-start = "sha256:70a2f96788eecbd689412d428a3615193edcd1deaccc730e6976332c61
 "pixi.toml#shipit-lint-deps" = "sha256:c75669f6e5fe369c0a6a2d5bbcceb59f0c8a0c9a1eba163f00d1081048067224"
 "pixi.toml#shipit-environments" = "sha256:c54b53e3bb55cd59aaabf9daea85c81cffe3cbae8978e41cbef5db0f16b3838b"
 "pixi.toml#shipit-rust-lint-toolchain" = "sha256:e5105bbd8feb8a1d5bde16dd427028303d1f0b3b4c43d7b85689de95c1200285"
-"pixi.toml#shipit-rust-release-deps" = "sha256:0f4fa11a3baa8d38a52db7649a938c8366b01fa60d3193aa17a1754bd72db2b1"
+"pixi.toml#shipit-rust-release-deps" = "sha256:e644207b819072fedeb26ab033ee695679b89df3403dedd190ed6f400e58fbc0"
 "pixi.toml#shipit-node-deps" = "sha256:c9f9ff77b997e755780bcf35094b4ef3c77fd31c99c269e12c1eb61d1646f1a9"
 ".claude/agents/explorer.md" = "sha256:278acf5f455c4a819f04d4686857854838faeb43c51a01f78cfdc171507081ee"
 ".claude/agents/implementer.md" = "sha256:6dd3a1edfda6fe025119a79b865a620081cfecdd7bf29431223f65e2caf2c801"
