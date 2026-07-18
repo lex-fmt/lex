@@ -108,8 +108,9 @@ on:
           the publish verb narrows the fire to — every other declared
           endpoint is selector-skipped (`gh-release` cannot be deselected;
           unknown names are refused, by the verb). Empty: the full
-          post-guard set fires (gh-release + crates + npm). Ignored by the
-          other stages. This is what makes lex's scoped ARF02 channel seed
+          post-guard set fires (gh-release + crates + conda + npm — the
+          union across lexd, lexd-lsp and lex-wasm). Ignored by the other
+          stages. This is what makes lex's scoped ARF02 channel seed
           (`gh-release,conda`) possible WITHOUT firing the owner-gated
           crates/npm endpoints.
         required: false
