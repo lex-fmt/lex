@@ -124,7 +124,13 @@ bundle = { composition = "archive" }
 # are NOT signed (no linux signing rail). Do not read the matrix as "all legs
 # signed".
 sign = true
-endpoints = ["gh-release", "crates"]
+# gh-release is the base surface the `conda` DERIVED endpoint repackages from
+# (a conda endpoint REQUIRES gh-release in the plan). Declaring conda here only
+# makes it SELECTABLE at dispatch (ADR-0070); the live stable SEED is
+# coordinator-owned and NOT dispatched in this change. `crates` stays declared
+# but is deselected at the ARF02 stable dispatch (endpoints="gh-release,conda"),
+# keeping lexd OFF crates.io (ADR-0070).
+endpoints = ["gh-release", "crates", "conda"]
 
 [artifacts.lexd-lsp]
 build = [{ toolchain = "rust", package = "lexd-lsp" }]
