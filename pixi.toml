@@ -10,7 +10,6 @@ platforms = ["linux-64", "linux-aarch64", "osx-64", "osx-arm64"]
 changelog = "./bin/shipit changelog"
 lint = "./bin/shipit lint"
 logs = "./bin/shipit logs"
-provision-lexd = "./bin/shipit provision lexd"
 # <<< shipit-managed tasks <<<
 
 # Consumer-owned tasks (outside the shipit-managed block above).
@@ -72,11 +71,11 @@ lefthook = "2.1.*"
 # idempotent. Defined ONLY in this feature, so it exists in EXACTLY ONE env
 # (lint) and bare `pixi run lint-full` resolves unambiguously — the wf-checks
 # matrix job's `pixi run --locked lint-full` and a laptop run are identical.
-lint-full = { cmd = "./bin/shipit provision lexd && ./bin/shipit lint" }
+lint-full = { cmd = "./bin/shipit lint" }
 
 [environments]
 # >>> shipit-managed environments (do not edit; regenerate via `shipit install`) >>>
-lint = ["lint"]
+lint = ["lint", "shipit-lexd"]
 # <<< shipit-managed environments <<<
 
 # Consumer-owned dependencies (outside the shipit-managed blocks above).
@@ -170,3 +169,47 @@ rust-std-wasm32-unknown-unknown = "1.96.*"
 # otherwise present, so the launcher's one prerequisite must ride the env too.
 # (Flagged upstream: the block/managed set should own this — lex#828/#829.)
 uv = ">=0.5"
+
+# >>> shipit-managed lexd feature (do not edit; regenerate via `shipit install`) >>>
+[feature.shipit-lexd]
+# lexd — the lex Lang's lint-gate tool — resolved as an ordinary conda package
+# from the public Artifact channel (ADR-0066: `provision lexd` retired). The
+# channel is scoped to THIS reserved feature (a sibling of conda-forge, added to
+# whatever env `shipit-lexd` is wired into — the lint env), so lexd rides
+# pixi.lock and pixi's sha256 like every other linter, and `shipit install`
+# keeps the whole fleet on ONE lexd version — uniformity moved from a compiled
+# binary constant to this managed block (ADR-0047: not consumer config).
+channels = ["https://storage.googleapis.com/shipit-artifacts-public/lex-fmt/lex"]
+
+# The fleet-pinned lexd, PLATFORM-SCOPED via pixi `[target]` tables to the
+# channel's CLOSED SERVED SET (#1068) — `SERVED_SUBDIRS`
+# (`src/shipit/channel/buckets.py`): osx-arm64/linux-64/linux-aarch64 AND win-64.
+# The one target table per served subdir below IS that set; keep the two in step
+# (drift-guarded by `test_load_units_includes_the_managed_lexd_feature_block`,
+# which asserts these targets == `SERVED_SUBDIRS`). A bump is one edit here,
+# rolled fleet-wide on each consumer's next `shipit install` reconcile;
+# exact-pinned (`==`) so uniformity is a single version, never a resolved range.
+#
+# Scoping is load-bearing AND fail-closed-preserving:
+#  - A BLANKET `[feature.shipit-lexd.dependencies]` applied lexd to EVERY platform
+#    a composing env declares, so a consumer declaring a platform OUTSIDE the
+#    served set (e.g. osx-64, Intel Mac) had no channel candidate and got an
+#    unsatisfiable lint-env solve — `shipit install` then failed closed with no
+#    commit and no reconcile (#1068). Platforms NOT in the served set now carry
+#    NO lexd dep, so their lint env SOLVES and install/reconcile no longer breaks.
+#  - win-64 IS in the served set (served, merely owner-PAUSED under the Windows
+#    build pause #895, ADR-0071), so it KEEPS a target dep. The channel serves no
+#    win-64 lexd while the pause holds, so a win-64 lint solve finds no candidate
+#    and FAILS CLOSED — ADR-0071's "Windows consumers fail closed, loudly." Drop
+#    the win-64 target and a win-64 consumer would instead solve WITHOUT lexd
+#    (fail-open), silently breaking that invariant. It re-resolves automatically
+#    when #895 lifts and the channel produces win-64 — no edit here.
+[feature.shipit-lexd.target.osx-arm64.dependencies]
+lexd = "==0.19.10"
+[feature.shipit-lexd.target.linux-64.dependencies]
+lexd = "==0.19.10"
+[feature.shipit-lexd.target.linux-aarch64.dependencies]
+lexd = "==0.19.10"
+[feature.shipit-lexd.target.win-64.dependencies]
+lexd = "==0.19.10"
+# <<< shipit-managed lexd feature <<<

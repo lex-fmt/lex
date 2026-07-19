@@ -157,7 +157,7 @@ bundle = { composition = "wasm-pack", wasm-target = "web", scope = "lex-fmt" }
 endpoints = ["gh-release", "npm"]
 
 [shipit]
-version = "57d9d16b1a8d374e1558912376c4f10d70beae1d"
+version = "8de0ac48c5c52b5e88ccd020c5f84f9bd803cf47"
 
 [managed]
 ".shipit-skills/coordinating/SKILL.md" = "sha256:065a793b117dcfbb1e97fea0a80b405c69995850af9a350061dbcc1f4ea4976a"
@@ -181,9 +181,10 @@ agent-start = "sha256:70a2f96788eecbd689412d428a3615193edcd1deaccc730e6976332c61
 ".markdownlintignore" = "sha256:05b151b2b20689c8c8e5e488ac8c5131f62b273101fb60395eb7be1c5d79d101"
 ".yamllint.yaml" = "sha256:d5c3b7b69d0bdd0ce25335e0db50cea2355b3c8ff62f4edbbf2a7d7909a2fd54"
 ".prettierrc" = "sha256:9d40f301aa8fdd684ebde7c1d7a7493d764e46b6f45585dbb5b99c821123a947"
-"pixi.toml#shipit-tasks" = "sha256:d02ea7ec3c772affa6d9510007e434115e1d75b5f7231567c38fb96c05d1a02b"
+"pixi.toml#shipit-tasks" = "sha256:8a550f5d5a8f09c1ab685b120353bb8922a8578c2918c5ed2d688e423fed7f2c"
 "pixi.toml#shipit-lint-deps" = "sha256:c75669f6e5fe369c0a6a2d5bbcceb59f0c8a0c9a1eba163f00d1081048067224"
-"pixi.toml#shipit-environments" = "sha256:c54b53e3bb55cd59aaabf9daea85c81cffe3cbae8978e41cbef5db0f16b3838b"
+"pixi.toml#shipit-environments" = "sha256:940c14da94788ca8581c1363752ee5ab42eb07b1d8a9bf89fdb086bb0ed0cbed"
+"pixi.toml#shipit-lexd" = "sha256:225d8f91e31b39ee8139ab32083af6282108cba75ebd767a8e229f1c773d4c2e"
 "pixi.toml#shipit-rust-lint-toolchain" = "sha256:e5105bbd8feb8a1d5bde16dd427028303d1f0b3b4c43d7b85689de95c1200285"
 "pixi.toml#shipit-rust-release-deps" = "sha256:e644207b819072fedeb26ab033ee695679b89df3403dedd190ed6f400e58fbc0"
 "pixi.toml#shipit-node-deps" = "sha256:c9f9ff77b997e755780bcf35094b4ef3c77fd31c99c269e12c1eb61d1646f1a9"

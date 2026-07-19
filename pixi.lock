@@ -164,6 +164,7 @@ environments:
   lint:
     channels:
     - url: https://conda.anaconda.org/conda-forge/
+    - url: https://storage.googleapis.com/shipit-artifacts-public/lex-fmt/lex/
     packages:
       linux-64:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-20_gnu.conda
@@ -228,6 +229,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/sysroot_linux-64-2.28-h4ee821c_9.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/tzdata-2025c-hc9c84f9_1.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/yamllint-1.38.0-pyhcf101f3_1.conda
+      - conda: https://storage.googleapis.com/shipit-artifacts-public/lex-fmt/lex/linux-64/lexd-0.19.10-hb0f4dca_0.conda
       linux-aarch64:
       - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/_openmp_mutex-4.5-20_gnu.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/actionlint-1.7.12-hddfeb4d_0.conda
@@ -291,6 +293,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/sysroot_linux-aarch64-2.28-h585391f_9.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/tzdata-2025c-hc9c84f9_1.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/yamllint-1.38.0-pyhcf101f3_1.conda
+      - conda: https://storage.googleapis.com/shipit-artifacts-public/lex-fmt/lex/linux-aarch64/lexd-0.19.10-he8cfe8b_0.conda
       osx-64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/ca-certificates-2026.6.17-hbd8a1cb_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/pathspec-1.1.1-pyhd8ed1ab_0.conda
@@ -389,6 +392,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/wasm-pack-0.15.0-h6fdd925_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/yaml-0.2.5-h925e9cb_3.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
+      - conda: https://storage.googleapis.com/shipit-artifacts-public/lex-fmt/lex/osx-arm64/lexd-0.19.10-h60d57d3_0.conda
 packages:
 - conda: https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-20_gnu.conda
   build_number: 20
@@ -3159,3 +3163,18 @@ packages:
     - zstd >=1.5.7,<1.6.0a0
   size: 433413
   timestamp: 1764777166076
+- conda: https://storage.googleapis.com/shipit-artifacts-public/lex-fmt/lex/linux-64/lexd-0.19.10-hb0f4dca_0.conda
+  sha256: d4660ca9d76ab0a912204fabf77dc4d962a0f8fc3880f414c18f9441315c2849
+  md5: c9f034be349e20271ce9027e7ea09f62
+  size: 4342098
+  timestamp: 1784427291315
+- conda: https://storage.googleapis.com/shipit-artifacts-public/lex-fmt/lex/linux-aarch64/lexd-0.19.10-he8cfe8b_0.conda
+  sha256: 72ea73507c70e302a3ef0e85000d811c26fe1b5dcb65d9522c59ef3d747f75b6
+  md5: 7716d19cac2d56526e2dac5334ba2624
+  size: 4264380
+  timestamp: 1784427293435
+- conda: https://storage.googleapis.com/shipit-artifacts-public/lex-fmt/lex/osx-arm64/lexd-0.19.10-h60d57d3_0.conda
+  sha256: 8a42023d6ae9002ea15e7c1b3414cb91512a4171870ba7fc768d1dcb50aab1af
+  md5: 0488b6110c72bfcd73fee9543ec9a9cf
+  size: 3841706
+  timestamp: 1784427295015
