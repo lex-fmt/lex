@@ -154,7 +154,12 @@ endpoints = ["gh-release", "conda"]
 build = [{ toolchain = "rust", package = "lex-wasm" }]
 platforms = ["linux-x86_64"]
 bundle = { composition = "wasm-pack", wasm-target = "web", scope = "lex-fmt" }
-endpoints = ["gh-release", "npm"]
+# The `conda` DERIVED endpoint repackages the platform-independent wasm archive
+# (the `wasm-pack` composition — treated as noarch-eligible via shipit v1.4.1's
+# `platform_independent` flag, shipit#1068) into ONE `noarch: generic` `.conda`
+# in the channel's `noarch/` subdir (ADR-0076). Declaring it here only makes it
+# SELECTABLE at dispatch (ADR-0070); npm stays (all wasm through conda, keep npm).
+endpoints = ["gh-release", "npm", "conda"]
 
 [shipit]
 version = "8de0ac48c5c52b5e88ccd020c5f84f9bd803cf47"
