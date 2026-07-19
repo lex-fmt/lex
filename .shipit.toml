@@ -157,7 +157,7 @@ bundle = { composition = "wasm-pack", wasm-target = "web", scope = "lex-fmt" }
 endpoints = ["gh-release", "npm"]
 
 [shipit]
-version = "628d4381e92b7427c72e9a9144440bcea98e3f50"
+version = "57d9d16b1a8d374e1558912376c4f10d70beae1d"
 
 [managed]
 ".shipit-skills/coordinating/SKILL.md" = "sha256:065a793b117dcfbb1e97fea0a80b405c69995850af9a350061dbcc1f4ea4976a"
