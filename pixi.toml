@@ -71,7 +71,7 @@ lefthook = "2.1.*"
 # idempotent. Defined ONLY in this feature, so it exists in EXACTLY ONE env
 # (lint) and bare `pixi run lint-full` resolves unambiguously — the wf-checks
 # matrix job's `pixi run --locked lint-full` and a laptop run are identical.
-lint-full = { cmd = "./bin/shipit provision lexd && ./bin/shipit lint" }
+lint-full = { cmd = "./bin/shipit lint" }
 
 [environments]
 # >>> shipit-managed environments (do not edit; regenerate via `shipit install`) >>>
